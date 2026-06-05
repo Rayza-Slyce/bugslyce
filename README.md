@@ -91,6 +91,12 @@ BugSlyce includes a minimal provider interface for future optional LLM support. 
 
 No external LLM calls are implemented yet. Future providers should receive a minimised triage context, not raw recon files by default. The minimised context contains counts, candidate summaries, capped endpoint lists, capped evidence summaries, language rules, and a privacy note.
 
+`bugslyce run` currently uses provider `none` and prints that deterministic report mode is active. Future provider names such as `gemini`, `openai`, `anthropic`, and `ollama` are recognised as configuration values but are not implemented yet. If a future provider is configured, reset to no-LLM mode with:
+
+```bash
+bugslyce config reset
+```
+
 ## Current Inputs
 
 BugSlyce currently looks for these files in an input directory:

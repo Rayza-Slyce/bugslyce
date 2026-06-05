@@ -8,6 +8,7 @@ from pathlib import Path
 from bugslyce.core.project import build_project_state
 from bugslyce.llm.none import NoLLMProvider
 from bugslyce.llm.prompt_builder import build_minimised_triage_context, estimate_context_size
+from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -34,6 +35,23 @@ def test_no_llm_provider_is_available() -> None:
 
     assert provider.name == "none"
     assert provider.is_available() is True
+
+
+def test_provider_factory_returns_no_llm_for_none_and_empty() -> None:
+    assert isinstance(get_llm_provider("none"), NoLLMProvider)
+    assert isinstance(get_llm_provider(""), NoLLMProvider)
+    assert isinstance(get_llm_provider(None), NoLLMProvider)
+
+
+def test_provider_factory_future_providers_fail_gracefully() -> None:
+    for provider_name in ("gemini", "openai", "anthropic", "ollama"):
+        try:
+            get_llm_provider(provider_name)
+        except LLMProviderNotImplementedError as exc:
+            assert provider_name in str(exc)
+            assert "not implemented yet" in str(exc)
+        else:
+            raise AssertionError(f"{provider_name} should not be implemented in this phase")
 
 
 def test_no_llm_provider_returns_used_false_without_external_behavior() -> None:

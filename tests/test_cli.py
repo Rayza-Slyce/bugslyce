@@ -29,6 +29,7 @@ def test_cli_run_succeeds_against_basic_saas(tmp_path: Path, capsys) -> None:
     assert json.loads(json_path.read_text(encoding="utf-8"))["candidates"]
     assert str(report_path) in captured.out
     assert "Candidates:" in captured.out
+    assert "LLM provider: none (deterministic report only)" in captured.out
 
 
 def test_cli_missing_input_directory_returns_nonzero(tmp_path: Path, capsys) -> None:
@@ -95,3 +96,35 @@ def test_cli_config_reset_uses_temp_env(tmp_path: Path, monkeypatch, capsys) -> 
     assert "GEMINI_API_KEY=" in text
     assert "secret-value" not in text
     assert "UNRELATED=value" in text
+
+
+def test_cli_run_with_default_config_still_writes_report(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    output_dir = tmp_path / "output"
+
+    exit_code = main(["run", str(FIXTURES_ROOT / "basic_saas"), "--output", str(output_dir)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "project_state.json").exists()
+    assert "LLM provider: none" in captured.out
+
+
+def test_cli_run_with_future_provider_fails_gracefully(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "BUGSLYCE_LLM_PROVIDER=gemini\nBUGSLYCE_LLM_MODEL=gemini-flash\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+
+    exit_code = main(["run", str(FIXTURES_ROOT / "basic_saas"), "--output", str(output_dir)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "LLM provider 'gemini' is configured but not implemented yet" in captured.err
+    assert "bugslyce config reset" in captured.err
+    assert not output_dir.exists()

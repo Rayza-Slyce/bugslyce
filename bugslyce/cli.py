@@ -7,8 +7,16 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
-from bugslyce.config import forget_provider_keys, init_config, render_config_show, reset_config
+from bugslyce.config import (
+    forget_provider_keys,
+    init_config,
+    load_env_config,
+    render_config_show,
+    reset_config,
+)
 from bugslyce.core.project import build_project_state
+from bugslyce.llm.prompt_builder import build_minimised_triage_context
+from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 
@@ -71,6 +79,18 @@ def _run(input_dir: Path, output_dir: Path) -> int:
 
     project_state = build_project_state(input_dir)
     candidates = generate_candidates(project_state)
+    config = load_env_config()
+    provider_name = config.get("BUGSLYCE_LLM_PROVIDER", "none")
+    model = config.get("BUGSLYCE_LLM_MODEL", "") or None
+
+    try:
+        provider = get_llm_provider(provider_name, model)
+    except LLMProviderNotImplementedError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    triage_context = build_minimised_triage_context(project_state, candidates)
+    llm_result = provider.generate_report_enhancement(triage_context) if provider.is_available() else None
     report_path, json_path = write_project_outputs(project_state, candidates, output_dir)
 
     print("BugSlyce run complete")
@@ -81,6 +101,10 @@ def _run(input_dir: Path, output_dir: Path) -> int:
     print(f"Assets: {len(project_state.assets)}")
     print(f"Endpoints: {len(project_state.endpoints)}")
     print(f"Candidates: {len(candidates)}")
+    if llm_result and llm_result.provider == "none":
+        print("LLM provider: none (deterministic report only)")
+    else:
+        print(f"LLM provider: {provider.name}")
 
     return 0
 
