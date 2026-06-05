@@ -85,6 +85,12 @@ No LLM calls exist yet. These commands only read and write local `.env` settings
 
 `.env` is local and gitignored. API keys must never be committed. If you choose to store a key with `bugslyce config init`, it is stored in the project `.env` file. This is local storage, not perfect security; anyone with access to this machine or project folder may be able to read it.
 
+## No-LLM Provider Abstraction
+
+BugSlyce includes a minimal provider interface for future optional LLM support. Provider `none` is the default and keeps the current deterministic behaviour unchanged.
+
+No external LLM calls are implemented yet. Future providers should receive a minimised triage context, not raw recon files by default. The minimised context contains counts, candidate summaries, capped endpoint lists, capped evidence summaries, language rules, and a privacy note.
+
 ## Current Inputs
 
 BugSlyce currently looks for these files in an input directory:
