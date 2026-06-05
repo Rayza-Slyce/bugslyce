@@ -130,3 +130,55 @@ def test_missing_optional_files_do_not_crash_project_assembly(tmp_path: Path) ->
     assert state.endpoints == []
     assert state.warnings
     assert any("Optional input file missing" in warning for warning in state.warnings)
+
+
+def test_malformed_httpx_lines_do_not_crash_project_assembly(tmp_path: Path) -> None:
+    (tmp_path / "httpx.jsonl").write_text(
+        "\n".join(
+            [
+                '{"url":"https://app.example-bounty.test","host":"app.example-bounty.test"}',
+                "{bad json",
+                '["not", "object"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert len(state.http_services) == 1
+    assert any("Skipping malformed JSONL line" in warning for warning in state.warnings)
+    assert any("Skipping non-object JSONL line" in warning for warning in state.warnings)
+
+
+def test_invalid_urls_do_not_crash_project_assembly(tmp_path: Path) -> None:
+    (tmp_path / "urls.txt").write_text(
+        "\n".join(
+            [
+                "not-a-url",
+                "http://",
+                "https://",
+                "javascript:alert(1)",
+                "mailto:test@example.com",
+                "https://app.example-bounty.test/login",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [endpoint.url for endpoint in state.endpoints] == ["https://app.example-bounty.test/login"]
+    assert len([warning for warning in state.warnings if "Skipping malformed URL" in warning]) == 5
+
+
+def test_duplicate_heavy_url_file_does_not_duplicate_endpoints(tmp_path: Path) -> None:
+    (tmp_path / "urls.txt").write_text(
+        "\n".join(["https://app.example-bounty.test/account?user_id=1001"] * 25),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert len(state.endpoints) == 1
+    assert len([item for item in state.evidence if item.evidence_type == "endpoint"]) == 1

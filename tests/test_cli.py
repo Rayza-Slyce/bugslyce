@@ -128,3 +128,38 @@ def test_cli_run_with_future_provider_fails_gracefully(tmp_path: Path, monkeypat
     assert "LLM provider 'gemini' is configured but not implemented yet" in captured.err
     assert "bugslyce config reset" in captured.err
     assert not output_dir.exists()
+
+
+def test_cli_run_with_only_scope_file_succeeds(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- `app.example-bounty.test`\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["run", str(input_dir), "--output", str(output_dir)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "project_state.json").exists()
+    assert "Candidates:" in captured.out
+
+
+def test_cli_run_with_empty_optional_files_succeeds(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    for filename in ("scope.md", "subdomains.txt", "httpx.jsonl", "urls.txt", "notes.md"):
+        (input_dir / filename).write_text("", encoding="utf-8")
+
+    exit_code = main(["run", str(input_dir), "--output", str(output_dir)])
+
+    assert exit_code == 0
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "project_state.json").exists()

@@ -146,6 +146,24 @@ def test_low_signal_demo_only_produces_low_or_kill_switch_candidates() -> None:
 
     assert candidates
     assert all(candidate.priority in {"low", "kill_switch"} for candidate in candidates)
+    assert not any(candidate.priority in {"high", "medium"} for candidate in candidates)
+
+
+def test_duplicate_heavy_url_file_does_not_explode_candidates(tmp_path: Path) -> None:
+    (tmp_path / "urls.txt").write_text(
+        "\n".join(["https://app.example-bounty.test/account?user_id=1001"] * 25),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+
+    assert len(state.endpoints) == 1
+    assert len(candidates) == 2
+    assert {candidate.candidate_type for candidate in candidates} == {
+        "auth_surface",
+        "object_reference_review",
+    }
 
 
 def test_generic_technology_review_candidates_are_low_priority() -> None:

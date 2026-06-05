@@ -184,7 +184,7 @@ def _candidate_lines(candidate: Candidate) -> list[str]:
         f"- Priority: `{candidate.priority}`",
         f"- Rationale: {_md(candidate.rationale)}",
         f"- Affected assets: {_csv(candidate.affected_assets)}",
-        f"- Affected endpoints: {_csv(candidate.affected_endpoints)}",
+        f"- Affected endpoints: {format_endpoint_list(candidate.affected_endpoints)}",
         f"- Evidence IDs: {_csv(candidate.evidence_ids)}",
         "- Suggested manual validation:",
     ]
@@ -272,13 +272,23 @@ def _csv(values: list[str]) -> str:
 def format_evidence_ids(evidence_ids: list[str], max_items: int = 4) -> str:
     """Format evidence IDs compactly for Markdown tables."""
 
-    if not evidence_ids:
-        return "none"
-    if len(evidence_ids) <= max_items:
-        return _csv(evidence_ids)
+    return _format_limited_list(evidence_ids, max_items)
 
-    visible = evidence_ids[:max_items]
-    remaining = len(evidence_ids) - max_items
+
+def format_endpoint_list(endpoints: list[str], max_items: int = 4) -> str:
+    """Format endpoint lists compactly for Markdown candidate sections."""
+
+    return _format_limited_list(endpoints, max_items)
+
+
+def _format_limited_list(values: list[str], max_items: int) -> str:
+    if not values:
+        return "none"
+    if len(values) <= max_items:
+        return _csv(values)
+
+    visible = values[:max_items]
+    remaining = len(values) - max_items
     return f"{_csv(visible)} ... +{remaining} more"
 
 

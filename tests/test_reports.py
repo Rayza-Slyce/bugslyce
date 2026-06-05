@@ -8,6 +8,7 @@ from pathlib import Path
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.markdown import (
     export_project_state_json,
+    format_endpoint_list,
     format_evidence_ids,
     render_markdown_report,
     write_project_outputs,
@@ -119,3 +120,25 @@ def test_json_export_preserves_full_evidence_ids() -> None:
 
     assert exported_app["evidence_ids"] == app_asset.evidence_ids
     assert len(exported_app["evidence_ids"]) > 4
+
+
+def test_report_candidate_endpoint_lists_are_compacted_but_json_preserves_full_detail() -> None:
+    report, _state, candidates = _basic_saas_report()
+    auth_candidate = next(
+        candidate
+        for candidate in candidates
+        if candidate.candidate_type == "auth_surface"
+        and candidate.affected_assets == ["app.example-bounty.test"]
+    )
+    expected_compact = format_endpoint_list(auth_candidate.affected_endpoints)
+    exported = json.loads(export_project_state_json(_state, candidates))
+    exported_auth = next(
+        candidate
+        for candidate in exported["candidates"]
+        if candidate["id"] == auth_candidate.id
+    )
+
+    assert len(auth_candidate.affected_endpoints) > 4
+    assert "... +" in expected_compact
+    assert expected_compact in report
+    assert exported_auth["affected_endpoints"] == auth_candidate.affected_endpoints
