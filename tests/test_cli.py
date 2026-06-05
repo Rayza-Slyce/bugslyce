@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from bugslyce.cli import main
 
 
@@ -40,3 +42,24 @@ def test_cli_missing_input_directory_returns_nonzero(tmp_path: Path, capsys) -> 
     assert exit_code != 0
     assert "input directory does not exist" in captured.err
     assert not output_dir.exists()
+
+
+def test_cli_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce" in captured.out
+
+
+def test_cli_run_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["run", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce run" in captured.out
+    assert "--output" in captured.out

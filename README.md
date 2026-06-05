@@ -1,57 +1,106 @@
 # BugSlyce
 
-BugSlyce is a local-first, CLI-first bug bounty recon triage assistant. Its intended purpose is to ingest authorised recon outputs, organise attack surface data, evidence-link interesting signals, and eventually help produce careful manual testing reports.
+BugSlyce is a local-first, CLI-first bug bounty recon triage assistant for authorised testing workflows. It ingests existing recon outputs, organises assets and endpoints, links evidence, generates deterministic manual-review candidates, and writes a careful Markdown report plus a JSON project export.
 
-This repository is currently in its first implementation phase: skeleton only, with fake portfolio-safe demo data. It does not include parsing, scoring, LLM calls, live recon, scanner execution, vulnerability confirmation, exploit generation, bypassing, brute forcing, or any active testing capability.
+The current MVP is deterministic Python only. It does not make network requests, run scanners, call LLMs, or confirm security issues.
 
 ## What BugSlyce Is
 
-- A Python project for organising already-collected, authorised recon outputs.
-- A future deterministic triage helper for grouping hosts, URLs, notes, and evidence.
-- A future report drafting assistant that keeps human validation at the centre.
-- A portfolio-safe project designed to avoid storing private target data in the repo.
+- A local Python CLI for organising already-collected, authorised recon outputs.
+- A deterministic parser and triage assistant for hosts, HTTP metadata, URLs, notes, evidence, and grouped manual-review leads.
+- A report generator that uses careful language and keeps human validation at the centre.
+- A portfolio-safe project using fake demo data under `examples/demo_recon/`.
 
 ## What BugSlyce Is Not
 
-- Not a recon scanner.
+- Not a live recon tool.
+- Not a scanner runner.
 - Not an exploitation framework.
-- Not a vulnerability confirmation tool.
 - Not a brute force, bypass, fuzzing, or attack automation tool.
+- Not an LLM agent yet.
 - Not a replacement for manual validation, programme scope review, or responsible disclosure judgement.
 
-## v1 Scope
+## Current MVP Status
 
-The planned v1 scope is intentionally narrow:
+Implemented:
 
-- Ingest existing recon outputs supplied by the user.
-- Normalise and organise host, URL, HTTP metadata, and note records.
-- Keep deterministic Python behaviour as the default foundation.
-- Support no-LLM operation as a complete mode.
-- Treat any future LLM mode as optional and assistive only.
-- Generate careful report drafts that avoid claiming unconfirmed vulnerabilities.
+- Parsers for MVP input files.
+- In-memory `ProjectState` assembly with assets, HTTP services, endpoints, evidence IDs, warnings, and deterministic tags.
+- Grouped deterministic triage candidates.
+- Deterministic `report.md` generation.
+- Deterministic `project_state.json` export.
+- Thin CLI command: `bugslyce run <input_dir> --output <output_dir>`.
+
+Candidates are manual review leads, not confirmed findings. They are evidence-backed prompts for careful manual validation.
+
+## Local Development Install
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+## Running Tests
+
+```bash
+pytest
+```
+
+## Running The Demo
+
+```bash
+bugslyce run ./examples/demo_recon/basic_saas --output ./bugslyce-output/demo-basic-saas
+```
+
+Fallback module command:
+
+```bash
+python -m bugslyce.cli run ./examples/demo_recon/basic_saas --output ./bugslyce-output/demo-basic-saas
+```
+
+Expected outputs:
+
+- `report.md`
+- `project_state.json`
+
+## Current Inputs
+
+BugSlyce currently looks for these files in an input directory:
+
+- `scope.md`
+- `subdomains.txt`
+- `httpx.jsonl`
+- `urls.txt`
+- `notes.md`
+
+Missing optional files are handled with warnings rather than stopping the run.
 
 ## Safety Boundaries
 
 BugSlyce is for authorised testing only. Use it only with programmes, assets, and data you are explicitly permitted to assess.
 
-Do not commit raw recon files, private outputs, screenshots, Burp exports, HAR files, API keys, tokens, customer data, or any sensitive material. Keep private testing material outside the repository, such as in `private_recon/` or `raw-recon/`, both of which are ignored by default.
+Do not commit raw recon files, private outputs, screenshots, Burp exports, HAR files, API keys, tokens, customer data, or sensitive material.
 
-The demo data in this repository is fictional and sanitised. Domains such as `example-bounty.test` are not real targets and are included only to exercise future parsing and triage behaviour.
+These paths are gitignored by default:
 
-## Deterministic Python First, LLM Second
+- `bugslyce-output/`
+- `private_recon/`
+- `raw-recon/`
+- `.env`
 
-BugSlyce should work without an LLM provider. No-LLM mode must remain functional and useful.
+The demo data in this repository is fictional and sanitised. Domains such as `example-bounty.test` are not real targets.
 
-Future LLM support may help summarise evidence or draft language, but it must be optional, conservative, and controlled. Raw recon should not be sent to any provider by default. The `BUGSLYCE_SEND_RAW_RECON=false` setting exists to make that boundary explicit.
+## Current Non-Goals
 
-## Current Status
+- No live recon.
+- No scanning.
+- No LLM calls yet.
+- No config flow yet.
+- No assisted recon.
+- No vulnerability confirmation.
+- No exploit generation or active testing logic.
 
-This phase contains only:
+## Deterministic Python First, LLM Later
 
-- Repository skeleton.
-- Placeholder Python modules with docstrings.
-- Test folder placeholders.
-- Safety-focused configuration files.
-- Fake demo recon datasets for future parser and triage tests.
-
-Implementation of parsers, scoring, classification, report generation, and LLM integrations is intentionally deferred.
+No-LLM mode works as the current default. Future LLM support, if added, should remain optional, conservative, and controlled. Raw recon should not be sent to any provider by default.
