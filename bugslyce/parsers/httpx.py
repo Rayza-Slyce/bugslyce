@@ -1,0 +1,1 @@
+"""HTTP metadata parser placeholder."""

@@ -1,0 +1,15 @@
+https://api.example-bounty.test/v1/users?user_id=1001
+https://api.example-bounty.test/v1/users/1001
+https://api.example-bounty.test/v1/users/1001?expand=account
+https://api.example-bounty.test/v1/accounts?account_id=acct-demo
+https://api.example-bounty.test/v1/accounts/acct-demo/members?org_id=org-demo
+https://api.example-bounty.test/v1/tenants/demo-tenant/projects?tenant_id=demo-tenant
+https://api.example-bounty.test/v1/files/download?file_id=file-demo&return_to=/files
+https://api.example-bounty.test/v1/imports
+https://api.example-bounty.test/v1/exports?format=csv
+https://api.example-bounty.test/v1/exports?format=csv
+https://graphql.example-bounty.test/graphql
+https://docs.example-bounty.test/api/reference
+https://docs.example-bounty.test/api/reference?version=v1
+https://dev.example-bounty.test/login?next=/console
+https://staging.example-bounty.test/admin/audit-log

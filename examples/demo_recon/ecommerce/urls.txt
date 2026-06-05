@@ -1,0 +1,17 @@
+https://shop.example-bounty.test/
+https://shop.example-bounty.test/products
+https://shop.example-bounty.test/products?category=shoes
+https://shop.example-bounty.test/cart
+https://shop.example-bounty.test/account/orders?user_id=2042
+https://shop.example-bounty.test/account/orders/5001?order_id=5001
+https://shop.example-bounty.test/returns?order_id=5001&return_to=/account
+https://shop.example-bounty.test/login?redirect=/checkout
+https://checkout.example-bounty.test/start?cart_id=demo-cart
+https://api.example-bounty.test/v2/orders?account_id=2042
+https://api.example-bounty.test/v2/orders/5001/export?format=json
+https://admin.example-bounty.test/login
+https://admin.example-bounty.test/products/import
+https://static.example-bounty.test/css/site.css
+https://static.example-bounty.test/js/site.js
+https://static.example-bounty.test/js/site.js
+https://img.static.example-bounty.test/products/demo-shirt.webp

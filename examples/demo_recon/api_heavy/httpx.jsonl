@@ -1,0 +1,6 @@
+{"url":"https://api.example-bounty.test","host":"api.example-bounty.test","status_code":200,"title":"Example API","tech":["nginx","Go"],"content_length":640}
+{"url":"https://graphql.example-bounty.test","host":"graphql.example-bounty.test","status_code":200,"title":"GraphQL Explorer Disabled","tech":["nginx"],"content_length":1180}
+{"url":"https://docs.example-bounty.test","host":"docs.example-bounty.test","status_code":200,"title":"Developer Docs","tech":["Docusaurus"],"content_length":55120}
+{"url":"https://dev.example-bounty.test","host":"dev.example-bounty.test","status_code":302,"title":"Redirect","tech":["nginx"],"content_length":96}
+{"url":"https://staging.example-bounty.test","host":"staging.example-bounty.test","status_code":401,"title":"Staging Login","tech":["nginx"],"content_length":8452}
+{"url":"https://internal-docs.example-bounty.test","host":"internal-docs.example-bounty.test","status_code":403,"title":"Forbidden","tech":[],"content_length":271}

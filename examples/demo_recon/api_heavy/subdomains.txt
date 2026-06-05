@@ -1,0 +1,8 @@
+api.example-bounty.test
+app.example-bounty.test
+dev.example-bounty.test
+staging.example-bounty.test
+graphql.example-bounty.test
+docs.example-bounty.test
+api.example-bounty.test
+internal-docs.example-bounty.test

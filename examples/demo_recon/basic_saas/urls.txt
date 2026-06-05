@@ -1,0 +1,17 @@
+https://app.example-bounty.test/
+https://app.example-bounty.test/login
+https://app.example-bounty.test/account
+https://app.example-bounty.test/account/settings?user_id=1001
+https://app.example-bounty.test/reset?token=REDACTED
+https://app.example-bounty.test/dashboard?org_id=acme-demo
+https://app.example-bounty.test/dashboard?org_id=acme-demo
+https://app.example-bounty.test/export?account_id=1001&format=csv
+https://app.example-bounty.test/download?file=monthly-summary.pdf
+https://app.example-bounty.test/auth/callback?next=/dashboard
+https://api.example-bounty.test/v1/users?tenant_id=demo-tenant
+https://api.example-bounty.test/v1/accounts/1001/orders?order_id=5001
+https://staging.example-bounty.test/login
+https://admin.example-bounty.test/admin/users
+https://cdn.example-bounty.test/static/app.js
+https://cdn.example-bounty.test/static/app.js?v=2
+https://cdn.example-bounty.test/images/logo.png

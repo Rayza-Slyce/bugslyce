@@ -1,0 +1,5 @@
+{"url":"https://www.example-bounty.test","host":"www.example-bounty.test","status_code":200,"title":"Example Bounty Marketing","tech":["nginx"],"content_length":39220}
+{"url":"https://cdn.example-bounty.test","host":"cdn.example-bounty.test","status_code":200,"title":"CDN","tech":["CDN"],"content_length":810}
+{"url":"https://static.example-bounty.test","host":"static.example-bounty.test","status_code":200,"title":"Static Assets","tech":["CDN"],"content_length":920}
+{"url":"https://assets.example-bounty.test","host":"assets.example-bounty.test","status_code":404,"title":"Not Found","tech":[],"content_length":172}
+{"url":"https://media.example-bounty.test","host":"media.example-bounty.test","status_code":200,"title":"Media Library","tech":["CDN"],"content_length":1304}

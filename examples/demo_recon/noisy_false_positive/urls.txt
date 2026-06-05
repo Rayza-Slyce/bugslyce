@@ -1,0 +1,17 @@
+https://admin.example-bounty.test/login
+https://admin.example-bounty.test/login?return_to=/admin
+https://admin.example-bounty.test/admin
+https://admin.example-bounty.test/admin/users?user_id=1001
+https://dev.example-bounty.test/debug
+https://dev.example-bounty.test/debug?next=/console
+https://backup.example-bounty.test/backup.zip
+https://backup.example-bounty.test/download?file=backup.zip
+https://not-a-secret.example-bounty.test/status
+https://not-a-secret.example-bounty.test/status?url=https%3A%2F%2Fapp.example-bounty.test
+https://app.example-bounty.test/assets/app.js
+https://cdn.example-bounty.test/assets/app.js
+https://cdn.example-bounty.test/assets/app.js?cache=2024
+https://cdn.example-bounty.test/assets/app.js?cache=2024
+https://app.example-bounty.test/redirect?url=/dashboard
+https://app.example-bounty.test/import
+https://app.example-bounty.test/export?org_id=org-demo

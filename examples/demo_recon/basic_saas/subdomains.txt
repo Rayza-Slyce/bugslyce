@@ -1,0 +1,9 @@
+app.example-bounty.test
+api.example-bounty.test
+staging.example-bounty.test
+admin.example-bounty.test
+cdn.example-bounty.test
+www.example-bounty.test
+app.example-bounty.test
+assets.cdn.example-bounty.test
+old-staging.example-bounty.test

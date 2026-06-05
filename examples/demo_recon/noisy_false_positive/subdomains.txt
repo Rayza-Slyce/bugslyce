@@ -1,0 +1,9 @@
+admin.example-bounty.test
+dev.example-bounty.test
+test.example-bounty.test
+backup.example-bounty.test
+cdn.example-bounty.test
+app.example-bounty.test
+admin-old.example-bounty.test
+not-a-secret.example-bounty.test
+dev.example-bounty.test

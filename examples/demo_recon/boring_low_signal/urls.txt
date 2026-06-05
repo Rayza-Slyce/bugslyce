@@ -1,0 +1,13 @@
+https://www.example-bounty.test/
+https://www.example-bounty.test/about
+https://www.example-bounty.test/pricing
+https://www.example-bounty.test/contact
+https://www.example-bounty.test/blog
+https://www.example-bounty.test/blog?page=2
+https://cdn.example-bounty.test/css/main.css
+https://cdn.example-bounty.test/js/main.js
+https://cdn.example-bounty.test/js/main.js
+https://cdn.example-bounty.test/fonts/inter.woff2
+https://static.example-bounty.test/images/hero.jpg
+https://static.example-bounty.test/images/logo.png
+https://media.example-bounty.test/brand/banner.webp

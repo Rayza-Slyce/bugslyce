@@ -1,0 +1,6 @@
+{"url":"https://admin.example-bounty.test","host":"admin.example-bounty.test","status_code":401,"title":"Admin Login","tech":["nginx"],"content_length":10044}
+{"url":"https://admin-old.example-bounty.test","host":"admin-old.example-bounty.test","status_code":410,"title":"Gone","tech":[],"content_length":251}
+{"url":"https://dev.example-bounty.test","host":"dev.example-bounty.test","status_code":403,"title":"Forbidden","tech":["nginx"],"content_length":342}
+{"url":"https://backup.example-bounty.test","host":"backup.example-bounty.test","status_code":404,"title":"Not Found","tech":[],"content_length":180}
+{"url":"https://not-a-secret.example-bounty.test","host":"not-a-secret.example-bounty.test","status_code":200,"title":"Public Status Page","tech":["nginx"],"content_length":6260}
+{"url":"https://cdn.example-bounty.test","host":"cdn.example-bounty.test","status_code":200,"title":"CDN","tech":["CDN"],"content_length":902}

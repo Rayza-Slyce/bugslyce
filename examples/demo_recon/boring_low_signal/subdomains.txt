@@ -1,0 +1,6 @@
+www.example-bounty.test
+cdn.example-bounty.test
+static.example-bounty.test
+assets.example-bounty.test
+media.example-bounty.test
+www.example-bounty.test

@@ -1,0 +1,6 @@
+{"url":"https://shop.example-bounty.test","host":"shop.example-bounty.test","status_code":200,"title":"Example Shop","tech":["nginx","Next.js"],"content_length":77120}
+{"url":"https://checkout.example-bounty.test","host":"checkout.example-bounty.test","status_code":302,"title":"Redirecting","tech":["nginx"],"content_length":144}
+{"url":"https://api.example-bounty.test","host":"api.example-bounty.test","status_code":404,"title":"Not Found","tech":["Express"],"content_length":89}
+{"url":"https://admin.example-bounty.test","host":"admin.example-bounty.test","status_code":401,"title":"Admin Login","tech":["nginx"],"content_length":10312}
+{"url":"https://static.example-bounty.test","host":"static.example-bounty.test","status_code":200,"title":"Static Content","tech":["CDN"],"content_length":2024}
+{"url":"https://promo.example-bounty.test","host":"promo.example-bounty.test","status_code":200,"title":"Spring Campaign Archive","tech":["nginx"],"content_length":14880}

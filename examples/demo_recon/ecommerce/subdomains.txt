@@ -1,0 +1,8 @@
+shop.example-bounty.test
+static.example-bounty.test
+api.example-bounty.test
+admin.example-bounty.test
+checkout.example-bounty.test
+shop.example-bounty.test
+img.static.example-bounty.test
+promo.example-bounty.test
