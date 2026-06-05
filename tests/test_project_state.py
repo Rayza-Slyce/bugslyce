@@ -132,6 +132,25 @@ def test_missing_optional_files_do_not_crash_project_assembly(tmp_path: Path) ->
     assert any("Optional input file missing" in warning for warning in state.warnings)
 
 
+def test_project_state_builds_from_local_lab_ip_fixture() -> None:
+    state = build_project_state(FIXTURES_ROOT / "local_lab_ip")
+    assets = {asset.hostname: asset for asset in state.assets}
+    services = {service.url: service for service in state.http_services}
+    endpoints = {endpoint.url: endpoint for endpoint in state.endpoints}
+
+    assert "10.10.10.10" in assets
+    assert assets["10.10.10.10"].in_scope is True
+    assert "http://10.10.10.10/" in services
+    assert "http://10.10.10.10:8080/" in services
+    assert "http://10.10.10.10/login" in endpoints
+    assert "http://10.10.10.10:8080/api/users?user_id=1" in endpoints
+    assert endpoints["http://10.10.10.10:8080/api/users?user_id=1"].query_params == ["user_id"]
+    assert endpoints["http://10.10.10.10:8080/api/users?user_id=1"].tags == [
+        "api_surface",
+        "object_reference",
+    ]
+
+
 def test_malformed_httpx_lines_do_not_crash_project_assembly(tmp_path: Path) -> None:
     (tmp_path / "httpx.jsonl").write_text(
         "\n".join(

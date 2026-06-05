@@ -1,0 +1,3 @@
+# IP-style lab asset list
+10.10.10.10
+10.10.10.10

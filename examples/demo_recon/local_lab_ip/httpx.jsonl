@@ -1,0 +1,2 @@
+{"url":"http://10.10.10.10","host":"10.10.10.10","status_code":200,"title":"Local Lab Landing","tech":["nginx"],"content_length":18420}
+{"url":"http://10.10.10.10:8080","host":"10.10.10.10","status_code":200,"title":"Local Lab API","tech":["Python"],"content_length":921}

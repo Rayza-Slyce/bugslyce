@@ -76,6 +76,24 @@ For private local use, keep real/private recon under `private_recon/`, `raw-reco
 
 Do not commit real targets, API keys, screenshots, Burp files, HAR files, or raw private outputs.
 
+## Safe Private Lab Workflow
+
+For authorised private lab data, keep inputs in a gitignored folder:
+
+```bash
+mkdir -p private_recon/thm-lab-name
+cd private_recon/thm-lab-name
+touch scope.md subdomains.txt httpx.jsonl urls.txt notes.md
+```
+
+Then run BugSlyce from the repository root:
+
+```bash
+bugslyce run ./private_recon/thm-lab-name --output ./bugslyce-output/thm-lab-name
+```
+
+`private_recon/` and `bugslyce-output/` are gitignored. Do not commit real lab outputs. BugSlyce does not run scans yet; it only ingests files you provide. Candidates are manual review leads, not confirmed findings.
+
 ## Candidate Language
 
 Candidates are manual review leads, not confirmed findings. Evidence IDs show why something was included in the queue.

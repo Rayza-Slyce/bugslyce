@@ -187,3 +187,18 @@ def test_cli_run_with_empty_optional_files_succeeds(tmp_path: Path, monkeypatch)
     assert exit_code == 0
     assert (output_dir / "report.md").exists()
     assert (output_dir / "project_state.json").exists()
+
+
+def test_cli_run_succeeds_against_local_lab_ip(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    output_dir = tmp_path / "lab-output"
+
+    exit_code = main(["run", str(FIXTURES_ROOT / "local_lab_ip"), "--output", str(output_dir)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "project_state.json").exists()
+    assert "Candidates:" in captured.out
+    assert "10.10.10.10" in (output_dir / "report.md").read_text(encoding="utf-8")

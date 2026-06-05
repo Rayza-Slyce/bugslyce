@@ -142,3 +142,13 @@ def test_report_candidate_endpoint_lists_are_compacted_but_json_preserves_full_d
     assert "... +" in expected_compact
     assert expected_compact in report
     assert exported_auth["affected_endpoints"] == auth_candidate.affected_endpoints
+
+
+def test_report_renders_ip_assets() -> None:
+    state = build_project_state(FIXTURES_ROOT / "local_lab_ip")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+
+    assert "10.10.10.10" in report
+    assert "http://10.10.10.10/login" in report
+    assert "CAND-" in report

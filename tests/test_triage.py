@@ -173,3 +173,16 @@ def test_generic_technology_review_candidates_are_low_priority() -> None:
 
     assert technology_candidates
     assert all(candidate.priority == "low" for candidate in technology_candidates)
+
+
+def test_ip_based_fixture_generates_expected_surface_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "local_lab_ip")
+    candidates = generate_candidates(state)
+    candidate_types = {candidate.candidate_type for candidate in candidates}
+
+    assert "auth_surface" in candidate_types
+    assert "admin_surface" in candidate_types
+    assert "api_surface" in candidate_types
+    assert "file_or_content_surface" in candidate_types
+    assert "object_reference_review" in candidate_types
+    assert any("10.10.10.10" in candidate.affected_assets for candidate in candidates)

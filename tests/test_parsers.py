@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from bugslyce.core.normalise import normalise_hostname
 from bugslyce.core.scope import parse_scope
 from bugslyce.parsers.httpx import parse_httpx_jsonl
 from bugslyce.parsers.notes import parse_notes
@@ -103,6 +104,17 @@ def test_parse_urls_skips_malformed_urls_safely(tmp_path: Path) -> None:
     assert len(parsed) == 1
     assert parsed[0].hostname == "app.example-bounty.test"
     assert parsed[0].query_param_names == ["user_id", "next"]
+
+
+def test_ip_hostname_normalisation_and_url_parsing() -> None:
+    assert normalise_hostname(" 10.10.10.10. ") == "10.10.10.10"
+
+    parsed = parse_urls(FIXTURES_ROOT / "local_lab_ip" / "urls.txt")
+    api_endpoint = next(record for record in parsed if record.hostname == "10.10.10.10" and record.path == "/api/users")
+
+    assert api_endpoint.scheme == "http"
+    assert api_endpoint.hostname == "10.10.10.10"
+    assert api_endpoint.query_param_names == ["user_id"]
 
 
 def test_missing_optional_files_are_handled_safely(tmp_path: Path) -> None:

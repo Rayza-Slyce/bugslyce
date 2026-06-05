@@ -1,0 +1,12 @@
+http://10.10.10.10/
+http://10.10.10.10/login
+http://10.10.10.10/logout
+http://10.10.10.10/admin
+http://10.10.10.10/admin/users?user_id=1
+http://10.10.10.10:8080/api/users?user_id=1
+http://10.10.10.10:8080/api/users?user_id=1
+http://10.10.10.10/upload
+http://10.10.10.10/download?file=demo.txt
+http://10.10.10.10/static/app.js
+http://10.10.10.10/static/site.css
+http://10.10.10.10/redirect?next=/dashboard
