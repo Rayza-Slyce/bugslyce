@@ -64,6 +64,24 @@ Expected outputs:
 - `report.md`
 - `project_state.json`
 
+## Current MVP Workflow
+
+```bash
+bugslyce run ./examples/demo_recon/basic_saas --output ./bugslyce-output/demo-basic-saas
+```
+
+BugSlyce currently ingests recon files; it does not gather recon itself yet. Automated recon is planned later, but it is not part of the current MVP.
+
+For private local use, keep real/private recon under `private_recon/`, `raw-recon/`, or another gitignored path. Write generated outputs under `bugslyce-output/`.
+
+Do not commit real targets, API keys, screenshots, Burp files, HAR files, or raw private outputs.
+
+## Candidate Language
+
+Candidates are manual review leads, not confirmed findings. Evidence IDs show why something was included in the queue.
+
+Priority means manual attention priority, not severity. A `kill_switch` priority means low signal or stop-unless-new-evidence, not proof of safety.
+
 ## Local Config
 
 BugSlyce defaults to no-LLM mode:
@@ -133,6 +151,26 @@ The demo data in this repository is fictional and sanitised. Domains such as `ex
 - No assisted recon.
 - No vulnerability confirmation.
 - No exploit generation or active testing logic.
+
+## Known Limitations
+
+- Does not run recon yet.
+- Does not parse Burp exports, nuclei output, or screenshots yet.
+- Scope matching is simple.
+- Report output is deterministic and may still need human judgement.
+- No LLM provider calls are implemented yet.
+- No confirmed vulnerability claims.
+
+## Roadmap
+
+- v0.1: deterministic recon-output triage.
+- v0.2: private lab/IP support.
+- v0.3: recon planning model, no execution yet.
+- v0.4: controlled lab-safe recon execution.
+- v0.5: passive/bug-bounty-safe recon profiles.
+- v0.6: optional LLM report enhancement from minimised context.
+
+LLMs are optional and are not required for the deterministic engine.
 
 ## Deterministic Python First, LLM Later
 

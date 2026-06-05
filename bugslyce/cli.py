@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+from bugslyce import __version__
 from bugslyce.config import (
     forget_provider_keys,
     init_config,
@@ -41,6 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="bugslyce",
         description="Local-first bug bounty recon triage assistant.",
     )
+    parser.add_argument("--version", action="version", version=f"bugslyce {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(

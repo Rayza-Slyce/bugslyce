@@ -45,6 +45,30 @@ def test_cli_missing_input_directory_returns_nonzero(tmp_path: Path, capsys) -> 
     assert not output_dir.exists()
 
 
+def test_cli_input_path_file_returns_nonzero(tmp_path: Path, capsys) -> None:
+    input_file = tmp_path / "input.txt"
+    output_dir = tmp_path / "output"
+    input_file.write_text("not a directory", encoding="utf-8")
+
+    exit_code = main(["run", str(input_file), "--output", str(output_dir)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "input path is not a directory" in captured.err
+    assert not output_dir.exists()
+
+
+def test_cli_version_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "bugslyce 0.1.0" in captured.out
+
+
 def test_cli_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--help"])
