@@ -48,11 +48,7 @@ def priority_for_service(service: HTTPService, asset: Asset | None) -> str:
     if should_force_kill_switch(asset):
         return "kill_switch"
 
-    score = 1 if service.technologies else 0
-    if asset and any(tag in asset.tags for tag in ("admin", "api", "environment")):
-        score += 1
-
-    return priority_from_score(score)
+    return "low"
 
 
 def priority_for_note(asset: Asset | None = None) -> str:

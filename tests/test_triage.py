@@ -146,3 +146,12 @@ def test_low_signal_demo_only_produces_low_or_kill_switch_candidates() -> None:
 
     assert candidates
     assert all(candidate.priority in {"low", "kill_switch"} for candidate in candidates)
+
+
+def test_generic_technology_review_candidates_are_low_priority() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    technology_candidates = [candidate for candidate in candidates if candidate.candidate_type == "technology_review"]
+
+    assert technology_candidates
+    assert all(candidate.priority == "low" for candidate in technology_candidates)

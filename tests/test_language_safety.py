@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bugslyce.core.models import Candidate
 from bugslyce.core.project import build_project_state
+from bugslyce.reports.markdown import render_markdown_report
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -20,6 +21,7 @@ FORBIDDEN_TERMS = (
     "pwned",
     "compromised",
     "breached",
+    "owned",
 )
 
 
@@ -42,3 +44,11 @@ def test_candidate_language_avoids_forbidden_terms() -> None:
     ).lower()
 
     assert not any(term in text for term in FORBIDDEN_TERMS)
+
+
+def test_markdown_report_language_avoids_forbidden_terms() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates).lower()
+
+    assert not any(term in report for term in FORBIDDEN_TERMS)
