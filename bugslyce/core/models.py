@@ -135,3 +135,19 @@ class ProjectState:
     evidence: list[Evidence]
     warnings: list[str]
     generated_at: str
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """Evidence-backed manual review lead generated from deterministic signals."""
+
+    id: str
+    candidate_type: str
+    title: str
+    priority: str
+    rationale: str
+    affected_assets: list[str]
+    affected_endpoints: list[str]
+    evidence_ids: list[str]
+    suggested_manual_validation: list[str]
+    kill_switch_guidance: str | None

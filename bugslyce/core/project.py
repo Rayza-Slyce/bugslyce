@@ -303,12 +303,16 @@ def _host_matches_scope(hostname: str, scope_host: str) -> bool:
 
 def _host_tags(hostname: str) -> list[str]:
     host = hostname.lower()
+    non_tld_labels = host.split(".")[:-1]
     tags: list[str] = []
     if "api" in host:
         tags.append("api")
     if "admin" in host:
         tags.append("admin")
-    if any(marker in host for marker in ("staging", "stage", "dev", "test")):
+    if any(
+        label == "test" or any(marker in label for marker in ("staging", "stage", "dev"))
+        for label in non_tld_labels
+    ):
         tags.append("environment")
     if any(marker in host for marker in ("cdn", "static", "assets")):
         tags.append("static_or_cdn")
@@ -321,7 +325,7 @@ def _endpoint_tags(path: str, query_params: list[str]) -> list[str]:
     combined_params = " ".join(lower_params)
     tags: list[str] = []
 
-    if any(marker in lower_path for marker in ("login", "auth", "reset", "account", "session")):
+    if _is_auth_surface_path(lower_path):
         tags.append("auth_surface")
     if "admin" in lower_path:
         tags.append("admin_surface")
@@ -339,3 +343,28 @@ def _endpoint_tags(path: str, query_params: list[str]) -> list[str]:
         tags.append("static_asset")
 
     return tags
+
+
+def _is_auth_surface_path(path: str) -> bool:
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    first_segment = segments[0] if segments else ""
+    auth_segments = {
+        "login",
+        "logout",
+        "signin",
+        "signup",
+        "register",
+        "reset",
+        "password",
+        "forgot-password",
+        "auth",
+        "session",
+        "sessions",
+        "oauth",
+        "sso",
+    }
+    user_account_segments = {"account", "profile", "me"}
+
+    if any(segment in auth_segments for segment in segments):
+        return True
+    return first_segment in user_account_segments

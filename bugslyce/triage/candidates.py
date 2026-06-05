@@ -1,1 +1,420 @@
-"""Candidate grouping placeholder for future triage."""
+"""Generate evidence-backed manual review candidates from ProjectState."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+
+from bugslyce.core.models import Asset, Candidate, Endpoint, Evidence, ProjectState
+from bugslyce.triage.classify import (
+    ADMIN_SURFACE,
+    API_SURFACE,
+    AUTH_SURFACE,
+    ENVIRONMENT_SURFACE,
+    FILE_OR_CONTENT_SURFACE,
+    KILL_SWITCH,
+    LOW_SIGNAL_STATIC,
+    MANUAL_NOTE_REVIEW,
+    OBJECT_REFERENCE_REVIEW,
+    REDIRECT_PARAMETER_REVIEW,
+    TECHNOLOGY_REVIEW,
+)
+from bugslyce.triage.killswitch import (
+    LOW_SIGNAL_GUIDANCE,
+    VALIDATION_GUIDANCE,
+    asset_kill_switch_guidance,
+    endpoint_kill_switch_guidance,
+)
+from bugslyce.triage.scoring import (
+    priority_for_asset,
+    priority_for_endpoint,
+    priority_for_note,
+    priority_for_service,
+)
+
+
+def generate_candidates(project_state: ProjectState) -> list[Candidate]:
+    """Generate deterministic manual-review leads from assembled project state."""
+
+    candidates: list[Candidate] = []
+    seen: set[tuple[str, str]] = set()
+    assets_by_host = {asset.hostname: asset for asset in project_state.assets}
+    endpoint_groups: dict[tuple[str, str], _EndpointCandidateGroup] = {}
+    endpoint_group_order: list[tuple[str, str]] = []
+
+    for endpoint in project_state.endpoints:
+        asset = assets_by_host.get(endpoint.hostname)
+        if "static_asset" in endpoint.tags and _only_static_context(endpoint):
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                LOW_SIGNAL_STATIC,
+                title=f"Low-signal static asset on {endpoint.hostname}",
+                rationale="This endpoint is a static asset in the parsed recon data and has no stronger linked context.",
+                suggested_manual_validation=[
+                    "Treat this as low signal unless manual recon adds stronger context.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+            continue
+
+        if "auth_surface" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                AUTH_SURFACE,
+                f"Auth-flow manual review for {endpoint.hostname}",
+                "This endpoint has auth, login, reset, account, or session path context in parsed URL evidence.",
+                [
+                    "Review the programme scope before any manual testing.",
+                    "Manually inspect the auth flow and note expected behaviours.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+        if "admin_surface" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                ADMIN_SURFACE,
+                f"Admin-surface manual review for {endpoint.hostname}",
+                "This endpoint has admin path context in parsed URL evidence.",
+                [
+                    "Review the programme scope before any manual testing.",
+                    "Manually inspect expected access requirements for this admin-labelled surface.",
+                    "Do not treat this as a finding without manual validation.",
+                ],
+            )
+        if "api_surface" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                API_SURFACE,
+                f"API-surface manual review for {endpoint.hostname}",
+                "This endpoint has API-style path context in parsed URL evidence.",
+                [
+                    "Review the programme scope before any manual testing.",
+                    "Manually inspect documented API behaviour and expected access requirements.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+        if "file_or_content_surface" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                FILE_OR_CONTENT_SURFACE,
+                f"File or content-flow manual review for {endpoint.hostname}",
+                "This endpoint has upload, import, export, download, file, or content context in parsed URL evidence.",
+                [
+                    "Check whether upload or download functionality has documented constraints.",
+                    "Review the programme scope before any manual testing.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+        if "object_reference" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                OBJECT_REFERENCE_REVIEW,
+                f"Object reference review for {endpoint.hostname}",
+                "This endpoint has object-like query parameters in parsed URL evidence.",
+                [
+                    "Check whether object-like parameters are tied to the authenticated user context.",
+                    "Review expected access boundaries using authorised accounts only.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+        if "redirect_parameter" in endpoint.tags:
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                REDIRECT_PARAMETER_REVIEW,
+                f"Redirect-parameter review for {endpoint.hostname}",
+                "This endpoint has redirect-like query parameters in parsed URL evidence.",
+                [
+                    "Review redirect-like parameters for intended navigation behaviour.",
+                    "Manually inspect expected destinations using authorised flows only.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
+
+    for key in endpoint_group_order:
+        group = endpoint_groups[key]
+        _add_candidate(
+            candidates,
+            seen,
+            group.candidate_type,
+            group.hostname,
+            title=group.title,
+            priority=_combine_priorities(group.priorities),
+            rationale=group.rationale,
+            affected_assets=[group.hostname],
+            affected_endpoints=group.affected_endpoints,
+            evidence_ids=group.evidence_ids,
+            suggested_manual_validation=group.suggested_manual_validation,
+            kill_switch_guidance=_select_guidance(group.kill_switch_guidance),
+        )
+
+    for asset in project_state.assets:
+        if "environment" in asset.tags:
+            _add_candidate(
+                candidates,
+                seen,
+                ENVIRONMENT_SURFACE,
+                asset.hostname,
+                title=f"Environment-labelled host review for {asset.hostname}",
+                priority=priority_for_asset(asset, ENVIRONMENT_SURFACE),
+                rationale="This host has staging, stage, dev, or test naming context in parsed asset evidence.",
+                affected_assets=[asset.hostname],
+                affected_endpoints=[],
+                evidence_ids=asset.evidence_ids,
+                suggested_manual_validation=[
+                    "Review the programme scope before any manual testing.",
+                    "Manually inspect whether the host is intended for tester access.",
+                    "Do not treat this as a finding without manual validation.",
+                ],
+                kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
+            )
+        if "static_or_cdn" in asset.tags and len(asset.tags) == 1:
+            _add_candidate(
+                candidates,
+                seen,
+                LOW_SIGNAL_STATIC,
+                asset.hostname,
+                title=f"Low-signal static or CDN host for {asset.hostname}",
+                priority="low" if asset.in_scope is True else "kill_switch",
+                rationale="This host has static or CDN naming context and no stronger linked host tag.",
+                affected_assets=[asset.hostname],
+                affected_endpoints=[],
+                evidence_ids=asset.evidence_ids,
+                suggested_manual_validation=[
+                    "Treat this as low signal unless manual recon adds stronger context.",
+                    "Do not spend time here unless new evidence links it to sensitive functionality.",
+                ],
+                kill_switch_guidance=asset_kill_switch_guidance(asset) or LOW_SIGNAL_GUIDANCE,
+            )
+
+    for service in project_state.http_services:
+        asset = assets_by_host.get(service.hostname)
+        if not service.evidence_ids or not service.technologies:
+            continue
+        if not asset or not any(tag in asset.tags for tag in ("admin", "api", "environment")):
+            continue
+        _add_candidate(
+            candidates,
+            seen,
+            TECHNOLOGY_REVIEW,
+            service.url,
+            title=f"Technology-context review for {service.hostname}",
+            priority=priority_for_service(service, asset),
+            rationale="This HTTP service has technology metadata plus admin, API, or environment host context.",
+            affected_assets=[service.hostname],
+            affected_endpoints=[],
+            evidence_ids=service.evidence_ids,
+            suggested_manual_validation=[
+                "Review observed technology metadata as context only.",
+                "Manually inspect expected service behaviour within programme scope.",
+                "Record request/response evidence before escalating this lead.",
+            ],
+            kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
+        )
+
+    for note in _note_evidence(project_state.evidence):
+        linked_asset = _asset_mentioned_in_note(note, project_state.assets)
+        _add_candidate(
+            candidates,
+            seen,
+            MANUAL_NOTE_REVIEW,
+            note.id,
+            title="Manual note review",
+            priority=priority_for_note(linked_asset),
+            rationale="A manual note item was captured and may be useful context for review.",
+            affected_assets=[linked_asset.hostname] if linked_asset else [],
+            affected_endpoints=[],
+            evidence_ids=[note.id],
+            suggested_manual_validation=[
+                "Review the note in context with the original recon evidence.",
+                "Do not treat this as a finding without manual validation.",
+            ],
+            kill_switch_guidance=asset_kill_switch_guidance(linked_asset) if linked_asset else VALIDATION_GUIDANCE,
+        )
+
+    for asset in project_state.assets:
+        if asset.in_scope is not False:
+            continue
+        _add_candidate(
+            candidates,
+            seen,
+            KILL_SWITCH,
+            asset.hostname,
+            title=f"Scope review before testing {asset.hostname}",
+            priority="kill_switch",
+            rationale="This host appears to match out-of-scope information in the assembled project state.",
+            affected_assets=[asset.hostname],
+            affected_endpoints=[],
+            evidence_ids=asset.evidence_ids,
+            suggested_manual_validation=["Review programme scope before testing this host further."],
+            kill_switch_guidance="Review programme scope before testing this host further.",
+        )
+
+    return [_with_candidate_id(index, candidate) for index, candidate in enumerate(candidates, start=1)]
+
+
+@dataclass
+class _EndpointCandidateGroup:
+    candidate_type: str
+    hostname: str
+    title: str
+    rationale: str
+    suggested_manual_validation: list[str]
+    priorities: list[str] = field(default_factory=list)
+    affected_endpoints: list[str] = field(default_factory=list)
+    evidence_ids: list[str] = field(default_factory=list)
+    kill_switch_guidance: list[str] = field(default_factory=list)
+
+
+def _record_endpoint_group(
+    groups: dict[tuple[str, str], _EndpointCandidateGroup],
+    order: list[tuple[str, str]],
+    endpoint: Endpoint,
+    asset: Asset | None,
+    candidate_type: str,
+    title: str,
+    rationale: str,
+    suggested_manual_validation: list[str],
+) -> None:
+    if not endpoint.evidence_ids:
+        return
+
+    key = (candidate_type, endpoint.hostname)
+    if key not in groups:
+        order.append(key)
+        groups[key] = _EndpointCandidateGroup(
+            candidate_type=candidate_type,
+            hostname=endpoint.hostname,
+            title=title,
+            rationale=rationale,
+            suggested_manual_validation=suggested_manual_validation,
+        )
+
+    group = groups[key]
+    _append_unique(group.affected_endpoints, endpoint.url)
+    for evidence_id in endpoint.evidence_ids:
+        _append_unique(group.evidence_ids, evidence_id)
+    group.priorities.append(priority_for_endpoint(endpoint, asset, candidate_type))
+    guidance = endpoint_kill_switch_guidance(endpoint, asset)
+    if guidance:
+        _append_unique(group.kill_switch_guidance, guidance)
+
+
+def _combine_priorities(priorities: list[str]) -> str:
+    rank = {"low": 0, "medium": 1, "high": 2, "kill_switch": 3}
+    if not priorities:
+        return "low"
+    return max(priorities, key=lambda priority: rank[priority])
+
+
+def _select_guidance(guidance_values: list[str]) -> str | None:
+    if not guidance_values:
+        return None
+    for guidance in guidance_values:
+        if guidance != VALIDATION_GUIDANCE:
+            return guidance
+    return guidance_values[0]
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _add_candidate(
+    candidates: list[Candidate],
+    seen: set[tuple[str, str]],
+    candidate_type: str,
+    dedupe_key: str,
+    *,
+    title: str,
+    priority: str,
+    rationale: str,
+    affected_assets: list[str],
+    affected_endpoints: list[str],
+    evidence_ids: list[str],
+    suggested_manual_validation: list[str],
+    kill_switch_guidance: str | None,
+) -> None:
+    if not evidence_ids:
+        return
+    key = (candidate_type, dedupe_key)
+    if key in seen:
+        return
+    seen.add(key)
+    candidates.append(
+        Candidate(
+            id="",
+            candidate_type=candidate_type,
+            title=title,
+            priority=priority,
+            rationale=rationale,
+            affected_assets=_dedupe(affected_assets),
+            affected_endpoints=_dedupe(affected_endpoints),
+            evidence_ids=_dedupe(evidence_ids),
+            suggested_manual_validation=suggested_manual_validation,
+            kill_switch_guidance=kill_switch_guidance,
+        )
+    )
+
+
+def _with_candidate_id(index: int, candidate: Candidate) -> Candidate:
+    return Candidate(
+        id=f"CAND-{index:04d}",
+        candidate_type=candidate.candidate_type,
+        title=candidate.title,
+        priority=candidate.priority,
+        rationale=candidate.rationale,
+        affected_assets=candidate.affected_assets,
+        affected_endpoints=candidate.affected_endpoints,
+        evidence_ids=candidate.evidence_ids,
+        suggested_manual_validation=candidate.suggested_manual_validation,
+        kill_switch_guidance=candidate.kill_switch_guidance,
+    )
+
+
+def _only_static_context(endpoint: Endpoint) -> bool:
+    return "static_asset" in endpoint.tags and all(tag == "static_asset" for tag in endpoint.tags)
+
+
+def _note_evidence(evidence: Iterable[Evidence]) -> list[Evidence]:
+    return [item for item in evidence if item.evidence_type == "note"]
+
+
+def _asset_mentioned_in_note(note: Evidence, assets: list[Asset]) -> Asset | None:
+    lowered = note.value.lower()
+    for asset in assets:
+        if asset.hostname.lower() in lowered:
+            return asset
+    return None
+
+
+def _dedupe(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

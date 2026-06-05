@@ -100,6 +100,9 @@ def test_deterministic_tags_are_applied() -> None:
     export_endpoint = endpoints["https://app.example-bounty.test/export?account_id=1001&format=csv"]
     callback_endpoint = endpoints["https://app.example-bounty.test/auth/callback?next=/dashboard"]
     api_endpoint = endpoints["https://api.example-bounty.test/v1/users?tenant_id=demo-tenant"]
+    api_account_endpoint = endpoints[
+        "https://api.example-bounty.test/v1/accounts/1001/orders?order_id=5001"
+    ]
     static_endpoint = endpoints["https://cdn.example-bounty.test/static/app.js"]
 
     assert "auth_surface" in account_endpoint.tags
@@ -107,6 +110,9 @@ def test_deterministic_tags_are_applied() -> None:
     assert "file_or_content_surface" in export_endpoint.tags
     assert "redirect_parameter" in callback_endpoint.tags
     assert "api_surface" in api_endpoint.tags
+    assert "api_surface" in api_account_endpoint.tags
+    assert "object_reference" in api_account_endpoint.tags
+    assert "auth_surface" not in api_account_endpoint.tags
     assert "static_asset" in static_endpoint.tags
 
 
