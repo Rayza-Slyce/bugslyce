@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+from bugslyce.config import forget_provider_keys, init_config, render_config_show, reset_config
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
@@ -20,6 +21,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run":
         return _run(args.input_dir, args.output_dir)
+    if args.command == "config":
+        return _config(args)
 
     parser.print_help()
     return 1
@@ -44,6 +47,16 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Directory where report.md and project_state.json will be written.",
     )
+
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Manage local future LLM provider settings.",
+    )
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+    config_subparsers.add_parser("show", help="Show local BugSlyce config.")
+    config_subparsers.add_parser("init", help="Interactively initialise local config.")
+    config_subparsers.add_parser("forget-key", help="Remove provider API keys from .env.")
+    config_subparsers.add_parser("reset", help="Reset local LLM config to no-LLM defaults.")
 
     return parser
 
@@ -70,6 +83,31 @@ def _run(input_dir: Path, output_dir: Path) -> int:
     print(f"Candidates: {len(candidates)}")
 
     return 0
+
+
+def _config(args: argparse.Namespace) -> int:
+    if args.config_command == "show":
+        print(render_config_show())
+        return 0
+    if args.config_command == "init":
+        try:
+            init_config()
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        print("BugSlyce config updated")
+        return 0
+    if args.config_command == "forget-key":
+        forget_provider_keys()
+        print("BugSlyce provider API keys removed from .env")
+        return 0
+    if args.config_command == "reset":
+        reset_config()
+        print("BugSlyce config reset to no-LLM defaults")
+        return 0
+
+    print("Error: config command required", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

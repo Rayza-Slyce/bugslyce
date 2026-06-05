@@ -63,3 +63,35 @@ def test_cli_run_help_exits_successfully(capsys) -> None:
     assert exc_info.value.code == 0
     assert "usage: bugslyce run" in captured.out
     assert "--output" in captured.out
+
+
+def test_cli_config_show_exits_successfully(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["config", "show"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "BugSlyce config" in captured.out
+    assert "LLM provider: none" in captured.out
+
+
+def test_cli_config_reset_uses_temp_env(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "BUGSLYCE_LLM_PROVIDER=gemini\nGEMINI_API_KEY=secret-value\nUNRELATED=value\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["config", "reset"])
+
+    captured = capsys.readouterr()
+    text = (tmp_path / ".env").read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert "no-LLM defaults" in captured.out
+    assert "BUGSLYCE_LLM_PROVIDER=none" in text
+    assert "GEMINI_API_KEY=" in text
+    assert "secret-value" not in text
+    assert "UNRELATED=value" in text

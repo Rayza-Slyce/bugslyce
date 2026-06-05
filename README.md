@@ -64,6 +64,27 @@ Expected outputs:
 - `report.md`
 - `project_state.json`
 
+## Local Config
+
+BugSlyce defaults to no-LLM mode:
+
+```text
+BUGSLYCE_LLM_PROVIDER=none
+```
+
+Current config commands are a local foundation for future provider support:
+
+```bash
+bugslyce config show
+bugslyce config init
+bugslyce config forget-key
+bugslyce config reset
+```
+
+No LLM calls exist yet. These commands only read and write local `.env` settings for future use.
+
+`.env` is local and gitignored. API keys must never be committed. If you choose to store a key with `bugslyce config init`, it is stored in the project `.env` file. This is local storage, not perfect security; anyone with access to this machine or project folder may be able to read it.
+
 ## Current Inputs
 
 BugSlyce currently looks for these files in an input directory:
@@ -96,7 +117,7 @@ The demo data in this repository is fictional and sanitised. Domains such as `ex
 - No live recon.
 - No scanning.
 - No LLM calls yet.
-- No config flow yet.
+- Config commands exist only as a local foundation for future providers.
 - No assisted recon.
 - No vulnerability confirmation.
 - No exploit generation or active testing logic.
