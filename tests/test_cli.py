@@ -90,6 +90,105 @@ def test_cli_run_help_exits_successfully(capsys) -> None:
     assert "--output" in captured.out
 
 
+def test_cli_recon_plan_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "plan", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon plan" in captured.out
+    assert "--target" in captured.out
+    assert "--scope" in captured.out
+    assert "--profile" in captured.out
+
+
+def test_cli_recon_plan_writes_outputs(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "plan-output"
+
+    exit_code = main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-full",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads((output / "recon_plan.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "recon_plan.md").exists()
+    assert payload["profile"] == "lab-full"
+    assert payload["planned_artifacts"]
+    assert "No commands were executed." in captured.out
+
+
+def test_cli_recon_plan_scope_failure_writes_nothing(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 192.0.2.20\n", encoding="utf-8")
+    output = tmp_path / "plan-output"
+
+    exit_code = main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-full",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "does not appear in scope file" in captured.err
+    assert "No commands were executed." in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_plan_unsupported_profile_fails_gracefully(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "plan-output"
+
+    exit_code = main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "unsupported",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "Unsupported recon profile" in captured.err
+    assert "No commands were executed." in captured.err
+    assert not output.exists()
+
+
 def test_cli_config_show_exits_successfully(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
 

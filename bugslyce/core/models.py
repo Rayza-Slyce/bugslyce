@@ -214,6 +214,57 @@ class ReconManifest:
 
 
 @dataclass(frozen=True)
+class ReconPlannedArtifact:
+    """Artifact a future recon executor would be expected to produce."""
+
+    type: str
+    file: str
+    url: str | None = None
+    base_url: str | None = None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class ReconPlanStep:
+    """Documented future recon action that is not executed by the planner."""
+
+    id: str
+    name: str
+    phase: str
+    description: str
+    command_preview: str | None
+    expected_artifacts: list[str]
+    requires_confirmation: bool
+    risk_level: str
+    scope_sensitive: bool
+
+
+@dataclass(frozen=True)
+class ReconProfile:
+    """Named recon planning profile and its safety intent."""
+
+    name: str
+    description: str
+    allows_live_commands: bool
+    safety_notes: list[str]
+
+
+@dataclass(frozen=True)
+class ReconPlan:
+    """Serializable plan for possible future recon execution."""
+
+    target: str
+    scope_file: str
+    profile: str
+    output_dir: str
+    created_by: str
+    steps: list[ReconPlanStep]
+    planned_artifacts: list[ReconPlannedArtifact]
+    safety_notes: list[str]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ProjectState:
     """In-memory project state assembled from MVP input files."""
 

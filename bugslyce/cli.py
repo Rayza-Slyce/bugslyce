@@ -18,6 +18,12 @@ from bugslyce.config import (
 from bugslyce.core.project import build_project_state
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
+from bugslyce.recon.planner import (
+    build_recon_plan,
+    render_recon_plan_summary,
+    write_recon_plan,
+)
+from bugslyce.recon.profiles import recon_profile_names
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 
@@ -32,6 +38,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args.input_dir, args.output_dir)
     if args.command == "config":
         return _config(args)
+    if args.command == "recon":
+        return _recon(args)
 
     parser.print_help()
     return 1
@@ -67,6 +75,36 @@ def _build_parser() -> argparse.ArgumentParser:
     config_subparsers.add_parser("init", help="Interactively initialise local config.")
     config_subparsers.add_parser("forget-key", help="Remove provider API keys from .env.")
     config_subparsers.add_parser("reset", help="Reset local LLM config to no-LLM defaults.")
+
+    recon_parser = subparsers.add_parser(
+        "recon",
+        help="Preview future recon activity without executing commands.",
+    )
+    recon_subparsers = recon_parser.add_subparsers(dest="recon_command")
+    plan_parser = recon_subparsers.add_parser(
+        "plan",
+        help="Create a planning-only recon plan.",
+    )
+    plan_parser.add_argument("--target", required=True, help="Authorised target to include in the plan.")
+    plan_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file used for basic target presence validation.",
+    )
+    plan_parser.add_argument(
+        "--profile",
+        required=True,
+        help=f"Planning profile: {', '.join(recon_profile_names())}.",
+    )
+    plan_parser.add_argument(
+        "--output",
+        dest="output_dir",
+        required=True,
+        type=Path,
+        help="Directory where recon_plan.json and recon_plan.md will be written.",
+    )
 
     return parser
 
@@ -134,6 +172,28 @@ def _config(args: argparse.Namespace) -> int:
 
     print("Error: config command required", file=sys.stderr)
     return 2
+
+
+def _recon(args: argparse.Namespace) -> int:
+    if args.recon_command != "plan":
+        print("Error: recon command required. Use 'bugslyce recon plan --help'.", file=sys.stderr)
+        return 2
+
+    try:
+        plan = build_recon_plan(
+            target=args.target,
+            scope_file=args.scope_file,
+            output_dir=args.output_dir,
+            profile=args.profile,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print("No commands were executed.", file=sys.stderr)
+        return 2
+
+    json_path, markdown_path = write_recon_plan(plan, args.output_dir)
+    print(render_recon_plan_summary(plan, json_path, markdown_path))
+    return 0
 
 
 if __name__ == "__main__":

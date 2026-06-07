@@ -92,6 +92,35 @@ For private local use, keep real/private recon under `private_recon/`, `raw-reco
 
 Do not commit real targets, API keys, screenshots, Burp files, HAR files, or raw private outputs.
 
+## Recon Plan Mode
+
+BugSlyce can preview future recon activity without executing commands:
+
+```bash
+bugslyce recon plan \
+  --target 10.10.10.10 \
+  --scope ./private_recon/example/scope.md \
+  --profile lab-full \
+  --output ./private_recon/example
+```
+
+This writes:
+
+- `recon_plan.json`
+- `recon_plan.md`
+
+Plan mode only documents proposed steps, command previews, expected artifacts, safety notes, and future `recon_manifest.json` entries. It does not execute nmap, curl, gobuster, ffuf, or any other network command.
+
+Supported profiles:
+
+- `lab-full`: broad planning for an explicitly authorised private lab, including full TCP discovery, service checks, HTTP metadata, bounded content discovery, and limited reviewed recursion.
+- `bug-bounty-standard`: scope-first and conservative, with bounded service discovery, low-rate HTTP checks, and no aggressive fuzzing by default.
+- `passive-only`: offline import and recon-pack assembly planning with no live command previews.
+
+Active profiles require the target string to appear in the supplied scope file. `passive-only` can still create a plan when it does not, but records a warning because no live recon is planned.
+
+Actual recon execution is planned for a later phase. `recon_manifest.json` remains the bridge between that future controlled executor and the current evidence-first recon pack generator.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

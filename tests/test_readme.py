@@ -12,3 +12,9 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "candidates are manual review leads" in readme.lower()
     assert "Priority means manual attention priority" in readme
     assert "Automated recon is planned later" in readme
+    assert "## Recon Plan Mode" in readme
+    assert "It does not execute nmap, curl, gobuster, ffuf" in readme
+    assert "`lab-full`" in readme
+    assert "`bug-bounty-standard`" in readme
+    assert "`passive-only`" in readme
+    assert "`recon_manifest.json` remains the bridge" in readme
