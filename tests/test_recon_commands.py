@@ -174,12 +174,9 @@ def test_simulated_runner_reports_validation_failure(tmp_path: Path) -> None:
     assert not Path(command.output_file).exists()
 
 
-def test_command_modules_contain_no_execution_apis() -> None:
+def test_command_builder_contains_no_execution_apis() -> None:
     root = Path(__file__).resolve().parents[1] / "bugslyce" / "recon"
-    source = "\n".join(
-        (root / filename).read_text(encoding="utf-8")
-        for filename in ("commands.py", "runner.py")
-    ).casefold()
+    source = (root / "commands.py").read_text(encoding="utf-8").casefold()
 
     forbidden = ("subprocess", "os.system", "popen", "pexpect", "shell=true")
     assert all(value not in source for value in forbidden)

@@ -128,6 +128,131 @@ def test_cli_recon_preflight_help_exits_successfully(capsys) -> None:
     assert "--plan" in captured.out
 
 
+def test_cli_recon_curl_headers_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "curl-headers", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon curl-headers" in captured.out
+    assert "--url" in captured.out
+    assert "--scope" in captured.out
+    assert "--output" in captured.out
+    assert "--confirm" in captured.out
+
+
+def test_cli_recon_curl_headers_requires_confirm(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "recon",
+            "curl-headers",
+            "--url",
+            "http://10.10.10.10/",
+            "--scope",
+            str(scope),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "requires explicit --confirm" in captured.err
+    assert "No network request was executed." in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_curl_headers_rejects_out_of_scope_host(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("- 192.0.2.20\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "recon",
+            "curl-headers",
+            "--url",
+            "http://10.10.10.10/",
+            "--scope",
+            str(scope),
+            "--output",
+            str(output),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "does not appear in the supplied scope file" in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_curl_headers_uses_mocked_runner_and_writes_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    def fake_run(_runner, command):
+        header_path = Path(command.output_file)
+        header_path.parent.mkdir(parents=True, exist_ok=True)
+        header_path.write_text("HTTP/1.1 200 OK\nContent-Length: 0\n", encoding="utf-8")
+        from bugslyce.core.models import ReconCommandResult
+
+        return ReconCommandResult(
+            command_id=command.id,
+            tool="curl",
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:00+00:00",
+            duration_seconds=0.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+    monkeypatch.setattr("bugslyce.recon.curl_headers.LiveCurlHeaderRunner.run", fake_run)
+
+    exit_code = main(
+        [
+            "recon",
+            "curl-headers",
+            "--url",
+            "http://10.10.10.10/",
+            "--scope",
+            str(scope),
+            "--output",
+            str(output),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    manifest = json.loads((output / "recon_manifest.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "report.md").exists()
+    assert (output / "project_state.json").exists()
+    assert (output / "recon_execution.json").exists()
+    assert (output / "recon_execution.md").exists()
+    assert manifest["artifacts"][0]["url"] == "http://10.10.10.10/"
+    assert "One curl header request was executed." in captured.out
+    assert "No scanners, brute force, exploitation, or content discovery were run." in captured.out
+
+
 def test_cli_recon_plan_writes_outputs(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")

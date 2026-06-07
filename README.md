@@ -214,6 +214,30 @@ The current runner is simulated only. It validates a `ReconCommand` and returns 
 
 Any future live runner must retain structured argv, allowlisted tools, bounded timeouts, output-file enforcement, preflight checks, explicit operator confirmation, and no shell interpretation.
 
+### Scoped Curl Header Request
+
+BugSlyce has one narrowly scoped live command:
+
+```bash
+bugslyce recon curl-headers \
+  --url http://10.10.10.10/ \
+  --scope ./private_recon/example/scope.md \
+  --output ./private_recon/example \
+  --confirm
+```
+
+This command:
+
+- Requires explicit `--confirm`.
+- Accepts one explicit `http://` or `https://` URL.
+- Requires the exact URL host to appear in the supplied scope file.
+- Runs one curl response-header request using a structured argv list.
+- Uses a bounded timeout, enforced by both curl and the local process runner.
+- Writes only inside the selected output directory.
+- Saves the raw headers, `recon_manifest.json`, recon-pack outputs, and execution metadata.
+
+The live runner accepts only the approved curl header argv shape. It does not use shell interpretation, does not send request bodies, and does not run POST, PUT, DELETE, scanners, brute force, exploitation, recursive discovery, or content discovery. Live nmap and gobuster execution remain unimplemented.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

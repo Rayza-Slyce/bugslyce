@@ -18,6 +18,11 @@ from bugslyce.config import (
 from bugslyce.core.project import build_project_state
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
+from bugslyce.recon.curl_headers import (
+    render_curl_header_execution_summary,
+    run_curl_header_workflow,
+    write_curl_header_execution_result,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -92,7 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     recon_parser = subparsers.add_parser(
         "recon",
-        help="Preview future recon activity without executing commands.",
+        help="Plan, inspect, or run narrowly scoped recon workflows.",
     )
     recon_subparsers = recon_parser.add_subparsers(dest="recon_command")
     plan_parser = recon_subparsers.add_parser(
@@ -155,6 +160,36 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Path to a BugSlyce recon_plan.json file.",
+    )
+    curl_headers_parser = recon_subparsers.add_parser(
+        "curl-headers",
+        help="Run one confirmed, scoped, bounded curl header request.",
+    )
+    curl_headers_parser.add_argument("--url", required=True, help="Explicit authorised HTTP or HTTPS URL.")
+    curl_headers_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file that must contain the URL host.",
+    )
+    curl_headers_parser.add_argument(
+        "--output",
+        dest="output_dir",
+        required=True,
+        type=Path,
+        help="Directory for raw headers, manifest, recon pack, and execution metadata.",
+    )
+    curl_headers_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=10,
+        help="Bounded curl timeout in seconds (default: 10, maximum: 30).",
+    )
+    curl_headers_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm the single scoped curl header request.",
     )
 
     return parser
@@ -348,9 +383,33 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_preflight_summary(result, json_path, markdown_path))
         return 0 if result.passed else 2
 
+    if args.recon_command == "curl-headers":
+        if not args.confirm:
+            print(
+                "Error: live curl header execution requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No network request was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_curl_header_workflow(
+                url=args.url,
+                scope_file=args.scope_file,
+                output_dir=args.output_dir,
+                timeout_seconds=args.timeout,
+            )
+            write_curl_header_execution_result(result, Path(result.output_dir))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+
+        print(render_curl_header_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
-        "'bugslyce recon execute --help', or 'bugslyce recon preflight --help'.",
+        "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
+        "or 'bugslyce recon curl-headers --help'.",
         file=sys.stderr,
     )
     return 2

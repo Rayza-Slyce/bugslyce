@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from urllib.parse import urlparse
 
 from bugslyce.core.models import (
     ReconCommand,
@@ -29,6 +30,7 @@ FORBIDDEN_TOKENS = {
 }
 SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<")
 MAX_TIMEOUT_SECONDS = 3600
+MAX_LIVE_CURL_TIMEOUT_SECONDS = 30
 PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]+\}")
 
 
@@ -100,6 +102,102 @@ def validate_recon_command(
         valid=not errors,
         errors=_dedupe(errors),
         warnings=_dedupe(warnings),
+    )
+
+
+def build_live_curl_header_command(
+    url: str,
+    output_dir: Path,
+    timeout_seconds: int = 10,
+) -> ReconCommand:
+    """Build the only live command shape currently supported by BugSlyce."""
+
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("URL must use http:// or https:// and include a host.")
+    if parsed.username or parsed.password:
+        raise ValueError("URLs containing user information are not supported.")
+    if not 1 <= timeout_seconds <= MAX_LIVE_CURL_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"Curl header timeout must be between 1 and {MAX_LIVE_CURL_TIMEOUT_SECONDS} seconds."
+        )
+
+    output_dir = output_dir.expanduser().resolve()
+    output_file = output_dir / _curl_header_filename(parsed.hostname, parsed.port, parsed.scheme)
+    argv = [
+        "curl",
+        "-I",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        str(timeout_seconds),
+        "--output",
+        str(output_file),
+        url,
+    ]
+    return ReconCommand(
+        id="CMD-CURL-HEADERS-0001",
+        tool="curl",
+        argv=argv,
+        output_file=str(output_file),
+        timeout_seconds=timeout_seconds,
+        phase="http-headers",
+        risk_level="low",
+        requires_confirmation=True,
+        scope_sensitive=True,
+        description="Single bounded HTTP response-header request.",
+        ready_for_execution=True,
+        placeholders=[],
+    )
+
+
+def validate_live_curl_header_command(
+    command: ReconCommand,
+    planned_output_dir: Path,
+) -> ReconCommandValidationResult:
+    """Validate the exact curl header-only shape allowed for live execution."""
+
+    base = validate_recon_command(command, planned_output_dir)
+    errors = list(base.errors)
+    expected_prefix = [
+        "curl",
+        "-I",
+        "--silent",
+        "--show-error",
+        "--max-time",
+    ]
+    argv = command.argv if isinstance(command.argv, list) else []
+
+    if command.tool != "curl":
+        errors.append("Live execution is restricted to curl.")
+    if len(argv) != 9 or argv[:5] != expected_prefix or argv[6] != "--output":
+        errors.append("Curl live command must match the approved header-only argv shape.")
+    else:
+        try:
+            argv_timeout = int(argv[5])
+        except ValueError:
+            errors.append("Curl --max-time must be an integer.")
+        else:
+            if argv_timeout != command.timeout_seconds:
+                errors.append("Curl --max-time must match timeout_seconds.")
+            if not 1 <= argv_timeout <= MAX_LIVE_CURL_TIMEOUT_SECONDS:
+                errors.append(
+                    f"Curl --max-time must be between 1 and {MAX_LIVE_CURL_TIMEOUT_SECONDS} seconds."
+                )
+        if argv[7] != command.output_file:
+            errors.append("Curl --output path must match command output_file.")
+        parsed = urlparse(argv[8])
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            errors.append("Curl header URL must use http:// or https:// and include a host.")
+        if parsed.username or parsed.password:
+            errors.append("Curl header URL must not contain user information.")
+    if not command.requires_confirmation:
+        errors.append("Live curl header commands require explicit confirmation.")
+    return ReconCommandValidationResult(
+        command_id=command.id,
+        valid=not errors,
+        errors=_dedupe(errors),
+        warnings=base.warnings,
     )
 
 
@@ -294,3 +392,9 @@ def _output_is_inside(output_file: str, output_dir: Path) -> bool:
 
 def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
+
+
+def _curl_header_filename(hostname: str, port: int | None, scheme: str) -> str:
+    safe_host = re.sub(r"[^a-z0-9.-]+", "-", hostname.lower()).strip(".-") or "host"
+    default_port = 443 if scheme.lower() == "https" else 80
+    return f"curl-headers-{safe_host}-{port or default_port}.txt"

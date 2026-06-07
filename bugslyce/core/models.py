@@ -356,6 +356,25 @@ class ReconCommandResult:
 
 
 @dataclass(frozen=True)
+class ReconCurlHeaderExecutionResult:
+    """Metadata for one confirmed, scoped curl header request."""
+
+    mode: str
+    url: str
+    host: str
+    scope_file: str
+    output_dir: str
+    header_output_path: str
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    scanners_executed: bool
+    command_result: ReconCommandResult
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 

@@ -37,3 +37,8 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "The current runner is simulated only" in readme
     assert "Live execution remains unimplemented" in readme
     assert "bounded timeouts" in readme
+    assert "### Scoped Curl Header Request" in readme
+    assert "bugslyce recon curl-headers" in readme
+    assert "Requires explicit `--confirm`" in readme
+    assert "exact URL host to appear" in readme
+    assert "Live nmap and gobuster execution remain unimplemented" in readme
