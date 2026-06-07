@@ -27,9 +27,9 @@ def test_generate_candidates_basic_saas() -> None:
         "object_reference_review",
         "redirect_parameter_review",
         "technology_review",
-        "manual_note_review",
         "low_signal_static",
     }
+    assert "manual_note_review" not in {candidate.candidate_type for candidate in candidates}
 
 
 def test_auth_endpoints_create_auth_review_candidates() -> None:
@@ -149,6 +149,19 @@ def test_low_signal_demo_only_produces_low_or_kill_switch_candidates() -> None:
     assert not any(candidate.priority in {"high", "medium"} for candidate in candidates)
 
 
+def test_notes_do_not_generate_manual_review_candidates(tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_text(
+        "\n".join(f"- Operator context item {index}" for index in range(20)),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+
+    assert len([item for item in state.evidence if item.evidence_type == "note"]) == 20
+    assert candidates == []
+
+
 def test_duplicate_heavy_url_file_does_not_explode_candidates(tmp_path: Path) -> None:
     (tmp_path / "urls.txt").write_text(
         "\n".join(["https://app.example-bounty.test/account?user_id=1001"] * 25),
@@ -186,3 +199,17 @@ def test_ip_based_fixture_generates_expected_surface_candidates() -> None:
     assert "file_or_content_surface" in candidate_types
     assert "object_reference_review" in candidate_types
     assert any("10.10.10.10" in candidate.affected_assets for candidate in candidates)
+
+
+def test_lab_recon_pack_generates_evidence_first_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_recon_pack")
+    candidates = generate_candidates(state)
+    candidate_types = {candidate.candidate_type for candidate in candidates}
+
+    assert "multiple_http_services" in candidate_types
+    assert "high_port_http_service" in candidate_types
+    assert "robots_artifact" in candidate_types
+    assert "hidden_path_review" in candidate_types
+    assert "low_signal_static" in candidate_types
+    assert "manual_note_review" not in candidate_types
+    assert all(candidate.evidence_ids for candidate in candidates)

@@ -202,3 +202,15 @@ def test_cli_run_succeeds_against_local_lab_ip(tmp_path: Path, monkeypatch, caps
     assert (output_dir / "project_state.json").exists()
     assert "Candidates:" in captured.out
     assert "10.10.10.10" in (output_dir / "report.md").read_text(encoding="utf-8")
+
+
+def test_cli_run_succeeds_against_lab_recon_pack(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    output_dir = tmp_path / "recon-pack-output"
+
+    exit_code = main(["run", str(FIXTURES_ROOT / "lab_recon_pack"), "--output", str(output_dir)])
+
+    assert exit_code == 0
+    assert "# BugSlyce Recon Pack" in (output_dir / "report.md").read_text(encoding="utf-8")
+    exported = json.loads((output_dir / "project_state.json").read_text(encoding="utf-8"))
+    assert all(candidate["candidate_type"] != "manual_note_review" for candidate in exported["candidates"])

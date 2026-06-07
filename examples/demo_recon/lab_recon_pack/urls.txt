@@ -1,0 +1,8 @@
+http://10.10.10.10/
+http://10.10.10.10/robots.txt
+http://10.10.10.10/hidden/
+http://10.10.10.10/hidden/whatever/
+http://10.10.10.10:65524/
+http://10.10.10.10:65524/index.html
+http://10.10.10.10:65524/robots.txt
+http://10.10.10.10:65524/icons/openlogo-75.png

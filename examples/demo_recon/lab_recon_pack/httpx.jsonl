@@ -1,0 +1,2 @@
+{"url":"http://10.10.10.10","host":"10.10.10.10","status_code":200,"title":"Lab Web","tech":["nginx"],"content_length":16420}
+{"url":"http://10.10.10.10:65524","host":"10.10.10.10","status_code":200,"title":"Lab Alternate Web","tech":["Apache"],"content_length":9130}

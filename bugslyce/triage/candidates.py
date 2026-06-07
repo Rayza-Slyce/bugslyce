@@ -4,19 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
-from bugslyce.core.models import Asset, Candidate, Endpoint, Evidence, ProjectState
+from bugslyce.core.models import Asset, Candidate, Endpoint, ProjectState
 from bugslyce.triage.classify import (
     ADMIN_SURFACE,
     API_SURFACE,
     AUTH_SURFACE,
     ENVIRONMENT_SURFACE,
     FILE_OR_CONTENT_SURFACE,
+    HIGH_PORT_HTTP_SERVICE,
+    HIDDEN_PATH_REVIEW,
     KILL_SWITCH,
     LOW_SIGNAL_STATIC,
-    MANUAL_NOTE_REVIEW,
+    MULTIPLE_HTTP_SERVICES,
     OBJECT_REFERENCE_REVIEW,
     REDIRECT_PARAMETER_REVIEW,
+    ROBOTS_ARTIFACT,
     TECHNOLOGY_REVIEW,
 )
 from bugslyce.triage.killswitch import (
@@ -28,7 +32,6 @@ from bugslyce.triage.killswitch import (
 from bugslyce.triage.scoring import (
     priority_for_asset,
     priority_for_endpoint,
-    priority_for_note,
     priority_for_service,
 )
 
@@ -150,6 +153,36 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                     "Record request/response evidence before escalating this lead.",
                 ],
             )
+        if endpoint.path.lower().endswith("/robots.txt") or endpoint.path.lower() == "/robots.txt":
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                ROBOTS_ARTIFACT,
+                f"Robots artifact review for {endpoint.hostname}",
+                "A robots.txt URL is present in structured URL evidence and may reference additional paths.",
+                [
+                    "Review the robots.txt content already collected or retrieve it only within authorised scope.",
+                    "Treat referenced paths as recon leads that require manual validation.",
+                    "Record evidence before adding any path to the manual review queue.",
+                ],
+            )
+        if _has_hidden_path_marker(endpoint.path):
+            _record_endpoint_group(
+                endpoint_groups,
+                endpoint_group_order,
+                endpoint,
+                asset,
+                HIDDEN_PATH_REVIEW,
+                f"Hidden-looking path review for {endpoint.hostname}",
+                "This URL contains a hidden, secret, private, backup, old, dev, staging, or test path segment.",
+                [
+                    "Review the programme scope before inspecting this path further.",
+                    "Manually determine whether the path is intended, current, and relevant.",
+                    "Record request/response evidence before escalating this lead.",
+                ],
+            )
 
     for key in endpoint_group_order:
         group = endpoint_groups[key]
@@ -232,24 +265,58 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
             kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
         )
 
-    for note in _note_evidence(project_state.evidence):
-        linked_asset = _asset_mentioned_in_note(note, project_state.assets)
+    services_by_host: dict[str, list] = {}
+    for service in project_state.http_services:
+        services_by_host.setdefault(service.hostname, []).append(service)
+        port = urlparse(service.url).port
+        if port is None or port <= 1024:
+            continue
+        asset = assets_by_host.get(service.hostname)
         _add_candidate(
             candidates,
             seen,
-            MANUAL_NOTE_REVIEW,
-            note.id,
-            title="Manual note review",
-            priority=priority_for_note(linked_asset),
-            rationale="A manual note item was captured and may be useful context for review.",
-            affected_assets=[linked_asset.hostname] if linked_asset else [],
-            affected_endpoints=[],
-            evidence_ids=[note.id],
+            HIGH_PORT_HTTP_SERVICE,
+            service.url,
+            title=f"High-port HTTP service review for {service.hostname}:{port}",
+            priority="medium" if asset and asset.in_scope is True else "kill_switch",
+            rationale="Structured HTTP metadata shows an HTTP service on a port above 1024.",
+            affected_assets=[service.hostname],
+            affected_endpoints=[service.url],
+            evidence_ids=service.evidence_ids,
             suggested_manual_validation=[
-                "Review the note in context with the original recon evidence.",
-                "Do not treat this as a finding without manual validation.",
+                "Review programme scope before manual inspection of this service.",
+                "Compare the service with other HTTP services on the same host.",
+                "Record response metadata and observed functionality before escalating this lead.",
             ],
-            kill_switch_guidance=asset_kill_switch_guidance(linked_asset) if linked_asset else VALIDATION_GUIDANCE,
+            kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
+        )
+
+    for hostname, services in services_by_host.items():
+        distinct_urls = _dedupe(service.url for service in services)
+        if len(distinct_urls) < 2:
+            continue
+        asset = assets_by_host.get(hostname)
+        _add_candidate(
+            candidates,
+            seen,
+            MULTIPLE_HTTP_SERVICES,
+            hostname,
+            title=f"Multiple HTTP services review for {hostname}",
+            priority="medium" if asset and asset.in_scope is True else "kill_switch",
+            rationale="Structured HTTP metadata shows multiple distinct HTTP service URLs for this host.",
+            affected_assets=[hostname],
+            affected_endpoints=distinct_urls,
+            evidence_ids=_dedupe(
+                evidence_id
+                for service in services
+                for evidence_id in service.evidence_ids
+            ),
+            suggested_manual_validation=[
+                "Compare titles, technologies, and exposed functionality across the services.",
+                "Review programme scope before manual inspection.",
+                "Record service-specific evidence before escalating a lead.",
+            ],
+            kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
         )
 
     for asset in project_state.assets:
@@ -397,16 +464,10 @@ def _only_static_context(endpoint: Endpoint) -> bool:
     return "static_asset" in endpoint.tags and all(tag == "static_asset" for tag in endpoint.tags)
 
 
-def _note_evidence(evidence: Iterable[Evidence]) -> list[Evidence]:
-    return [item for item in evidence if item.evidence_type == "note"]
-
-
-def _asset_mentioned_in_note(note: Evidence, assets: list[Asset]) -> Asset | None:
-    lowered = note.value.lower()
-    for asset in assets:
-        if asset.hostname.lower() in lowered:
-            return asset
-    return None
+def _has_hidden_path_marker(path: str) -> bool:
+    markers = {"hidden", "secret", "private", "backup", "old", "dev", "staging", "test"}
+    segments = {segment.lower() for segment in path.strip("/").split("/") if segment}
+    return bool(segments & markers)
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:

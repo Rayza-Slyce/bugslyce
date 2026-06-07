@@ -28,7 +28,7 @@ def _basic_saas_report() -> tuple[str, object, object]:
 def test_markdown_report_renders_for_basic_saas() -> None:
     report, _state, _candidates = _basic_saas_report()
 
-    assert report.startswith("# BugSlyce Triage Report")
+    assert report.startswith("# BugSlyce Recon Pack")
     assert "basic_saas" in report
 
 
@@ -40,12 +40,14 @@ def test_markdown_report_includes_required_sections() -> None:
         "## Input Files Processed",
         "## Asset Inventory",
         "## Live HTTP Services",
-        "## Interesting Surface Areas",
-        "## Priority Manual Testing Queue",
-        "## Evidence Table",
+        "## Attack Surface Summary",
+        "## Manual Review Queue",
+        "## Evidence Summary",
+        "### Raw Evidence References",
+        "## Operator Notes / Context",
         "## Safe Next Steps",
         "## Kill-switch / Rabbit-hole Warnings",
-        "## Unknowns / Needs Manual Validation",
+        "## Unknowns / Requires Manual Validation",
     ]
 
     for section in required_sections:
@@ -94,7 +96,7 @@ def test_write_project_outputs_to_temp_directory(tmp_path: Path) -> None:
     assert json_path == tmp_path / "bugslyce-output" / "project_state.json"
     assert report_path.exists()
     assert json_path.exists()
-    assert "# BugSlyce Triage Report" in report_path.read_text(encoding="utf-8")
+    assert "# BugSlyce Recon Pack" in report_path.read_text(encoding="utf-8")
     assert json.loads(json_path.read_text(encoding="utf-8"))["candidates"]
 
 
@@ -152,3 +154,26 @@ def test_report_renders_ip_assets() -> None:
     assert "10.10.10.10" in report
     assert "http://10.10.10.10/login" in report
     assert "CAND-" in report
+
+
+def test_operator_notes_are_context_not_queue_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_recon_pack")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+
+    assert "## Operator Notes / Context" in report
+    assert "Notes are context only" in report
+    assert "manual_note_review" not in report
+    assert all(candidate.candidate_type != "manual_note_review" for candidate in candidates)
+
+
+def test_lab_recon_pack_report_uses_evidence_first_sections() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_recon_pack")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+
+    assert "# BugSlyce Recon Pack" in report
+    assert "## Attack Surface Summary" in report
+    assert "## Manual Review Queue" in report
+    assert "High-port HTTP services" in report
+    assert "Robots artifacts" in report

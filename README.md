@@ -1,13 +1,13 @@
 # BugSlyce
 
-BugSlyce is a local-first, CLI-first bug bounty recon triage assistant for authorised testing workflows. It ingests existing recon outputs, organises assets and endpoints, links evidence, generates deterministic manual-review candidates, and writes a careful Markdown report plus a JSON project export.
+BugSlyce is a local-first, scope-aware recon pack generator and triage assistant for authorised security testing. It currently ingests existing recon outputs, organises assets and endpoints, links evidence, generates deterministic manual-review candidates, and writes a careful Markdown recon pack plus a JSON project export.
 
 The current MVP is deterministic Python only. It does not make network requests, run scanners, call LLMs, or confirm security issues.
 
 ## What BugSlyce Is
 
 - A local Python CLI for organising already-collected, authorised recon outputs.
-- A deterministic parser and triage assistant for hosts, HTTP metadata, URLs, notes, evidence, and grouped manual-review leads.
+- An evidence-first parser and triage assistant for hosts, HTTP metadata, URLs, structured evidence, and grouped manual-review leads.
 - A report generator that uses careful language and keeps human validation at the centre.
 - A portfolio-safe project using fake demo data under `examples/demo_recon/`.
 
@@ -27,11 +27,27 @@ Implemented:
 - Parsers for MVP input files.
 - In-memory `ProjectState` assembly with assets, HTTP services, endpoints, evidence IDs, warnings, and deterministic tags.
 - Grouped deterministic triage candidates.
-- Deterministic `report.md` generation.
+- Deterministic recon-pack generation in `report.md`.
 - Deterministic `project_state.json` export.
 - Thin CLI command: `bugslyce run <input_dir> --output <output_dir>`.
 
 Candidates are manual review leads, not confirmed findings. They are evidence-backed prompts for careful manual validation.
+
+## Evidence-first Direction
+
+BugSlyce is moving toward an evidence-first recon pack generator. The intended future workflow is:
+
+1. Accept an authorised target and explicit scope.
+2. Run controlled, profile-based recon.
+3. Save raw outputs locally.
+4. Parse structured recon evidence.
+5. Generate a Markdown and JSON recon pack.
+6. Optionally let a user-selected LLM summarise minimised structured evidence.
+7. Leave validation and judgement to the operator.
+
+The current version still ingests files and does not execute recon. Future automated recon will be scope-aware, profile-based, and locally saved.
+
+`notes.md` remains optional operator context but is deprecated as a triage driver. Note bullets do not create individual manual-review candidates.
 
 ## Local Development Install
 
@@ -125,7 +141,7 @@ No LLM calls exist yet. These commands only read and write local `.env` settings
 
 BugSlyce includes a minimal provider interface for future optional LLM support. Provider `none` is the default and keeps the current deterministic behaviour unchanged.
 
-No external LLM calls are implemented yet. Future providers should receive a minimised triage context, not raw recon files by default. The minimised context contains counts, candidate summaries, capped endpoint lists, capped evidence summaries, language rules, and a privacy note.
+No external LLM calls are implemented yet. Future providers should receive minimised structured evidence, not raw recon files by default. LLMs remain optional and are not required for the deterministic recon-pack engine.
 
 `bugslyce run` currently uses provider `none` and prints that deterministic report mode is active. Future provider names such as `gemini`, `openai`, `anthropic`, and `ollama` are recognised as configuration values but are not implemented yet. If a future provider is configured, reset to no-LLM mode with:
 
@@ -176,6 +192,7 @@ The demo data in this repository is fictional and sanitised. Domains such as `ex
 - Does not parse Burp exports, nuclei output, or screenshots yet.
 - Scope matching is simple.
 - Report output is deterministic and may still need human judgement.
+- Notes are optional context and do not drive the manual-review queue.
 - No LLM provider calls are implemented yet.
 - No confirmed vulnerability claims.
 

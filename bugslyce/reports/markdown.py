@@ -21,6 +21,10 @@ SURFACE_LABELS = {
     "object_reference_review": "Object-reference review surfaces",
     "redirect_parameter_review": "Redirect-parameter review surfaces",
     "low_signal_static": "Static/CDN low-signal areas",
+    "high_port_http_service": "High-port HTTP services",
+    "multiple_http_services": "Hosts with multiple HTTP services",
+    "robots_artifact": "Robots artifacts",
+    "hidden_path_review": "Hidden-looking path surfaces",
 }
 
 
@@ -28,9 +32,11 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     """Render a cautious deterministic triage report."""
 
     lines: list[str] = [
-        "# BugSlyce Triage Report",
+        "# BugSlyce Recon Pack",
         "",
-        "This report is a deterministic manual-review aid. Candidates are not findings and require manual validation.",
+        "This is an evidence-grounded recon pack built from structured local inputs. "
+        "Candidates are manual review leads, priority means manual attention priority rather than severity, "
+        "and no confirmed findings are claimed.",
         "",
     ]
 
@@ -41,6 +47,7 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     _surface_areas(lines, candidates)
     _priority_queue(lines, candidates)
     _evidence_table(lines, project_state)
+    _operator_notes(lines, project_state)
     _safe_next_steps(lines)
     _kill_switch_warnings(lines, project_state, candidates)
     _unknowns(lines)
@@ -141,7 +148,7 @@ def _http_services(lines: list[str], project_state: ProjectState) -> None:
 
 
 def _surface_areas(lines: list[str], candidates: list[Candidate]) -> None:
-    lines.extend(["## Interesting Surface Areas", ""])
+    lines.extend(["## Attack Surface Summary", ""])
     grouped: dict[str, list[Candidate]] = defaultdict(list)
     for candidate in candidates:
         if candidate.candidate_type in SURFACE_LABELS:
@@ -160,7 +167,7 @@ def _surface_areas(lines: list[str], candidates: list[Candidate]) -> None:
 
 
 def _priority_queue(lines: list[str], candidates: list[Candidate]) -> None:
-    lines.extend(["## Priority Manual Testing Queue", ""])
+    lines.extend(["## Manual Review Queue", ""])
     candidates_by_priority: dict[str, list[Candidate]] = defaultdict(list)
     for candidate in candidates:
         candidates_by_priority[candidate.priority].append(candidate)
@@ -195,7 +202,7 @@ def _candidate_lines(candidate: Candidate) -> list[str]:
 
 
 def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
-    lines.extend(["## Evidence Table", ""])
+    lines.extend(["## Evidence Summary", "", "### Raw Evidence References", ""])
     if not project_state.evidence:
         lines.extend(["No evidence records were assembled from the parsed inputs.", ""])
         return
@@ -210,6 +217,22 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
             f"{_md(_compact(evidence.value))} |"
         )
     lines.append("")
+
+
+def _operator_notes(lines: list[str], project_state: ProjectState) -> None:
+    note_evidence = [item for item in project_state.evidence if item.evidence_type == "note"]
+    if not note_evidence:
+        return
+
+    lines.extend(["## Operator Notes / Context", ""])
+    lines.extend(f"- [{item.id}] {_md(_compact(item.value))}" for item in note_evidence)
+    lines.extend(
+        [
+            "",
+            "Operator notes are contextual input only and do not create manual review candidates.",
+            "",
+        ]
+    )
 
 
 def _safe_next_steps(lines: list[str]) -> None:
@@ -246,7 +269,7 @@ def _kill_switch_warnings(lines: list[str], project_state: ProjectState, candida
 def _unknowns(lines: list[str]) -> None:
     lines.extend(
         [
-            "## Unknowns / Needs Manual Validation",
+            "## Unknowns / Requires Manual Validation",
             "",
             "Candidates are evidence-backed review signals, not confirmed findings. "
             "Manual validation is required before any issue is described or escalated.",

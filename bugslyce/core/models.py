@@ -121,6 +121,53 @@ class Endpoint:
     tags: list[str]
 
 
+@dataclass
+class PortService:
+    """Structured port/service evidence foundation for future recon ingestion."""
+
+    host: str
+    port: int
+    protocol: str
+    service: str | None
+    product: str | None
+    version: str | None
+    evidence_ids: list[str]
+    tags: list[str]
+
+
+@dataclass
+class HTTPArtifact:
+    """Structured HTTP artifact foundation for future recon ingestion."""
+
+    url: str
+    artifact_type: str
+    value: str
+    evidence_ids: list[str]
+    tags: list[str]
+
+
+@dataclass
+class DiscoveredPath:
+    """Structured discovered-path foundation for future recon ingestion."""
+
+    url: str
+    status_code: int | None
+    content_length: int | None
+    source: str
+    evidence_ids: list[str]
+    tags: list[str]
+
+
+@dataclass(frozen=True)
+class ReconPackSummary:
+    """Compact recon pack counts for future structured exports."""
+
+    open_port_count: int
+    http_service_count: int
+    interesting_artifact_count: int
+    candidate_count: int
+
+
 @dataclass(frozen=True)
 class ProjectState:
     """In-memory project state assembled from MVP input files."""
