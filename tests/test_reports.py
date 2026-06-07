@@ -185,7 +185,23 @@ def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
     report = render_markdown_report(state, candidates)
 
     assert "# BugSlyce Recon Pack" in report
+    assert "## Recon Manifest" in report
+    assert "Schema version: `1.0`" in report
+    assert "Artifact count: 14" in report
     assert "### Port Services" in report
     assert "### Discovered Paths" in report
     assert "### HTTP Artifacts" in report
     assert "### Raw Evidence References" in report
+
+
+def test_raw_recon_pack_json_preserves_manifest_metadata() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    candidates = generate_candidates(state)
+    exported = json.loads(export_project_state_json(state, candidates))
+
+    manifest = exported["project_state"]["recon_manifest"]
+    assert manifest["schema_version"] == "1.0"
+    assert manifest["target"] == "10.10.10.10"
+    assert manifest["created_by"] == "manual"
+    assert manifest["profile"] == "manual-import"
+    assert len(manifest["artifacts"]) == 14

@@ -185,6 +185,35 @@ class ReconPackSummary:
 
 
 @dataclass(frozen=True)
+class ReconManifestArtifact:
+    """Validated raw recon artifact entry from recon_manifest.json."""
+
+    type: str
+    file: str
+    url: str | None = None
+    base_url: str | None = None
+    host: str | None = None
+    port: int | None = None
+    protocol: str | None = None
+    description: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReconManifest:
+    """Validated recon manifest metadata and artifact entries."""
+
+    schema_version: str
+    target: str
+    artifacts: list[ReconManifestArtifact]
+    scope_file: str | None = None
+    created_by: str | None = None
+    profile: str | None = None
+    notes: str | None = None
+    source_file: str = ""
+
+
+@dataclass(frozen=True)
 class ProjectState:
     """In-memory project state assembled from MVP input files."""
 
@@ -199,6 +228,7 @@ class ProjectState:
     http_artifacts: list[HTTPArtifact]
     discovered_paths: list[DiscoveredPath]
     recon_summary: ReconPackSummary | None
+    recon_manifest: ReconManifest | None
     evidence: list[Evidence]
     warnings: list[str]
     generated_at: str

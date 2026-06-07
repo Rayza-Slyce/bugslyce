@@ -41,6 +41,7 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     ]
 
     _scope_summary(lines, project_state)
+    _recon_manifest(lines, project_state)
     _input_files(lines, project_state)
     _asset_inventory(lines, project_state)
     _http_services(lines, project_state)
@@ -91,6 +92,24 @@ def _scope_summary(lines: list[str], project_state: ProjectState) -> None:
             f"- Input directory: `{project_state.input_dir}`",
             f"- Parsed scope summary: {project_state.scope_summary}",
             "- Scope status uses simple exact-host and suffix matching. Review programme scope before manual testing.",
+            "",
+        ]
+    )
+
+
+def _recon_manifest(lines: list[str], project_state: ProjectState) -> None:
+    manifest = project_state.recon_manifest
+    if manifest is None:
+        return
+    lines.extend(
+        [
+            "## Recon Manifest",
+            "",
+            f"- Schema version: `{_md(manifest.schema_version)}`",
+            f"- Target: `{_md(manifest.target)}`",
+            f"- Created by: {_md(manifest.created_by or 'unspecified')}",
+            f"- Profile: {_md(manifest.profile or 'unspecified')}",
+            f"- Artifact count: {len(manifest.artifacts)}",
             "",
         ]
     )

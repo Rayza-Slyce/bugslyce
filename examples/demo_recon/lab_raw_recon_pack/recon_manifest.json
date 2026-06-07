@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "target": "10.10.10.10",
+  "scope_file": "scope.md",
+  "created_by": "manual",
+  "profile": "manual-import",
+  "notes": "Sanitised multi-service lab-style raw recon fixture.",
+  "artifacts": [
+    {
+      "type": "nmap",
+      "file": "nmap-allports.txt",
+      "description": "Saved all-ports scan output"
+    },
+    {
+      "type": "nmap",
+      "file": "nmap-services-all.txt",
+      "description": "Saved service/version scan output"
+    },
+    {
+      "type": "gobuster",
+      "file": "gobuster-80-root.txt",
+      "base_url": "http://10.10.10.10/",
+      "description": "Directory discovery against the default HTTP service"
+    },
+    {
+      "type": "gobuster",
+      "file": "gobuster-80-hidden.txt",
+      "base_url": "http://10.10.10.10/hidden/",
+      "description": "Directory discovery against an observed path"
+    },
+    {
+      "type": "gobuster",
+      "file": "gobuster-65524-root.txt",
+      "base_url": "http://10.10.10.10:65524/",
+      "description": "Directory discovery against a non-default HTTP port"
+    },
+    {
+      "type": "http_headers",
+      "file": "curl-headers-80.txt",
+      "url": "http://10.10.10.10/",
+      "description": "Saved response headers for the default HTTP service"
+    },
+    {
+      "type": "http_headers",
+      "file": "curl-headers-65524.txt",
+      "url": "http://10.10.10.10:65524/",
+      "description": "Saved response headers for the non-default HTTP service"
+    },
+    {
+      "type": "http_headers",
+      "file": "curl-headers-65524-manual.txt",
+      "url": "http://10.10.10.10:65524/manual/",
+      "description": "Saved response headers for a manually observed path"
+    },
+    {
+      "type": "robots",
+      "file": "robots-80.txt",
+      "url": "http://10.10.10.10/robots.txt"
+    },
+    {
+      "type": "robots",
+      "file": "robots-65524.txt",
+      "url": "http://10.10.10.10:65524/robots.txt"
+    },
+    {
+      "type": "html",
+      "file": "homepage-80.html",
+      "url": "http://10.10.10.10/"
+    },
+    {
+      "type": "html",
+      "file": "hidden.html",
+      "url": "http://10.10.10.10/hidden/"
+    },
+    {
+      "type": "html",
+      "file": "hidden-whatever.html",
+      "url": "http://10.10.10.10/hidden/whatever/"
+    },
+    {
+      "type": "html",
+      "file": "homepage-65524.html",
+      "url": "http://10.10.10.10:65524/"
+    }
+  ]
+}

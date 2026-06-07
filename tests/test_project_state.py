@@ -154,6 +154,10 @@ def test_project_state_builds_from_local_lab_ip_fixture() -> None:
 def test_project_state_builds_from_raw_recon_fixture() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
 
+    assert state.recon_manifest is not None
+    assert state.recon_manifest.schema_version == "1.0"
+    assert state.recon_manifest.target == "10.10.10.10"
+    assert len(state.recon_manifest.artifacts) == 14
     assert {(service.port, service.service) for service in state.port_services} == {
         (80, "http"),
         (2222, "ssh"),

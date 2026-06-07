@@ -173,7 +173,11 @@ BugSlyce can also ingest selected saved raw recon artifacts:
 
 These parsers extract structured port services, HTTP services, discovered paths, headers, robots directives, page titles, links and sources, comments, hidden elements, forms, inputs, keyword hits, and conservative encoded-looking artifacts.
 
-BugSlyce still does not run recon. Raw artifact parsing is the bridge between manual recon today and a future planner/executor model for controlled, scope-aware recon. Parser and candidate logic is behaviour-driven and must not be treated as target-specific.
+BugSlyce also supports `recon_manifest.json` for explicit raw artifact context. The manifest records the target and maps each saved artifact to its parser type plus optional URL, base URL, host, port, protocol, description, and tags. Manifest metadata takes precedence over filename hints.
+
+Filename hints remain available as a backwards-compatible fallback for manually collected data without a manifest. Artifact paths declared in a manifest are constrained to the input directory; unknown types, missing files, and unsafe paths are skipped with warnings.
+
+Future controlled recon execution is expected to write `recon_manifest.json` while saving outputs locally. BugSlyce still does not run recon. Raw artifact parsing is the bridge between manual recon today and a future planner/executor model for controlled, scope-aware recon. Parser and candidate logic is behaviour-driven and must not be treated as target-specific.
 
 ## Safety Boundaries
 
