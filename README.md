@@ -191,6 +191,29 @@ It does not run network commands or execute command-preview strings. Plans using
 
 This local packaging and analysis path is the safe bridge between planning/preflight and any future controlled live recon executor.
 
+### Structured Command Foundation
+
+BugSlyce models future recon activity as structured argument lists rather than shell command strings. For example:
+
+```text
+["nmap", "-p-", "--min-rate", "5000", "-oN", "/safe/output/nmap-allports.txt", "10.10.10.10"]
+```
+
+The current command builder can create non-executable templates for planned nmap, curl, and gobuster steps. Unknown ports, URLs, rates, and wordlists remain explicit placeholders, and those commands are marked as not ready for execution.
+
+Command validation currently checks:
+
+- The tool is allowlisted.
+- `argv` is a list of strings and starts with the declared tool.
+- Shell metacharacters and configured high-risk tokens are absent.
+- Output files remain inside the planned output directory.
+- Timeouts are positive and bounded.
+- No unresolved placeholders remain.
+
+The current runner is simulated only. It validates a `ReconCommand` and returns a simulated result with `executed=false`; it does not start processes or create network output. Live execution remains unimplemented.
+
+Any future live runner must retain structured argv, allowlisted tools, bounded timeouts, output-file enforcement, preflight checks, explicit operator confirmation, and no shell interpretation.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

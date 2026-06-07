@@ -32,3 +32,8 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "--input-dir" in readme
     assert "`recon_execution.json`" in readme
     assert "does not run network commands or execute command-preview strings" in readme
+    assert "### Structured Command Foundation" in readme
+    assert "structured argument lists rather than shell command strings" in readme
+    assert "The current runner is simulated only" in readme
+    assert "Live execution remains unimplemented" in readme
+    assert "bounded timeouts" in readme

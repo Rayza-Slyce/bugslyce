@@ -310,6 +310,52 @@ class ReconExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconCommand:
+    """Structured future recon command; never a raw shell command string."""
+
+    id: str
+    tool: str
+    argv: list[str]
+    output_file: str
+    timeout_seconds: int
+    phase: str
+    risk_level: str
+    requires_confirmation: bool
+    scope_sensitive: bool
+    description: str
+    ready_for_execution: bool
+    placeholders: list[str]
+
+
+@dataclass(frozen=True)
+class ReconCommandValidationResult:
+    """Guardrail validation result for one structured recon command."""
+
+    command_id: str
+    valid: bool
+    errors: list[str]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
+class ReconCommandResult:
+    """Simulated or future execution result for a structured command."""
+
+    command_id: str
+    tool: str
+    exit_code: int | None
+    stdout_path: str | None
+    stderr_path: str | None
+    output_file: str
+    started_at: str
+    ended_at: str
+    duration_seconds: float
+    executed: bool
+    simulated: bool
+    error: str | None
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 
