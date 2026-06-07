@@ -149,6 +149,13 @@ def test_curl_header_workflow_writes_manifest_and_recon_pack_with_mock_runner(tm
     assert manifest["artifacts"][0]["type"] == "http_headers"
     assert manifest["artifacts"][0]["url"] == "http://10.10.10.10/"
     assert manifest["artifacts"][0]["file"] == Path(result.header_output_path).name
+    exported = json.loads((output / "project_state.json").read_text(encoding="utf-8"))
+    warnings = exported["project_state"]["warnings"]
+    assert not any(
+        filename in warning
+        for warning in warnings
+        for filename in ("subdomains.txt", "httpx.jsonl", "urls.txt", "notes.md")
+    )
 
 
 @pytest.mark.parametrize("url", ["ftp://10.10.10.10/", "not-a-url", "http://"])

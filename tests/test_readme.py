@@ -42,3 +42,6 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "Requires explicit `--confirm`" in readme
     assert "exact URL host to appear" in readme
     assert "Live nmap and gobuster execution remain unimplemented" in readme
+    assert "valid manifest is present, it is the primary input description" in readme
+    assert "are not required and do not generate missing-file warnings" in readme
+    assert "manifest-listed artifacts still generate warnings" in readme

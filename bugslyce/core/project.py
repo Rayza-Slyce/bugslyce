@@ -44,10 +44,35 @@ def build_project_state(input_dir: Path) -> ProjectState:
     manifest = _load_manifest(input_dir, processed_files, warnings)
     scope_path = input_dir / (manifest.scope_file if manifest and manifest.scope_file else "scope.md")
     scope = _parse_optional(scope_path, parse_scope, processed_files, warnings)
-    subdomains = _parse_optional(input_dir / "subdomains.txt", parse_subdomains, processed_files, warnings)
-    httpx_records = _parse_optional(input_dir / "httpx.jsonl", parse_httpx_jsonl, processed_files, warnings)
-    urls = _parse_optional(input_dir / "urls.txt", parse_urls, processed_files, warnings)
-    notes = _parse_optional(input_dir / "notes.md", parse_notes, processed_files, warnings)
+    warn_missing_legacy = manifest is None
+    subdomains = _parse_optional(
+        input_dir / "subdomains.txt",
+        parse_subdomains,
+        processed_files,
+        warnings,
+        warn_missing=warn_missing_legacy,
+    )
+    httpx_records = _parse_optional(
+        input_dir / "httpx.jsonl",
+        parse_httpx_jsonl,
+        processed_files,
+        warnings,
+        warn_missing=warn_missing_legacy,
+    )
+    urls = _parse_optional(
+        input_dir / "urls.txt",
+        parse_urls,
+        processed_files,
+        warnings,
+        warn_missing=warn_missing_legacy,
+    )
+    notes = _parse_optional(
+        input_dir / "notes.md",
+        parse_notes,
+        processed_files,
+        warnings,
+        warn_missing=warn_missing_legacy,
+    )
 
     evidence: list[Evidence] = []
     asset_evidence: dict[str, list[str]] = defaultdict(list)
@@ -240,9 +265,11 @@ def _parse_optional(
     parser: InputParser,
     processed_files: list[str],
     warnings: list[str],
+    warn_missing: bool = True,
 ) -> object:
     if not path.exists():
-        warnings.append(f"Optional input file missing: {path}")
+        if warn_missing:
+            warnings.append(f"Optional input file missing: {path}")
         return _empty_parse_result(path.name, path)
 
     with warnings_module.catch_warnings(record=True) as captured:

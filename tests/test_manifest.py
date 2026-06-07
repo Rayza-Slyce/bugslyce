@@ -61,6 +61,7 @@ def test_project_state_records_malformed_manifest_warning(tmp_path: Path) -> Non
 
     assert state.recon_manifest is None
     assert any("Could not parse recon manifest" in warning for warning in state.warnings)
+    assert any("subdomains.txt" in warning for warning in state.warnings)
 
 
 def test_manifest_skips_unsafe_unknown_and_missing_artifacts(tmp_path: Path) -> None:
@@ -86,6 +87,76 @@ def test_manifest_skips_unsafe_unknown_and_missing_artifacts(tmp_path: Path) -> 
     assert any("unsafe manifest artifact path" in message for message in messages)
     assert any("unsupported manifest artifact type" in message for message in messages)
     assert any("missing manifest artifact file" in message for message in messages)
+
+
+def test_manifest_led_project_suppresses_missing_legacy_input_warnings(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text("# Scope\n\n- 127.0.0.1\n", encoding="utf-8")
+    (tmp_path / "curl-headers-127.0.0.1-8765.txt").write_text(
+        "HTTP/1.0 200 OK\nServer: Test\nContent-Length: 123\n",
+        encoding="utf-8",
+    )
+    _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "127.0.0.1",
+            "scope_file": "scope.md",
+            "artifacts": [
+                {
+                    "type": "http_headers",
+                    "file": "curl-headers-127.0.0.1-8765.txt",
+                    "url": "http://127.0.0.1:8765/",
+                }
+            ],
+        },
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.recon_manifest is not None
+    assert not any(
+        filename in warning
+        for warning in state.warnings
+        for filename in ("subdomains.txt", "httpx.jsonl", "urls.txt", "notes.md")
+    )
+
+
+def test_valid_manifest_project_keeps_missing_artifact_warning(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text("# Scope\n\n- 127.0.0.1\n", encoding="utf-8")
+    _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "127.0.0.1",
+            "scope_file": "scope.md",
+            "artifacts": [{"type": "http_headers", "file": "missing-headers.txt"}],
+        },
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.recon_manifest is not None
+    assert any("missing manifest artifact file" in warning for warning in state.warnings)
+    assert not any("subdomains.txt" in warning for warning in state.warnings)
+
+
+def test_valid_manifest_project_keeps_unknown_artifact_warning(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text("# Scope\n\n- 127.0.0.1\n", encoding="utf-8")
+    _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "127.0.0.1",
+            "scope_file": "scope.md",
+            "artifacts": [{"type": "future_type", "file": "future.txt"}],
+        },
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.recon_manifest is not None
+    assert any("unsupported manifest artifact type" in warning for warning in state.warnings)
+    assert not any("httpx.jsonl" in warning for warning in state.warnings)
 
 
 def test_valid_manifest_is_authoritative_over_filename_discovery(tmp_path: Path) -> None:

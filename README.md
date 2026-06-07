@@ -321,6 +321,8 @@ These parsers extract structured port services, HTTP services, discovered paths,
 
 BugSlyce also supports `recon_manifest.json` for explicit raw artifact context. The manifest records the target and maps each saved artifact to its parser type plus optional URL, base URL, host, port, protocol, description, and tags. Manifest metadata takes precedence over filename hints.
 
+When a valid manifest is present, it is the primary input description. Legacy files such as `subdomains.txt`, `httpx.jsonl`, `urls.txt`, and `notes.md` are still parsed when present, but are not required and do not generate missing-file warnings. Missing, unsupported, malformed, or unsafe manifest-listed artifacts still generate warnings.
+
 Filename hints remain available as a backwards-compatible fallback for manually collected data without a manifest. Artifact paths declared in a manifest are constrained to the input directory; unknown types, missing files, and unsafe paths are skipped with warnings.
 
 Future controlled recon execution is expected to write `recon_manifest.json` while saving outputs locally. BugSlyce still does not run recon. Raw artifact parsing is the bridge between manual recon today and a future planner/executor model for controlled, scope-aware recon. Parser and candidate logic is behaviour-driven and must not be treated as target-specific.
