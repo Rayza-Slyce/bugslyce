@@ -9,11 +9,15 @@ from typing import Any
 
 from bugslyce.core.models import (
     ReconExecutionPreview,
+    ReconExecutionResult,
     ReconExecutionStepPreview,
     ReconPlan,
     ReconPlannedArtifact,
     ReconPlanStep,
 )
+from bugslyce.core.project import build_project_state
+from bugslyce.reports.markdown import write_project_outputs
+from bugslyce.triage.candidates import generate_candidates
 
 
 DRY_RUN_WARNINGS = [
@@ -177,6 +181,110 @@ def render_execution_preview_summary(
             f"Preview JSON path: {json_path}",
             f"Preview Markdown path: {markdown_path}",
             "No commands were executed.",
+        ]
+    )
+
+
+def run_passive_execution(
+    plan: ReconPlan,
+    plan_path: Path,
+    input_dir: Path,
+    output_dir: Path,
+    preflight_passed: bool,
+    preflight_warnings: list[str] | None = None,
+) -> ReconExecutionResult:
+    """Build deterministic recon-pack outputs from existing local artifacts only."""
+
+    if plan.profile != "passive-only":
+        raise ValueError(
+            f"Plan profile '{plan.profile}' is not passive-only. "
+            "Live recon execution is not implemented yet."
+        )
+    if not preflight_passed:
+        raise ValueError("Recon preflight did not pass; passive execution was not started.")
+    if not input_dir.exists():
+        raise ValueError(f"Passive execution input directory does not exist: {input_dir}")
+    if not input_dir.is_dir():
+        raise ValueError(f"Passive execution input path is not a directory: {input_dir}")
+
+    project_state = build_project_state(input_dir)
+    candidates = generate_candidates(project_state)
+    report_path, project_state_path = write_project_outputs(project_state, candidates, output_dir)
+    warnings = [*(preflight_warnings or []), *project_state.warnings]
+    return ReconExecutionResult(
+        mode="passive-only",
+        plan_path=str(plan_path),
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        report_path=str(report_path),
+        project_state_path=str(project_state_path),
+        preflight_passed=True,
+        no_network_commands_executed=True,
+        warnings=warnings,
+    )
+
+
+def render_passive_execution_markdown(result: ReconExecutionResult) -> str:
+    """Render local passive-only execution metadata."""
+
+    lines = [
+        "# BugSlyce Passive Execution",
+        "",
+        f"- Mode: `{result.mode}`",
+        f"- Plan path: `{result.plan_path}`",
+        f"- Input directory: `{result.input_dir}`",
+        f"- Output directory: `{result.output_dir}`",
+        f"- Report path: `{result.report_path}`",
+        f"- Project state path: `{result.project_state_path}`",
+        f"- Preflight passed: `{str(result.preflight_passed).lower()}`",
+        f"- No network commands executed: `{str(result.no_network_commands_executed).lower()}`",
+    ]
+    if result.warnings:
+        lines.extend(["", "## Warnings", ""])
+        lines.extend(f"- {warning}" for warning in result.warnings)
+    lines.extend(
+        [
+            "",
+            "This execution only parsed and packaged existing local artifacts.",
+            "No network commands were executed.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_passive_execution_result(
+    result: ReconExecutionResult,
+    output_dir: Path,
+) -> tuple[Path, Path]:
+    """Write passive-only execution metadata."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "recon_execution.json"
+    markdown_path = output_dir / "recon_execution.md"
+    json_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_passive_execution_markdown(result), encoding="utf-8")
+    return json_path, markdown_path
+
+
+def render_passive_execution_summary(
+    result: ReconExecutionResult,
+    execution_json_path: Path,
+    execution_markdown_path: Path,
+) -> str:
+    """Render concise CLI output for passive-only local execution."""
+
+    return "\n".join(
+        [
+            "BugSlyce passive execution complete",
+            f"Plan path: {result.plan_path}",
+            f"Input directory used: {result.input_dir}",
+            f"Output directory: {result.output_dir}",
+            f"Report path: {result.report_path}",
+            f"JSON path: {result.project_state_path}",
+            f"Execution JSON path: {execution_json_path}",
+            f"Execution Markdown path: {execution_markdown_path}",
+            "No network commands were executed.",
         ]
     )
 

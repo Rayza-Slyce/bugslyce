@@ -27,3 +27,8 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "Expected local tool availability using PATH lookup only" in readme
     assert "Preflight does not run commands or contact targets" in readme
     assert "required safety layer" in readme
+    assert "### Passive-only Execution" in readme
+    assert "--passive-only" in readme
+    assert "--input-dir" in readme
+    assert "`recon_execution.json`" in readme
+    assert "does not run network commands or execute command-preview strings" in readme

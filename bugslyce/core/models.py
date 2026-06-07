@@ -295,6 +295,21 @@ class ReconExecutionPreview:
 
 
 @dataclass(frozen=True)
+class ReconExecutionResult:
+    """Metadata for a completed local passive-only recon-pack execution."""
+
+    mode: str
+    plan_path: str
+    input_dir: str
+    output_dir: str
+    report_path: str
+    project_state_path: str
+    preflight_passed: bool
+    no_network_commands_executed: bool
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 

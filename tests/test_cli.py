@@ -113,6 +113,8 @@ def test_cli_recon_execute_help_exits_successfully(capsys) -> None:
     assert "usage: bugslyce recon execute" in captured.out
     assert "--plan" in captured.out
     assert "--dry-run" in captured.out
+    assert "--passive-only" in captured.out
+    assert "--input-dir" in captured.out
 
 
 def test_cli_recon_preflight_help_exits_successfully(capsys) -> None:
@@ -318,6 +320,191 @@ def test_cli_recon_execute_invalid_plan_fails_safely(
     assert message in captured.err
     assert "No commands were executed." in captured.err
     assert not (tmp_path / "recon_execution_preview.json").exists()
+
+
+def test_cli_recon_execute_passive_only_writes_recon_pack_and_metadata(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / "passive"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "passive-only",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(output / "recon_plan.json"),
+            "--passive-only",
+            "--input-dir",
+            str(FIXTURES_ROOT / "lab_raw_recon_pack"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    execution = json.loads((output / "recon_execution.json").read_text(encoding="utf-8"))
+    project_state = json.loads((output / "project_state.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "report.md").exists()
+    assert (output / "recon_execution.md").exists()
+    assert execution["mode"] == "passive-only"
+    assert execution["no_network_commands_executed"] is True
+    assert project_state["project_state"]["port_services"]
+    assert "BugSlyce passive execution complete" in captured.out
+    assert "No network commands were executed." in captured.out
+
+
+@pytest.mark.parametrize("profile", ["lab-full", "bug-bounty-standard"])
+def test_cli_recon_execute_passive_only_refuses_active_plan(
+    tmp_path: Path,
+    capsys,
+    profile: str,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / profile
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            profile,
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(output / "recon_plan.json"),
+            "--passive-only",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert f"Plan profile '{profile}' is not passive-only" in captured.err
+    assert "Live recon execution is not implemented yet" in captured.err
+    assert "No network commands were executed." in captured.err
+    assert not (output / "report.md").exists()
+
+
+def test_cli_recon_execute_passive_only_requires_input_directory(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / "passive"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "passive-only",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(output / "recon_plan.json"),
+            "--passive-only",
+            "--input-dir",
+            str(tmp_path / "missing-input"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "input directory does not exist" in captured.err
+    assert "No network commands were executed." in captured.err
+    assert not (output / "report.md").exists()
+
+
+def test_cli_recon_execute_passive_only_stops_on_failed_preflight(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / "passive"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "passive-only",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+    plan_path = output / "recon_plan.json"
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    payload["output_dir"] = str(Path.cwd() / "tests")
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(plan_path),
+            "--passive-only",
+            "--input-dir",
+            str(FIXTURES_ROOT / "lab_raw_recon_pack"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "recon preflight failed" in captured.err
+    assert "Preflight JSON path:" in captured.err
+    assert "No network commands were executed." in captured.err
+    assert (output / "recon_preflight.json").exists()
+    assert not (output / "report.md").exists()
 
 
 def test_cli_recon_preflight_writes_outputs(

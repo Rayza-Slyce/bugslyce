@@ -11,10 +11,16 @@ import pytest
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
+    render_passive_execution_markdown,
     render_execution_preview_markdown,
+    run_passive_execution,
+    write_passive_execution_result,
     write_execution_preview,
 )
 from bugslyce.recon.planner import build_recon_plan, write_recon_plan
+
+
+FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
 
 
 def test_load_valid_recon_plan(tmp_path: Path) -> None:
@@ -109,6 +115,80 @@ def test_load_zero_step_plan_fails_gracefully(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="at least one step"):
         load_recon_plan(plan_path)
+
+
+def test_passive_execution_builds_local_recon_pack_outputs(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    output = tmp_path / "bugslyce-output" / "passive"
+    plan = build_recon_plan("10.10.10.10", scope, output, "passive-only")
+    plan_path, _markdown_path = write_recon_plan(plan)
+
+    result = run_passive_execution(
+        plan,
+        plan_path,
+        FIXTURES_ROOT / "lab_raw_recon_pack",
+        output,
+        preflight_passed=True,
+    )
+    json_path, markdown_path = write_passive_execution_result(result, output)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+
+    assert (output / "report.md").exists()
+    assert (output / "project_state.json").exists()
+    assert payload["mode"] == "passive-only"
+    assert payload["preflight_passed"] is True
+    assert payload["no_network_commands_executed"] is True
+    assert "No network commands were executed." in markdown_path.read_text(encoding="utf-8")
+    assert render_passive_execution_markdown(result) == markdown_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("profile", ["lab-full", "bug-bounty-standard"])
+def test_passive_execution_refuses_active_profiles(tmp_path: Path, profile: str) -> None:
+    scope = _scope_file(tmp_path)
+    output = tmp_path / "bugslyce-output" / profile
+    plan = build_recon_plan("10.10.10.10", scope, output, profile)
+    plan_path, _markdown_path = write_recon_plan(plan)
+
+    with pytest.raises(ValueError, match="Live recon execution is not implemented yet"):
+        run_passive_execution(
+            plan,
+            plan_path,
+            FIXTURES_ROOT / "lab_raw_recon_pack",
+            output,
+            preflight_passed=True,
+        )
+
+
+def test_passive_execution_requires_existing_input_directory(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    output = tmp_path / "bugslyce-output" / "passive"
+    plan = build_recon_plan("10.10.10.10", scope, output, "passive-only")
+    plan_path, _markdown_path = write_recon_plan(plan)
+
+    with pytest.raises(ValueError, match="input directory does not exist"):
+        run_passive_execution(
+            plan,
+            plan_path,
+            tmp_path / "missing-input",
+            output,
+            preflight_passed=True,
+        )
+
+
+def test_passive_execution_requires_passing_preflight(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    output = tmp_path / "bugslyce-output" / "passive"
+    plan = build_recon_plan("10.10.10.10", scope, output, "passive-only")
+    plan_path, _markdown_path = write_recon_plan(plan)
+
+    with pytest.raises(ValueError, match="preflight did not pass"):
+        run_passive_execution(
+            plan,
+            plan_path,
+            FIXTURES_ROOT / "lab_raw_recon_pack",
+            output,
+            preflight_passed=False,
+        )
 
 
 def test_executor_source_contains_no_command_execution_apis() -> None:

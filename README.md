@@ -166,6 +166,31 @@ Preflight does not run commands or contact targets. Missing required tools fail 
 
 This is a required safety layer before any future controlled live execution is introduced.
 
+### Passive-only Execution
+
+BugSlyce can complete a local execution pipeline for a `passive-only` plan:
+
+```bash
+bugslyce recon execute \
+  --plan ./private_recon/example/recon_plan.json \
+  --passive-only \
+  --input-dir ./private_recon/example/artifacts
+```
+
+The optional `--input-dir` selects an existing local artifact directory. Without it, BugSlyce uses the plan output directory as the input directory.
+
+Passive-only execution:
+
+1. Loads and validates `recon_plan.json`.
+2. Requires the plan profile to be `passive-only`.
+3. Runs and writes recon preflight results.
+4. Parses existing local recon artifacts through the deterministic project assembly pipeline.
+5. Writes `report.md`, `project_state.json`, `recon_execution.json`, and `recon_execution.md`.
+
+It does not run network commands or execute command-preview strings. Plans using `lab-full` or `bug-bounty-standard` remain blocked because live command execution is not implemented.
+
+This local packaging and analysis path is the safe bridge between planning/preflight and any future controlled live recon executor.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

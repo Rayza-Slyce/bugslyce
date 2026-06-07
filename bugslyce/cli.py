@@ -21,7 +21,10 @@ from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provi
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
+    render_passive_execution_summary,
     render_execution_preview_summary,
+    run_passive_execution,
+    write_passive_execution_result,
     write_execution_preview,
 )
 from bugslyce.recon.planner import (
@@ -132,6 +135,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required safety flag; writes execution preview files only.",
     )
+    execute_parser.add_argument(
+        "--passive-only",
+        action="store_true",
+        help="Package existing local artifacts for a passive-only plan.",
+    )
+    execute_parser.add_argument(
+        "--input-dir",
+        type=Path,
+        help="Optional local artifact directory; defaults to the plan output directory.",
+    )
     preflight_parser = recon_subparsers.add_parser(
         "preflight",
         help="Check local readiness and plan safety without executing commands.",
@@ -231,28 +244,96 @@ def _recon(args: argparse.Namespace) -> int:
         return 0
 
     if args.recon_command == "execute":
-        if not args.dry_run:
+        if args.dry_run and args.passive_only:
+            print("Error: choose either --dry-run or --passive-only, not both.", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            return 2
+        if not args.dry_run and not args.passive_only:
             print(
                 "Error: Live recon execution is not implemented yet. "
-                "Re-run with --dry-run to preview planned execution.",
+                "Re-run with --dry-run to preview planned execution or "
+                "--passive-only to package existing local artifacts.",
                 file=sys.stderr,
             )
             print("No commands were executed.", file=sys.stderr)
             return 2
+
+        if args.dry_run:
+            try:
+                plan = load_recon_plan(args.plan_path)
+                preview = build_execution_preview(
+                    plan,
+                    args.plan_path,
+                    output_dir=args.plan_path.parent,
+                )
+                json_path, markdown_path = write_execution_preview(preview, args.plan_path.parent)
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                print("No commands were executed.", file=sys.stderr)
+                return 2
+
+            print(render_execution_preview_summary(preview, json_path, markdown_path))
+            return 0
+
         try:
             plan = load_recon_plan(args.plan_path)
-            preview = build_execution_preview(
-                plan,
-                args.plan_path,
-                output_dir=args.plan_path.parent,
-            )
-            json_path, markdown_path = write_execution_preview(preview, args.plan_path.parent)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
-            print("No commands were executed.", file=sys.stderr)
+            print("No network commands were executed.", file=sys.stderr)
+            return 2
+        if plan.profile != "passive-only":
+            print(
+                f"Error: Plan profile '{plan.profile}' is not passive-only. "
+                "Live recon execution is not implemented yet.",
+                file=sys.stderr,
+            )
+            print("No network commands were executed.", file=sys.stderr)
             return 2
 
-        print(render_execution_preview_summary(preview, json_path, markdown_path))
+        try:
+            preflight = run_preflight(args.plan_path)
+            preflight_json_path, preflight_markdown_path = write_preflight_result(
+                preflight,
+                args.plan_path.parent,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No network commands were executed.", file=sys.stderr)
+            return 2
+        if not preflight.passed:
+            print("Error: recon preflight failed; passive execution was not started.", file=sys.stderr)
+            print(f"Preflight JSON path: {preflight_json_path}", file=sys.stderr)
+            print(f"Preflight Markdown path: {preflight_markdown_path}", file=sys.stderr)
+            print("No network commands were executed.", file=sys.stderr)
+            return 2
+
+        output_dir = Path(plan.output_dir)
+        input_dir = args.input_dir or output_dir
+        try:
+            result = run_passive_execution(
+                plan=plan,
+                plan_path=args.plan_path,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                preflight_passed=preflight.passed,
+                preflight_warnings=preflight.warnings,
+            )
+            execution_json_path, execution_markdown_path = write_passive_execution_result(
+                result,
+                output_dir,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No network commands were executed.", file=sys.stderr)
+            return 2
+
+        print(
+            render_passive_execution_summary(
+                result,
+                execution_json_path,
+                execution_markdown_path,
+            )
+        )
         return 0
 
     if args.recon_command == "preflight":
