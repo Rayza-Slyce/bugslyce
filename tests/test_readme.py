@@ -18,3 +18,7 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "`bug-bounty-standard`" in readme
     assert "`passive-only`" in readme
     assert "`recon_manifest.json` remains the bridge" in readme
+    assert "### Recon Execution Dry Run" in readme
+    assert "bugslyce recon execute" in readme
+    assert "It does not run commands." in readme
+    assert "Live recon execution is not implemented yet" in readme

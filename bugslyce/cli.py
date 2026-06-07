@@ -18,6 +18,12 @@ from bugslyce.config import (
 from bugslyce.core.project import build_project_state
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
+from bugslyce.recon.executor import (
+    build_execution_preview,
+    load_recon_plan,
+    render_execution_preview_summary,
+    write_execution_preview,
+)
 from bugslyce.recon.planner import (
     build_recon_plan,
     render_recon_plan_summary,
@@ -105,6 +111,22 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory where recon_plan.json and recon_plan.md will be written.",
     )
+    execute_parser = recon_subparsers.add_parser(
+        "execute",
+        help="Preview a recon plan without executing commands.",
+    )
+    execute_parser.add_argument(
+        "--plan",
+        dest="plan_path",
+        required=True,
+        type=Path,
+        help="Path to a BugSlyce recon_plan.json file.",
+    )
+    execute_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required safety flag; writes execution preview files only.",
+    )
 
     return parser
 
@@ -175,25 +197,54 @@ def _config(args: argparse.Namespace) -> int:
 
 
 def _recon(args: argparse.Namespace) -> int:
-    if args.recon_command != "plan":
-        print("Error: recon command required. Use 'bugslyce recon plan --help'.", file=sys.stderr)
-        return 2
+    if args.recon_command == "plan":
+        try:
+            plan = build_recon_plan(
+                target=args.target,
+                scope_file=args.scope_file,
+                output_dir=args.output_dir,
+                profile=args.profile,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            return 2
 
-    try:
-        plan = build_recon_plan(
-            target=args.target,
-            scope_file=args.scope_file,
-            output_dir=args.output_dir,
-            profile=args.profile,
-        )
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        print("No commands were executed.", file=sys.stderr)
-        return 2
+        json_path, markdown_path = write_recon_plan(plan, args.output_dir)
+        print(render_recon_plan_summary(plan, json_path, markdown_path))
+        return 0
 
-    json_path, markdown_path = write_recon_plan(plan, args.output_dir)
-    print(render_recon_plan_summary(plan, json_path, markdown_path))
-    return 0
+    if args.recon_command == "execute":
+        if not args.dry_run:
+            print(
+                "Error: Live recon execution is not implemented yet. "
+                "Re-run with --dry-run to preview planned execution.",
+                file=sys.stderr,
+            )
+            print("No commands were executed.", file=sys.stderr)
+            return 2
+        try:
+            plan = load_recon_plan(args.plan_path)
+            preview = build_execution_preview(
+                plan,
+                args.plan_path,
+                output_dir=args.plan_path.parent,
+            )
+            json_path, markdown_path = write_execution_preview(preview, args.plan_path.parent)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            return 2
+
+        print(render_execution_preview_summary(preview, json_path, markdown_path))
+        return 0
+
+    print(
+        "Error: recon command required. Use 'bugslyce recon plan --help' "
+        "or 'bugslyce recon execute --help'.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

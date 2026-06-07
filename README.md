@@ -121,6 +121,25 @@ Active profiles require the target string to appear in the supplied scope file. 
 
 Actual recon execution is planned for a later phase. `recon_manifest.json` remains the bridge between that future controlled executor and the current evidence-first recon pack generator.
 
+### Recon Execution Dry Run
+
+A generated plan can be loaded and reviewed through the dry-run executor scaffold:
+
+```bash
+bugslyce recon execute \
+  --plan ./private_recon/example/recon_plan.json \
+  --dry-run
+```
+
+This writes:
+
+- `recon_execution_preview.json`
+- `recon_execution_preview.md`
+
+The preview validates the plan, lists each planned step, counts non-empty command previews, and shows expected artifacts and confirmation requirements. It does not run commands.
+
+The `--dry-run` flag is required. Live recon execution is not implemented yet, and running `bugslyce recon execute` without that flag fails safely. Dry-run mode is the safety bridge between the current planning model and any future controlled executor.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

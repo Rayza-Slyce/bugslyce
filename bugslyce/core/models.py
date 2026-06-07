@@ -265,6 +265,36 @@ class ReconPlan:
 
 
 @dataclass(frozen=True)
+class ReconExecutionStepPreview:
+    """Dry-run view of a planned step without command execution."""
+
+    step_id: str
+    name: str
+    phase: str
+    command_preview: str | None
+    expected_artifacts: list[str]
+    would_execute: bool
+    requires_confirmation: bool
+    risk_level: str
+    scope_sensitive: bool
+
+
+@dataclass(frozen=True)
+class ReconExecutionPreview:
+    """Serializable dry-run preview derived from a recon plan."""
+
+    target: str
+    profile: str
+    plan_path: str
+    output_dir: str
+    step_count: int
+    command_count: int
+    steps: list[ReconExecutionStepPreview]
+    warnings: list[str]
+    no_commands_executed: bool
+
+
+@dataclass(frozen=True)
 class ProjectState:
     """In-memory project state assembled from MVP input files."""
 

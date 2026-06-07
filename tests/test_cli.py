@@ -103,6 +103,18 @@ def test_cli_recon_plan_help_exits_successfully(capsys) -> None:
     assert "--profile" in captured.out
 
 
+def test_cli_recon_execute_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "execute", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon execute" in captured.out
+    assert "--plan" in captured.out
+    assert "--dry-run" in captured.out
+
+
 def test_cli_recon_plan_writes_outputs(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
@@ -187,6 +199,114 @@ def test_cli_recon_plan_unsupported_profile_fails_gracefully(tmp_path: Path, cap
     assert "Unsupported recon profile" in captured.err
     assert "No commands were executed." in captured.err
     assert not output.exists()
+
+
+def test_cli_recon_execute_dry_run_writes_preview_files(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "plan-output"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-full",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(output / "recon_plan.json"),
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads((output / "recon_execution_preview.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "recon_execution_preview.md").exists()
+    assert payload["no_commands_executed"] is True
+    assert payload["command_count"] == 7
+    assert "BugSlyce recon dry-run complete" in captured.out
+    assert "No commands were executed." in captured.out
+
+
+def test_cli_recon_execute_without_dry_run_fails_safely(tmp_path: Path, capsys) -> None:
+    plan_path = tmp_path / "recon_plan.json"
+    plan_path.write_text("{}", encoding="utf-8")
+
+    exit_code = main(["recon", "execute", "--plan", str(plan_path)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "Live recon execution is not implemented yet" in captured.err
+    assert "Re-run with --dry-run" in captured.err
+    assert "No commands were executed." in captured.err
+    assert not (tmp_path / "recon_execution_preview.json").exists()
+
+
+def test_cli_recon_execute_missing_plan_fails_safely(tmp_path: Path, capsys) -> None:
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(tmp_path / "missing.json"),
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "Recon plan file does not exist" in captured.err
+    assert "No commands were executed." in captured.err
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("{bad json", "invalid JSON"),
+        (json.dumps({"created_by": "bugslyce-recon-planner", "steps": []}), "field 'target'"),
+    ],
+)
+def test_cli_recon_execute_invalid_plan_fails_safely(
+    tmp_path: Path,
+    capsys,
+    content: str,
+    message: str,
+) -> None:
+    plan_path = tmp_path / "recon_plan.json"
+    plan_path.write_text(content, encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "execute",
+            "--plan",
+            str(plan_path),
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert message in captured.err
+    assert "No commands were executed." in captured.err
+    assert not (tmp_path / "recon_execution_preview.json").exists()
 
 
 def test_cli_config_show_exits_successfully(tmp_path: Path, monkeypatch, capsys) -> None:
