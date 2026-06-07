@@ -202,7 +202,71 @@ def _candidate_lines(candidate: Candidate) -> list[str]:
 
 
 def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
-    lines.extend(["## Evidence Summary", "", "### Raw Evidence References", ""])
+    lines.extend(["## Evidence Summary", ""])
+    if project_state.recon_summary:
+        summary = project_state.recon_summary
+        lines.extend(
+            [
+                f"- Open ports recorded: {summary.open_port_count}",
+                f"- HTTP services recorded: {summary.http_service_count}",
+                f"- Interesting artifacts recorded: {summary.interesting_artifact_count}",
+                f"- Manual review candidates: {summary.candidate_count}",
+                "",
+            ]
+        )
+
+    if project_state.port_services:
+        lines.extend(
+            [
+                "### Port Services",
+                "",
+                "| Host | Port | Protocol | State | Service | Product / Version | Evidence IDs |",
+                "| --- | ---: | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for service in project_state.port_services:
+            details = " ".join(value for value in (service.product, service.version) if value) or "unknown"
+            lines.append(
+                f"| {_md(service.host)} | {service.port} | {_md(service.protocol)} | "
+                f"{_md(service.state)} | {_md(service.service or 'unknown')} | {_md(details)} | "
+                f"{format_evidence_ids(service.evidence_ids)} |"
+            )
+        lines.append("")
+
+    if project_state.discovered_paths:
+        lines.extend(
+            [
+                "### Discovered Paths",
+                "",
+                "| URL | Status | Length | Redirect | Evidence IDs |",
+                "| --- | ---: | ---: | --- | --- |",
+            ]
+        )
+        for path in project_state.discovered_paths:
+            lines.append(
+                f"| {_md(path.url)} | {path.status_code if path.status_code is not None else 'unknown'} | "
+                f"{path.content_length if path.content_length is not None else 'unknown'} | "
+                f"{_md(path.redirect_location or 'none')} | {format_evidence_ids(path.evidence_ids)} |"
+            )
+        lines.append("")
+
+    if project_state.http_artifacts:
+        lines.extend(
+            [
+                "### HTTP Artifacts",
+                "",
+                "| URL | Artifact Type | Value | Evidence IDs |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for artifact in project_state.http_artifacts:
+            lines.append(
+                f"| {_md(artifact.url or 'unknown')} | {_md(artifact.artifact_type)} | "
+                f"{_md(_compact(artifact.value))} | {format_evidence_ids(artifact.evidence_ids)} |"
+            )
+        lines.append("")
+
+    lines.extend(["### Raw Evidence References", ""])
     if not project_state.evidence:
         lines.extend(["No evidence records were assembled from the parsed inputs.", ""])
         return

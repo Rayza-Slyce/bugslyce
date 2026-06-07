@@ -1,0 +1,3 @@
+User-Agent: CUSTOM_USER_AGENT_PLACEHOLDER
+Disallow: /private/
+Allow: /icons/

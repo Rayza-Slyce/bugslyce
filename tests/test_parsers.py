@@ -147,9 +147,12 @@ def test_all_demo_fixture_types_parse() -> None:
 
         assert parse_scope(fixture_dir / "scope.md").raw_text
         assert parse_subdomains(fixture_dir / "subdomains.txt")
-        assert parse_httpx_jsonl(fixture_dir / "httpx.jsonl")
-        assert parse_urls(fixture_dir / "urls.txt")
-        assert parse_notes(fixture_dir / "notes.md").raw_text
+        if (fixture_dir / "httpx.jsonl").exists():
+            assert parse_httpx_jsonl(fixture_dir / "httpx.jsonl")
+        if (fixture_dir / "urls.txt").exists():
+            assert parse_urls(fixture_dir / "urls.txt")
+        if (fixture_dir / "notes.md").exists():
+            assert parse_notes(fixture_dir / "notes.md").raw_text
 
 
 def test_parsers_do_not_invent_vulnerability_claims(tmp_path: Path) -> None:

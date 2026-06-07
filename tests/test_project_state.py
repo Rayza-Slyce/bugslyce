@@ -151,6 +151,28 @@ def test_project_state_builds_from_local_lab_ip_fixture() -> None:
     ]
 
 
+def test_project_state_builds_from_raw_recon_fixture() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+
+    assert {(service.port, service.service) for service in state.port_services} == {
+        (80, "http"),
+        (2222, "ssh"),
+        (65524, "http"),
+    }
+    assert {service.url for service in state.http_services} == {
+        "http://10.10.10.10/",
+        "http://10.10.10.10:65524/",
+    }
+    assert state.discovered_paths
+    assert state.http_artifacts
+    assert state.recon_summary is not None
+    assert state.recon_summary.open_port_count == 3
+    assert any(item.artifact_type == "encoded_like_artifact" for item in state.http_artifacts)
+    assert all(item.evidence_ids for item in state.port_services)
+    assert all(item.evidence_ids for item in state.discovered_paths)
+    assert all(item.evidence_ids for item in state.http_artifacts)
+
+
 def test_malformed_httpx_lines_do_not_crash_project_assembly(tmp_path: Path) -> None:
     (tmp_path / "httpx.jsonl").write_text(
         "\n".join(

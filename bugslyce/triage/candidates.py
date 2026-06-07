@@ -12,6 +12,8 @@ from bugslyce.triage.classify import (
     API_SURFACE,
     AUTH_SURFACE,
     ENVIRONMENT_SURFACE,
+    ENCODED_ARTIFACT_REVIEW,
+    EXPOSED_SERVICE_CONTEXT,
     FILE_OR_CONTENT_SURFACE,
     HIGH_PORT_HTTP_SERVICE,
     HIDDEN_PATH_REVIEW,
@@ -21,6 +23,7 @@ from bugslyce.triage.classify import (
     OBJECT_REFERENCE_REVIEW,
     REDIRECT_PARAMETER_REVIEW,
     ROBOTS_ARTIFACT,
+    DEAD_LOW_SIGNAL_PATH,
     TECHNOLOGY_REVIEW,
 )
 from bugslyce.triage.killswitch import (
@@ -319,6 +322,107 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
             kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
         )
 
+    for port_service in project_state.port_services:
+        if port_service.state != "open" or "http_service" in port_service.tags:
+            continue
+        asset = assets_by_host.get(port_service.host)
+        service_label = port_service.service or "unknown service"
+        _add_candidate(
+            candidates,
+            seen,
+            EXPOSED_SERVICE_CONTEXT,
+            f"{port_service.host}:{port_service.port}/{port_service.protocol}",
+            title=f"Exposed service context for {port_service.host}:{port_service.port}",
+            priority="low" if asset and asset.in_scope is True else "kill_switch",
+            rationale=f"Structured nmap evidence records an open {service_label} service.",
+            affected_assets=[port_service.host],
+            affected_endpoints=[],
+            evidence_ids=port_service.evidence_ids,
+            suggested_manual_validation=[
+                "Review programme scope before inspecting this service.",
+                "Record the expected service role and version context.",
+                "Treat service metadata as recon context rather than a finding.",
+            ],
+            kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
+        )
+
+    artifact_groups: dict[tuple[str, str], list] = {}
+    for artifact in project_state.http_artifacts:
+        host = normalise_artifact_host(artifact.url)
+        if not host:
+            continue
+        if "robots_artifact" in artifact.tags:
+            artifact_groups.setdefault((ROBOTS_ARTIFACT, host), []).append(artifact)
+        if "encoded_or_hidden_artifact" in artifact.tags:
+            artifact_groups.setdefault((ENCODED_ARTIFACT_REVIEW, host), []).append(artifact)
+
+    for (candidate_type, host), artifacts in artifact_groups.items():
+        asset = assets_by_host.get(host)
+        if candidate_type == ROBOTS_ARTIFACT:
+            title = f"Robots artifact review for {host}"
+            rationale = "Structured robots evidence includes directives or user-agent context."
+            validation = [
+                "Review robots directives as recon context.",
+                "Treat referenced paths as manual review leads only when they are in scope.",
+                "Record linked path evidence before escalating a lead.",
+            ]
+        else:
+            title = f"Encoded or hidden artifact review for {host}"
+            rationale = "Saved HTML metadata contains a hidden element or encoded-looking artifact."
+            validation = [
+                "Review the saved HTML context without assuming the artifact meaning.",
+                "Do not decode or interpret content without authorised manual review.",
+                "Record surrounding page evidence before escalating a lead.",
+            ]
+        _add_candidate(
+            candidates,
+            seen,
+            candidate_type,
+            host,
+            title=title,
+            priority="low" if asset and asset.in_scope is True else "kill_switch",
+            rationale=rationale,
+            affected_assets=[host],
+            affected_endpoints=_dedupe(artifact.url for artifact in artifacts if artifact.url),
+            evidence_ids=_dedupe(
+                evidence_id
+                for artifact in artifacts
+                for evidence_id in artifact.evidence_ids
+            ),
+            suggested_manual_validation=validation,
+            kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
+        )
+
+    dead_groups: dict[str, list] = {}
+    for path in project_state.discovered_paths:
+        if "dead_path" in path.tags:
+            host = normalise_artifact_host(path.url)
+            if host:
+                dead_groups.setdefault(host, []).append(path)
+    for host, paths in dead_groups.items():
+        asset = assets_by_host.get(host)
+        _add_candidate(
+            candidates,
+            seen,
+            DEAD_LOW_SIGNAL_PATH,
+            host,
+            title=f"Dead or low-signal path context for {host}",
+            priority="low" if asset and asset.in_scope is True else "kill_switch",
+            rationale="Structured path or header evidence records one or more 404 responses.",
+            affected_assets=[host],
+            affected_endpoints=_dedupe(path.url for path in paths),
+            evidence_ids=_dedupe(
+                evidence_id
+                for path in paths
+                for evidence_id in path.evidence_ids
+            ),
+            suggested_manual_validation=[
+                "Treat these paths as low signal unless new evidence changes the response context.",
+                "Avoid repeated manual effort on unchanged 404 paths.",
+            ],
+            kill_switch_guidance=LOW_SIGNAL_GUIDANCE,
+        )
+
     for asset in project_state.assets:
         if asset.in_scope is not False:
             continue
@@ -337,7 +441,10 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
             kill_switch_guidance="Review programme scope before testing this host further.",
         )
 
-    return [_with_candidate_id(index, candidate) for index, candidate in enumerate(candidates, start=1)]
+    result = [_with_candidate_id(index, candidate) for index, candidate in enumerate(candidates, start=1)]
+    if project_state.recon_summary is not None:
+        project_state.recon_summary.candidate_count = len(result)
+    return result
 
 
 @dataclass
@@ -468,6 +575,10 @@ def _has_hidden_path_marker(path: str) -> bool:
     markers = {"hidden", "secret", "private", "backup", "old", "dev", "staging", "test"}
     segments = {segment.lower() for segment in path.strip("/").split("/") if segment}
     return bool(segments & markers)
+
+
+def normalise_artifact_host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:

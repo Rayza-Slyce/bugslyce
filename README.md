@@ -161,6 +161,20 @@ BugSlyce currently looks for these files in an input directory:
 
 Missing optional files are handled with warnings rather than stopping the run.
 
+## Raw Recon Artifact Support
+
+BugSlyce can also ingest selected saved raw recon artifacts:
+
+- nmap normal output in files matching `nmap*.txt`
+- gobuster output in files matching `gobuster-*.txt`
+- saved curl response headers in files matching `curl-headers-*.txt`
+- robots files matching `robots-*.txt`
+- saved HTML files matching `*.html`
+
+These parsers extract structured port services, HTTP services, discovered paths, headers, robots directives, page titles, links and sources, comments, hidden elements, forms, inputs, keyword hits, and conservative encoded-looking artifacts.
+
+BugSlyce still does not run recon. Raw artifact parsing is the bridge between manual recon today and a future planner/executor model for controlled, scope-aware recon. Parser and candidate logic is behaviour-driven and must not be treated as target-specific.
+
 ## Safety Boundaries
 
 BugSlyce is for authorised testing only. Use it only with programmes, assets, and data you are explicitly permitted to assess.

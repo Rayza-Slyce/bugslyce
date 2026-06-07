@@ -1,0 +1,5 @@
+Nmap scan report for 10.10.10.10
+PORT      STATE SERVICE VERSION
+80/tcp    open  http    nginx 1.18.0
+2222/tcp  open  ssh     OpenSSH 8.2p1 Ubuntu
+65524/tcp open  http    Apache httpd 2.4.57

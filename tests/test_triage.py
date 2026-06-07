@@ -213,3 +213,66 @@ def test_lab_recon_pack_generates_evidence_first_candidates() -> None:
     assert "low_signal_static" in candidate_types
     assert "manual_note_review" not in candidate_types
     assert all(candidate.evidence_ids for candidate in candidates)
+
+
+def test_raw_recon_pack_generates_structured_evidence_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    candidates = generate_candidates(state)
+    candidate_types = {candidate.candidate_type for candidate in candidates}
+
+    assert {
+        "exposed_service_context",
+        "high_port_http_service",
+        "multiple_http_services",
+        "robots_artifact",
+        "hidden_path_review",
+        "encoded_artifact_review",
+        "dead_low_signal_path",
+        "low_signal_static",
+    } <= candidate_types
+    assert "manual_note_review" not in candidate_types
+    assert state.recon_summary is not None
+    assert state.recon_summary.candidate_count == len(candidates)
+
+
+def test_api_style_raw_recon_is_behaviour_driven(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- `api.example-bounty.test`\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "subdomains.txt").write_text("api.example-bounty.test\n", encoding="utf-8")
+    (tmp_path / "nmap-services.txt").write_text(
+        "\n".join(
+            [
+                "Nmap scan report for api.example-bounty.test",
+                "PORT     STATE SERVICE VERSION",
+                "8088/tcp open  http    Caddy 2.7",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "gobuster-8088-root.txt").write_text(
+        "\n".join(
+            [
+                "api/v1/users?id=1 (Status: 200) [Size: 128]",
+                "login?next=/dashboard (Status: 200) [Size: 512]",
+                "account?redirect_url=/home (Status: 200) [Size: 610]",
+                "upload (Status: 200) [Size: 420]",
+                "static/app.js (Status: 200) [Size: 1400]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    candidate_types = {candidate.candidate_type for candidate in generate_candidates(state)}
+
+    assert {
+        "api_surface",
+        "auth_surface",
+        "file_or_content_surface",
+        "object_reference_review",
+        "redirect_parameter_review",
+        "low_signal_static",
+        "high_port_http_service",
+    } <= candidate_types

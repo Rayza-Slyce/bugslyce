@@ -47,8 +47,11 @@ def test_candidate_language_avoids_forbidden_terms() -> None:
 
 
 def test_markdown_report_language_avoids_forbidden_terms() -> None:
-    state = build_project_state(FIXTURES_ROOT / "basic_saas")
-    candidates = generate_candidates(state)
-    report = render_markdown_report(state, candidates).lower()
+    reports: list[str] = []
+    for fixture_name in ("basic_saas", "lab_raw_recon_pack"):
+        state = build_project_state(FIXTURES_ROOT / fixture_name)
+        candidates = generate_candidates(state)
+        reports.append(render_markdown_report(state, candidates))
+    report = "\n".join(reports).lower()
 
     assert not any(term in report for term in FORBIDDEN_TERMS)

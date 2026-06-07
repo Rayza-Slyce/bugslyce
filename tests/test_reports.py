@@ -177,3 +177,15 @@ def test_lab_recon_pack_report_uses_evidence_first_sections() -> None:
     assert "## Manual Review Queue" in report
     assert "High-port HTTP services" in report
     assert "Robots artifacts" in report
+
+
+def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+
+    assert "# BugSlyce Recon Pack" in report
+    assert "### Port Services" in report
+    assert "### Discovered Paths" in report
+    assert "### HTTP Artifacts" in report
+    assert "### Raw Evidence References" in report

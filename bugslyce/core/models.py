@@ -128,9 +128,11 @@ class PortService:
     host: str
     port: int
     protocol: str
+    state: str
     service: str | None
     product: str | None
     version: str | None
+    source_file: str
     evidence_ids: list[str]
     tags: list[str]
 
@@ -142,6 +144,7 @@ class HTTPArtifact:
     url: str
     artifact_type: str
     value: str
+    source_file: str
     evidence_ids: list[str]
     tags: list[str]
 
@@ -153,12 +156,25 @@ class DiscoveredPath:
     url: str
     status_code: int | None
     content_length: int | None
+    redirect_location: str | None
     source: str
     evidence_ids: list[str]
     tags: list[str]
 
 
 @dataclass(frozen=True)
+class ParsedHTTPHeaders:
+    """Parsed response header block from saved curl output."""
+
+    status_code: int | None
+    server: str | None
+    content_type: str | None
+    content_length: int | None
+    location: str | None
+    source_file: str
+
+
+@dataclass
 class ReconPackSummary:
     """Compact recon pack counts for future structured exports."""
 
@@ -179,6 +195,10 @@ class ProjectState:
     assets: list[Asset]
     http_services: list[HTTPService]
     endpoints: list[Endpoint]
+    port_services: list[PortService]
+    http_artifacts: list[HTTPArtifact]
+    discovered_paths: list[DiscoveredPath]
+    recon_summary: ReconPackSummary | None
     evidence: list[Evidence]
     warnings: list[str]
     generated_at: str
