@@ -115,6 +115,17 @@ def test_cli_recon_execute_help_exits_successfully(capsys) -> None:
     assert "--dry-run" in captured.out
 
 
+def test_cli_recon_preflight_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "preflight", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon preflight" in captured.out
+    assert "--plan" in captured.out
+
+
 def test_cli_recon_plan_writes_outputs(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
@@ -307,6 +318,79 @@ def test_cli_recon_execute_invalid_plan_fails_safely(
     assert message in captured.err
     assert "No commands were executed." in captured.err
     assert not (tmp_path / "recon_execution_preview.json").exists()
+
+
+def test_cli_recon_preflight_writes_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / "plan"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-full",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+    monkeypatch.setattr("bugslyce.recon.preflight.shutil.which", lambda tool: f"/usr/bin/{tool}")
+
+    exit_code = main(["recon", "preflight", "--plan", str(output / "recon_plan.json")])
+
+    captured = capsys.readouterr()
+    payload = json.loads((output / "recon_preflight.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "recon_preflight.md").exists()
+    assert payload["passed"] is True
+    assert "BugSlyce recon preflight complete" in captured.out
+    assert "No commands were executed." in captured.out
+
+
+def test_cli_recon_preflight_returns_nonzero_on_failed_check(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Test Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "bugslyce-output" / "plan"
+    assert main(
+        [
+            "recon",
+            "plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-full",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    capsys.readouterr()
+    monkeypatch.setattr("bugslyce.recon.preflight.shutil.which", lambda _tool: None)
+
+    exit_code = main(["recon", "preflight", "--plan", str(output / "recon_plan.json")])
+
+    captured = capsys.readouterr()
+    payload = json.loads((output / "recon_preflight.json").read_text(encoding="utf-8"))
+
+    assert exit_code != 0
+    assert payload["passed"] is False
+    assert "Passed: false" in captured.out
+    assert "No commands were executed." in captured.out
 
 
 def test_cli_config_show_exits_successfully(tmp_path: Path, monkeypatch, capsys) -> None:

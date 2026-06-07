@@ -295,6 +295,33 @@ class ReconExecutionPreview:
 
 
 @dataclass(frozen=True)
+class ReconPreflightCheck:
+    """One deterministic safety or readiness check for a recon plan."""
+
+    id: str
+    name: str
+    status: str
+    message: str
+    severity: str
+    remediation: str | None
+
+
+@dataclass(frozen=True)
+class ReconPreflightResult:
+    """Serializable local preflight result with no command execution."""
+
+    plan_path: str
+    target: str
+    profile: str
+    output_dir: str
+    passed: bool
+    checks: list[ReconPreflightCheck]
+    warnings: list[str]
+    errors: list[str]
+    no_commands_executed: bool
+
+
+@dataclass(frozen=True)
 class ProjectState:
     """In-memory project state assembled from MVP input files."""
 

@@ -29,6 +29,11 @@ from bugslyce.recon.planner import (
     render_recon_plan_summary,
     write_recon_plan,
 )
+from bugslyce.recon.preflight import (
+    render_preflight_summary,
+    run_preflight,
+    write_preflight_result,
+)
 from bugslyce.recon.profiles import recon_profile_names
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
@@ -126,6 +131,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Required safety flag; writes execution preview files only.",
+    )
+    preflight_parser = recon_subparsers.add_parser(
+        "preflight",
+        help="Check local readiness and plan safety without executing commands.",
+    )
+    preflight_parser.add_argument(
+        "--plan",
+        dest="plan_path",
+        required=True,
+        type=Path,
+        help="Path to a BugSlyce recon_plan.json file.",
     )
 
     return parser
@@ -239,9 +255,21 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_execution_preview_summary(preview, json_path, markdown_path))
         return 0
 
+    if args.recon_command == "preflight":
+        try:
+            result = run_preflight(args.plan_path)
+            json_path, markdown_path = write_preflight_result(result, args.plan_path.parent)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            return 2
+
+        print(render_preflight_summary(result, json_path, markdown_path))
+        return 0 if result.passed else 2
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
-        "or 'bugslyce recon execute --help'.",
+        "'bugslyce recon execute --help', or 'bugslyce recon preflight --help'.",
         file=sys.stderr,
     )
     return 2

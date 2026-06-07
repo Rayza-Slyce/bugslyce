@@ -140,6 +140,32 @@ The preview validates the plan, lists each planned step, counts non-empty comman
 
 The `--dry-run` flag is required. Live recon execution is not implemented yet, and running `bugslyce recon execute` without that flag fails safely. Dry-run mode is the safety bridge between the current planning model and any future controlled executor.
 
+### Recon Safety Preflight
+
+Run local safety and readiness checks against a generated plan:
+
+```bash
+bugslyce recon preflight \
+  --plan ./private_recon/example/recon_plan.json
+```
+
+Preflight writes:
+
+- `recon_preflight.json`
+- `recon_preflight.md`
+
+It checks:
+
+- BugSlyce plan provenance and structure.
+- Literal target alignment with the recorded scope file.
+- Expected local tool availability using PATH lookup only.
+- Whether the planned output directory uses a safer local recon path.
+- Command previews for configured high-risk tokens that are outside current product boundaries.
+
+Preflight does not run commands or contact targets. Missing required tools fail active profiles, while `passive-only` requires no external recon tools. Warnings do not fail preflight, but any failed check produces a non-zero CLI exit code.
+
+This is a required safety layer before any future controlled live execution is introduced.
+
 ## Safe Private Lab Workflow
 
 For authorised private lab data, keep inputs in a gitignored folder:

@@ -25,7 +25,7 @@ DRY_RUN_WARNINGS = [
 ]
 
 
-def load_recon_plan(path: Path) -> ReconPlan:
+def load_recon_plan(path: Path, require_provenance: bool = True) -> ReconPlan:
     """Load and validate a BugSlyce recon_plan.json file."""
 
     if not path.exists():
@@ -45,7 +45,7 @@ def load_recon_plan(path: Path) -> ReconPlan:
         name: _required_text(payload, name)
         for name in ("target", "scope_file", "profile", "output_dir", "created_by")
     }
-    if required_text["created_by"] != "bugslyce-recon-planner":
+    if require_provenance and required_text["created_by"] != "bugslyce-recon-planner":
         raise ValueError("Plan does not look like a BugSlyce recon plan.")
 
     raw_steps = payload.get("steps")

@@ -22,3 +22,8 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "bugslyce recon execute" in readme
     assert "It does not run commands." in readme
     assert "Live recon execution is not implemented yet" in readme
+    assert "### Recon Safety Preflight" in readme
+    assert "bugslyce recon preflight" in readme
+    assert "Expected local tool availability using PATH lookup only" in readme
+    assert "Preflight does not run commands or contact targets" in readme
+    assert "required safety layer" in readme
