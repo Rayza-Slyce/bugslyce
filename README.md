@@ -2,6 +2,8 @@
 
 BugSlyce is a local-first, scope-aware recon pack generator and triage assistant for authorised security testing. It currently ingests existing recon outputs, organises assets and endpoints, links evidence, generates deterministic manual-review candidates, and writes a careful Markdown recon pack plus a JSON project export.
 
+When reading `scope.md`, BugSlyce separates target-like entries such as IP addresses, networks, hostnames, wildcard domains, and HTTP URLs from policy or activity restrictions. Restriction text remains scope context and is not added to the asset inventory or manual review queue.
+
 The current MVP is deterministic Python only. It does not make network requests, run scanners, call LLMs, or confirm security issues.
 
 ## What BugSlyce Is

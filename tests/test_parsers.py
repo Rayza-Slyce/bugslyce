@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bugslyce.core.normalise import normalise_hostname
-from bugslyce.core.scope import parse_scope
+from bugslyce.core.scope import is_target_like_scope_entry, parse_scope, scope_entry_target
 from bugslyce.parsers.httpx import parse_httpx_jsonl
 from bugslyce.parsers.notes import parse_notes
 from bugslyce.parsers.subdomains import parse_subdomains
@@ -25,6 +25,33 @@ def test_parse_scope_extracts_demo_in_scope_and_out_of_scope() -> None:
     assert "Any domain not ending in `.example-bounty.test`" in parsed.out_of_scope
     assert "Fictional authorised demo scope" in parsed.raw_text
     assert parsed.source_path.endswith("scope.md")
+
+
+def test_scope_entry_target_classification_distinguishes_targets_from_policy() -> None:
+    target_entries = {
+        "10.82.158.153": "10.82.158.153",
+        "10.82.158.0/24": "10.82.158.0/24",
+        "2001:db8::1": "2001:db8::1",
+        "2001:db8::/32": "2001:db8::/32",
+        "api.example.com": "api.example.com",
+        "*.example.com": "example.com",
+        "https://staging.example.co.uk/account": "staging.example.co.uk",
+    }
+    policy_entries = [
+        "Scanners",
+        "Content discovery",
+        "Brute force",
+        "Exploitation",
+        "Any other IP or domain",
+        "Targets outside the TryHackMe lab environment",
+        "third-party services",
+    ]
+
+    for entry, expected in target_entries.items():
+        assert is_target_like_scope_entry(entry)
+        assert scope_entry_target(entry) == expected
+    assert all(not is_target_like_scope_entry(entry) for entry in policy_entries)
+    assert all(scope_entry_target(entry) is None for entry in policy_entries)
 
 
 def test_parse_subdomains_dedupes_and_normalises_hosts() -> None:

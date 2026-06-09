@@ -227,3 +227,58 @@ def test_duplicate_heavy_url_file_does_not_duplicate_endpoints(tmp_path: Path) -
 
     assert len(state.endpoints) == 1
     assert len([item for item in state.evidence if item.evidence_type == "endpoint"]) == 1
+
+
+def test_scope_policy_lines_do_not_create_assets(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "\n".join(
+            [
+                "# Scope",
+                "",
+                "## In Scope",
+                "",
+                "* 10.82.158.153",
+                "",
+                "## Out of Scope",
+                "",
+                "* Any other IP or domain",
+                "* Scanners",
+                "* Content discovery",
+                "* Brute force",
+                "* Exploitation",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [asset.hostname for asset in state.assets] == ["10.82.158.153"]
+    assert state.assets[0].in_scope is True
+    assert len([item for item in state.evidence if item.evidence_type == "scope_in_target"]) == 1
+    assert len([item for item in state.evidence if item.evidence_type == "scope_policy"]) == 5
+
+
+def test_scope_url_and_wildcard_entries_create_normalised_assets(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "\n".join(
+            [
+                "# Scope",
+                "",
+                "## In Scope",
+                "",
+                "* https://app.example.com/login",
+                "",
+                "## Out of Scope",
+                "",
+                "* *.third-party.example",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    assets = {asset.hostname: asset for asset in state.assets}
+
+    assert assets["app.example.com"].in_scope is True
+    assert assets["third-party.example"].in_scope is False

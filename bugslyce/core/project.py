@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
+import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
 import warnings as warnings_module
@@ -24,7 +25,7 @@ from bugslyce.core.models import (
 )
 from bugslyce.core.normalise import dedupe_preserve_order, normalise_hostname, normalise_url
 from bugslyce.core.raw_artifacts import assemble_raw_artifacts
-from bugslyce.core.scope import parse_scope
+from bugslyce.core.scope import is_target_like_scope_entry, parse_scope, scope_entry_target
 from bugslyce.parsers.httpx import parse_httpx_jsonl
 from bugslyce.parsers.manifest import parse_recon_manifest
 from bugslyce.parsers.notes import parse_notes
@@ -83,16 +84,16 @@ def build_project_state(input_dir: Path) -> ProjectState:
     endpoint_order: list[str] = []
 
     scope_entries = _scope_entries(scope)
-    for entry_type, value in scope_entries:
+    for evidence_type, scope_type, value in scope_entries:
         evidence_id = _append_evidence(
             evidence,
             "SCOPE",
             scope.source_path,
-            entry_type,
+            evidence_type,
             value,
-            {"scope_type": entry_type},
+            {"scope_type": scope_type},
         )
-        host = _simple_scope_host(value)
+        host = _simple_scope_host(value) if evidence_type != "scope_policy" else None
         if host:
             _link_asset(asset_evidence, asset_sources, host, evidence_id, scope.source_path)
 
@@ -290,12 +291,15 @@ def _empty_parse_result(name: str, path: Path) -> object:
     return []
 
 
-def _scope_entries(scope: object) -> list[tuple[str, str]]:
+def _scope_entries(scope: object) -> list[tuple[str, str, str]]:
     if not isinstance(scope, ParsedScope):
         return []
-    return [("scope_in", value) for value in scope.in_scope] + [
-        ("scope_out", value) for value in scope.out_of_scope
-    ]
+    entries: list[tuple[str, str, str]] = []
+    for scope_type, values in (("scope_in", scope.in_scope), ("scope_out", scope.out_of_scope)):
+        for value in values:
+            evidence_type = f"{scope_type}_target" if is_target_like_scope_entry(value) else "scope_policy"
+            entries.append((evidence_type, scope_type, value))
+    return entries
 
 
 def _append_evidence(
@@ -390,17 +394,16 @@ def _scope_status(hostname: str, scope: object) -> bool | None:
 
 
 def _simple_scope_host(value: str) -> str | None:
-    stripped = value.strip().strip("`").strip()
-    if not stripped:
-        return None
-    if " " in stripped or "/" in stripped:
-        return None
-    if stripped.startswith("*."):
-        stripped = stripped[2:]
-    return normalise_hostname(stripped)
+    target = scope_entry_target(value)
+    return normalise_hostname(target) if target else None
 
 
 def _host_matches_scope(hostname: str, scope_host: str) -> bool:
+    try:
+        network = ipaddress.ip_network(scope_host, strict=False)
+        return ipaddress.ip_address(hostname) in network
+    except ValueError:
+        pass
     return hostname == scope_host or hostname.endswith(f".{scope_host}")
 
 

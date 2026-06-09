@@ -156,6 +156,39 @@ def test_report_renders_ip_assets() -> None:
     assert "CAND-" in report
 
 
+def test_scope_policy_text_is_not_rendered_as_assets_or_candidates(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "\n".join(
+            [
+                "# Scope Policy Check",
+                "",
+                "## In Scope",
+                "",
+                "* 127.0.0.1",
+                "",
+                "## Out of Scope",
+                "",
+                "* Scanners",
+                "* Content discovery",
+                "* Brute force",
+                "* Exploitation",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    asset_inventory = report.split("## Asset Inventory", 1)[1].split("## Live HTTP Services", 1)[0]
+    manual_queue = report.split("## Manual Review Queue", 1)[1].split("## Evidence Summary", 1)[0]
+
+    assert "127.0.0.1" in asset_inventory
+    assert "scanners" not in asset_inventory.lower()
+    assert "exploitation" not in asset_inventory.lower()
+    assert "scope review before testing scanners" not in manual_queue.lower()
+    assert "scope review before testing exploitation" not in manual_queue.lower()
+
+
 def test_operator_notes_are_context_not_queue_candidates() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_recon_pack")
     candidates = generate_candidates(state)

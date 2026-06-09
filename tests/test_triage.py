@@ -162,6 +162,34 @@ def test_notes_do_not_generate_manual_review_candidates(tmp_path: Path) -> None:
     assert candidates == []
 
 
+def test_scope_policy_lines_do_not_generate_kill_switch_candidates(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "\n".join(
+            [
+                "# Scope",
+                "",
+                "## In Scope",
+                "",
+                "* 10.82.158.153",
+                "",
+                "## Out of Scope",
+                "",
+                "* Scanners",
+                "* Content discovery",
+                "* Brute force",
+                "* Exploitation",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+
+    assert candidates == []
+    assert [asset.hostname for asset in state.assets] == ["10.82.158.153"]
+
+
 def test_duplicate_heavy_url_file_does_not_explode_candidates(tmp_path: Path) -> None:
     (tmp_path / "urls.txt").write_text(
         "\n".join(["https://app.example-bounty.test/account?user_id=1001"] * 25),
