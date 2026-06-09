@@ -12,6 +12,7 @@ from bugslyce.core.models import (
     ReconPlan,
     ReconPlanStep,
 )
+from bugslyce.recon.nmap_profiles import validate_nmap_command
 
 
 ALLOWED_TOOLS = {"nmap", "curl", "gobuster"}
@@ -83,7 +84,7 @@ def validate_recon_command(
         if matched_forbidden:
             errors.append(f"argv contains forbidden token '{matched_forbidden}'.")
 
-    if not command.ready_for_execution or command.placeholders:
+    if command.placeholders:
         errors.append("Command contains unresolved placeholders and is not ready for execution.")
     if not isinstance(command.timeout_seconds, int) or isinstance(command.timeout_seconds, bool):
         errors.append("timeout_seconds must be an integer.")
@@ -94,6 +95,13 @@ def validate_recon_command(
 
     if not _output_is_inside(command.output_file, planned_output_dir):
         errors.append("output_file must stay inside the planned output directory.")
+
+    if tool == "nmap" and argv_values and not command.placeholders:
+        nmap_validation = validate_nmap_command(command, planned_output_dir)
+        errors.extend(nmap_validation.errors)
+        warnings.extend(nmap_validation.warnings)
+    elif not command.ready_for_execution:
+        errors.append("Command is not ready for execution.")
 
     if command.risk_level not in {"low", "moderate", "high"}:
         warnings.append(f"Unrecognised risk level '{command.risk_level}'.")
@@ -170,6 +178,8 @@ def validate_live_curl_header_command(
 
     if command.tool != "curl":
         errors.append("Live execution is restricted to curl.")
+    if not command.ready_for_execution:
+        errors.append("Live curl header command must be marked ready for execution.")
     if len(argv) != 9 or argv[:5] != expected_prefix or argv[6] != "--output":
         errors.append("Curl live command must match the approved header-only argv shape.")
     else:

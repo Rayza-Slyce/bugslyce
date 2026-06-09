@@ -216,6 +216,26 @@ The current runner is simulated only. It validates a `ReconCommand` and returns 
 
 Any future live runner must retain structured argv, allowlisted tools, bounded timeouts, output-file enforcement, preflight checks, explicit operator confirmation, and no shell interpretation.
 
+### Nmap Command Planning
+
+BugSlyce models three approved future nmap profiles without executing them:
+
+- `lab-tcp-top`: SYN discovery across nmap's top 1000 TCP ports.
+- `lab-tcp-full`: full TCP discovery with a fixed planned rate.
+- `lab-service-scan`: service/version detection for an explicit validated port list.
+
+Create a non-executing command plan with:
+
+```bash
+bugslyce recon nmap-plan \
+  --target 10.10.10.10 \
+  --scope ./private_recon/example/scope.md \
+  --profile lab-tcp-top \
+  --output ./bugslyce-output/nmap-plan
+```
+
+The command writes `nmap_command_plan.json` and `nmap_command_plan.md`. Nmap execution is not implemented. The validator accepts only exact profile shapes and rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:

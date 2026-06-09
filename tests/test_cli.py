@@ -142,6 +142,80 @@ def test_cli_recon_curl_headers_help_exits_successfully(capsys) -> None:
     assert "--confirm" in captured.out
 
 
+def test_cli_recon_nmap_plan_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "nmap-plan", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon nmap-plan" in captured.out
+    assert "--target" in captured.out
+    assert "--scope" in captured.out
+    assert "--profile" in captured.out
+    assert "--ports" in captured.out
+
+
+def test_cli_recon_nmap_plan_writes_non_executing_outputs(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "nmap-plan"
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-top",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads((output / "nmap_command_plan.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "nmap_command_plan.md").exists()
+    assert payload["profile"]["name"] == "lab-tcp-top"
+    assert payload["command"]["ready_for_execution"] is False
+    assert payload["no_commands_executed"] is True
+    assert "BugSlyce nmap command plan created" in captured.out
+    assert "No commands were executed." in captured.out
+
+
+def test_cli_recon_nmap_plan_refuses_target_not_in_scope(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 192.0.2.10\n", encoding="utf-8")
+    output = tmp_path / "nmap-plan"
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-plan",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-top",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "not present in the supplied in-scope target entries" in captured.err
+    assert "No commands were executed." in captured.err
+    assert not output.exists()
+
+
 def test_cli_recon_curl_headers_requires_confirm(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("- 10.10.10.10\n", encoding="utf-8")
