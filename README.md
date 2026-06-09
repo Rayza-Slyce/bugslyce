@@ -212,7 +212,7 @@ Command validation currently checks:
 - Timeouts are positive and bounded.
 - No unresolved placeholders remain.
 
-The current runner is simulated only. It validates a `ReconCommand` and returns a simulated result with `executed=false`; it does not start processes or create network output. Live execution remains unimplemented.
+The simulated runner remains available for command-flow tests and previews. Isolated live runners exist only for the scoped curl-header command and the two fixed nmap discovery profiles described below.
 
 Any future live runner must retain structured argv, allowlisted tools, bounded timeouts, output-file enforcement, preflight checks, explicit operator confirmation, and no shell interpretation.
 
@@ -234,11 +234,14 @@ bugslyce recon nmap-plan \
   --output ./bugslyce-output/nmap-plan
 ```
 
-The command writes `nmap_command_plan.json` and `nmap_command_plan.md`. Nmap execution is not implemented. The validator accepts only exact profile shapes and rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
+The command writes `nmap_command_plan.json` and `nmap_command_plan.md` without executing nmap. Planning also models `lab-service-scan`, but live service/version execution is not implemented. Validation rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
 
-### Scoped Nmap Top-Ports Discovery
+### Scoped Nmap TCP Discovery
 
-BugSlyce has one narrowly restricted live nmap command:
+BugSlyce has two narrowly restricted live nmap discovery profiles:
+
+- `lab-tcp-top`: one top-1000 TCP discovery command.
+- `lab-tcp-full`: one full TCP discovery command using the fixed planned rate.
 
 ```bash
 bugslyce recon nmap-discover \
@@ -249,9 +252,9 @@ bugslyce recon nmap-discover \
   --confirm
 ```
 
-This runs exactly one top-1000 TCP discovery command using the fixed `lab-tcp-top` argv shape. It requires explicit confirmation, one target-like in-scope entry, a bounded process timeout, and an output file named `nmap-top1000.txt` inside the selected directory.
+Use `--profile lab-tcp-full` to write `nmap-allports.txt`. Both profiles require explicit confirmation, one exactly listed target-like in-scope entry, a bounded process timeout, and their fixed output filename inside the selected directory.
 
-The live validator rejects arbitrary nmap arguments, NSE scripts, service scans, full TCP scans, UDP scans, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, and shell metacharacters. Full TCP and service/version live execution remain unimplemented. The workflow writes raw nmap output, `recon_manifest.json`, the recon pack, and execution metadata.
+The live validator rejects arbitrary nmap arguments, NSE scripts, service scans, UDP scans, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, and shell metacharacters. Service/version live execution remains unimplemented. The workflow writes raw nmap output, `recon_manifest.json`, the recon pack, and execution metadata.
 
 ### Scoped Curl Header Request
 
@@ -275,7 +278,7 @@ This command:
 - Writes only inside the selected output directory.
 - Saves the raw headers, `recon_manifest.json`, recon-pack outputs, and execution metadata.
 
-The live runner accepts only the approved curl header argv shape. It does not use shell interpretation, does not send request bodies, and does not run POST, PUT, DELETE, scanners, brute force, exploitation, recursive discovery, or content discovery. Live nmap and gobuster execution remain unimplemented.
+The live runner accepts only the approved curl header argv shape. It does not use shell interpretation, does not send request bodies, and does not run POST, PUT, DELETE, brute force, exploitation, recursive discovery, or content discovery. Live nmap service scanning and gobuster execution remain unimplemented.
 
 ## Safe Private Lab Workflow
 

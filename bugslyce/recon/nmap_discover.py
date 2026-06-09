@@ -9,11 +9,12 @@ from pathlib import Path
 from bugslyce.core.models import ReconNmapDiscoveryExecutionResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.nmap_profiles import (
+    build_live_nmap_full_tcp_command,
     build_live_nmap_top_ports_command,
     get_nmap_profile,
     validate_explicit_nmap_target_scope,
 )
-from bugslyce.recon.runner import LiveNmapTopPortsRunner
+from bugslyce.recon.runner import LiveNmapDiscoveryRunner
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 
@@ -23,21 +24,28 @@ def run_nmap_discovery_workflow(
     scope_file: Path,
     output_dir: Path,
     profile_name: str = "lab-tcp-top",
-    runner: LiveNmapTopPortsRunner | None = None,
+    runner: LiveNmapDiscoveryRunner | None = None,
 ) -> ReconNmapDiscoveryExecutionResult:
-    """Run one confirmed lab-tcp-top command and build recon-pack outputs."""
+    """Run one approved nmap discovery command and build recon-pack outputs."""
 
-    if profile_name != "lab-tcp-top":
-        raise ValueError("Live nmap execution currently supports only profile 'lab-tcp-top'.")
+    if profile_name not in {"lab-tcp-top", "lab-tcp-full"}:
+        raise ValueError(
+            "Live nmap execution currently supports only profiles "
+            "'lab-tcp-top' and 'lab-tcp-full'."
+        )
 
     output_dir = output_dir.expanduser().resolve()
     target = validate_explicit_nmap_target_scope(target, scope_file)
     profile = get_nmap_profile(profile_name)
-    command = build_live_nmap_top_ports_command(target, output_dir)
+    command = (
+        build_live_nmap_top_ports_command(target, output_dir)
+        if profile_name == "lab-tcp-top"
+        else build_live_nmap_full_tcp_command(target, output_dir)
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
-    command_result = (runner or LiveNmapTopPortsRunner(output_dir)).run(command)
+    command_result = (runner or LiveNmapDiscoveryRunner(output_dir)).run(command)
     if command_result.error or command_result.exit_code != 0:
-        raise ValueError(command_result.error or "Nmap top-1000 discovery did not complete successfully.")
+        raise ValueError(command_result.error or "Nmap discovery did not complete successfully.")
 
     nmap_output_path = Path(command_result.output_file)
     if not nmap_output_path.is_file():
@@ -50,6 +58,9 @@ def run_nmap_discovery_workflow(
     local_scope_path = output_dir / "scope.md"
     local_scope_path.write_text(scope_text, encoding="utf-8")
     manifest_path = output_dir / "recon_manifest.json"
+    discovery_label = (
+        "top-1000 TCP discovery" if profile_name == "lab-tcp-top" else "full TCP discovery"
+    )
     manifest_path.write_text(
         json.dumps(
             {
@@ -62,7 +73,7 @@ def run_nmap_discovery_workflow(
                     {
                         "type": "nmap",
                         "file": nmap_output_path.name,
-                        "description": "Single bounded nmap top-1000 TCP discovery command",
+                        "description": f"Single bounded nmap {discovery_label} command",
                     }
                 ],
             },
@@ -110,6 +121,7 @@ def render_nmap_discovery_execution_markdown(
 ) -> str:
     """Render careful execution metadata for one nmap discovery command."""
 
+    discovery_label = _discovery_label(result.profile)
     return "\n".join(
         [
             "# BugSlyce Nmap Discovery Execution",
@@ -124,7 +136,7 @@ def render_nmap_discovery_execution_markdown(
             f"- Project state: `{result.project_state_path}`",
             f"- Nmap discovery commands executed: {result.execution_count}",
             "",
-            "One nmap top-1000 TCP discovery command was executed.",
+            f"One nmap {discovery_label} command was executed.",
             "No NSE scripts, service scans, UDP scans, content discovery, brute force, or exploitation were run.",
             "",
         ]
@@ -136,6 +148,7 @@ def render_nmap_discovery_execution_summary(
 ) -> str:
     """Render concise CLI output for one nmap discovery command."""
 
+    discovery_label = _discovery_label(result.profile)
     return "\n".join(
         [
             "BugSlyce nmap discovery complete",
@@ -145,7 +158,11 @@ def render_nmap_discovery_execution_summary(
             f"Nmap output path: {result.nmap_output_path}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
-            "One nmap top-1000 TCP discovery command was executed.",
+            f"One nmap {discovery_label} command was executed.",
             "No NSE scripts, service scans, UDP scans, content discovery, brute force, or exploitation were run.",
         ]
     )
+
+
+def _discovery_label(profile_name: str) -> str:
+    return "top-1000 TCP discovery" if profile_name == "lab-tcp-top" else "full TCP discovery"

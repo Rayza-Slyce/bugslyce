@@ -11,7 +11,7 @@ from bugslyce.recon.commands import (
     validate_live_curl_header_command,
     validate_recon_command,
 )
-from bugslyce.recon.nmap_profiles import validate_live_nmap_top_ports_command
+from bugslyce.recon.nmap_profiles import validate_live_nmap_discovery_command
 
 
 class SimulatedReconRunner:
@@ -113,17 +113,17 @@ class LiveCurlHeaderRunner:
         )
 
 
-class LiveNmapTopPortsRunner:
-    """Execute only the approved lab-tcp-top nmap command shape."""
+class LiveNmapDiscoveryRunner:
+    """Execute only approved nmap discovery command shapes."""
 
     def __init__(self, planned_output_dir: Path) -> None:
         self.planned_output_dir = planned_output_dir
 
     def run(self, command: ReconCommand) -> ReconCommandResult:
-        """Run one validated nmap top-1000 TCP discovery command."""
+        """Run one validated nmap TCP discovery command."""
 
         started = datetime.now(timezone.utc)
-        validation = validate_live_nmap_top_ports_command(command, self.planned_output_dir)
+        validation = validate_live_nmap_discovery_command(command, self.planned_output_dir)
         if not validation.valid:
             ended = datetime.now(timezone.utc)
             return _live_result(
@@ -154,7 +154,7 @@ class LiveNmapTopPortsRunner:
                 ended,
                 exit_code=None,
                 stderr_path=None,
-                error=f"Nmap top-1000 discovery exceeded {command.timeout_seconds} seconds.",
+                error=f"Nmap discovery exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
             ended = datetime.now(timezone.utc)
@@ -164,7 +164,7 @@ class LiveNmapTopPortsRunner:
                 ended,
                 exit_code=None,
                 stderr_path=None,
-                error=f"Nmap top-1000 discovery could not start: {exc}",
+                error=f"Nmap discovery could not start: {exc}",
             )
 
         stderr_file: str | None = None
@@ -181,6 +181,10 @@ class LiveNmapTopPortsRunner:
             stderr_path=stderr_file,
             error=error,
         )
+
+
+# Backwards-compatible internal alias from the first live nmap phase.
+LiveNmapTopPortsRunner = LiveNmapDiscoveryRunner
 
 
 def _live_result(

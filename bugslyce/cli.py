@@ -233,7 +233,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     nmap_discover_parser = recon_subparsers.add_parser(
         "nmap-discover",
-        help="Run one confirmed, scoped nmap top-1000 TCP discovery command.",
+        help="Run one confirmed, scoped nmap TCP discovery command.",
     )
     nmap_discover_parser.add_argument("--target", required=True, help="One authorised hostname or IP target.")
     nmap_discover_parser.add_argument(
@@ -246,7 +246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     nmap_discover_parser.add_argument(
         "--profile",
         required=True,
-        help="Live profile; only lab-tcp-top is supported.",
+        help="Approved live profile: lab-tcp-top or lab-tcp-full.",
     )
     nmap_discover_parser.add_argument(
         "--output",

@@ -106,7 +106,7 @@ def build_nmap_top_ports_command(target: str, output_dir: Path) -> ReconCommand:
 
 
 def build_live_nmap_top_ports_command(target: str, output_dir: Path) -> ReconCommand:
-    """Build the sole nmap command shape currently permitted for live execution."""
+    """Build the top-1000 nmap command permitted for live execution."""
 
     return replace(
         build_nmap_top_ports_command(target, output_dir),
@@ -123,6 +123,16 @@ def build_nmap_full_tcp_command(target: str, output_dir: Path) -> ReconCommand:
         target=target,
         output_dir=output_dir,
         argv_before_output=["nmap", "-sS", "-Pn", "-p-", "--min-rate", "5000"],
+    )
+
+
+def build_live_nmap_full_tcp_command(target: str, output_dir: Path) -> ReconCommand:
+    """Build the full TCP nmap command permitted for live execution."""
+
+    return replace(
+        build_nmap_full_tcp_command(target, output_dir),
+        id="CMD-NMAP-DISCOVER-0001",
+        ready_for_execution=True,
     )
 
 
@@ -243,6 +253,31 @@ def validate_live_nmap_top_ports_command(
 ) -> ReconCommandValidationResult:
     """Validate the exact lab-tcp-top shape permitted for live execution."""
 
+    return _validate_live_nmap_discovery_command(
+        command,
+        planned_output_dir,
+        allowed_profiles=("lab-tcp-top",),
+    )
+
+
+def validate_live_nmap_discovery_command(
+    command: ReconCommand,
+    planned_output_dir: Path,
+) -> ReconCommandValidationResult:
+    """Validate either approved live nmap discovery command shape."""
+
+    return _validate_live_nmap_discovery_command(
+        command,
+        planned_output_dir,
+        allowed_profiles=("lab-tcp-top", "lab-tcp-full"),
+    )
+
+
+def _validate_live_nmap_discovery_command(
+    command: ReconCommand,
+    planned_output_dir: Path,
+    allowed_profiles: tuple[str, ...],
+) -> ReconCommandValidationResult:
     errors: list[str] = []
     if not isinstance(command.argv, list) or any(not isinstance(value, str) for value in command.argv):
         argv: list[str] = []
@@ -250,20 +285,28 @@ def validate_live_nmap_top_ports_command(
     else:
         argv = command.argv
 
-    profile = NMAP_PROFILES["lab-tcp-top"]
-    expected_output = planned_output_dir.expanduser().resolve() / profile.expected_output_file
-    expected_prefix = ["nmap", "-sS", "-Pn", "--top-ports", "1000", "-oN"]
+    profile = _profile_for_argv(argv)
+    if profile is not None and profile.name not in allowed_profiles:
+        profile = None
 
     if command.tool != "nmap":
         errors.append("Live nmap execution is restricted to the nmap tool.")
-    if len(argv) != 8 or argv[:6] != expected_prefix:
-        errors.append("Live nmap command must match the approved lab-tcp-top argv shape.")
+    if profile is None:
+        labels = " or ".join(allowed_profiles)
+        errors.append(f"Live nmap command must match the approved {labels} argv shape.")
     else:
-        if argv[6] != command.output_file:
+        output_index = argv.index("-oN") + 1
+        expected_output = (
+            planned_output_dir.expanduser().resolve() / profile.expected_output_file
+        )
+        if argv[output_index] != command.output_file:
             errors.append("Nmap -oN path must match command output_file.")
-        if Path(argv[6]).expanduser().resolve() != expected_output:
-            errors.append("Live nmap output must be nmap-top1000.txt inside the selected output directory.")
-        if not _valid_single_target(argv[7]):
+        if Path(argv[output_index]).expanduser().resolve() != expected_output:
+            errors.append(
+                f"Live nmap output must be {profile.expected_output_file} "
+                "inside the selected output directory."
+            )
+        if not _valid_single_target(argv[-1]):
             errors.append("Live nmap command must contain one valid hostname or IP target.")
     for value in argv:
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
@@ -271,9 +314,9 @@ def validate_live_nmap_top_ports_command(
             errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
     if command.output_file and not _output_is_inside(command.output_file, planned_output_dir):
         errors.append("output_file must stay inside the planned output directory.")
-    if command.timeout_seconds != profile.default_timeout_seconds:
+    if profile is not None and command.timeout_seconds != profile.default_timeout_seconds:
         errors.append(
-            f"Live lab-tcp-top requires timeout_seconds={profile.default_timeout_seconds}."
+            f"Live {profile.name} requires timeout_seconds={profile.default_timeout_seconds}."
         )
     if not command.ready_for_execution:
         errors.append("Live nmap command must be explicitly marked ready for execution.")
