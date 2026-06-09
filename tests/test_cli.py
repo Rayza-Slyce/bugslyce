@@ -156,6 +156,174 @@ def test_cli_recon_nmap_plan_help_exits_successfully(capsys) -> None:
     assert "--ports" in captured.out
 
 
+def test_cli_recon_nmap_discover_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "nmap-discover", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon nmap-discover" in captured.out
+    assert "--target" in captured.out
+    assert "--scope" in captured.out
+    assert "--profile" in captured.out
+    assert "--output" in captured.out
+    assert "--confirm" in captured.out
+
+
+def test_cli_recon_nmap_discover_requires_confirm(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-discover",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-top",
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "requires explicit --confirm" in captured.err
+    assert "No nmap command was executed." in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_nmap_discover_refuses_unsupported_profile(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-discover",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-full",
+            "--output",
+            str(output),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "supports only profile 'lab-tcp-top'" in captured.err
+    assert "No nmap command was executed." in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_nmap_discover_refuses_target_not_in_scope(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 192.0.2.10\n\n## Out of Scope\n\n- Scanners\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-discover",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-top",
+            "--output",
+            str(output),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "not explicitly listed in the supplied in-scope target entries" in captured.err
+    assert "No nmap command was executed." in captured.err
+    assert not output.exists()
+
+
+def test_cli_recon_nmap_discover_uses_mocked_runner_and_writes_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    output = tmp_path / "output"
+
+    def fake_run(_runner, command):
+        nmap_output = Path(command.output_file)
+        nmap_output.parent.mkdir(parents=True, exist_ok=True)
+        nmap_output.write_text(
+            "Nmap scan report for 10.10.10.10\nPORT   STATE SERVICE\n80/tcp open  http\n",
+            encoding="utf-8",
+        )
+        from bugslyce.core.models import ReconCommandResult
+
+        return ReconCommandResult(
+            command_id=command.id,
+            tool="nmap",
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+    monkeypatch.setattr("bugslyce.recon.nmap_discover.LiveNmapTopPortsRunner.run", fake_run)
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-discover",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--profile",
+            "lab-tcp-top",
+            "--output",
+            str(output),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    execution = json.loads((output / "recon_execution.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (output / "nmap-top1000.txt").exists()
+    assert (output / "recon_manifest.json").exists()
+    assert (output / "report.md").exists()
+    assert (output / "project_state.json").exists()
+    assert (output / "recon_execution.md").exists()
+    assert execution["profile"] == "lab-tcp-top"
+    assert "One nmap top-1000 TCP discovery command was executed." in captured.out
+
+
 def test_cli_recon_nmap_plan_writes_non_executing_outputs(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")

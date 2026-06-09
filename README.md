@@ -236,6 +236,23 @@ bugslyce recon nmap-plan \
 
 The command writes `nmap_command_plan.json` and `nmap_command_plan.md`. Nmap execution is not implemented. The validator accepts only exact profile shapes and rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
 
+### Scoped Nmap Top-Ports Discovery
+
+BugSlyce has one narrowly restricted live nmap command:
+
+```bash
+bugslyce recon nmap-discover \
+  --target 10.10.10.10 \
+  --scope ./private_recon/example/scope.md \
+  --profile lab-tcp-top \
+  --output ./private_recon/example \
+  --confirm
+```
+
+This runs exactly one top-1000 TCP discovery command using the fixed `lab-tcp-top` argv shape. It requires explicit confirmation, one target-like in-scope entry, a bounded process timeout, and an output file named `nmap-top1000.txt` inside the selected directory.
+
+The live validator rejects arbitrary nmap arguments, NSE scripts, service scans, full TCP scans, UDP scans, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, and shell metacharacters. Full TCP and service/version live execution remain unimplemented. The workflow writes raw nmap output, `recon_manifest.json`, the recon pack, and execution metadata.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:

@@ -43,6 +43,11 @@ from bugslyce.recon.nmap_profiles import (
     render_nmap_command_plan_summary,
     write_nmap_command_plan,
 )
+from bugslyce.recon.nmap_discover import (
+    render_nmap_discovery_execution_summary,
+    run_nmap_discovery_workflow,
+    write_nmap_discovery_execution_result,
+)
 from bugslyce.recon.preflight import (
     render_preflight_summary,
     run_preflight,
@@ -225,6 +230,35 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Directory for nmap_command_plan.json and nmap_command_plan.md.",
+    )
+    nmap_discover_parser = recon_subparsers.add_parser(
+        "nmap-discover",
+        help="Run one confirmed, scoped nmap top-1000 TCP discovery command.",
+    )
+    nmap_discover_parser.add_argument("--target", required=True, help="One authorised hostname or IP target.")
+    nmap_discover_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the target in its In Scope section.",
+    )
+    nmap_discover_parser.add_argument(
+        "--profile",
+        required=True,
+        help="Live profile; only lab-tcp-top is supported.",
+    )
+    nmap_discover_parser.add_argument(
+        "--output",
+        dest="output_dir",
+        required=True,
+        type=Path,
+        help="Directory for nmap output, manifest, recon pack, and execution metadata.",
+    )
+    nmap_discover_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm the single scoped nmap discovery command.",
     )
 
     return parser
@@ -471,10 +505,35 @@ def _recon(args: argparse.Namespace) -> int:
         )
         return 0
 
+    if args.recon_command == "nmap-discover":
+        if not args.confirm:
+            print(
+                "Error: live nmap execution requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No nmap command was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_nmap_discovery_workflow(
+                target=args.target,
+                scope_file=args.scope_file,
+                output_dir=args.output_dir,
+                profile_name=args.profile,
+            )
+            write_nmap_discovery_execution_result(result, Path(result.output_dir))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No nmap command was executed.", file=sys.stderr)
+            return 2
+
+        print(render_nmap_discovery_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
-        "'bugslyce recon curl-headers --help', or 'bugslyce recon nmap-plan --help'.",
+        "'bugslyce recon curl-headers --help', 'bugslyce recon nmap-plan --help', "
+        "or 'bugslyce recon nmap-discover --help'.",
         file=sys.stderr,
     )
     return 2

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import ipaddress
 import json
 from pathlib import Path
@@ -102,6 +102,16 @@ def build_nmap_top_ports_command(target: str, output_dir: Path) -> ReconCommand:
         target=target,
         output_dir=output_dir,
         argv_before_output=["nmap", "-sS", "-Pn", "--top-ports", "1000"],
+    )
+
+
+def build_live_nmap_top_ports_command(target: str, output_dir: Path) -> ReconCommand:
+    """Build the sole nmap command shape currently permitted for live execution."""
+
+    return replace(
+        build_nmap_top_ports_command(target, output_dir),
+        id="CMD-NMAP-DISCOVER-0001",
+        ready_for_execution=True,
     )
 
 
@@ -227,6 +237,61 @@ def validate_nmap_command(
     )
 
 
+def validate_live_nmap_top_ports_command(
+    command: ReconCommand,
+    planned_output_dir: Path,
+) -> ReconCommandValidationResult:
+    """Validate the exact lab-tcp-top shape permitted for live execution."""
+
+    errors: list[str] = []
+    if not isinstance(command.argv, list) or any(not isinstance(value, str) for value in command.argv):
+        argv: list[str] = []
+        errors.append("argv must be a list of strings.")
+    else:
+        argv = command.argv
+
+    profile = NMAP_PROFILES["lab-tcp-top"]
+    expected_output = planned_output_dir.expanduser().resolve() / profile.expected_output_file
+    expected_prefix = ["nmap", "-sS", "-Pn", "--top-ports", "1000", "-oN"]
+
+    if command.tool != "nmap":
+        errors.append("Live nmap execution is restricted to the nmap tool.")
+    if len(argv) != 8 or argv[:6] != expected_prefix:
+        errors.append("Live nmap command must match the approved lab-tcp-top argv shape.")
+    else:
+        if argv[6] != command.output_file:
+            errors.append("Nmap -oN path must match command output_file.")
+        if Path(argv[6]).expanduser().resolve() != expected_output:
+            errors.append("Live nmap output must be nmap-top1000.txt inside the selected output directory.")
+        if not _valid_single_target(argv[7]):
+            errors.append("Live nmap command must contain one valid hostname or IP target.")
+    for value in argv:
+        matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
+        if matched:
+            errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
+    if command.output_file and not _output_is_inside(command.output_file, planned_output_dir):
+        errors.append("output_file must stay inside the planned output directory.")
+    if command.timeout_seconds != profile.default_timeout_seconds:
+        errors.append(
+            f"Live lab-tcp-top requires timeout_seconds={profile.default_timeout_seconds}."
+        )
+    if not command.ready_for_execution:
+        errors.append("Live nmap command must be explicitly marked ready for execution.")
+    if command.placeholders:
+        errors.append("Live nmap command must not contain placeholders.")
+    if not command.requires_confirmation:
+        errors.append("Live nmap commands require explicit confirmation.")
+    if not command.scope_sensitive:
+        errors.append("Live nmap commands must be scope sensitive.")
+
+    return ReconCommandValidationResult(
+        command_id=command.id,
+        valid=not errors,
+        errors=list(dict.fromkeys(errors)),
+        warnings=[],
+    )
+
+
 def build_nmap_command_plan(
     target: str,
     scope_file: Path,
@@ -257,6 +322,22 @@ def build_nmap_command_plan(
             raise ValueError("--ports is required with lab-service-scan.")
         command = build_nmap_service_scan_command(target, ports, output_dir)
     return profile, command
+
+
+def validate_explicit_nmap_target_scope(target: str, scope_file: Path) -> str:
+    """Validate one live target against an explicit target-like in-scope entry."""
+
+    target = _normalise_target(target)
+    if not scope_file.exists() or not scope_file.is_file():
+        raise ValueError(f"Scope file does not exist or is not a file: {scope_file}")
+    parsed_scope = parse_scope(scope_file)
+    for value in parsed_scope.in_scope:
+        stripped = value.strip().strip("`").strip()
+        if stripped.startswith("*.") or "/" in stripped:
+            continue
+        if scope_entry_target(value) == target:
+            return target
+    raise ValueError(f"Target '{target}' is not explicitly listed in the supplied in-scope target entries.")
 
 
 def write_nmap_command_plan(

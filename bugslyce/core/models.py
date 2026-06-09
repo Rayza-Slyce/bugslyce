@@ -375,6 +375,24 @@ class ReconCurlHeaderExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconNmapDiscoveryExecutionResult:
+    """Metadata for one confirmed, scoped nmap top-1000 discovery command."""
+
+    mode: str
+    target: str
+    profile: str
+    scope_file: str
+    output_dir: str
+    nmap_output_path: str
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    command_result: ReconCommandResult
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 
