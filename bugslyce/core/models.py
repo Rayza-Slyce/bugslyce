@@ -412,6 +412,24 @@ class ReconNmapServiceExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconHTTPMetadataExecutionResult:
+    """Metadata for bounded HTTP metadata collection from discovered services."""
+
+    mode: str
+    target: str
+    scope_file: str
+    input_dir: str
+    http_services: list[str]
+    artifact_paths: list[str]
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    command_results: list[ReconCommandResult]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 

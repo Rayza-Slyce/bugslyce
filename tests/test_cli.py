@@ -185,6 +185,132 @@ def test_cli_recon_nmap_services_help_exits_successfully(capsys) -> None:
     assert "--ports" not in captured.out
 
 
+def test_cli_recon_http_metadata_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "http-metadata", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon http-metadata" in captured.out
+    assert "--input-dir" in captured.out
+    assert "--scope" in captured.out
+    assert "--confirm" in captured.out
+    assert "--url" not in captured.out
+
+
+def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "http-metadata",
+            "--input-dir",
+            str(input_dir),
+            "--scope",
+            str(scope),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "requires explicit --confirm" in captured.err
+    assert "No HTTP request was executed." in captured.err
+
+
+def test_cli_recon_http_metadata_uses_mocked_runner_and_writes_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    (input_dir / "nmap-services-all.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT      STATE SERVICE VERSION\n"
+        "80/tcp    open  http    nginx 1.16.1\n"
+        "65524/tcp open  http    Apache httpd 2.4.43\n",
+        encoding="utf-8",
+    )
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "profile": "lab-tcp-full-plus-services",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-services-all.txt",
+                        "description": "Service output",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(_runner, command):
+        output = Path(command.output_file)
+        if output.name.startswith("curl-headers-"):
+            output.write_text("HTTP/1.1 200 OK\nServer: Test\n\n", encoding="utf-8")
+        elif output.name.startswith("robots-"):
+            output.write_text("User-agent: *\nDisallow: /private/\n", encoding="utf-8")
+        else:
+            output.write_text("<title>Test Service</title>", encoding="utf-8")
+        from bugslyce.core.models import ReconCommandResult
+
+        return ReconCommandResult(
+            command_id=command.id,
+            tool="curl",
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+    monkeypatch.setattr("bugslyce.recon.http_metadata.LiveHTTPMetadataRunner.run", fake_run)
+
+    exit_code = main(
+        [
+            "recon",
+            "http-metadata",
+            "--input-dir",
+            str(input_dir),
+            "--scope",
+            str(scope),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    execution = json.loads((input_dir / "recon_execution.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (input_dir / "curl-headers-10.10.10.10-80.txt").exists()
+    assert (input_dir / "robots-10.10.10.10-65524.txt").exists()
+    assert (input_dir / "homepage-10.10.10.10-65524.html").exists()
+    assert (input_dir / "report.md").exists()
+    assert (input_dir / "project_state.json").exists()
+    assert (input_dir / "recon_execution.md").exists()
+    assert execution["execution_count"] == 6
+    assert "HTTP metadata requests were executed." in captured.out
+
+
 def test_cli_recon_nmap_services_requires_confirm(tmp_path: Path, capsys) -> None:
     input_dir = tmp_path / "output"
     input_dir.mkdir()

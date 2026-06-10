@@ -32,6 +32,11 @@ from bugslyce.recon.executor import (
     write_passive_execution_result,
     write_execution_preview,
 )
+from bugslyce.recon.http_metadata import (
+    render_http_metadata_execution_summary,
+    run_http_metadata_workflow,
+    write_http_metadata_execution_result,
+)
 from bugslyce.recon.planner import (
     build_recon_plan,
     render_recon_plan_summary,
@@ -286,6 +291,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm the derived-port nmap service/version command.",
+    )
+    http_metadata_parser = recon_subparsers.add_parser(
+        "http-metadata",
+        help="Collect bounded metadata from nmap-discovered HTTP services.",
+    )
+    http_metadata_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce output directory containing nmap service evidence.",
+    )
+    http_metadata_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing discovery target.",
+    )
+    http_metadata_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm bounded HTTP metadata requests.",
     )
 
     return parser
@@ -578,12 +605,34 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_nmap_service_execution_summary(result))
         return 0
 
+    if args.recon_command == "http-metadata":
+        if not args.confirm:
+            print(
+                "Error: live HTTP metadata collection requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No HTTP request was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_http_metadata_workflow(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            write_http_metadata_execution_result(result, Path(result.input_dir))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No HTTP metadata request was executed.", file=sys.stderr)
+            return 2
+
+        print(render_http_metadata_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
         "'bugslyce recon curl-headers --help', 'bugslyce recon nmap-plan --help', "
-        "'bugslyce recon nmap-discover --help', or "
-        "'bugslyce recon nmap-services --help'.",
+        "'bugslyce recon nmap-discover --help', 'bugslyce recon nmap-services --help', "
+        "or 'bugslyce recon http-metadata --help'.",
         file=sys.stderr,
     )
     return 2

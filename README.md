@@ -271,6 +271,21 @@ The command prefers `nmap-allports.txt` and falls back to `nmap-top1000.txt`. It
 
 The live runner accepts only `nmap -sV -Pn -p <derived-ports> -oN nmap-services-all.txt <target>`. It rejects NSE scripts including `-sC`, UDP scans, arbitrary flags or ports, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, shell metacharacters, and output paths outside the existing directory. It preserves the discovery artifact in `recon_manifest.json`, adds the service artifact, and rebuilds the recon pack.
 
+### Scoped HTTP Metadata Collection
+
+BugSlyce can collect bounded metadata from HTTP services already identified by saved nmap service evidence:
+
+```bash
+bugslyce recon http-metadata \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+For at most 10 discovered HTTP services, the command collects response headers, `/robots.txt`, and the root homepage HTML. Origins are derived from structured nmap evidence; the CLI accepts no URL or port arguments. Requests use fixed curl argv shapes, a 10-second timeout, no redirect-following option, no request body, and only HEAD or GET behavior.
+
+The command requires an exact scope match and writes only inside the existing BugSlyce directory. It preserves nmap artifacts, appends HTTP artifacts to `recon_manifest.json`, and rebuilds the recon pack. It does not perform content discovery, brute force, exploitation, form submission, or arbitrary URL requests. Live gobuster/content discovery remains unimplemented.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:
