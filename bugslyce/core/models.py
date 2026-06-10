@@ -265,6 +265,37 @@ class ReconPlan:
 
 
 @dataclass(frozen=True)
+class ContentDiscoveryStep:
+    """One reviewed, non-executing root content discovery proposal."""
+
+    step_id: str
+    origin: str
+    command_preview: list[str]
+    expected_artifact: ReconPlannedArtifact
+    risk_level: str
+    requires_confirmation: bool
+    scope_sensitive: bool
+    allowed_tool: str
+    no_commands_executed: bool
+
+
+@dataclass(frozen=True)
+class ContentDiscoveryPlan:
+    """Serializable content discovery plan that cannot execute commands."""
+
+    target: str
+    profile: str
+    input_dir: str
+    scope_file: str
+    output_dir: str
+    origins: list[str]
+    steps: list[ContentDiscoveryStep]
+    warnings: list[str]
+    safety_notes: list[str]
+    no_commands_executed: bool
+
+
+@dataclass(frozen=True)
 class ReconExecutionStepPreview:
     """Dry-run view of a planned step without command execution."""
 

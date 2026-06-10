@@ -23,6 +23,12 @@ from bugslyce.recon.curl_headers import (
     run_curl_header_workflow,
     write_curl_header_execution_result,
 )
+from bugslyce.recon.content_plan import (
+    CONTENT_DISCOVERY_PROFILE,
+    build_content_discovery_plan,
+    render_content_discovery_plan_summary,
+    write_content_discovery_plan,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -340,6 +346,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm bounded checks of evidence-derived paths.",
+    )
+    content_plan_parser = recon_subparsers.add_parser(
+        "content-plan",
+        help="Plan bounded root content discovery without executing commands.",
+    )
+    content_plan_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce output directory containing discovered HTTP services.",
+    )
+    content_plan_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing recon target.",
+    )
+    content_plan_parser.add_argument(
+        "--profile",
+        required=True,
+        help=f"Supported planning profile: {CONTENT_DISCOVERY_PROFILE}.",
+    )
+    content_plan_parser.add_argument(
+        "--output",
+        dest="output_dir",
+        required=True,
+        type=Path,
+        help="Safe directory for content_discovery_plan.json and Markdown.",
     )
 
     return parser
@@ -676,13 +711,34 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_path_followup_execution_summary(result))
         return 0
 
+    if args.recon_command == "content-plan":
+        try:
+            plan = build_content_discovery_plan(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+                profile=args.profile,
+                output_dir=args.output_dir,
+            )
+            json_path, markdown_path = write_content_discovery_plan(
+                plan,
+                args.output_dir,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            return 2
+
+        print(render_content_discovery_plan_summary(plan, json_path, markdown_path))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
         "'bugslyce recon curl-headers --help', 'bugslyce recon nmap-plan --help', "
         "'bugslyce recon nmap-discover --help', 'bugslyce recon nmap-services --help', "
         "'bugslyce recon http-metadata --help', "
-        "or 'bugslyce recon path-followup --help'.",
+        "'bugslyce recon path-followup --help', "
+        "or 'bugslyce recon content-plan --help'.",
         file=sys.stderr,
     )
     return 2

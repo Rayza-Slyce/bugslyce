@@ -230,6 +230,20 @@ def test_cli_recon_path_followup_requires_confirm(tmp_path: Path, capsys) -> Non
     assert "No discovered-path request was executed." in captured.err
 
 
+def test_cli_recon_content_plan_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "content-plan", "--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon content-plan" in captured.out
+    assert "--input-dir" in captured.out
+    assert "--scope" in captured.out
+    assert "--profile" in captured.out
+    assert "--output" in captured.out
+    assert "--confirm" not in captured.out
+
+
 def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:
     input_dir = tmp_path / "output"
     input_dir.mkdir()

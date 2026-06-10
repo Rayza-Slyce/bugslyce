@@ -311,6 +311,31 @@ wordlists, recursive crawling, content discovery, brute force, exploitation,
 or form submission. General wordlist-based content discovery remains
 unimplemented.
 
+### Content Discovery Planning
+
+BugSlyce can create a reviewed, non-executing root content discovery plan for
+HTTP origins already present in structured recon evidence:
+
+```bash
+bugslyce recon content-plan \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --profile lab-root-light \
+  --output ./bugslyce-output/example-content-plan
+```
+
+The `lab-root-light` profile plans at most five discovered HTTP service roots.
+It produces `content_discovery_plan.json` and `content_discovery_plan.md` with
+structured gobuster argv previews, deterministic future artifact names,
+moderate-risk labels, scope requirements, and future confirmation
+requirements.
+
+Planning does not run gobuster, ffuf, feroxbuster, dirsearch, curl, or any
+wordlist. The referenced default wordlist is a future execution prerequisite;
+planning only warns when it is absent. The profile proposes no recursion,
+extensions, arbitrary paths, or user-supplied flags. Live content discovery
+remains future work.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:
