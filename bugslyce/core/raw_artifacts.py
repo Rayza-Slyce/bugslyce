@@ -225,6 +225,8 @@ def _assemble_nmap(
             existing = port_service_keys[key]
             _append_unique(existing.evidence_ids, evidence_id)
             existing.tags = dedupe_preserve_order([*existing.tags, *tags])
+            if existing.service in {None, "unknown"} and record.service not in {None, "unknown"}:
+                existing.service = record.service
             if not existing.product and record.product:
                 existing.product = record.product
             if not existing.version and record.version:

@@ -171,6 +171,158 @@ def test_cli_recon_nmap_discover_help_exits_successfully(capsys) -> None:
     assert "--confirm" in captured.out
 
 
+def test_cli_recon_nmap_services_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "nmap-services", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon nmap-services" in captured.out
+    assert "--input-dir" in captured.out
+    assert "--scope" in captured.out
+    assert "--confirm" in captured.out
+    assert "--ports" not in captured.out
+
+
+def test_cli_recon_nmap_services_requires_confirm(tmp_path: Path, capsys) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-services",
+            "--input-dir",
+            str(input_dir),
+            "--scope",
+            str(scope),
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "requires explicit --confirm" in captured.err
+    assert "No nmap command was executed." in captured.err
+
+
+def test_cli_recon_nmap_services_refuses_missing_input(tmp_path: Path, capsys) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-services",
+            "--input-dir",
+            str(tmp_path / "missing"),
+            "--scope",
+            str(scope),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code != 0
+    assert "Input directory does not exist" in captured.err
+    assert "No nmap command was executed." in captured.err
+
+
+def test_cli_recon_nmap_services_uses_mocked_runner_and_writes_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    (input_dir / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT      STATE SERVICE\n"
+        "80/tcp    open  http\n"
+        "6498/tcp  open  unknown\n"
+        "65524/tcp open  unknown\n",
+        encoding="utf-8",
+    )
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "lab-tcp-full",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "description": "Discovery output",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(_runner, command):
+        service_output = Path(command.output_file)
+        service_output.write_text(
+            "Nmap scan report for 10.10.10.10\n"
+            "PORT      STATE SERVICE VERSION\n"
+            "80/tcp    open  http    nginx 1.16.1\n"
+            "6498/tcp  open  ssh     OpenSSH 7.6p1\n"
+            "65524/tcp open  http    Apache httpd 2.4.43\n",
+            encoding="utf-8",
+        )
+        from bugslyce.core.models import ReconCommandResult
+
+        return ReconCommandResult(
+            command_id=command.id,
+            tool="nmap",
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+    monkeypatch.setattr("bugslyce.recon.nmap_services.LiveNmapServiceRunner.run", fake_run)
+
+    exit_code = main(
+        [
+            "recon",
+            "nmap-services",
+            "--input-dir",
+            str(input_dir),
+            "--scope",
+            str(scope),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    execution = json.loads((input_dir / "recon_execution.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert (input_dir / "nmap-services-all.txt").exists()
+    assert (input_dir / "recon_manifest.json").exists()
+    assert (input_dir / "report.md").exists()
+    assert (input_dir / "project_state.json").exists()
+    assert (input_dir / "recon_execution.md").exists()
+    assert execution["ports"] == [80, 6498, 65524]
+    assert "One nmap service/version command was executed." in captured.out
+
+
 def test_cli_recon_nmap_discover_requires_confirm(tmp_path: Path, capsys) -> None:
     scope = tmp_path / "scope.md"
     scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")

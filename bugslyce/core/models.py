@@ -393,6 +393,25 @@ class ReconNmapDiscoveryExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconNmapServiceExecutionResult:
+    """Metadata for one confirmed nmap service/version command."""
+
+    mode: str
+    target: str
+    profile: str
+    scope_file: str
+    input_dir: str
+    ports: list[int]
+    nmap_output_path: str
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    command_result: ReconCommandResult
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 

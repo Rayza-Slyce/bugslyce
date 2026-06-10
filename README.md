@@ -234,7 +234,7 @@ bugslyce recon nmap-plan \
   --output ./bugslyce-output/nmap-plan
 ```
 
-The command writes `nmap_command_plan.json` and `nmap_command_plan.md` without executing nmap. Planning also models `lab-service-scan`, but live service/version execution is not implemented. Validation rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
+The command writes `nmap_command_plan.json` and `nmap_command_plan.md` without executing nmap. Planning also models `lab-service-scan`; the narrow live form is documented below and can use only ports derived from saved BugSlyce discovery output. Validation rejects arbitrary arguments, NSE scripts including `-sC`, `-A`, OS detection, UDP scans, decoys or spoofing, `-T5`, multiple targets, shell metacharacters, and output paths outside the selected directory.
 
 ### Scoped Nmap TCP Discovery
 
@@ -254,7 +254,22 @@ bugslyce recon nmap-discover \
 
 Use `--profile lab-tcp-full` to write `nmap-allports.txt`. Both profiles require explicit confirmation, one exactly listed target-like in-scope entry, a bounded process timeout, and their fixed output filename inside the selected directory.
 
-The live validator rejects arbitrary nmap arguments, NSE scripts, service scans, UDP scans, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, and shell metacharacters. Service/version live execution remains unimplemented. The workflow writes raw nmap output, `recon_manifest.json`, the recon pack, and execution metadata.
+The discovery validator rejects arbitrary nmap arguments, NSE scripts, service-detection flags, UDP scans, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, and shell metacharacters. The workflow writes raw nmap output, `recon_manifest.json`, the recon pack, and execution metadata.
+
+### Scoped Nmap Service Detection
+
+BugSlyce can run one narrow service/version command against TCP ports already recorded as open by a prior BugSlyce nmap discovery run:
+
+```bash
+bugslyce recon nmap-services \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+The command prefers `nmap-allports.txt` and falls back to `nmap-top1000.txt`. It derives, sorts, and deduplicates open TCP ports from that file; there is no CLI option for manually supplying ports. The target comes from the existing manifest or discovery output and must be explicitly listed in scope.
+
+The live runner accepts only `nmap -sV -Pn -p <derived-ports> -oN nmap-services-all.txt <target>`. It rejects NSE scripts including `-sC`, UDP scans, arbitrary flags or ports, `-A`, `-O`, `-T5`, decoys or spoofing, multiple targets, shell metacharacters, and output paths outside the existing directory. It preserves the discovery artifact in `recon_manifest.json`, adds the service artifact, and rebuilds the recon pack.
 
 ### Scoped Curl Header Request
 
@@ -278,7 +293,7 @@ This command:
 - Writes only inside the selected output directory.
 - Saves the raw headers, `recon_manifest.json`, recon-pack outputs, and execution metadata.
 
-The live runner accepts only the approved curl header argv shape. It does not use shell interpretation, does not send request bodies, and does not run POST, PUT, DELETE, brute force, exploitation, recursive discovery, or content discovery. Live nmap service scanning and gobuster execution remain unimplemented.
+The live runner accepts only the approved curl header argv shape. It does not use shell interpretation, does not send request bodies, and does not run POST, PUT, DELETE, brute force, exploitation, recursive discovery, or content discovery. NSE-based nmap scanning and live gobuster execution remain unimplemented.
 
 ## Safe Private Lab Workflow
 

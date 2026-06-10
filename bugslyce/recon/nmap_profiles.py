@@ -152,6 +152,20 @@ def build_nmap_service_scan_command(
     )
 
 
+def build_live_nmap_service_scan_command(
+    target: str,
+    ports: str | list[int] | list[str],
+    output_dir: Path,
+) -> ReconCommand:
+    """Build the service/version command permitted for live execution."""
+
+    return replace(
+        build_nmap_service_scan_command(target, ports, output_dir),
+        id="CMD-NMAP-SERVICES-0001",
+        ready_for_execution=True,
+    )
+
+
 def normalise_nmap_ports(ports: str | list[int] | list[str]) -> str:
     """Validate and normalize an explicit comma-separated TCP port set."""
 
@@ -270,6 +284,71 @@ def validate_live_nmap_discovery_command(
         command,
         planned_output_dir,
         allowed_profiles=("lab-tcp-top", "lab-tcp-full"),
+    )
+
+
+def validate_live_nmap_service_scan_command(
+    command: ReconCommand,
+    planned_output_dir: Path,
+) -> ReconCommandValidationResult:
+    """Validate the exact service/version shape permitted for live execution."""
+
+    errors: list[str] = []
+    if not isinstance(command.argv, list) or any(not isinstance(value, str) for value in command.argv):
+        argv: list[str] = []
+        errors.append("argv must be a list of strings.")
+    else:
+        argv = command.argv
+
+    profile = NMAP_PROFILES["lab-service-scan"]
+    expected_output = planned_output_dir.expanduser().resolve() / profile.expected_output_file
+    expected_prefix = ["nmap", "-sV", "-Pn", "-p"]
+
+    if command.tool != "nmap":
+        errors.append("Live nmap service execution is restricted to the nmap tool.")
+    if len(argv) != 8 or argv[:4] != expected_prefix or argv[5] != "-oN":
+        errors.append("Live nmap command must match the approved lab-service-scan argv shape.")
+    else:
+        try:
+            normalized_ports = normalise_nmap_ports(argv[4])
+        except ValueError as exc:
+            errors.append(str(exc))
+        else:
+            if argv[4] != normalized_ports:
+                errors.append("Live nmap service ports must be normalized, unique numeric ports.")
+        if argv[6] != command.output_file:
+            errors.append("Nmap -oN path must match command output_file.")
+        if Path(argv[6]).expanduser().resolve() != expected_output:
+            errors.append(
+                "Live nmap service output must be nmap-services-all.txt "
+                "inside the selected input directory."
+            )
+        if not _valid_single_target(argv[7]):
+            errors.append("Live nmap service command must contain one valid hostname or IP target.")
+    for value in argv:
+        matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
+        if matched:
+            errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
+    if command.output_file and not _output_is_inside(command.output_file, planned_output_dir):
+        errors.append("output_file must stay inside the selected input directory.")
+    if command.timeout_seconds != profile.default_timeout_seconds:
+        errors.append(
+            f"Live lab-service-scan requires timeout_seconds={profile.default_timeout_seconds}."
+        )
+    if not command.ready_for_execution:
+        errors.append("Live nmap service command must be explicitly marked ready for execution.")
+    if command.placeholders:
+        errors.append("Live nmap service command must not contain placeholders.")
+    if not command.requires_confirmation:
+        errors.append("Live nmap service commands require explicit confirmation.")
+    if not command.scope_sensitive:
+        errors.append("Live nmap service commands must be scope sensitive.")
+
+    return ReconCommandValidationResult(
+        command_id=command.id,
+        valid=not errors,
+        errors=list(dict.fromkeys(errors)),
+        warnings=[],
     )
 
 

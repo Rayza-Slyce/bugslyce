@@ -48,6 +48,11 @@ from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
     write_nmap_discovery_execution_result,
 )
+from bugslyce.recon.nmap_services import (
+    render_nmap_service_execution_summary,
+    run_nmap_service_workflow,
+    write_nmap_service_execution_result,
+)
 from bugslyce.recon.preflight import (
     render_preflight_summary,
     run_preflight,
@@ -259,6 +264,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm the single scoped nmap discovery command.",
+    )
+    nmap_services_parser = recon_subparsers.add_parser(
+        "nmap-services",
+        help="Run one scoped service/version scan on previously discovered open TCP ports.",
+    )
+    nmap_services_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce nmap discovery output directory.",
+    )
+    nmap_services_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing discovery target.",
+    )
+    nmap_services_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm the derived-port nmap service/version command.",
     )
 
     return parser
@@ -529,11 +556,34 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_nmap_discovery_execution_summary(result))
         return 0
 
+    if args.recon_command == "nmap-services":
+        if not args.confirm:
+            print(
+                "Error: live nmap service scan requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No nmap command was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_nmap_service_workflow(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            write_nmap_service_execution_result(result, Path(result.input_dir))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No nmap command was executed.", file=sys.stderr)
+            return 2
+
+        print(render_nmap_service_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
         "'bugslyce recon curl-headers --help', 'bugslyce recon nmap-plan --help', "
-        "or 'bugslyce recon nmap-discover --help'.",
+        "'bugslyce recon nmap-discover --help', or "
+        "'bugslyce recon nmap-services --help'.",
         file=sys.stderr,
     )
     return 2

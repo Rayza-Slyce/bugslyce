@@ -35,13 +35,13 @@ def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
     assert "### Structured Command Foundation" in readme
     assert "structured argument lists rather than shell command strings" in readme
     assert "The simulated runner remains available" in readme
-    assert "live service/version execution is not implemented" in readme
+    assert "ports derived from saved BugSlyce discovery output" in readme
     assert "bounded timeouts" in readme
     assert "### Scoped Curl Header Request" in readme
     assert "bugslyce recon curl-headers" in readme
     assert "Requires explicit `--confirm`" in readme
     assert "exact URL host to appear" in readme
-    assert "Live nmap service scanning and gobuster execution remain unimplemented" in readme
+    assert "NSE-based nmap scanning and live gobuster execution remain unimplemented" in readme
     assert "valid manifest is present, it is the primary input description" in readme
     assert "are not required and do not generate missing-file warnings" in readme
     assert "manifest-listed artifacts still generate warnings" in readme
