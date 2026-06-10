@@ -244,6 +244,38 @@ def test_cli_recon_content_plan_help_exits_successfully(capsys) -> None:
     assert "--confirm" not in captured.out
 
 
+def test_cli_recon_content_run_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "content-run", "--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon content-run" in captured.out
+    assert "--plan" in captured.out
+    assert "--scope" in captured.out
+    assert "--confirm" in captured.out
+    assert "--url" not in captured.out
+    assert "--wordlist" not in captured.out
+
+
+def test_cli_recon_content_run_requires_confirm(tmp_path: Path, capsys) -> None:
+    exit_code = main(
+        [
+            "recon",
+            "content-run",
+            "--plan",
+            str(tmp_path / "content_discovery_plan.json"),
+            "--scope",
+            str(tmp_path / "scope.md"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "requires explicit --confirm" in captured.err
+    assert "No gobuster command was executed." in captured.err
+
+
 def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:
     input_dir = tmp_path / "output"
     input_dir.mkdir()

@@ -334,7 +334,30 @@ Planning does not run gobuster, ffuf, feroxbuster, dirsearch, curl, or any
 wordlist. The referenced default wordlist is a future execution prerequisite;
 planning only warns when it is absent. The profile proposes no recursion,
 extensions, arbitrary paths, or user-supplied flags. Live content discovery
-remains future work.
+is available only through an approved saved plan.
+
+### Controlled Root Content Discovery
+
+BugSlyce can execute the fixed root-discovery steps in an existing plan:
+
+```bash
+bugslyce recon content-run \
+  --plan ./bugslyce-output/example-content-plan/content_discovery_plan.json \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+Execution supports only the `lab-root-light` profile and the exact structured
+gobuster argv lists written by BugSlyce. The target must still be explicitly
+in scope, the approved local wordlist must exist, each origin must remain in
+current structured HTTP evidence, and all output filenames must remain inside
+the planned directory. Results are copied into the original recon directory,
+added to `recon_manifest.json`, and used to rebuild the recon pack.
+
+The command accepts no URL, path, wordlist, thread, extension, header, cookie,
+authentication, proxy, or arbitrary gobuster options. It does not use
+recursion, ffuf, feroxbuster, dirsearch, form submission, credential brute
+force, or exploitation.
 
 ### Scoped Curl Header Request
 

@@ -29,6 +29,11 @@ from bugslyce.recon.content_plan import (
     render_content_discovery_plan_summary,
     write_content_discovery_plan,
 )
+from bugslyce.recon.content_run import (
+    render_content_discovery_execution_summary,
+    run_content_discovery_workflow,
+    write_content_discovery_execution_result,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -375,6 +380,29 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Safe directory for content_discovery_plan.json and Markdown.",
+    )
+    content_run_parser = recon_subparsers.add_parser(
+        "content-run",
+        help="Execute an approved BugSlyce root content discovery plan.",
+    )
+    content_run_parser.add_argument(
+        "--plan",
+        dest="plan_path",
+        required=True,
+        type=Path,
+        help="Path to a BugSlyce content_discovery_plan.json file.",
+    )
+    content_run_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the plan target.",
+    )
+    content_run_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm approved root content discovery execution.",
     )
 
     return parser
@@ -731,6 +759,31 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_content_discovery_plan_summary(plan, json_path, markdown_path))
         return 0
 
+    if args.recon_command == "content-run":
+        if not args.confirm:
+            print(
+                "Error: live content discovery requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No gobuster command was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_content_discovery_workflow(
+                plan_path=args.plan_path,
+                scope_file=args.scope_file,
+            )
+            write_content_discovery_execution_result(
+                result,
+                Path(result.output_dir),
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No gobuster command was executed.", file=sys.stderr)
+            return 2
+
+        print(render_content_discovery_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
@@ -738,7 +791,8 @@ def _recon(args: argparse.Namespace) -> int:
         "'bugslyce recon nmap-discover --help', 'bugslyce recon nmap-services --help', "
         "'bugslyce recon http-metadata --help', "
         "'bugslyce recon path-followup --help', "
-        "or 'bugslyce recon content-plan --help'.",
+        "'bugslyce recon content-plan --help', "
+        "or 'bugslyce recon content-run --help'.",
         file=sys.stderr,
     )
     return 2

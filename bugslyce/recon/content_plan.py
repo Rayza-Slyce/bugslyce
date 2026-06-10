@@ -20,6 +20,8 @@ from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 
 
 CONTENT_DISCOVERY_PROFILE = "lab-root-light"
+CONTENT_DISCOVERY_SCHEMA_VERSION = "1.0"
+CONTENT_DISCOVERY_CREATED_BY = "bugslyce-content-planner"
 DEFAULT_WORDLIST = Path("/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt")
 MAX_CONTENT_PLAN_ORIGINS = 5
 CONTENT_PLAN_THREADS = 10
@@ -84,6 +86,8 @@ def build_content_discovery_plan(
         for index, origin in enumerate(origins, start=1)
     ]
     return ContentDiscoveryPlan(
+        schema_version=CONTENT_DISCOVERY_SCHEMA_VERSION,
+        created_by=CONTENT_DISCOVERY_CREATED_BY,
         target=target,
         profile=CONTENT_DISCOVERY_PROFILE,
         input_dir=str(input_dir),
@@ -234,6 +238,9 @@ def _build_step(index: int, origin: str, output_dir: Path) -> ContentDiscoverySt
         requires_confirmation=True,
         scope_sensitive=True,
         allowed_tool="gobuster",
+        recursive_discovery=False,
+        extensions=[],
+        ready_for_execution=False,
         no_commands_executed=True,
     )
 

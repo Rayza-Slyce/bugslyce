@@ -11,6 +11,7 @@ from bugslyce.recon.commands import (
     validate_live_curl_header_command,
     validate_recon_command,
 )
+from bugslyce.recon.content_commands import validate_live_content_discovery_command
 from bugslyce.recon.http_metadata_commands import validate_live_http_metadata_command
 from bugslyce.recon.path_followup_commands import validate_live_path_followup_command
 from bugslyce.recon.nmap_profiles import (
@@ -422,6 +423,88 @@ class LivePathFollowupRunner:
             stderr_file = str(stderr_path)
         ended = datetime.now(timezone.utc)
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
+        return _live_result(
+            command,
+            started,
+            ended,
+            exit_code=completed.returncode,
+            stderr_path=stderr_file,
+            error=error,
+        )
+
+
+class LiveContentDiscoveryRunner:
+    """Execute only approved gobuster commands from a validated content plan."""
+
+    def __init__(
+        self,
+        output_dir: Path,
+        target: str,
+        allowed_origins: set[str],
+    ) -> None:
+        self.output_dir = output_dir
+        self.target = target
+        self.allowed_origins = allowed_origins
+
+    def run(self, command: ReconCommand) -> ReconCommandResult:
+        """Run one validated lab-root-light gobuster command."""
+
+        started = datetime.now(timezone.utc)
+        validation = validate_live_content_discovery_command(
+            command,
+            self.output_dir,
+            self.target,
+            self.allowed_origins,
+        )
+        if not validation.valid:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error="; ".join(validation.errors),
+            )
+
+        output_path = Path(command.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path = output_path.with_suffix(output_path.suffix + ".stderr.log")
+        try:
+            completed = subprocess.run(
+                command.argv,
+                capture_output=True,
+                text=True,
+                timeout=command.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=f"Content discovery exceeded {command.timeout_seconds} seconds.",
+            )
+        except OSError as exc:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=f"Content discovery could not start: {exc}",
+            )
+
+        stderr_file: str | None = None
+        if completed.stderr:
+            stderr_path.write_text(completed.stderr, encoding="utf-8")
+            stderr_file = str(stderr_path)
+        ended = datetime.now(timezone.utc)
+        error = None if completed.returncode == 0 else f"Gobuster exited with code {completed.returncode}."
         return _live_result(
             command,
             started,

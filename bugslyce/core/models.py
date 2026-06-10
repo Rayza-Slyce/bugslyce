@@ -276,6 +276,9 @@ class ContentDiscoveryStep:
     requires_confirmation: bool
     scope_sensitive: bool
     allowed_tool: str
+    recursive_discovery: bool
+    extensions: list[str]
+    ready_for_execution: bool
     no_commands_executed: bool
 
 
@@ -283,6 +286,8 @@ class ContentDiscoveryStep:
 class ContentDiscoveryPlan:
     """Serializable content discovery plan that cannot execute commands."""
 
+    schema_version: str
+    created_by: str
     target: str
     profile: str
     input_dir: str
@@ -475,6 +480,30 @@ class ReconPathFollowupExecutionResult:
     project_state_path: str
     execution_count: int
     command_results: list[ReconCommandResult]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
+class ReconContentDiscoveryExecutionResult:
+    """Metadata for approved root content discovery plan execution."""
+
+    mode: str
+    plan_path: str
+    target: str
+    profile: str
+    input_dir: str
+    output_dir: str
+    origins: list[str]
+    artifact_paths: list[str]
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    command_results: list[ReconCommandResult]
+    no_recursion: bool
+    no_extensions: bool
+    no_arbitrary_urls: bool
+    no_exploitation: bool
     warnings: list[str]
 
 
