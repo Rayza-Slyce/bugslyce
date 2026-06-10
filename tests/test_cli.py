@@ -199,6 +199,37 @@ def test_cli_recon_http_metadata_help_exits_successfully(capsys) -> None:
     assert "--url" not in captured.out
 
 
+def test_cli_recon_path_followup_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "path-followup", "--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon path-followup" in captured.out
+    assert "--input-dir" in captured.out
+    assert "--scope" in captured.out
+    assert "--confirm" in captured.out
+    assert "--url" not in captured.out
+
+
+def test_cli_recon_path_followup_requires_confirm(tmp_path: Path, capsys) -> None:
+    exit_code = main(
+        [
+            "recon",
+            "path-followup",
+            "--input-dir",
+            str(tmp_path),
+            "--scope",
+            str(tmp_path / "scope.md"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "requires explicit --confirm" in captured.err
+    assert "No discovered-path request was executed." in captured.err
+
+
 def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:
     input_dir = tmp_path / "output"
     input_dir.mkdir()

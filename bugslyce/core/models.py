@@ -430,6 +430,24 @@ class ReconHTTPMetadataExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconPathFollowupExecutionResult:
+    """Metadata for bounded checks of previously discovered same-origin paths."""
+
+    mode: str
+    target: str
+    scope_file: str
+    input_dir: str
+    followup_urls: list[str]
+    artifact_paths: list[str]
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    execution_count: int
+    command_results: list[ReconCommandResult]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 

@@ -58,6 +58,11 @@ from bugslyce.recon.nmap_services import (
     run_nmap_service_workflow,
     write_nmap_service_execution_result,
 )
+from bugslyce.recon.path_followup import (
+    render_path_followup_execution_summary,
+    run_path_followup_workflow,
+    write_path_followup_execution_result,
+)
 from bugslyce.recon.preflight import (
     render_preflight_summary,
     run_preflight,
@@ -313,6 +318,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm bounded HTTP metadata requests.",
+    )
+    path_followup_parser = recon_subparsers.add_parser(
+        "path-followup",
+        help="Check bounded same-origin paths already present in collected evidence.",
+    )
+    path_followup_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce output directory containing HTTP metadata artifacts.",
+    )
+    path_followup_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing recon target.",
+    )
+    path_followup_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm bounded checks of evidence-derived paths.",
     )
 
     return parser
@@ -627,12 +654,35 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_http_metadata_execution_summary(result))
         return 0
 
+    if args.recon_command == "path-followup":
+        if not args.confirm:
+            print(
+                "Error: live discovered-path follow-up requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No discovered-path request was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_path_followup_workflow(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            write_path_followup_execution_result(result, Path(result.input_dir))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No discovered-path request was executed.", file=sys.stderr)
+            return 2
+
+        print(render_path_followup_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
         "'bugslyce recon curl-headers --help', 'bugslyce recon nmap-plan --help', "
         "'bugslyce recon nmap-discover --help', 'bugslyce recon nmap-services --help', "
-        "or 'bugslyce recon http-metadata --help'.",
+        "'bugslyce recon http-metadata --help', "
+        "or 'bugslyce recon path-followup --help'.",
         file=sys.stderr,
     )
     return 2

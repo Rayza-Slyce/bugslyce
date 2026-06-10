@@ -286,6 +286,31 @@ For at most 10 discovered HTTP services, the command collects response headers, 
 
 The command requires an exact scope match and writes only inside the existing BugSlyce directory. It preserves nmap artifacts, appends HTTP artifacts to `recon_manifest.json`, and rebuilds the recon pack. It does not perform content discovery, brute force, exploitation, form submission, or arbitrary URL requests. Live gobuster/content discovery remains unimplemented.
 
+### Discovered-Path Follow-up
+
+BugSlyce can perform bounded header checks for same-origin paths that already
+exist in collected HTML or robots evidence:
+
+```bash
+bugslyce recon path-followup \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+This command does not accept URLs, paths, or wordlists. It derives concrete
+relative paths from saved same-origin links, sources, and robots rules,
+deduplicates them, and checks at most 20 URLs. Root, anchors, external URLs,
+`robots.txt`, and path traversal forms are excluded. Each approved URL receives
+one fixed, bounded curl HEAD request with no redirect-following option or
+request body.
+
+The command requires an exact scope match and preserves prior manifest
+artifacts while rebuilding the recon pack. It does not run gobuster, ffuf,
+wordlists, recursive crawling, content discovery, brute force, exploitation,
+or form submission. General wordlist-based content discovery remains
+unimplemented.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:
