@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
@@ -20,13 +20,68 @@ from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 
 
 CONTENT_DISCOVERY_PROFILE = "lab-root-light"
+CONTENT_DISCOVERY_TINY_PROFILE = "lab-root-tiny"
 CONTENT_DISCOVERY_SCHEMA_VERSION = "1.0"
 CONTENT_DISCOVERY_CREATED_BY = "bugslyce-content-planner"
 DEFAULT_WORDLIST = Path("/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt")
+TINY_WORDLIST = Path(__file__).resolve().parent.parent / "wordlists" / "lab-root-tiny.txt"
 MAX_CONTENT_PLAN_ORIGINS = 5
 CONTENT_PLAN_THREADS = 10
 SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<")
 NO_EXECUTION_NOTE = "No commands were executed."
+
+
+@dataclass(frozen=True)
+class ContentDiscoveryProfileDefinition:
+    """Fixed settings for one approved content discovery profile."""
+
+    name: str
+    description: str
+    wordlist: Path
+    threads: int
+    timeout_seconds: int
+    output_prefix: str
+
+
+CONTENT_DISCOVERY_PROFILES = {
+    CONTENT_DISCOVERY_TINY_PROFILE: ContentDiscoveryProfileDefinition(
+        name=CONTENT_DISCOVERY_TINY_PROFILE,
+        description=(
+            "Tiny first-live proving profile for command execution, parsing, "
+            "manifest update, and report regeneration."
+        ),
+        wordlist=TINY_WORDLIST,
+        threads=5,
+        timeout_seconds=120,
+        output_prefix="gobuster-tiny",
+    ),
+    CONTENT_DISCOVERY_PROFILE: ContentDiscoveryProfileDefinition(
+        name=CONTENT_DISCOVERY_PROFILE,
+        description="Broader bounded root discovery profile for authorised lab targets.",
+        wordlist=DEFAULT_WORDLIST,
+        threads=CONTENT_PLAN_THREADS,
+        timeout_seconds=900,
+        output_prefix="gobuster",
+    ),
+}
+
+
+def content_discovery_profile_names() -> tuple[str, ...]:
+    """Return supported content discovery planning profiles."""
+
+    return tuple(CONTENT_DISCOVERY_PROFILES)
+
+
+def get_content_discovery_profile(name: str) -> ContentDiscoveryProfileDefinition:
+    """Return fixed settings for a supported content discovery profile."""
+
+    try:
+        return CONTENT_DISCOVERY_PROFILES[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported content discovery profile '{name}'. Supported profiles: "
+            f"{', '.join(content_discovery_profile_names())}."
+        ) from exc
 
 
 def build_content_discovery_plan(
@@ -47,11 +102,7 @@ def build_content_discovery_plan(
         raise ValueError(f"Scope file does not exist: {scope_file}")
     if not scope_file.is_file():
         raise ValueError(f"Scope path is not a file: {scope_file}")
-    if profile != CONTENT_DISCOVERY_PROFILE:
-        raise ValueError(
-            f"Unsupported content discovery profile '{profile}'. "
-            f"Supported profile: {CONTENT_DISCOVERY_PROFILE}."
-        )
+    profile_definition = get_content_discovery_profile(profile)
     if not _safe_output_dir(output_dir):
         raise ValueError(
             "Content plan output must be under /tmp, private_recon/, raw-recon/, "
@@ -75,21 +126,21 @@ def build_content_discovery_plan(
     warnings: list[str] = []
     if len(all_origins) > MAX_CONTENT_PLAN_ORIGINS:
         warnings.append(f"Content discovery plan capped at {MAX_CONTENT_PLAN_ORIGINS} origins.")
-    if not DEFAULT_WORDLIST.is_file():
+    if not profile_definition.wordlist.is_file():
         warnings.append(
-            f"Future approved wordlist was not found locally: {DEFAULT_WORDLIST}. "
+            f"Future approved wordlist was not found locally: {profile_definition.wordlist}. "
             "Planning continues without using it."
         )
 
     steps = [
-        _build_step(index, origin, output_dir)
+        _build_step(index, origin, output_dir, profile_definition)
         for index, origin in enumerate(origins, start=1)
     ]
     return ContentDiscoveryPlan(
         schema_version=CONTENT_DISCOVERY_SCHEMA_VERSION,
         created_by=CONTENT_DISCOVERY_CREATED_BY,
         target=target,
-        profile=CONTENT_DISCOVERY_PROFILE,
+        profile=profile_definition.name,
         input_dir=str(input_dir),
         scope_file=str(scope_file),
         output_dir=str(output_dir),
@@ -98,6 +149,7 @@ def build_content_discovery_plan(
         warnings=warnings,
         safety_notes=[
             NO_EXECUTION_NOTE,
+            profile_definition.description,
             "This plan requires operator review before any future content discovery.",
             "Only discovered HTTP service roots are included.",
             "The profile proposes no recursion, extensions, arbitrary paths, or user-supplied flags.",
@@ -206,24 +258,29 @@ def render_content_discovery_plan_summary(
     return "\n".join(lines)
 
 
-def _build_step(index: int, origin: str, output_dir: Path) -> ContentDiscoveryStep:
+def _build_step(
+    index: int,
+    origin: str,
+    output_dir: Path,
+    profile: ContentDiscoveryProfileDefinition,
+) -> ContentDiscoveryStep:
     parsed = urlparse(origin)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     safe_host = _safe_component(parsed.hostname or "host")
-    filename = f"gobuster-{safe_host}-{port}-root.txt"
+    filename = f"{profile.output_prefix}-{safe_host}-{port}-root.txt"
     argv = [
         "gobuster",
         "dir",
         "-u",
         origin,
         "-w",
-        str(DEFAULT_WORDLIST),
+        str(profile.wordlist),
         "-t",
-        str(CONTENT_PLAN_THREADS),
+        str(profile.threads),
         "-o",
         str(output_dir / filename),
     ]
-    _validate_preview(argv, origin, output_dir / filename)
+    _validate_preview(argv, origin, output_dir / filename, profile)
     return ContentDiscoveryStep(
         step_id=f"CONTENT-STEP-{index:03d}",
         origin=origin,
@@ -245,16 +302,21 @@ def _build_step(index: int, origin: str, output_dir: Path) -> ContentDiscoverySt
     )
 
 
-def _validate_preview(argv: list[str], origin: str, output_file: Path) -> None:
+def _validate_preview(
+    argv: list[str],
+    origin: str,
+    output_file: Path,
+    profile: ContentDiscoveryProfileDefinition,
+) -> None:
     expected = [
         "gobuster",
         "dir",
         "-u",
         origin,
         "-w",
-        str(DEFAULT_WORDLIST),
+        str(profile.wordlist),
         "-t",
-        str(CONTENT_PLAN_THREADS),
+        str(profile.threads),
         "-o",
         str(output_file),
     ]

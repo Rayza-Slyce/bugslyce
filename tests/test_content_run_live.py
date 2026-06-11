@@ -16,10 +16,13 @@ from bugslyce.recon.content_commands import (
 )
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
+    CONTENT_DISCOVERY_TINY_PROFILE,
+    TINY_WORDLIST,
     build_content_discovery_plan,
     write_content_discovery_plan,
 )
 from bugslyce.recon.content_run import (
+    ContentDiscoveryExecutionIncomplete,
     load_content_discovery_plan,
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
@@ -46,6 +49,10 @@ def test_content_run_executes_approved_plan_and_rebuilds_recon_pack(
     project = json.loads((input_dir / "project_state.json").read_text(encoding="utf-8"))
 
     assert result.execution_count == 2
+    assert result.commands_started == 2
+    assert result.commands_completed == 2
+    assert result.commands_timed_out == 0
+    assert result.partial_artifacts_imported == 0
     assert result.origins == [
         "http://10.10.10.10/",
         "http://10.10.10.10:65524/",
@@ -89,8 +96,27 @@ def test_content_run_refuses_missing_malformed_and_unsupported_plan(
     payload = _payload(plan_path)
     payload["profile"] = "recursive-full"
     _write_payload(plan_path, payload)
-    with pytest.raises(ValueError, match="supports only profile"):
+    with pytest.raises(ValueError, match="Unsupported content discovery profile"):
         load_content_discovery_plan(plan_path)
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [CONTENT_DISCOVERY_TINY_PROFILE, CONTENT_DISCOVERY_PROFILE],
+)
+def test_content_run_accepts_supported_profiles(tmp_path: Path, profile: str) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path, profile=profile)
+
+    result = run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=_MockContentRunner(),
+        wordlist_check=lambda _path: True,
+    )
+
+    assert result.profile == profile
+    if profile == CONTENT_DISCOVERY_TINY_PROFILE:
+        assert all("gobuster-tiny-" in Path(path).name for path in result.artifact_paths)
 
 
 def test_content_run_refuses_target_not_in_scope(tmp_path: Path) -> None:
@@ -278,8 +304,83 @@ def test_content_runner_enforces_timeout(tmp_path: Path, monkeypatch) -> None:
         set(plan.origins),
     ).run(command)
 
-    assert result.executed is False
-    assert result.error == "Content discovery exceeded 900 seconds."
+    assert result.executed is True
+    assert result.error == (
+        "Content discovery command CONTENT-STEP-001 for http://10.10.10.10/ "
+        "started and exceeded 900 seconds."
+    )
+
+
+def test_content_run_timeout_without_output_records_started_and_timed_out(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, input_dir, output_dir = _written_plan(tmp_path)
+
+    with pytest.raises(ContentDiscoveryExecutionIncomplete) as exc_info:
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_TimeoutContentRunner(write_partial=False),
+            wordlist_check=lambda _path: True,
+        )
+
+    result = exc_info.value.result
+    execution_json, _execution_markdown = write_content_discovery_execution_result(
+        result,
+        output_dir,
+    )
+    payload = json.loads(execution_json.read_text(encoding="utf-8"))
+    assert result.commands_started == 1
+    assert result.commands_completed == 0
+    assert result.commands_timed_out == 1
+    assert result.partial_artifacts_imported == 0
+    assert result.timed_out_step_id == "CONTENT-STEP-001"
+    assert result.timed_out_origin == "http://10.10.10.10/"
+    assert result.artifact_paths == []
+    assert payload["commands_started"] == 1
+    assert (input_dir / "report.md").is_file()
+    assert "started and exceeded" in str(exc_info.value)
+
+
+def test_content_run_timeout_imports_nonempty_partial_output(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+
+    with pytest.raises(ContentDiscoveryExecutionIncomplete) as exc_info:
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_TimeoutContentRunner(write_partial=True),
+            wordlist_check=lambda path: path == TINY_WORDLIST,
+        )
+
+    result = exc_info.value.result
+    write_content_discovery_execution_result(result, output_dir)
+    manifest = json.loads((input_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+    project = json.loads((input_dir / "project_state.json").read_text(encoding="utf-8"))
+    partial = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact.get("type") == "gobuster"
+    ]
+
+    assert result.commands_started == 1
+    assert result.commands_completed == 0
+    assert result.commands_timed_out == 1
+    assert result.partial_artifacts_imported == 1
+    assert len(result.artifact_paths) == 1
+    assert Path(result.artifact_paths[0]).is_file()
+    assert partial[0]["tags"] == ["partial", "timed_out"]
+    assert "Partial gobuster output" in partial[0]["description"]
+    assert any(
+        path["url"] == "http://10.10.10.10/hidden"
+        for path in project["project_state"]["discovered_paths"]
+    )
+    assert (input_dir / "report.md").is_file()
 
 
 class _MockContentRunner:
@@ -314,7 +415,40 @@ class _NeverRunContentRunner:
         raise AssertionError("runner must not be called")
 
 
-def _written_plan(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+class _TimeoutContentRunner:
+    def __init__(self, write_partial: bool) -> None:
+        self.write_partial = write_partial
+
+    def run(self, command):
+        if self.write_partial:
+            Path(command.output_file).write_text(
+                "hidden (Status: 301) [Size: 169] "
+                "[--> http://10.10.10.10/hidden/]\n",
+                encoding="utf-8",
+            )
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=None,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-06-11T00:00:00+00:00",
+            ended_at="2026-06-11T00:02:00+00:00",
+            duration_seconds=120.0,
+            executed=True,
+            simulated=False,
+            error=(
+                f"Content discovery command {command.id} for {command.argv[3]} "
+                f"started and exceeded {command.timeout_seconds} seconds."
+            ),
+        )
+
+
+def _written_plan(
+    tmp_path: Path,
+    profile: str = CONTENT_DISCOVERY_PROFILE,
+) -> tuple[Path, Path, Path, Path]:
     input_dir = tmp_path / "private_recon" / "lab"
     input_dir.mkdir(parents=True)
     scope = input_dir / "scope.md"
@@ -349,7 +483,7 @@ def _written_plan(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     plan = build_content_discovery_plan(
         input_dir,
         scope,
-        CONTENT_DISCOVERY_PROFILE,
+        profile,
         output_dir,
     )
     plan_path, _markdown_path = write_content_discovery_plan(plan)

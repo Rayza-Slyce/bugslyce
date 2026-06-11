@@ -24,12 +24,13 @@ from bugslyce.recon.curl_headers import (
     write_curl_header_execution_result,
 )
 from bugslyce.recon.content_plan import (
-    CONTENT_DISCOVERY_PROFILE,
     build_content_discovery_plan,
+    content_discovery_profile_names,
     render_content_discovery_plan_summary,
     write_content_discovery_plan,
 )
 from bugslyce.recon.content_run import (
+    ContentDiscoveryExecutionIncomplete,
     render_content_discovery_execution_summary,
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
@@ -372,7 +373,10 @@ def _build_parser() -> argparse.ArgumentParser:
     content_plan_parser.add_argument(
         "--profile",
         required=True,
-        help=f"Supported planning profile: {CONTENT_DISCOVERY_PROFILE}.",
+        help=(
+            "Supported planning profiles: "
+            f"{', '.join(content_discovery_profile_names())}."
+        ),
     )
     content_plan_parser.add_argument(
         "--output",
@@ -776,6 +780,17 @@ def _recon(args: argparse.Namespace) -> int:
                 result,
                 Path(result.output_dir),
             )
+        except ContentDiscoveryExecutionIncomplete as exc:
+            result = exc.result
+            execution_json, execution_markdown = write_content_discovery_execution_result(
+                result,
+                Path(result.output_dir),
+            )
+            print(f"Error: {exc}", file=sys.stderr)
+            print(render_content_discovery_execution_summary(result), file=sys.stderr)
+            print(f"Execution JSON path: {execution_json}", file=sys.stderr)
+            print(f"Execution Markdown path: {execution_markdown}", file=sys.stderr)
+            return 2
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             print("No gobuster command was executed.", file=sys.stderr)

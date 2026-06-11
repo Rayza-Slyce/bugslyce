@@ -441,10 +441,12 @@ class LiveContentDiscoveryRunner:
         output_dir: Path,
         target: str,
         allowed_origins: set[str],
+        profile: str = "lab-root-light",
     ) -> None:
         self.output_dir = output_dir
         self.target = target
         self.allowed_origins = allowed_origins
+        self.profile = profile
 
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated lab-root-light gobuster command."""
@@ -455,6 +457,7 @@ class LiveContentDiscoveryRunner:
             self.output_dir,
             self.target,
             self.allowed_origins,
+            self.profile,
         )
         if not validation.valid:
             ended = datetime.now(timezone.utc)
@@ -486,7 +489,11 @@ class LiveContentDiscoveryRunner:
                 ended,
                 exit_code=None,
                 stderr_path=None,
-                error=f"Content discovery exceeded {command.timeout_seconds} seconds.",
+                error=(
+                    f"Content discovery command {command.id} for {command.argv[3]} "
+                    f"started and exceeded {command.timeout_seconds} seconds."
+                ),
+                executed=True,
             )
         except OSError as exc:
             ended = datetime.now(timezone.utc)
@@ -522,6 +529,7 @@ def _live_result(
     exit_code: int | None,
     stderr_path: str | None,
     error: str | None,
+    executed: bool | None = None,
 ) -> ReconCommandResult:
     return ReconCommandResult(
         command_id=command.id,
@@ -533,7 +541,7 @@ def _live_result(
         started_at=started.isoformat(),
         ended_at=ended.isoformat(),
         duration_seconds=max(0.0, (ended - started).total_seconds()),
-        executed=exit_code is not None,
+        executed=exit_code is not None if executed is None else executed,
         simulated=False,
         error=error,
     )

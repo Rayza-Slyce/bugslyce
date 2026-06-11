@@ -12,9 +12,9 @@ from bugslyce.core.models import (
     ReconCommandValidationResult,
 )
 from bugslyce.recon.content_plan import (
-    CONTENT_PLAN_THREADS,
-    DEFAULT_WORDLIST,
+    CONTENT_DISCOVERY_PROFILE,
     SHELL_METACHARACTERS,
+    get_content_discovery_profile,
 )
 
 
@@ -27,13 +27,14 @@ def build_live_content_discovery_command(
 ) -> ReconCommand:
     """Convert one fully validated plan step into an executable command model."""
 
+    profile = get_content_discovery_profile(plan.profile)
     output_file = Path(plan.output_dir).resolve() / step.expected_artifact.file
     command = ReconCommand(
         id=step.step_id,
         tool="gobuster",
         argv=list(step.command_preview),
         output_file=str(output_file),
-        timeout_seconds=CONTENT_DISCOVERY_TIMEOUT_SECONDS,
+        timeout_seconds=profile.timeout_seconds,
         phase="content-discovery-root",
         risk_level=step.risk_level,
         requires_confirmation=step.requires_confirmation,
@@ -47,6 +48,7 @@ def build_live_content_discovery_command(
         Path(plan.output_dir),
         plan.target,
         {item.origin for item in plan.steps},
+        plan.profile,
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
@@ -58,6 +60,7 @@ def validate_live_content_discovery_command(
     output_dir: Path,
     target: str,
     allowed_origins: set[str],
+    profile_name: str = CONTENT_DISCOVERY_PROFILE,
 ) -> ReconCommandValidationResult:
     """Validate one exact gobuster root-discovery argv list."""
 
@@ -77,8 +80,14 @@ def validate_live_content_discovery_command(
                 f"Gobuster argv contains forbidden shell metacharacter token '{matched}'."
             )
 
-    if len(argv) != 10:
-        errors.append("Gobuster command must match the approved lab-root-light argv shape.")
+    try:
+        profile = get_content_discovery_profile(profile_name)
+    except ValueError as exc:
+        profile = None
+        errors.append(str(exc))
+
+    if len(argv) != 10 or profile is None:
+        errors.append("Gobuster command must match the approved content profile argv shape.")
     else:
         origin = argv[3]
         output_file = argv[9]
@@ -88,14 +97,14 @@ def validate_live_content_discovery_command(
             "-u",
             origin,
             "-w",
-            str(DEFAULT_WORDLIST),
+            str(profile.wordlist),
             "-t",
-            str(CONTENT_PLAN_THREADS),
+            str(profile.threads),
             "-o",
             output_file,
         ]
         if argv != expected:
-            errors.append("Gobuster command must match the approved lab-root-light argv shape.")
+            errors.append("Gobuster command must match the approved content profile argv shape.")
         parsed = urlparse(origin)
         normalized_origin = urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
         if (
@@ -110,14 +119,17 @@ def validate_live_content_discovery_command(
             errors.append("Gobuster -o path must match command output_file.")
         if not _output_is_inside(command.output_file, output_dir):
             errors.append("output_file must stay inside the planned output directory.")
-        if Path(output_file).name != _expected_filename(origin):
+        if Path(output_file).name != _expected_filename(origin, profile.output_prefix):
             errors.append(
-                f"Gobuster output must use deterministic filename {_expected_filename(origin)}."
+                "Gobuster output must use deterministic filename "
+                f"{_expected_filename(origin, profile.output_prefix)}."
             )
 
-    if command.timeout_seconds != CONTENT_DISCOVERY_TIMEOUT_SECONDS:
+    expected_timeout = profile.timeout_seconds if profile is not None else None
+    if expected_timeout is not None and command.timeout_seconds != expected_timeout:
         errors.append(
-            f"Content discovery commands require timeout_seconds={CONTENT_DISCOVERY_TIMEOUT_SECONDS}."
+            f"Content discovery profile '{profile_name}' requires "
+            f"timeout_seconds={expected_timeout}."
         )
     if not command.ready_for_execution:
         errors.append("Live content discovery command must be marked ready for execution.")
@@ -136,14 +148,14 @@ def validate_live_content_discovery_command(
     )
 
 
-def _expected_filename(origin: str) -> str:
+def _expected_filename(origin: str, output_prefix: str) -> str:
     parsed = urlparse(origin)
     safe_host = "".join(
         character if character.isalnum() or character in ".-" else "-"
         for character in (parsed.hostname or "host").lower()
     ).strip(".-") or "host"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return f"gobuster-{safe_host}-{port}-root.txt"
+    return f"{output_prefix}-{safe_host}-{port}-root.txt"
 
 
 def _output_is_inside(output_file: str, output_dir: Path) -> bool:

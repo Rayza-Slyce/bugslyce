@@ -11,8 +11,10 @@ from bugslyce.cli import main
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
+    CONTENT_DISCOVERY_TINY_PROFILE,
     DEFAULT_WORDLIST,
     MAX_CONTENT_PLAN_ORIGINS,
+    TINY_WORDLIST,
     build_content_discovery_plan,
     discover_content_plan_origins,
     render_content_discovery_plan,
@@ -114,6 +116,27 @@ def test_content_plan_previews_fixed_gobuster_root_shape(tmp_path: Path) -> None
     assert first.scope_sensitive is True
     assert "--recursive" not in first.command_preview
     assert "-x" not in first.command_preview
+
+
+def test_content_plan_tiny_profile_uses_bundled_wordlist(tmp_path: Path) -> None:
+    input_dir, scope = _content_plan_input(tmp_path)
+    output_dir = tmp_path / "bugslyce-output" / "tiny-content-plan"
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        CONTENT_DISCOVERY_TINY_PROFILE,
+        output_dir,
+    )
+    first = plan.steps[0]
+
+    assert TINY_WORDLIST.is_file()
+    assert TINY_WORDLIST.read_text(encoding="utf-8").count("\n") >= 20
+    assert first.command_preview[5] == str(TINY_WORDLIST)
+    assert first.command_preview[7] == "5"
+    assert first.expected_artifact.file == "gobuster-tiny-10.10.10.10-80-root.txt"
+    assert any("first-live proving profile" in note for note in plan.safety_notes)
+    assert not any("wordlist was not found" in warning for warning in plan.warnings)
 
 
 def test_content_plan_refuses_missing_input_scope_and_unsupported_profile(

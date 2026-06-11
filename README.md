@@ -324,11 +324,18 @@ bugslyce recon content-plan \
   --output ./bugslyce-output/example-content-plan
 ```
 
-The `lab-root-light` profile plans at most five discovered HTTP service roots.
-It produces `content_discovery_plan.json` and `content_discovery_plan.md` with
-structured gobuster argv previews, deterministic future artifact names,
-moderate-risk labels, scope requirements, and future confirmation
-requirements.
+Two profiles are available:
+
+- `lab-root-tiny` uses BugSlyce's bundled small generic wordlist, five threads,
+  and a shorter timeout. It is a first-live proving profile for checking the
+  execution, parsing, manifest, and report pipeline. It is not thorough recon.
+- `lab-root-light` keeps the broader system wordlist path, ten threads, and a
+  longer bounded timeout for later lab use.
+
+Both profiles plan at most five discovered HTTP service roots. They produce
+`content_discovery_plan.json` and `content_discovery_plan.md` with structured
+gobuster argv previews, deterministic future artifact names, moderate-risk
+labels, scope requirements, and future confirmation requirements.
 
 Planning does not run gobuster, ffuf, feroxbuster, dirsearch, curl, or any
 wordlist. The referenced default wordlist is a future execution prerequisite;
@@ -347,12 +354,20 @@ bugslyce recon content-run \
   --confirm
 ```
 
-Execution supports only the `lab-root-light` profile and the exact structured
-gobuster argv lists written by BugSlyce. The target must still be explicitly
-in scope, the approved local wordlist must exist, each origin must remain in
-current structured HTTP evidence, and all output filenames must remain inside
-the planned directory. Results are copied into the original recon directory,
-added to `recon_manifest.json`, and used to rebuild the recon pack.
+Execution supports only `lab-root-tiny` and `lab-root-light` plans and the
+exact structured gobuster argv lists written by BugSlyce. The target must
+still be explicitly in scope, the profile-specific approved local wordlist
+must exist, each origin must remain in current structured HTTP evidence, and
+all output filenames must remain inside the planned directory. Results are
+copied into the original recon directory, added to `recon_manifest.json`, and
+used to rebuild the recon pack.
+
+If gobuster starts but exceeds its timeout, BugSlyce records that the command
+started and timed out. A non-empty partial output file is preserved, marked as
+partial in the manifest, and used to rebuild the recon pack before the command
+returns a non-zero status. A timeout before useful output does not create a
+gobuster artifact. Larger and more thorough discovery remains future
+profile-based work.
 
 The command accepts no URL, path, wordlist, thread, extension, header, cookie,
 authentication, proxy, or arbitrary gobuster options. It does not use

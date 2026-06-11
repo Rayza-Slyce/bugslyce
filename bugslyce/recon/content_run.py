@@ -22,15 +22,22 @@ from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_CREATED_BY,
     CONTENT_DISCOVERY_PROFILE,
     CONTENT_DISCOVERY_SCHEMA_VERSION,
-    CONTENT_PLAN_THREADS,
-    DEFAULT_WORDLIST,
     MAX_CONTENT_PLAN_ORIGINS,
     discover_content_plan_origins,
+    get_content_discovery_profile,
 )
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 from bugslyce.recon.runner import LiveContentDiscoveryRunner
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
+
+
+class ContentDiscoveryExecutionIncomplete(ValueError):
+    """Raised after an honest partial execution result has been assembled."""
+
+    def __init__(self, message: str, result: ReconContentDiscoveryExecutionResult) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 def load_content_discovery_plan(path: Path) -> ContentDiscoveryPlan:
@@ -57,10 +64,7 @@ def load_content_discovery_plan(path: Path) -> ContentDiscoveryPlan:
 
     target = _required_text(payload, "target")
     profile = _required_text(payload, "profile")
-    if profile != CONTENT_DISCOVERY_PROFILE:
-        raise ValueError(
-            f"Live content discovery supports only profile '{CONTENT_DISCOVERY_PROFILE}'."
-        )
+    profile_definition = get_content_discovery_profile(profile)
     input_dir = Path(_required_text(payload, "input_dir")).expanduser().resolve()
     output_dir = Path(_required_text(payload, "output_dir")).expanduser().resolve()
     scope_file = _required_text(payload, "scope_file")
@@ -86,7 +90,7 @@ def load_content_discovery_plan(path: Path) -> ContentDiscoveryPlan:
             f"Content discovery plan exceeds the {MAX_CONTENT_PLAN_ORIGINS}-origin limit."
         )
     steps = [
-        _parse_step(item, index, target, output_dir)
+        _parse_step(item, index, target, output_dir, profile_definition)
         for index, item in enumerate(raw_steps, start=1)
     ]
     step_origins = [step.origin for step in steps]
@@ -147,10 +151,11 @@ def run_content_discovery_workflow(
             "Content discovery plan contains an origin not present in current BugSlyce evidence."
         )
 
+    profile_definition = get_content_discovery_profile(plan.profile)
     checker = wordlist_check or Path.is_file
-    if not checker(DEFAULT_WORDLIST):
+    if not checker(profile_definition.wordlist):
         raise ValueError(
-            f"Approved content discovery wordlist does not exist: {DEFAULT_WORDLIST}"
+            f"Approved content discovery wordlist does not exist: {profile_definition.wordlist}"
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,10 +167,31 @@ def run_content_discovery_workflow(
         output_dir,
         target,
         set(plan.origins),
+        plan.profile,
     )
     command_results = []
     for command in commands:
         result = live_runner.run(command)
+        if result.executed:
+            command_results.append(result)
+        if _is_timeout_result(result):
+            partial_sources = [
+                (previous.command_id, Path(previous.output_file), False)
+                for previous in command_results[:-1]
+                if previous.exit_code == 0 and not previous.error
+            ]
+            output_path = Path(result.output_file)
+            if output_path.is_file() and output_path.stat().st_size > 0:
+                partial_sources.append((result.command_id, output_path, True))
+            execution_result = _finalize_execution(
+                plan_path,
+                plan,
+                scope_file,
+                command_results,
+                partial_sources,
+                timed_out_result=result,
+            )
+            raise ContentDiscoveryExecutionIncomplete(result.error or "Content discovery timed out.", execution_result)
         if result.error or result.exit_code != 0:
             raise ValueError(result.error or "Content discovery did not complete successfully.")
         output_path = Path(result.output_file)
@@ -173,50 +199,17 @@ def run_content_discovery_workflow(
             raise ValueError(
                 "Content discovery completed without creating its expected output file."
             )
-        command_results.append(result)
-
-    copied_paths: list[Path] = []
-    for result in command_results:
-        source = Path(result.output_file).resolve()
-        destination = (input_dir / source.name).resolve()
-        try:
-            destination.relative_to(input_dir.resolve())
-        except ValueError as exc:
-            raise ValueError("Content discovery artifact destination escaped the recon directory.") from exc
-        if source != destination:
-            shutil.copy2(source, destination)
-        copied_paths.append(destination)
-
-    manifest_path = input_dir / "recon_manifest.json"
-    manifest = _load_manifest_payload(manifest_path)
-    updated_manifest = _updated_manifest(manifest, plan, copied_paths)
-    manifest_path.write_text(
-        json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    project_state = build_project_state(input_dir)
-    candidates = generate_candidates(project_state)
-    report_path, project_state_path = write_project_outputs(project_state, candidates, input_dir)
-    return ReconContentDiscoveryExecutionResult(
-        mode="content-run",
-        plan_path=str(plan_path),
-        target=target,
-        profile=plan.profile,
-        input_dir=str(input_dir),
-        output_dir=str(output_dir),
-        origins=plan.origins,
-        artifact_paths=[str(path) for path in copied_paths],
-        manifest_path=str(manifest_path),
-        report_path=str(report_path),
-        project_state_path=str(project_state_path),
-        execution_count=len(command_results),
-        command_results=command_results,
-        no_recursion=True,
-        no_extensions=True,
-        no_arbitrary_urls=True,
-        no_exploitation=True,
-        warnings=project_state.warnings,
+    artifact_sources = [
+        (result.command_id, Path(result.output_file), False)
+        for result in command_results
+    ]
+    return _finalize_execution(
+        plan_path,
+        plan,
+        scope_file,
+        command_results,
+        artifact_sources,
+        timed_out_result=None,
     )
 
 
@@ -250,11 +243,19 @@ def render_content_discovery_execution_markdown(
             f"- Original recon directory: `{result.input_dir}`",
             f"- Plan output directory: `{result.output_dir}`",
             f"- Origins executed: {len(result.origins)}",
+            f"- Commands started: {result.commands_started}",
+            f"- Commands completed: {result.commands_completed}",
+            f"- Commands timed out: {result.commands_timed_out}",
             f"- Gobuster artifacts written: {len(result.artifact_paths)}",
+            f"- Partial artifacts imported: {result.partial_artifacts_imported}",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
             "",
-            "Root content discovery commands were executed.",
+            (
+                "Root content discovery timed out after starting."
+                if result.commands_timed_out
+                else "Root content discovery commands were executed."
+            ),
             "No recursion, extensions, brute force, exploitation, or form submission was run.",
             "",
         ]
@@ -274,10 +275,18 @@ def render_content_discovery_execution_summary(
             f"Plan path: {result.plan_path}",
             f"Original recon directory: {result.input_dir}",
             f"Planned/executed origins: {len(result.origins)}",
+            f"Commands started: {result.commands_started}",
+            f"Commands completed: {result.commands_completed}",
+            f"Commands timed out: {result.commands_timed_out}",
             f"Gobuster artifacts written: {len(result.artifact_paths)}",
+            f"Partial artifacts imported: {result.partial_artifacts_imported}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
-            "Root content discovery commands were executed.",
+            (
+                "Root content discovery timed out after starting."
+                if result.commands_timed_out
+                else "Root content discovery commands were executed."
+            ),
             "No recursion, extensions, brute force, exploitation, or form submission was run.",
         ]
     )
@@ -288,6 +297,7 @@ def _parse_step(
     index: int,
     target: str,
     output_dir: Path,
+    profile_definition,
 ) -> ContentDiscoveryStep:
     if not isinstance(value, dict):
         raise ValueError(f"Content discovery step #{index} must be an object.")
@@ -348,9 +358,9 @@ def _parse_step(
         "-u",
         origin,
         "-w",
-        str(DEFAULT_WORDLIST),
+        str(profile_definition.wordlist),
         "-t",
-        str(CONTENT_PLAN_THREADS),
+        str(profile_definition.threads),
         "-o",
         str(output_dir / expected_file),
     ]
@@ -390,12 +400,12 @@ def _load_manifest_payload(path: Path) -> dict[str, object]:
 def _updated_manifest(
     manifest: dict[str, object],
     plan: ContentDiscoveryPlan,
-    artifact_paths: list[Path],
+    artifacts_to_import: list[tuple[ContentDiscoveryStep, Path, bool]],
 ) -> dict[str, object]:
     payload = dict(manifest)
     existing = payload.get("artifacts")
     artifacts = list(existing) if isinstance(existing, list) else []
-    generated_names = {path.name for path in artifact_paths}
+    generated_names = {path.name for _step, path, _partial in artifacts_to_import}
     artifacts = [
         artifact
         for artifact in artifacts
@@ -404,25 +414,117 @@ def _updated_manifest(
             and artifact.get("file") in generated_names
         )
     ]
-    for step, artifact_path in zip(plan.steps, artifact_paths, strict=True):
+    for step, artifact_path, partial in artifacts_to_import:
         artifacts.append(
             {
                 "type": "gobuster",
                 "file": artifact_path.name,
                 "base_url": step.origin,
                 "description": (
-                    "Bounded root content discovery from approved BugSlyce content plan"
+                    "Partial gobuster output from timed-out approved content discovery command"
+                    if partial
+                    else "Bounded root content discovery from approved BugSlyce content plan"
                 ),
+                "tags": ["partial", "timed_out"] if partial else [],
             }
         )
-    original_profile = payload.get("profile")
-    suffix = "-plus-content-discovery"
-    if isinstance(original_profile, str) and original_profile:
-        profile = original_profile if original_profile.endswith(suffix) else f"{original_profile}{suffix}"
-    else:
-        profile = "lab-root-light-plus-content-discovery"
-    payload.update({"profile": profile, "artifacts": artifacts})
+    if artifacts_to_import:
+        original_profile = payload.get("profile")
+        suffix = "-plus-content-discovery"
+        if isinstance(original_profile, str) and original_profile:
+            profile = (
+                original_profile
+                if original_profile.endswith(suffix)
+                else f"{original_profile}{suffix}"
+            )
+        else:
+            profile = f"{plan.profile}-plus-content-discovery"
+        payload["profile"] = profile
+    payload["artifacts"] = artifacts
     return payload
+
+
+def _finalize_execution(
+    plan_path: Path,
+    plan: ContentDiscoveryPlan,
+    scope_file: Path,
+    command_results,
+    artifact_sources: list[tuple[str, Path, bool]],
+    timed_out_result,
+) -> ReconContentDiscoveryExecutionResult:
+    input_dir = Path(plan.input_dir)
+    output_dir = Path(plan.output_dir)
+    step_by_id = {step.step_id: step for step in plan.steps}
+    copied: list[tuple[ContentDiscoveryStep, Path, bool]] = []
+    for command_id, source_value, partial in artifact_sources:
+        source = source_value.resolve()
+        step = step_by_id[command_id]
+        destination = (input_dir / source.name).resolve()
+        try:
+            destination.relative_to(input_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("Content discovery artifact destination escaped the recon directory.") from exc
+        if source != destination:
+            shutil.copy2(source, destination)
+        copied.append((step, destination, partial))
+
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = _load_manifest_payload(manifest_path)
+    updated_manifest = _updated_manifest(manifest, plan, copied)
+    manifest_path.write_text(
+        json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    project_state = build_project_state(input_dir)
+    candidates = generate_candidates(project_state)
+    report_path, project_state_path = write_project_outputs(project_state, candidates, input_dir)
+
+    completed = sum(result.exit_code == 0 and not result.error for result in command_results)
+    timed_out = 1 if timed_out_result is not None else 0
+    started_steps = [
+        step_by_id[result.command_id]
+        for result in command_results
+        if result.command_id in step_by_id
+    ]
+    return ReconContentDiscoveryExecutionResult(
+        mode="content-run",
+        plan_path=str(plan_path),
+        target=plan.target,
+        profile=plan.profile,
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        origins=[step.origin for step in started_steps],
+        artifact_paths=[str(path) for _step, path, _partial in copied],
+        manifest_path=str(manifest_path),
+        report_path=str(report_path),
+        project_state_path=str(project_state_path),
+        execution_count=len(command_results),
+        commands_started=len(command_results),
+        commands_completed=completed,
+        commands_timed_out=timed_out,
+        partial_artifacts_imported=sum(partial for _step, _path, partial in copied),
+        timed_out_step_id=timed_out_result.command_id if timed_out_result else None,
+        timed_out_origin=(
+            step_by_id[timed_out_result.command_id].origin
+            if timed_out_result and timed_out_result.command_id in step_by_id
+            else None
+        ),
+        command_results=command_results,
+        no_recursion=True,
+        no_extensions=True,
+        no_arbitrary_urls=True,
+        no_exploitation=True,
+        warnings=project_state.warnings,
+    )
+
+
+def _is_timeout_result(result) -> bool:
+    return (
+        result.executed
+        and result.exit_code is None
+        and bool(result.error)
+        and "started and exceeded" in result.error
+    )
 
 
 def _required_text(payload: dict[str, Any], key: str) -> str:

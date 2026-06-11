@@ -35,5 +35,8 @@ bugslyce = "bugslyce.cli:main"
 [tool.setuptools.packages.find]
 include = ["bugslyce*"]
 
+[tool.setuptools.package-data]
+bugslyce = ["wordlists/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

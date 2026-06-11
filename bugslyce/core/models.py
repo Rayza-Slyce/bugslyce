@@ -499,6 +499,12 @@ class ReconContentDiscoveryExecutionResult:
     report_path: str
     project_state_path: str
     execution_count: int
+    commands_started: int
+    commands_completed: int
+    commands_timed_out: int
+    partial_artifacts_imported: int
+    timed_out_step_id: str | None
+    timed_out_origin: str | None
     command_results: list[ReconCommandResult]
     no_recursion: bool
     no_extensions: bool
