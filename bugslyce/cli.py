@@ -35,6 +35,12 @@ from bugslyce.recon.content_run import (
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
 )
+from bugslyce.recon.content_followup import (
+    ContentFollowupExecutionIncomplete,
+    render_content_followup_execution_summary,
+    run_content_followup_workflow,
+    write_content_followup_execution_result,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -407,6 +413,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm approved root content discovery execution.",
+    )
+    content_followup_parser = recon_subparsers.add_parser(
+        "content-followup",
+        help="Check selected paths already found by content discovery.",
+    )
+    content_followup_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce recon directory containing gobuster evidence.",
+    )
+    content_followup_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing recon target.",
+    )
+    content_followup_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm bounded content-result header requests.",
     )
 
     return parser
@@ -799,6 +827,37 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_content_discovery_execution_summary(result))
         return 0
 
+    if args.recon_command == "content-followup":
+        if not args.confirm:
+            print(
+                "Error: live content-result follow-up requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No content-result request was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_content_followup_workflow(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            write_content_followup_execution_result(
+                result,
+                Path(result.input_dir),
+            )
+        except ContentFollowupExecutionIncomplete as exc:
+            result = exc.result
+            write_content_followup_execution_result(result, Path(result.input_dir))
+            print(f"Error: {exc}", file=sys.stderr)
+            print(render_content_followup_execution_summary(result), file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No content-result request was executed.", file=sys.stderr)
+            return 2
+
+        print(render_content_followup_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
@@ -807,7 +866,8 @@ def _recon(args: argparse.Namespace) -> int:
         "'bugslyce recon http-metadata --help', "
         "'bugslyce recon path-followup --help', "
         "'bugslyce recon content-plan --help', "
-        "or 'bugslyce recon content-run --help'.",
+        "'bugslyce recon content-run --help', "
+        "or 'bugslyce recon content-followup --help'.",
         file=sys.stderr,
     )
     return 2

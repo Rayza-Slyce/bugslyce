@@ -374,6 +374,29 @@ authentication, proxy, or arbitrary gobuster options. It does not use
 recursion, ffuf, feroxbuster, dirsearch, form submission, credential brute
 force, or exploitation.
 
+### Content-Result Follow-up
+
+BugSlyce can perform bounded HEAD checks for selected paths already present in
+gobuster-derived `discovered_path` evidence:
+
+```bash
+bugslyce recon content-followup \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+Selection is dynamic and target-independent. Response status, directory or
+extensionless shape, redirects, static-file suffixes, prior low-signal tags,
+and generic application-oriented path segments affect ranking. No particular
+path is required. Selection is capped at 20 URLs total and 10 per HTTP origin.
+
+The command excludes external origins, duplicates, traversal forms, root,
+already collected robots/homepage equivalents, known dead paths, and URLs
+already checked by an earlier content follow-up. It accepts no URL or path
+arguments and runs no wordlists, gobuster, ffuf, recursion, brute force,
+exploitation, or form submission.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:
