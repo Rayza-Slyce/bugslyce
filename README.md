@@ -82,6 +82,14 @@ Expected outputs:
 - `report.md`
 - `project_state.json`
 
+The Markdown recon pack starts with a deterministic **Operator Summary**. It
+ranks a small set of evidence-backed review leads, separates low-signal items
+and likely rabbit holes, and records current evidence coverage. Summary items
+cite evidence IDs and use manual-review language rather than vulnerability
+claims. The summary does not replace or remove the full candidate, structured
+artifact, and raw evidence sections below it, which remain available for
+auditability.
+
 ## Current MVP Workflow
 
 ```bash

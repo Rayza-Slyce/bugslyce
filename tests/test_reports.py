@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
+from bugslyce.core.models import HTTPArtifact
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.markdown import (
     export_project_state_json,
@@ -36,6 +38,10 @@ def test_markdown_report_includes_required_sections() -> None:
     report, _state, _candidates = _basic_saas_report()
 
     required_sections = [
+        "## Operator Summary",
+        "### Review First",
+        "### Low-Signal / Avoid Rabbit Holes",
+        "### Current Coverage",
         "## Scope Summary",
         "## Input Files Processed",
         "## Asset Inventory",
@@ -52,6 +58,12 @@ def test_markdown_report_includes_required_sections() -> None:
 
     for section in required_sections:
         assert section in report
+
+
+def test_operator_summary_appears_before_scope_summary() -> None:
+    report, _state, _candidates = _basic_saas_report()
+
+    assert report.index("## Operator Summary") < report.index("## Scope Summary")
 
 
 def test_markdown_report_includes_candidate_and_evidence_ids() -> None:
@@ -225,6 +237,126 @@ def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
     assert "### Discovered Paths" in report
     assert "### HTTP Artifacts" in report
     assert "### Raw Evidence References" in report
+
+
+def test_operator_summary_prioritises_services_and_separates_noise() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    summary = report.split("## Operator Summary", 1)[1].split("## Scope Summary", 1)[0]
+    review_first = summary.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    low_signal = summary.split("### Low-Signal / Avoid Rabbit Holes", 1)[1].split(
+        "### Current Coverage",
+        1,
+    )[0]
+
+    assert "High-port HTTP service review" in review_first
+    assert "Multiple HTTP services review" in review_first
+    assert "Unusual robots user-agent context" in review_first
+    assert "SSH service context on 2222/tcp" in review_first
+    assert "Static assets" not in review_first
+    assert "404/dead paths" not in review_first
+    assert "Static assets" in low_signal
+    assert "404/dead paths" in low_signal
+    assert "EVID-" in summary
+    assert "vulnerable" not in summary.lower()
+    assert "exploitable" not in summary.lower()
+    assert "confirmed issue" not in summary.lower()
+
+
+def test_operator_summary_promotes_generic_body_fetched_200_path(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "curl-headers-content-followup-portal.txt").write_text(
+        "HTTP/1.1 200 OK\nContent-Type: text/html\nContent-Length: 80\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "body-fetch-10.10.10.10-80-portal.html").write_text(
+        "<html><head><title>Operator Portal</title></head>"
+        "<body><a href=\"/dashboard\">Dashboard</a></body></html>",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "profile": "lab-root-tiny-plus-content-followup-plus-body-fetch",
+                "artifacts": [
+                    {
+                        "type": "http_headers",
+                        "file": "curl-headers-content-followup-portal.txt",
+                        "url": "http://10.10.10.10/portal/",
+                        "description": (
+                            "Bounded header request for content-discovery result follow-up"
+                        ),
+                    },
+                    {
+                        "type": "html",
+                        "file": "body-fetch-10.10.10.10-80-portal.html",
+                        "url": "http://10.10.10.10/portal/",
+                        "description": (
+                            "Bounded body request for selected high-signal "
+                            "content-discovery follow-up path"
+                        ),
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+
+    assert "Fetched application page: /portal/" in review_first
+    assert 'saved page title "Operator Portal"' in review_first
+    assert "http://10.10.10.10/portal/" in review_first
+    assert "EVID-HEADER-" in review_first
+    assert "EVID-ART-" in review_first
+    assert "Signal: `medium`" in review_first
+
+
+def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url="http://10.10.10.10:65524/",
+                artifact_type="encoded_like_artifact",
+                value="/usr/share/doc/apache2/README.Debian.gz",
+                source_file="homepage-65524.html",
+                evidence_ids=["EVID-ART-NOISE"],
+                tags=["encoded_or_hidden_artifact"],
+            ),
+        ],
+    )
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    low_signal = report.split("### Low-Signal / Avoid Rabbit Holes", 1)[1].split(
+        "### Current Coverage",
+        1,
+    )[0]
+
+    assert "EVID-ART-NOISE" not in review_first
+    assert "Documentation-like encoded detector matches" in low_signal
+    assert "EVID-ART-NOISE" in low_signal
 
 
 def test_raw_recon_pack_json_preserves_manifest_metadata() -> None:

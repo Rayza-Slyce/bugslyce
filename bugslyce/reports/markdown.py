@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from bugslyce.core.models import Candidate, ProjectState
+from bugslyce.reports.operator_summary import build_operator_summary
 
 
 PRIORITY_ORDER = ("high", "medium", "low", "kill_switch")
@@ -40,6 +41,7 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
         "",
     ]
 
+    _operator_summary(lines, project_state, candidates)
     _scope_summary(lines, project_state)
     _recon_manifest(lines, project_state)
     _input_files(lines, project_state)
@@ -54,6 +56,58 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     _unknowns(lines)
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _operator_summary(
+    lines: list[str],
+    project_state: ProjectState,
+    candidates: list[Candidate],
+) -> None:
+    summary = build_operator_summary(project_state, candidates)
+    lines.extend(["## Operator Summary", "", "### Review First", ""])
+    if not summary.review_first:
+        lines.extend(
+            [
+                "No evidence-backed leads met the conservative summary threshold.",
+                "",
+            ]
+        )
+    else:
+        for index, lead in enumerate(summary.review_first, start=1):
+            lines.extend(
+                [
+                    f"{index}. **{_md(lead.title)}**",
+                    f"   - Why: {_md(lead.why)}",
+                    f"   - Endpoint(s): {format_endpoint_list(lead.endpoints)}",
+                    f"   - Evidence: {format_evidence_ids(lead.evidence_ids)}",
+                    f"   - Next: {_md(lead.next_action)}",
+                    f"   - Signal: `{lead.signal}`",
+                    "",
+                ]
+            )
+
+    lines.extend(["### Low-Signal / Avoid Rabbit Holes", ""])
+    if not summary.low_signal:
+        lines.extend(
+            [
+                "No structured low-signal items were identified for this dataset.",
+                "",
+            ]
+        )
+    else:
+        for item in summary.low_signal:
+            lines.extend(
+                [
+                    f"- **{_md(item.title)}**: {_md(item.reason)}",
+                    f"  - Endpoint(s): {format_endpoint_list(item.endpoints)}",
+                    f"  - Evidence: {format_evidence_ids(item.evidence_ids)}",
+                ]
+            )
+        lines.append("")
+
+    lines.extend(["### Current Coverage", ""])
+    lines.extend(f"- {_md(item)}" for item in summary.coverage)
+    lines.append("")
 
 
 def write_project_outputs(
