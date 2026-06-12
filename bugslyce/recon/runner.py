@@ -11,6 +11,7 @@ from bugslyce.recon.commands import (
     validate_live_curl_header_command,
     validate_recon_command,
 )
+from bugslyce.recon.body_fetch_commands import validate_live_body_fetch_command
 from bugslyce.recon.content_commands import validate_live_content_discovery_command
 from bugslyce.recon.content_followup_commands import validate_live_content_followup_command
 from bugslyce.recon.http_metadata_commands import validate_live_http_metadata_command
@@ -591,6 +592,92 @@ class LiveContentFollowupRunner:
                 exit_code=None,
                 stderr_path=None,
                 error=f"Content-result follow-up could not start: {exc}",
+            )
+
+        stderr_file: str | None = None
+        if completed.stderr:
+            stderr_path.write_text(completed.stderr, encoding="utf-8")
+            stderr_file = str(stderr_path)
+        ended = datetime.now(timezone.utc)
+        error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
+        return _live_result(
+            command,
+            started,
+            ended,
+            exit_code=completed.returncode,
+            stderr_path=stderr_file,
+            error=error,
+        )
+
+
+class LiveBodyFetchRunner:
+    """Execute only approved curl GET requests for selected followed paths."""
+
+    def __init__(
+        self,
+        output_dir: Path,
+        target: str,
+        allowed_origins: set[str],
+        allowed_urls: set[str],
+    ) -> None:
+        self.output_dir = output_dir
+        self.target = target
+        self.allowed_origins = allowed_origins
+        self.allowed_urls = allowed_urls
+
+    def run(self, command: ReconCommand) -> ReconCommandResult:
+        """Run one validated selective body-fetch request."""
+
+        started = datetime.now(timezone.utc)
+        validation = validate_live_body_fetch_command(
+            command,
+            self.output_dir,
+            self.target,
+            self.allowed_origins,
+            self.allowed_urls,
+        )
+        if not validation.valid:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error="; ".join(validation.errors),
+            )
+
+        output_path = Path(command.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path = output_path.with_suffix(output_path.suffix + ".stderr.log")
+        try:
+            completed = subprocess.run(
+                command.argv,
+                capture_output=True,
+                text=True,
+                timeout=command.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=f"Selective body fetch exceeded {command.timeout_seconds} seconds.",
+                executed=True,
+            )
+        except OSError as exc:
+            ended = datetime.now(timezone.utc)
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=f"Selective body fetch could not start: {exc}",
             )
 
         stderr_file: str | None = None

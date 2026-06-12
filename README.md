@@ -397,6 +397,33 @@ already checked by an earlier content follow-up. It accepts no URL or path
 arguments and runs no wordlists, gobuster, ffuf, recursion, brute force,
 exploitation, or form submission.
 
+### Selective Body Fetch
+
+BugSlyce can fetch saved HTML/application bodies for high-signal paths that
+were already selected and checked by `recon content-followup`:
+
+```bash
+bugslyce recon body-fetch \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md \
+  --confirm
+```
+
+Selection is evidence-driven and target-independent. Phase 30 only considers
+prior content-followup header artifacts with status 200, then ranks likely
+HTML/application paths using generic path shape and segment signals. It
+excludes roots, robots, homepage-equivalent index pages, 401/403/404
+responses, static/archive suffixes, external origins, traversal forms,
+duplicates, and URLs whose body was already saved. Selection is capped at 10
+URLs total and 5 per origin.
+
+The command accepts no URL or path arguments. It uses a fixed bounded curl GET
+shape with no redirects, request body, headers, cookies, authentication, or
+proxy options. It runs no crawling, wordlists, gobuster, ffuf, recursion,
+brute force, exploitation, or form submission. Saved HTML is parsed by the
+existing metadata pipeline for titles, links, comments, hidden elements,
+forms, inputs, keywords, and encoded-looking artifacts.
+
 ### Scoped Curl Header Request
 
 BugSlyce has one narrowly scoped live command:

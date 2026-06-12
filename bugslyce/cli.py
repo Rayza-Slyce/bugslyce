@@ -23,6 +23,12 @@ from bugslyce.recon.curl_headers import (
     run_curl_header_workflow,
     write_curl_header_execution_result,
 )
+from bugslyce.recon.body_fetch import (
+    BodyFetchExecutionIncomplete,
+    render_body_fetch_execution_summary,
+    run_body_fetch_workflow,
+    write_body_fetch_execution_result,
+)
 from bugslyce.recon.content_plan import (
     build_content_discovery_plan,
     content_discovery_profile_names,
@@ -435,6 +441,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm bounded content-result header requests.",
+    )
+    body_fetch_parser = recon_subparsers.add_parser(
+        "body-fetch",
+        help="Fetch selected bodies for high-signal paths already followed by BugSlyce.",
+    )
+    body_fetch_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce recon directory containing content-followup headers.",
+    )
+    body_fetch_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Scope file containing the existing recon target.",
+    )
+    body_fetch_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm bounded selective body GET requests.",
     )
 
     return parser
@@ -858,6 +886,34 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_content_followup_execution_summary(result))
         return 0
 
+    if args.recon_command == "body-fetch":
+        if not args.confirm:
+            print(
+                "Error: live selective body fetch requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No body-fetch request was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_body_fetch_workflow(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            write_body_fetch_execution_result(result, Path(result.input_dir))
+        except BodyFetchExecutionIncomplete as exc:
+            result = exc.result
+            write_body_fetch_execution_result(result, Path(result.input_dir))
+            print(f"Error: {exc}", file=sys.stderr)
+            print(render_body_fetch_execution_summary(result), file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No body-fetch request was executed.", file=sys.stderr)
+            return 2
+
+        print(render_body_fetch_execution_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
@@ -867,7 +923,8 @@ def _recon(args: argparse.Namespace) -> int:
         "'bugslyce recon path-followup --help', "
         "'bugslyce recon content-plan --help', "
         "'bugslyce recon content-run --help', "
-        "or 'bugslyce recon content-followup --help'.",
+        "'bugslyce recon content-followup --help', "
+        "or 'bugslyce recon body-fetch --help'.",
         file=sys.stderr,
     )
     return 2

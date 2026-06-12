@@ -539,6 +539,32 @@ class ReconContentFollowupExecutionResult:
 
 
 @dataclass(frozen=True)
+class ReconBodyFetchExecutionResult:
+    """Metadata for selective body fetches from prior followed-path evidence."""
+
+    mode: str
+    target: str
+    scope_file: str
+    input_dir: str
+    candidate_urls_considered: int
+    body_urls_selected: list[str]
+    artifact_paths: list[str]
+    manifest_path: str
+    report_path: str
+    project_state_path: str
+    commands_started: int
+    commands_completed: int
+    commands_timed_out: int
+    command_results: list[ReconCommandResult]
+    no_recursion: bool
+    no_wordlists: bool
+    no_arbitrary_urls: bool
+    no_form_submission: bool
+    no_exploitation: bool
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class ReconPreflightCheck:
     """One deterministic safety or readiness check for a recon plan."""
 
