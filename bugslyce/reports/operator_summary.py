@@ -7,6 +7,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
+from bugslyce.reports.artifact_classifier import (
+    LIKELY_NOISE,
+    LIKELY_SIGNAL,
+    classify_encoded_artifact,
+)
 
 
 REVIEW_TYPE_ORDER = (
@@ -32,16 +37,6 @@ INTERESTING_SEGMENTS = {
     "config",
     "files",
 }
-NOISE_MARKERS = (
-    "/usr/share/doc",
-    "dtd/",
-    ".dtd",
-    "w3.org",
-    "xhtml",
-    "doctype",
-)
-
-
 @dataclass(frozen=True)
 class OperatorSummaryLead:
     """One compact report lead grounded in existing evidence IDs."""
@@ -206,32 +201,37 @@ def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
 
 
 def _encoded_artifact_lead(project_state: ProjectState) -> OperatorSummaryLead | None:
-    artifacts = [
-        artifact
-        for artifact in project_state.http_artifacts
-        if artifact.artifact_type in {"encoded_like_artifact", "hidden_element"}
-        and not _looks_like_documentation_noise(artifact.value)
-    ]
+    artifacts = []
+    classifications = []
+    for artifact in project_state.http_artifacts:
+        if artifact.artifact_type not in {"encoded_like_artifact", "hidden_element"}:
+            continue
+        classification = classify_encoded_artifact(artifact)
+        if classification.category == LIKELY_NOISE:
+            continue
+        artifacts.append(artifact)
+        classifications.append(classification)
     evidence_ids = _dedupe(
         evidence_id for artifact in artifacts for evidence_id in artifact.evidence_ids
     )
     if not evidence_ids:
         return None
     endpoints = _dedupe(artifact.url for artifact in artifacts if artifact.url)
-    encoded_count = sum(
-        artifact.artifact_type == "encoded_like_artifact" for artifact in artifacts
+    likely_count = sum(
+        classification.category == LIKELY_SIGNAL for classification in classifications
     )
     return OperatorSummaryLead(
         title="Encoded or hidden HTML artifacts require contextual review",
         why=(
-            "Saved HTML contains encoded-looking or hidden-element metadata. "
-            "The strings may be meaningful or parser noise and are not interpreted here."
+            "Saved HTML contains encoded-looking or hidden-element metadata classified as "
+            "possible or likely signal. Obvious documentation and default-page noise is "
+            "kept in the rabbit-hole section."
         ),
         endpoints=endpoints,
         evidence_ids=evidence_ids,
         next_action="Review surrounding saved HTML before decoding, interpreting, or escalating these artifacts.",
-        signal="medium" if encoded_count > 1 else "low",
-        score=68 if encoded_count > 1 else 52,
+        signal="medium" if likely_count else "low",
+        score=68 if likely_count else 52,
     )
 
 
@@ -335,15 +335,15 @@ def _low_signal_items(
     noisy_artifacts = [
         artifact
         for artifact in project_state.http_artifacts
-        if artifact.artifact_type == "encoded_like_artifact"
-        and _looks_like_documentation_noise(artifact.value)
+        if artifact.artifact_type in {"encoded_like_artifact", "hidden_element"}
+        and classify_encoded_artifact(artifact).category == LIKELY_NOISE
         and artifact.evidence_ids
     ]
     if noisy_artifacts:
         items.append(
             OperatorSummaryNoise(
-                title="Documentation-like encoded detector matches",
-                reason="DTD, documentation, and default-page strings may trigger the detector without adding useful signal.",
+                title="Encoded detector likely-noise matches",
+                reason="Documentation, DTD, default-page, static, or low-diversity matches are classified as likely noise.",
                 endpoints=_dedupe(artifact.url for artifact in noisy_artifacts if artifact.url),
                 evidence_ids=_dedupe(
                     evidence_id
@@ -393,11 +393,6 @@ def _interesting_path(path: str) -> bool:
         if token
     }
     return bool(segments & INTERESTING_SEGMENTS)
-
-
-def _looks_like_documentation_noise(value: str) -> bool:
-    lowered = value.lower()
-    return any(marker in lowered for marker in NOISE_MARKERS)
 
 
 def _dedupe(values) -> list[str]:

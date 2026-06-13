@@ -355,8 +355,56 @@ def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:
     )[0]
 
     assert "EVID-ART-NOISE" not in review_first
-    assert "Documentation-like encoded detector matches" in low_signal
+    assert "Encoded detector likely-noise matches" in low_signal
     assert "EVID-ART-NOISE" in low_signal
+
+
+def test_encoded_artifact_classification_keeps_signal_noise_and_raw_rows() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    signal = HTTPArtifact(
+        url="http://10.10.10.10/hidden/",
+        artifact_type="encoded_like_artifact",
+        value="9fdafbd64c47471a8f54cd3fc64cd312",
+        source_file="body-fetch-10.10.10.10-80-hidden.html",
+        evidence_ids=["EVID-ART-SIGNAL"],
+        tags=["encoded_or_hidden_artifact"],
+    )
+    noise = HTTPArtifact(
+        url="http://10.10.10.10:65524/",
+        artifact_type="encoded_like_artifact",
+        value="org/TR/xhtml1/DTD/xhtml1",
+        source_file="homepage-65524.html",
+        evidence_ids=["EVID-ART-NOISE"],
+        tags=["encoded_or_hidden_artifact"],
+    )
+    state = replace(state, http_artifacts=[*state.http_artifacts, signal, noise])
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    summary = report.split("## Operator Summary", 1)[1].split("## Scope Summary", 1)[0]
+    classification = report.split("### Encoded Artifact Classification", 1)[1].split(
+        "### Raw Evidence References",
+        1,
+    )[0]
+    raw_artifacts = report.split("### HTTP Artifacts", 1)[1].split(
+        "### Encoded Artifact Classification",
+        1,
+    )[0]
+
+    assert "EVID-ART-SIGNAL" in summary
+    assert "EVID-ART-NOISE" not in summary.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    assert "Likely / Possible Signal" in classification
+    assert "Likely Noise" in classification
+    assert "`likely_signal`" in classification
+    assert "`likely_noise`" in classification
+    assert "EVID-ART-SIGNAL" in classification
+    assert "EVID-ART-NOISE" in classification
+    assert signal.value in raw_artifacts
+    assert noise.value in raw_artifacts
+    assert "vulnerable" not in classification.lower()
+    assert "exploitable" not in classification.lower()
 
 
 def test_raw_recon_pack_json_preserves_manifest_metadata() -> None:

@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from bugslyce.core.models import Candidate, ProjectState
+from bugslyce.reports.artifact_classifier import (
+    LIKELY_NOISE,
+    LIKELY_SIGNAL,
+    POSSIBLE_SIGNAL,
+    classify_encoded_artifact,
+)
 from bugslyce.reports.operator_summary import build_operator_summary
 
 
@@ -338,6 +344,7 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
                 f"{_md(_compact(artifact.value))} | {format_evidence_ids(artifact.evidence_ids)} |"
             )
         lines.append("")
+        _encoded_artifact_classification(lines, project_state)
 
     lines.extend(["### Raw Evidence References", ""])
     if not project_state.evidence:
@@ -354,6 +361,48 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
             f"{_md(_compact(evidence.value))} |"
         )
     lines.append("")
+
+
+def _encoded_artifact_classification(
+    lines: list[str],
+    project_state: ProjectState,
+) -> None:
+    classified = []
+    for artifact in project_state.http_artifacts:
+        if artifact.artifact_type not in {"encoded_like_artifact", "hidden_element"}:
+            continue
+        classified.append((artifact, classify_encoded_artifact(artifact)))
+    if not classified:
+        return
+
+    lines.extend(["### Encoded Artifact Classification", ""])
+    groups = (
+        ("Likely / Possible Signal", {LIKELY_SIGNAL, POSSIBLE_SIGNAL}),
+        ("Likely Noise", {LIKELY_NOISE}),
+    )
+    for heading, categories in groups:
+        items = [
+            (artifact, classification)
+            for artifact, classification in classified
+            if classification.category in categories
+        ]
+        lines.extend([f"#### {heading}", ""])
+        if not items:
+            lines.extend(["No artifacts in this classification group.", ""])
+            continue
+        for artifact, classification in items[:6]:
+            lines.extend(
+                [
+                    f"- `{_md(_compact(artifact.value, limit=80))}`",
+                    f"  - Classification: `{classification.category}`",
+                    f"  - Endpoint: {_md(artifact.url or 'unknown')}",
+                    f"  - Evidence: {format_evidence_ids(artifact.evidence_ids)}",
+                    f"  - Reason: {_md(classification.reason)}",
+                ]
+            )
+        if len(items) > 6:
+            lines.append(f"- ... +{len(items) - 6} more; see the full HTTP Artifacts table above.")
+        lines.append("")
 
 
 def _operator_notes(lines: list[str], project_state: ProjectState) -> None:

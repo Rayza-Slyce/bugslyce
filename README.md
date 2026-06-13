@@ -90,6 +90,14 @@ claims. The summary does not replace or remove the full candidate, structured
 artifact, and raw evidence sections below it, which remain available for
 auditability.
 
+Encoded-looking HTML artifacts are also classified deterministically as
+`likely_signal`, `possible_signal`, or `likely_noise`. Classification uses
+value shape and conservative source context to separate review candidates from
+documentation, DTD, default-page, static-resource, and low-diversity noise.
+BugSlyce does not decode or interpret these values automatically, and the
+classification does not claim a vulnerability or establish meaning. Original
+artifact rows and evidence IDs remain in the report for auditability.
+
 ## Current MVP Workflow
 
 ```bash
