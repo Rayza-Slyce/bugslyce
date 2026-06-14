@@ -492,6 +492,34 @@ checking what completed before a timeout, or deciding whether a fresh run is
 needed. Absence of evidence is not proof of safety, and manual validation
 remains required.
 
+### Evidence Pack Export
+
+BugSlyce can create a portable ZIP from an existing local recon directory:
+
+```bash
+bugslyce recon export \
+  --input-dir ./private_recon/example \
+  --output ./bugslyce-output/example-evidence-pack.zip
+```
+
+The export includes the recon report, project state, recon manifest, status
+files when present, latest and phase-specific execution metadata, scope, and
+every local raw artifact referenced by `recon_manifest.json`. It also includes
+`bugslyce_export_manifest.json` and `BUGSLYCE_EXPORT_README.md`. Missing
+manifest-referenced artifacts are recorded in the export manifest.
+
+Exports use an explicit file allowlist and reject traversal or references
+outside the input directory. Unrelated files and directories such as `.git`,
+`.venv`, `__pycache__`, and `.pytest_cache` are not included. Existing ZIP
+files are not overwritten unless `--force` is supplied.
+
+Evidence-pack export performs no live recon, subprocess execution, network
+requests, or LLM calls. The ZIP may contain sensitive target IPs, URLs,
+headers, HTML, service banners, and discovered paths. Review it before sharing
+and do not distribute it publicly unless authorised. Raw artifacts are
+preserved for auditability, and the archive does not claim confirmed
+vulnerabilities.
+
 ### Selective Body Fetch
 
 BugSlyce can fetch saved HTML/application bodies for high-signal paths that

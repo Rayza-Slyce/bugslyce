@@ -60,6 +60,7 @@ from bugslyce.recon.executor import (
     write_passive_execution_result,
     write_execution_preview,
 )
+from bugslyce.recon.export import export_recon_evidence_pack, render_recon_export_summary
 from bugslyce.recon.http_metadata import (
     render_http_metadata_execution_summary,
     run_http_metadata_workflow,
@@ -492,6 +493,28 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="scope_file",
         type=Path,
         help="Optional scope file used to report exact target alignment.",
+    )
+    export_parser = recon_subparsers.add_parser(
+        "export",
+        help="Create a portable ZIP from an existing local evidence pack.",
+    )
+    export_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce recon directory to package.",
+    )
+    export_parser.add_argument(
+        "--output",
+        dest="output_path",
+        required=True,
+        type=Path,
+        help="Destination .zip path for the evidence pack.",
+    )
+    export_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing export ZIP.",
     )
 
     return parser
@@ -967,6 +990,22 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_recon_status_summary(result, json_path, markdown_path))
         return 0
 
+    if args.recon_command == "export":
+        try:
+            result = export_recon_evidence_pack(
+                input_dir=args.input_dir,
+                output_path=args.output_path,
+                force=args.force,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No live commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+
+        print(render_recon_export_summary(result))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
@@ -978,7 +1017,8 @@ def _recon(args: argparse.Namespace) -> int:
         "'bugslyce recon content-run --help', "
         "'bugslyce recon content-followup --help', "
         "'bugslyce recon body-fetch --help', "
-        "or 'bugslyce recon status --help'.",
+        "'bugslyce recon status --help', "
+        "or 'bugslyce recon export --help'.",
         file=sys.stderr,
     )
     return 2
