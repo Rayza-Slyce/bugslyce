@@ -1,0 +1,307 @@
+"""Tests for local BugSlyce project/session management."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import shutil
+
+import pytest
+
+from bugslyce.cli import main
+from bugslyce.project_session import (
+    PROJECT_FILENAME,
+    initialize_project,
+    inspect_project_status,
+    load_project,
+)
+
+
+FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "examples"
+    / "demo_recon"
+    / "lab_raw_recon_pack"
+)
+
+
+def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    output_dir = tmp_path / "nested" / "output"
+
+    project, project_path = initialize_project(
+        "smoke-test",
+        "10.10.10.10",
+        scope,
+        output_dir,
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert output_dir.is_dir()
+    assert project_path == output_dir / PROJECT_FILENAME
+    assert payload["schema_version"] == "1.0"
+    assert payload["name"] == "smoke-test"
+    assert payload["target"] == "10.10.10.10"
+    assert payload["scope_file"] == str(scope.resolve())
+    assert payload["output_dir"] == str(output_dir.resolve())
+    assert payload["created_by"] == "bugslyce"
+    assert payload["default_profiles"] == {
+        "tcp_discovery": "lab-tcp-full",
+        "content_discovery_smoke": "lab-root-tiny",
+        "content_discovery_broader": "lab-root-light",
+    }
+    assert payload["notes"] == []
+    assert project.target == payload["target"]
+
+
+@pytest.mark.parametrize("name", ["../escape", "bad/name", "bad name", "", "."])
+def test_project_init_rejects_unsafe_names(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    scope = _scope_file(tmp_path)
+
+    with pytest.raises(ValueError, match="Project name"):
+        initialize_project(name, "10.10.10.10", scope, tmp_path / "output")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://example.com/",
+        "*.example.com",
+        "10.10.10.0/24",
+        "../target",
+        "not a host",
+    ],
+)
+def test_project_init_rejects_non_single_target(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    scope = _scope_file(tmp_path)
+
+    with pytest.raises(ValueError, match="plain IP address or hostname"):
+        initialize_project("test", target, scope, tmp_path / "output")
+
+
+def test_project_init_accepts_domain_target(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+
+    project, _path = initialize_project(
+        "domain-test",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+    )
+
+    assert project.target == "app.example.test"
+
+
+def test_project_init_rejects_missing_scope(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Scope file does not exist"):
+        initialize_project(
+            "test",
+            "10.10.10.10",
+            tmp_path / "missing.md",
+            tmp_path / "output",
+        )
+
+
+def test_project_init_refuses_overwrite_without_force(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    output_dir = tmp_path / "output"
+    initialize_project("first", "10.10.10.10", scope, output_dir)
+
+    with pytest.raises(ValueError, match="--force"):
+        initialize_project("second", "10.10.10.10", scope, output_dir)
+
+    project, _path = initialize_project(
+        "second",
+        "10.10.10.10",
+        scope,
+        output_dir,
+        force=True,
+    )
+    assert project.name == "second"
+
+
+def test_project_show_prints_saved_details(tmp_path: Path, capsys) -> None:
+    scope = _scope_file(tmp_path)
+    _project, project_path = initialize_project(
+        "show-test",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+    )
+
+    exit_code = main(["project", "show", "--project", str(project_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "BugSlyce project" in captured.out
+    assert "Name: show-test" in captured.out
+    assert "Target: 10.10.10.10" in captured.out
+    assert f"Scope file: {scope.resolve()}" in captured.out
+    assert "No commands were executed." in captured.out
+    assert "No network requests were made." in captured.out
+
+
+def test_project_status_handles_output_without_recon_manifest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    scope = _scope_file(tmp_path)
+    _project, project_path = initialize_project(
+        "not-started",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+    )
+
+    result = inspect_project_status(project_path)
+    exit_code = main(["project", "status", "--project", str(project_path)])
+    captured = capsys.readouterr()
+
+    assert result.recon_pack_exists is False
+    assert result.recon_status is None
+    assert "No recon pack exists yet" in result.next_action
+    assert exit_code == 0
+    assert "Recon pack exists: false" in captured.out
+    assert "Recommended first safe action" in captured.out
+    assert "No commands were executed." in captured.out
+
+
+def test_project_status_uses_project_output_and_scope_for_existing_pack(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    output_dir = tmp_path / "output"
+    shutil.copytree(FIXTURE, output_dir)
+    external_scope = tmp_path / "project-scope.md"
+    external_scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    _project, project_path = initialize_project(
+        "existing-pack",
+        "10.10.10.10",
+        external_scope,
+        output_dir,
+    )
+
+    result = inspect_project_status(project_path)
+    exit_code = main(["project", "status", "--project", str(project_path)])
+    captured = capsys.readouterr()
+
+    assert result.recon_pack_exists is True
+    assert result.recon_status is not None
+    assert result.recon_status.input_dir == str(output_dir.resolve())
+    assert result.recon_status.scope_file == str(external_scope.resolve())
+    assert result.recon_status.scope_status == "in scope"
+    assert (output_dir / "recon_status.json").is_file()
+    assert (output_dir / "recon_status.md").is_file()
+    assert exit_code == 0
+    assert "Recon pack exists: true" in captured.out
+    assert "BugSlyce recon status complete" in captured.out
+    assert "No network requests were made." in captured.out
+
+
+def test_project_status_reports_scope_warning_from_saved_scope(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    shutil.copytree(FIXTURE, output_dir)
+    scope = _scope_file(tmp_path, target="192.0.2.10")
+    _project, project_path = initialize_project(
+        "scope-warning",
+        "10.10.10.10",
+        scope,
+        output_dir,
+    )
+
+    result = inspect_project_status(project_path)
+
+    assert result.recon_status is not None
+    assert result.recon_status.scope_status.startswith("warning:")
+
+
+def test_load_project_rejects_missing_saved_scope(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+    _project, project_path = initialize_project(
+        "missing-scope",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+    )
+    scope.unlink()
+
+    with pytest.raises(ValueError, match="Project scope file does not exist"):
+        load_project(project_path)
+
+
+def test_cli_project_init_prints_local_only_safety_lines(tmp_path: Path, capsys) -> None:
+    scope = _scope_file(tmp_path)
+    output_dir = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "project",
+            "init",
+            "--name",
+            "cli-test",
+            "--target",
+            "10.10.10.10",
+            "--scope",
+            str(scope),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "BugSlyce project initialized" in captured.out
+    assert "No commands were executed." in captured.out
+    assert "No network requests were made." in captured.out
+    assert (output_dir / PROJECT_FILENAME).is_file()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "usage"),
+    [
+        (["project", "--help"], "usage: bugslyce project"),
+        (["project", "init", "--help"], "usage: bugslyce project init"),
+        (["project", "show", "--help"], "usage: bugslyce project show"),
+        (["project", "status", "--help"], "usage: bugslyce project status"),
+    ],
+)
+def test_project_help_commands(arguments: list[str], usage: str, capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(arguments)
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert usage in captured.out
+
+
+def test_project_module_has_no_command_or_network_execution_apis() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "bugslyce"
+        / "project_session.py"
+    ).read_text(encoding="utf-8")
+
+    assert "subprocess" not in source
+    assert "Popen" not in source
+    assert "os.system" not in source
+    assert "pexpect" not in source
+    assert "requests." not in source
+    assert "urlopen" not in source
+
+
+def _scope_file(tmp_path: Path, target: str = "10.10.10.10") -> Path:
+    scope = tmp_path / "scope.md"
+    scope.write_text(
+        f"# Scope\n\n## In Scope\n\n- {target}\n",
+        encoding="utf-8",
+    )
+    return scope

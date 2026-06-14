@@ -18,6 +18,14 @@ from bugslyce.config import (
 from bugslyce.core.project import build_project_state
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
+from bugslyce.project_session import (
+    initialize_project,
+    inspect_project_status,
+    load_project,
+    render_project_init_summary,
+    render_project_show,
+    render_project_status,
+)
 from bugslyce.recon.curl_headers import (
     render_curl_header_execution_summary,
     run_curl_header_workflow,
@@ -117,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args.input_dir, args.output_dir)
     if args.command == "config":
         return _config(args)
+    if args.command == "project":
+        return _project(args)
     if args.command == "recon":
         return _recon(args)
 
@@ -154,6 +164,58 @@ def _build_parser() -> argparse.ArgumentParser:
     config_subparsers.add_parser("init", help="Interactively initialise local config.")
     config_subparsers.add_parser("forget-key", help="Remove provider API keys from .env.")
     config_subparsers.add_parser("reset", help="Reset local LLM config to no-LLM defaults.")
+
+    project_parser = subparsers.add_parser(
+        "project",
+        help="Manage local BugSlyce project/session files.",
+    )
+    project_subparsers = project_parser.add_subparsers(dest="project_command")
+    project_init_parser = project_subparsers.add_parser(
+        "init",
+        help="Create a local BugSlyce project file.",
+    )
+    project_init_parser.add_argument("--name", required=True, help="Safe local project name.")
+    project_init_parser.add_argument("--target", required=True, help="One target IP or hostname.")
+    project_init_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        required=True,
+        type=Path,
+        help="Existing Markdown scope file.",
+    )
+    project_init_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Project recon output directory.",
+    )
+    project_init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing bugslyce_project.json file.",
+    )
+    project_show_parser = project_subparsers.add_parser(
+        "show",
+        help="Show saved project metadata without inspecting recon evidence.",
+    )
+    project_show_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
+    project_status_parser = project_subparsers.add_parser(
+        "status",
+        help="Inspect project recon progress without running recon.",
+    )
+    project_status_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
 
     recon_parser = subparsers.add_parser(
         "recon",
@@ -582,6 +644,54 @@ def _config(args: argparse.Namespace) -> int:
         return 0
 
     print("Error: config command required", file=sys.stderr)
+    return 2
+
+
+def _project(args: argparse.Namespace) -> int:
+    if args.project_command == "init":
+        try:
+            project, project_path = initialize_project(
+                name=args.name,
+                target=args.target,
+                scope_file=args.scope_file,
+                output_dir=args.output_dir,
+                force=args.force,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_init_summary(project, project_path))
+        return 0
+
+    if args.project_command == "show":
+        try:
+            project = load_project(args.project_file)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_show(project, args.project_file))
+        return 0
+
+    if args.project_command == "status":
+        try:
+            result = inspect_project_status(args.project_file)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_status(result))
+        return 0
+
+    print(
+        "Error: project command required. Use 'bugslyce project init --help', "
+        "'bugslyce project show --help', or 'bugslyce project status --help'.",
+        file=sys.stderr,
+    )
     return 2
 
 

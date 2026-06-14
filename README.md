@@ -110,6 +110,48 @@ For private local use, keep real/private recon under `private_recon/`, `raw-reco
 
 Do not commit real targets, API keys, screenshots, Burp files, HAR files, or raw private outputs.
 
+## Project Sessions
+
+BugSlyce projects are small local JSON session files that remember a target,
+scope file, recon output directory, and conservative default profiles:
+
+```bash
+bugslyce project init \
+  --name authorised-lab \
+  --target 10.10.10.10 \
+  --scope ./private_recon/authorised-lab/scope.md \
+  --output-dir ./bugslyce-output/authorised-lab
+```
+
+This creates `bugslyce_project.json` inside the output directory. Project
+names are restricted to letters, numbers, dash, and underscore. Targets must
+be one plain IP address or hostname. Existing project files are not
+overwritten unless `--force` is supplied.
+
+Saved details can be reviewed without inspecting recon evidence:
+
+```bash
+bugslyce project show \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json
+```
+
+Project status lets an operator resume work without remembering separate
+target, scope, and output paths:
+
+```bash
+bugslyce project status \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json
+```
+
+When a recon manifest exists, project status reuses the local recon status
+advisor and the saved scope file. If recon has not started, it reports that no
+pack exists and suggests a first safe planning or scoped discovery action.
+
+Project management performs no live recon, subprocess execution, or network
+requests. Project files are local JSON only and do not store API keys,
+credentials, provider tokens, or other secrets. This session layer is
+groundwork for a future guided wizard mode rather than a database.
+
 ## Recon Plan Mode
 
 BugSlyce can preview future recon activity without executing commands:
