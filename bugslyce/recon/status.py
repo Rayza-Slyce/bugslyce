@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.core.scope import parse_scope, scope_entry_target
+from bugslyce.reports.provenance import WorkflowProvenance, build_workflow_provenance
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -31,6 +32,7 @@ class ReconStatusResult:
     target: str
     input_dir: str
     manifest_profile: str | None
+    workflow_summary: WorkflowProvenance
     scope_file: str | None
     scope_status: str
     phases: list[ReconStatusPhase]
@@ -95,11 +97,13 @@ def build_recon_status(
         target=target,
         detected=detected,
     )
+    workflow_summary = build_workflow_provenance(project_state)
 
     return ReconStatusResult(
         target=target,
         input_dir=str(input_dir),
         manifest_profile=profile,
+        workflow_summary=workflow_summary,
         scope_file=str(resolved_scope) if resolved_scope else None,
         scope_status=scope_status,
         phases=list(detected.values()),
@@ -145,11 +149,33 @@ def render_recon_status_markdown(result: ReconStatusResult) -> str:
         "",
         f"- Target: `{result.target}`",
         f"- Input directory: `{result.input_dir}`",
-        f"- Manifest profile: `{result.manifest_profile or 'not recorded'}`",
+        f"- Manifest profile (raw): `{result.manifest_profile or 'not recorded'}`",
         f"- Scope status: {result.scope_status}",
     ]
     if result.scope_file:
         lines.append(f"- Scope file: `{result.scope_file}`")
+
+    workflow = result.workflow_summary
+    lines.extend(
+        [
+            "",
+            "## Workflow / Provenance Summary",
+            "",
+            f"- Base discovery profile: `{workflow.base_discovery_profile}`",
+            f"- Enrichment phases detected: {_display_list(workflow.enrichment_phases)}",
+            (
+                "- Content discovery profiles detected: "
+                f"{_display_list(workflow.content_discovery_profiles)}"
+            ),
+            f"- Follow-up phases detected: {_display_list(workflow.followup_phases)}",
+            f"- Raw discovered path evidence rows: {workflow.raw_discovered_path_rows}",
+            f"- Unique discovered paths: {workflow.unique_discovered_paths}",
+            (
+                "- Duplicate discovered path evidence rows retained for auditability: "
+                f"{workflow.duplicate_discovered_path_rows}"
+            ),
+        ]
+    )
 
     lines.extend(["", "## Completed Phases Detected", ""])
     for phase in result.phases:
@@ -196,7 +222,18 @@ def render_recon_status_summary(
         "BugSlyce recon status complete",
         f"Target: {result.target}",
         f"Input directory: {result.input_dir}",
-        f"Manifest profile: {result.manifest_profile or 'not recorded'}",
+        f"Manifest profile (raw): {result.manifest_profile or 'not recorded'}",
+        f"Workflow base: {result.workflow_summary.base_discovery_profile}",
+        (
+            "Content discovery profiles: "
+            f"{_display_list(result.workflow_summary.content_discovery_profiles)}"
+        ),
+        (
+            "Discovered paths: "
+            f"{result.workflow_summary.raw_discovered_path_rows} raw evidence row(s), "
+            f"{result.workflow_summary.unique_discovered_paths} unique, "
+            f"{result.workflow_summary.duplicate_discovered_path_rows} duplicate row(s)"
+        ),
         f"Scope status: {result.scope_status}",
         f"Detected phases: {detected_count}/{len(result.phases)}",
         "Recommended next safe action:",
@@ -370,10 +407,16 @@ def _artifact_overview(
         for record in project_state.port_services
         if record.state.lower() == "open"
     }
+    raw_path_count = len(project_state.discovered_paths)
+    unique_path_count = len(
+        {record.url.strip() for record in project_state.discovered_paths if record.url.strip()}
+    )
     return {
         "open_ports": len(open_ports),
         "http_services": len(project_state.http_services),
-        "discovered_paths": len(project_state.discovered_paths),
+        "raw_discovered_path_evidence_rows": raw_path_count,
+        "unique_discovered_paths": unique_path_count,
+        "duplicate_discovered_path_evidence_rows": raw_path_count - unique_path_count,
         "http_artifacts": len(project_state.http_artifacts),
         "manual_review_candidates": candidates_count,
         "gobuster_outputs": sum(Path(value).name.startswith("gobuster-") for value in artifact_files),
@@ -683,3 +726,7 @@ def _display_value(value: object) -> str:
     if isinstance(value, bool):
         return str(value).lower()
     return str(value)
+
+
+def _display_list(values: list[str]) -> str:
+    return ", ".join(f"`{value}`" for value in values) if values else "none detected"

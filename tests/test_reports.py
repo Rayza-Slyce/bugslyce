@@ -239,6 +239,62 @@ def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
     assert "### Raw Evidence References" in report
 
 
+def test_report_workflow_summary_preserves_duplicate_path_evidence(
+    tmp_path: Path,
+) -> None:
+    source = FIXTURES_ROOT / "lab_raw_recon_pack"
+    for path in source.iterdir():
+        if path.is_file():
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    manifest_path = tmp_path / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["profile"] = (
+        "lab-tcp-full-plus-services-plus-http-metadata-plus-path-followup-"
+        "plus-content-discovery-plus-content-followup-plus-body-fetch-"
+        "plus-content-discovery"
+    )
+    duplicate_file = tmp_path / "gobuster-tiny-10.10.10.10-80-root.txt"
+    duplicate_file.write_text(
+        "hidden (Status: 301) [Size: 169] "
+        "[--> http://10.10.10.10/hidden/]\n",
+        encoding="utf-8",
+    )
+    manifest["artifacts"].append(
+        {
+            "type": "gobuster",
+            "file": duplicate_file.name,
+            "base_url": "http://10.10.10.10/",
+            "description": "Approved lab-root-tiny root discovery",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    state = build_project_state(tmp_path)
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    workflow = report.split("## Workflow / Provenance Summary", 1)[1].split(
+        "## Input Files Processed",
+        1,
+    )[0]
+    path_table = report.split("### Discovered Paths", 1)[1].split(
+        "### HTTP Artifacts",
+        1,
+    )[0]
+    raw_count = len(state.discovered_paths)
+    unique_count = len({record.url for record in state.discovered_paths})
+
+    assert "Base discovery profile: `lab-tcp-full`" in workflow
+    assert "Content discovery profiles detected: `lab-root-tiny`, `lab-root-light`" in workflow
+    assert f"Raw discovered path evidence rows: {raw_count}" in workflow
+    assert f"Unique discovered paths: {unique_count}" in workflow
+    assert f"Duplicate path rows retained for auditability: {raw_count - unique_count}" in workflow
+    assert report.count("http://10.10.10.10/hidden/") >= 2
+    assert "Repeated URLs may appear" in path_table
+    assert "EVID-PATH-" in path_table
+    assert "## Operator Summary" in report
+    assert manifest["profile"] in report
+
+
 def test_operator_summary_prioritises_services_and_separates_noise() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
     candidates = generate_candidates(state)

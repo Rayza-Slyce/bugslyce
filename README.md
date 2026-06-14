@@ -474,6 +474,19 @@ based only on saved local evidence and remains conservative: it can recommend
 the next bounded BugSlyce phase, optional broader planned root discovery, or
 manual review when no eligible automated follow-up appears pending.
 
+Status and recon pack reports also include a clean workflow/provenance
+summary. The raw manifest profile remains available for compatibility, while
+repeated add-on phases are displayed as base discovery, enrichment, content
+discovery profiles, and follow-up phases. `lab-root-tiny` and
+`lab-root-light` runs are shown separately instead of repeating an ambiguous
+`plus-content-discovery` suffix.
+
+BugSlyce preserves every raw discovered-path evidence row, including repeated
+observations from different discovery profiles. Human-facing summaries report
+raw path rows, unique URL strings, and duplicate rows retained for
+auditability. This is reporting and provenance cleanup only; evidence IDs and
+raw path tables are not deduplicated or removed.
+
 This is useful when resuming an authorised lab after a VPN target expires,
 checking what completed before a timeout, or deciding whether a fresh run is
 needed. Absence of evidence is not proof of safety, and manual validation

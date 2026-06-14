@@ -16,6 +16,7 @@ from bugslyce.reports.artifact_classifier import (
     classify_encoded_artifact,
 )
 from bugslyce.reports.operator_summary import build_operator_summary
+from bugslyce.reports.provenance import build_workflow_provenance
 
 
 PRIORITY_ORDER = ("high", "medium", "low", "kill_switch")
@@ -50,6 +51,7 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     _operator_summary(lines, project_state, candidates)
     _scope_summary(lines, project_state)
     _recon_manifest(lines, project_state)
+    _workflow_provenance(lines, project_state)
     _input_files(lines, project_state)
     _asset_inventory(lines, project_state)
     _http_services(lines, project_state)
@@ -168,8 +170,43 @@ def _recon_manifest(lines: list[str], project_state: ProjectState) -> None:
             f"- Schema version: `{_md(manifest.schema_version)}`",
             f"- Target: `{_md(manifest.target)}`",
             f"- Created by: {_md(manifest.created_by or 'unspecified')}",
-            f"- Profile: {_md(manifest.profile or 'unspecified')}",
+            f"- Profile (raw): {_md(manifest.profile or 'unspecified')}",
             f"- Artifact count: {len(manifest.artifacts)}",
+            "",
+        ]
+    )
+
+
+def _workflow_provenance(lines: list[str], project_state: ProjectState) -> None:
+    if project_state.recon_manifest is None:
+        return
+    summary = build_workflow_provenance(project_state)
+    lines.extend(
+        [
+            "## Workflow / Provenance Summary",
+            "",
+            f"- Base discovery profile: `{_md(summary.base_discovery_profile)}`",
+            (
+                "- Enrichment phases detected: "
+                f"{_workflow_list(summary.enrichment_phases)}"
+            ),
+            (
+                "- Content discovery profiles detected: "
+                f"{_workflow_list(summary.content_discovery_profiles)}"
+            ),
+            (
+                "- Follow-up phases detected: "
+                f"{_workflow_list(summary.followup_phases)}"
+            ),
+            (
+                "- Raw discovered path evidence rows: "
+                f"{summary.raw_discovered_path_rows}"
+            ),
+            f"- Unique discovered paths: {summary.unique_discovered_paths}",
+            (
+                "- Duplicate path rows retained for auditability: "
+                f"{summary.duplicate_discovered_path_rows}"
+            ),
             "",
         ]
     )
@@ -316,6 +353,12 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
         lines.extend(
             [
                 "### Discovered Paths",
+                "",
+                (
+                    "This table contains raw path evidence rows. Repeated URLs may "
+                    "appear when multiple collection phases observed the same path; "
+                    "unique-path counts are summarised above."
+                ),
                 "",
                 "| URL | Status | Length | Redirect | Evidence IDs |",
                 "| --- | ---: | ---: | --- | --- |",
@@ -476,6 +519,12 @@ def _csv(values: list[str]) -> str:
     if not values:
         return "none"
     return ", ".join(_md(value) for value in values)
+
+
+def _workflow_list(values: list[str]) -> str:
+    if not values:
+        return "none detected"
+    return ", ".join(f"`{_md(value)}`" for value in values)
 
 
 def format_evidence_ids(evidence_ids: list[str], max_items: int = 4) -> str:

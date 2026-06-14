@@ -65,6 +65,65 @@ def test_status_detects_fixture_phases_and_counts(tmp_path: Path) -> None:
     assert result.artifact_overview["gobuster_outputs"] == 3
 
 
+def test_status_cleans_profile_display_and_reports_raw_unique_duplicate_paths(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="gobuster")
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["profile"] = (
+        "lab-tcp-full-plus-services-plus-http-metadata-plus-path-followup-"
+        "plus-content-discovery-plus-content-followup-plus-body-fetch-"
+        "plus-content-discovery"
+    )
+    tiny_file = input_dir / "gobuster-tiny-10.10.10.10-80-root.txt"
+    tiny_file.write_text("portal (Status: 200) [Size: 321]\n", encoding="utf-8")
+    manifest["artifacts"].append(
+        {
+            "type": "gobuster",
+            "file": tiny_file.name,
+            "base_url": "http://10.10.10.10/",
+            "description": "Approved lab-root-tiny root discovery",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.manifest_profile == manifest["profile"]
+    assert result.workflow_summary.base_discovery_profile == "lab-tcp-full"
+    assert result.workflow_summary.content_discovery_profiles == [
+        "lab-root-tiny",
+        "lab-root-light",
+    ]
+    assert result.workflow_summary.raw_discovered_path_rows == 3
+    assert result.workflow_summary.unique_discovered_paths == 2
+    assert result.workflow_summary.duplicate_discovered_path_rows == 1
+    assert result.artifact_overview["raw_discovered_path_evidence_rows"] == 3
+    assert result.artifact_overview["unique_discovered_paths"] == 2
+    assert result.artifact_overview["duplicate_discovered_path_evidence_rows"] == 1
+    workflow_section = rendered.split("## Workflow / Provenance Summary", 1)[1].split(
+        "## Completed Phases Detected",
+        1,
+    )[0]
+    assert "lab-root-tiny" in workflow_section
+    assert "lab-root-light" in workflow_section
+    assert "plus-content-discovery-plus-content-discovery" not in workflow_section
+
+
+def test_status_detects_content_profile_from_execution_metadata(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="services")
+    (input_dir / "recon_execution_content_run.json").write_text(
+        json.dumps({"mode": "content-run", "profile": "lab-root-tiny"}),
+        encoding="utf-8",
+    )
+
+    result = build_recon_status(input_dir)
+
+    assert result.workflow_summary.content_discovery_profiles == ["lab-root-tiny"]
+
+
 def test_status_detects_followup_body_report_and_execution_metadata(
     tmp_path: Path,
 ) -> None:
