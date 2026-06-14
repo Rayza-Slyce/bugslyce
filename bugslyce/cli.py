@@ -25,6 +25,8 @@ from bugslyce.recon.curl_headers import (
 )
 from bugslyce.recon.body_fetch import (
     BodyFetchExecutionIncomplete,
+    BodyFetchNoWork,
+    render_body_fetch_no_work,
     render_body_fetch_execution_summary,
     run_body_fetch_workflow,
     write_body_fetch_execution_result,
@@ -43,6 +45,8 @@ from bugslyce.recon.content_run import (
 )
 from bugslyce.recon.content_followup import (
     ContentFollowupExecutionIncomplete,
+    ContentFollowupNoWork,
+    render_content_followup_no_work,
     render_content_followup_execution_summary,
     run_content_followup_workflow,
     write_content_followup_execution_result,
@@ -884,6 +888,9 @@ def _recon(args: argparse.Namespace) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             print(render_content_followup_execution_summary(result), file=sys.stderr)
             return 2
+        except ContentFollowupNoWork as outcome:
+            print(render_content_followup_no_work(outcome))
+            return 0
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             print("No content-result request was executed.", file=sys.stderr)
@@ -912,6 +919,9 @@ def _recon(args: argparse.Namespace) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             print(render_body_fetch_execution_summary(result), file=sys.stderr)
             return 2
+        except BodyFetchNoWork as outcome:
+            print(render_body_fetch_no_work(outcome))
+            return 0
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             print("No body-fetch request was executed.", file=sys.stderr)

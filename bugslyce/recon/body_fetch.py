@@ -67,6 +67,14 @@ class BodyFetchExecutionIncomplete(ValueError):
         self.result = result
 
 
+class BodyFetchNoWork(Exception):
+    """Clean idempotent outcome when no new body URL is eligible."""
+
+    def __init__(self, considered: int) -> None:
+        super().__init__("No eligible new high-signal followed-path URLs remain for body fetch.")
+        self.considered = considered
+
+
 def select_body_fetch_urls(
     project_state: ProjectState,
     target: str,
@@ -143,7 +151,7 @@ def run_body_fetch_workflow(
     if considered == 0:
         raise ValueError("No prior content-followup header artifacts were found.")
     if not selected_urls:
-        raise ValueError("No eligible high-signal followed-path URLs remain for body fetch.")
+        raise BodyFetchNoWork(considered)
 
     allowed_origins = {_origin(url) for url in selected_urls}
     commands = build_body_fetch_commands(selected_urls, target, input_dir)
@@ -292,6 +300,22 @@ def render_body_fetch_execution_summary(result: ReconBodyFetchExecutionResult) -
             f"JSON path: {result.project_state_path}",
             "Selective body fetch requests were executed.",
             "No recursion, wordlists, brute force, exploitation, or form submission was run.",
+        ]
+    )
+
+
+def render_body_fetch_no_work(outcome: BodyFetchNoWork) -> str:
+    """Render a calm CLI summary for an idempotent no-work result."""
+
+    return "\n".join(
+        [
+            "No eligible new high-signal followed-path URLs remain for body fetch.",
+            f"Followed paths considered: {outcome.considered}",
+            (
+                "All currently followed paths are already body-fetched, excluded, "
+                "non-HTML, 403/404, duplicate, or low-signal."
+            ),
+            "No body-fetch request was executed.",
         ]
     )
 

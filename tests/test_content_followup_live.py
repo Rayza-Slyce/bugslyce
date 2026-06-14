@@ -13,6 +13,7 @@ from bugslyce.core.models import DiscoveredPath, ReconCommandResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.content_followup import (
     ContentFollowupExecutionIncomplete,
+    ContentFollowupNoWork,
     run_content_followup_workflow,
     select_content_followup_urls,
     write_content_followup_execution_result,
@@ -135,6 +136,42 @@ def test_content_followup_skips_previously_followed_url(tmp_path: Path) -> None:
     _considered, selected = select_content_followup_urls(state, "10.10.10.10", manifest)
 
     assert "http://10.10.10.10/admin" not in selected
+
+
+def test_content_followup_clean_noop_when_all_paths_are_already_processed(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _content_input(tmp_path)
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state = build_project_state(input_dir)
+    _considered, selected = select_content_followup_urls(
+        state,
+        "10.10.10.10",
+        manifest,
+    )
+    for index, url in enumerate(selected, start=1):
+        filename = f"curl-headers-content-followup-existing-{index}.txt"
+        (input_dir / filename).write_text("HTTP/1.1 200 OK\n", encoding="utf-8")
+        manifest["artifacts"].append(
+            {
+                "type": "http_headers",
+                "file": filename,
+                "url": url,
+                "description": "Bounded header request for content-discovery result follow-up",
+            }
+        )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    latest_metadata = input_dir / "recon_execution.md"
+    latest_metadata.write_text("# Previous Executed Phase\n", encoding="utf-8")
+    runner = _NeverRunContentFollowupRunner()
+
+    with pytest.raises(ContentFollowupNoWork) as exc_info:
+        run_content_followup_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 9
+    assert runner.called is False
+    assert latest_metadata.read_text(encoding="utf-8") == "# Previous Executed Phase\n"
 
 
 def test_content_followup_builds_deterministic_head_command(tmp_path: Path) -> None:
@@ -407,6 +444,15 @@ class _TimeoutContentFollowupRunner:
             simulated=False,
             error="Content-result follow-up exceeded 10 seconds.",
         )
+
+
+class _NeverRunContentFollowupRunner:
+    def __init__(self) -> None:
+        self.called = False
+
+    def run(self, _command):
+        self.called = True
+        raise AssertionError("runner must not be called for clean no-op")
 
 
 def _content_input(tmp_path: Path) -> tuple[Path, Path]:

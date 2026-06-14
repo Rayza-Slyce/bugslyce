@@ -9,6 +9,8 @@ import pytest
 
 from bugslyce.cli import main
 from bugslyce.core.models import ReconContentDiscoveryExecutionResult
+from bugslyce.recon.body_fetch import BodyFetchNoWork
+from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_run import ContentDiscoveryExecutionIncomplete
 
 
@@ -313,6 +315,37 @@ def test_cli_recon_content_followup_requires_confirm(tmp_path: Path, capsys) -> 
     assert "No content-result request was executed." in captured.err
 
 
+def test_cli_recon_content_followup_clean_noop_returns_success(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.cli.run_content_followup_workflow",
+        lambda **_kwargs: (_ for _ in ()).throw(ContentFollowupNoWork(6)),
+    )
+
+    exit_code = main(
+        [
+            "recon",
+            "content-followup",
+            "--input-dir",
+            str(tmp_path),
+            "--scope",
+            str(tmp_path / "scope.md"),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Error:" not in captured.out
+    assert "Error:" not in captured.err
+    assert "No eligible new content-discovery result URLs remain" in captured.out
+    assert "Discovered paths considered: 6" in captured.out
+    assert "No content-result request was executed." in captured.out
+
+
 def test_cli_recon_body_fetch_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["recon", "body-fetch", "--help"])
@@ -345,6 +378,35 @@ def test_cli_recon_body_fetch_requires_confirm(tmp_path: Path, capsys) -> None:
     assert "No body-fetch request was executed." in captured.err
 
 
+def test_cli_recon_body_fetch_clean_noop_returns_success(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.cli.run_body_fetch_workflow",
+        lambda **_kwargs: (_ for _ in ()).throw(BodyFetchNoWork(4)),
+    )
+
+    exit_code = main(
+        [
+            "recon",
+            "body-fetch",
+            "--input-dir",
+            str(tmp_path),
+            "--scope",
+            str(tmp_path / "scope.md"),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Error:" not in captured.out
+    assert "Error:" not in captured.err
+    assert "No eligible new high-signal followed-path URLs remain" in captured.out
+    assert "Followed paths considered: 4" in captured.out
+    assert "No body-fetch request was executed." in captured.out
 def test_cli_recon_content_run_timeout_is_honest(
     tmp_path: Path,
     capsys,

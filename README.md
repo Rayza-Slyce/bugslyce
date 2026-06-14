@@ -445,6 +445,13 @@ already checked by an earlier content follow-up. It accepts no URL or path
 arguments and runs no wordlists, gobuster, ffuf, recursion, brute force,
 exploitation, or form submission.
 
+Follow-up phases are idempotent. When valid evidence exists but every current
+candidate is already processed, excluded, duplicate, static, non-HTML,
+403/404, or otherwise low signal, `content-followup` and `body-fetch` exit
+cleanly with status 0 and state that no request was executed. Missing inputs,
+malformed manifests, and scope failures remain errors. A clean no-op does not
+replace the metadata for the latest phase that actually executed requests.
+
 ### Selective Body Fetch
 
 BugSlyce can fetch saved HTML/application bodies for high-signal paths that

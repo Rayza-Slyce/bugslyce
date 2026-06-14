@@ -66,6 +66,14 @@ class ContentFollowupExecutionIncomplete(ValueError):
         self.result = result
 
 
+class ContentFollowupNoWork(Exception):
+    """Clean idempotent outcome when no new follow-up URL is eligible."""
+
+    def __init__(self, considered: int) -> None:
+        super().__init__("No eligible new content-discovery result URLs remain for follow-up.")
+        self.considered = considered
+
+
 def select_content_followup_urls(
     project_state: ProjectState,
     target: str,
@@ -145,7 +153,7 @@ def run_content_followup_workflow(
     if considered == 0:
         raise ValueError("No discovered_path records from content discovery artifacts were found.")
     if not selected_urls:
-        raise ValueError("No eligible content-discovery result URLs remain for follow-up.")
+        raise ContentFollowupNoWork(considered)
 
     allowed_origins = {_origin(url) for url in selected_urls}
     commands = build_content_followup_commands(selected_urls, target, input_dir)
@@ -301,6 +309,22 @@ def render_content_followup_execution_summary(
             f"JSON path: {result.project_state_path}",
             "Content-result follow-up requests were executed.",
             "No recursion, wordlists, brute force, exploitation, or form submission was run.",
+        ]
+    )
+
+
+def render_content_followup_no_work(outcome: ContentFollowupNoWork) -> str:
+    """Render a calm CLI summary for an idempotent no-work result."""
+
+    return "\n".join(
+        [
+            "No eligible new content-discovery result URLs remain for follow-up.",
+            f"Discovered paths considered: {outcome.considered}",
+            (
+                "All currently discovered paths are already processed, excluded, "
+                "duplicate, static, or low-signal."
+            ),
+            "No content-result request was executed.",
         ]
     )
 

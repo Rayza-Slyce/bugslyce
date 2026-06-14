@@ -12,6 +12,7 @@ import pytest
 from bugslyce.core.models import DiscoveredPath, ReconCommandResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.body_fetch import (
+    BodyFetchNoWork,
     run_body_fetch_workflow,
     select_body_fetch_urls,
     write_body_fetch_execution_result,
@@ -119,6 +120,38 @@ def test_body_fetch_skips_url_with_existing_html_artifact(tmp_path: Path) -> Non
     _considered, selected = select_body_fetch_urls(state, "10.10.10.10", manifest)
 
     assert "http://10.10.10.10/admin/" not in selected
+
+
+def test_body_fetch_clean_noop_when_all_eligible_bodies_are_already_fetched(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = _manifest(input_dir)
+    state = build_project_state(input_dir)
+    _considered, selected = select_body_fetch_urls(state, "10.10.10.10", manifest)
+    for index, url in enumerate(selected, start=1):
+        filename = f"saved-body-{index}.html"
+        (input_dir / filename).write_text("<title>Already fetched</title>", encoding="utf-8")
+        manifest["artifacts"].append(
+            {
+                "type": "html",
+                "file": filename,
+                "url": url,
+                "description": "Previously saved HTML evidence",
+            }
+        )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    latest_metadata = input_dir / "recon_execution.md"
+    latest_metadata.write_text("# Previous Executed Phase\n", encoding="utf-8")
+    runner = _NeverRunBodyFetchRunner()
+
+    with pytest.raises(BodyFetchNoWork) as exc_info:
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 13
+    assert runner.called is False
+    assert latest_metadata.read_text(encoding="utf-8") == "# Previous Executed Phase\n"
 
 
 def test_body_fetch_caps_total_and_per_origin(tmp_path: Path) -> None:
@@ -375,6 +408,15 @@ class _MockBodyFetchRunner:
             simulated=False,
             error=None,
         )
+
+
+class _NeverRunBodyFetchRunner:
+    def __init__(self) -> None:
+        self.called = False
+
+    def run(self, _command):
+        self.called = True
+        raise AssertionError("runner must not be called for clean no-op")
 
 
 def _body_fetch_input(tmp_path: Path) -> tuple[Path, Path]:
