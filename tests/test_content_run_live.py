@@ -53,6 +53,9 @@ def test_content_run_executes_approved_plan_and_rebuilds_recon_pack(
     assert result.commands_completed == 2
     assert result.commands_timed_out == 0
     assert result.partial_artifacts_imported == 0
+    assert result.completed_artifacts_imported == 2
+    assert result.selected_step_id is None
+    assert result.selected_origin is None
     assert result.origins == [
         "http://10.10.10.10/",
         "http://10.10.10.10:65524/",
@@ -117,6 +120,74 @@ def test_content_run_accepts_supported_profiles(tmp_path: Path, profile: str) ->
     assert result.profile == profile
     if profile == CONTENT_DISCOVERY_TINY_PROFILE:
         assert all("gobuster-tiny-" in Path(path).name for path in result.artifact_paths)
+
+
+def test_content_run_executes_only_selected_existing_step(tmp_path: Path) -> None:
+    plan_path, scope, input_dir, _output_dir = _written_plan(tmp_path)
+    plan = load_content_discovery_plan(plan_path)
+    runner = _RecordingContentRunner()
+
+    result = run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=runner,
+        wordlist_check=lambda _path: True,
+        step_id="CONTENT-STEP-002",
+    )
+
+    assert [command.id for command in runner.commands] == ["CONTENT-STEP-002"]
+    assert runner.commands[0].argv == plan.steps[1].command_preview
+    assert result.origins == ["http://10.10.10.10:65524/"]
+    assert result.selected_step_id == "CONTENT-STEP-002"
+    assert result.selected_origin == "http://10.10.10.10:65524/"
+    assert result.commands_started == 1
+    assert result.commands_completed == 1
+    assert result.completed_artifacts_imported == 1
+    assert result.partial_artifacts_imported == 0
+    assert (input_dir / "gobuster-10.10.10.10-65524-root.txt").is_file()
+    assert not (input_dir / "gobuster-10.10.10.10-80-root.txt").exists()
+
+
+def test_content_run_refuses_unknown_selected_step_without_running(tmp_path: Path) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path)
+    runner = _NeverRunContentRunner()
+
+    with pytest.raises(ValueError, match="not present in the approved plan"):
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=runner,
+            wordlist_check=lambda _path: True,
+            step_id="CONTENT-STEP-999",
+        )
+
+    assert runner.called is False
+
+
+def test_selected_step_still_requires_scope_and_profile_wordlist(tmp_path: Path) -> None:
+    plan_path, _scope, _input_dir, _output_dir = _written_plan(tmp_path)
+    other_scope = tmp_path / "scope.md"
+    other_scope.write_text("# Scope\n\n## In Scope\n\n- 192.0.2.10\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not explicitly listed"):
+        run_content_discovery_workflow(
+            plan_path,
+            other_scope,
+            runner=_NeverRunContentRunner(),
+            wordlist_check=lambda _path: True,
+            step_id="CONTENT-STEP-001",
+        )
+
+    runner = _NeverRunContentRunner()
+    with pytest.raises(ValueError, match="wordlist does not exist"):
+        run_content_discovery_workflow(
+            plan_path,
+            _scope,
+            runner=runner,
+            wordlist_check=lambda _path: False,
+            step_id="CONTENT-STEP-001",
+        )
+    assert runner.called is False
 
 
 def test_content_run_refuses_target_not_in_scope(tmp_path: Path) -> None:
@@ -334,6 +405,9 @@ def test_content_run_timeout_without_output_records_started_and_timed_out(
     assert result.commands_completed == 0
     assert result.commands_timed_out == 1
     assert result.partial_artifacts_imported == 0
+    assert result.completed_artifacts_imported == 0
+    assert result.selected_step_id is None
+    assert result.selected_origin is None
     assert result.timed_out_step_id == "CONTENT-STEP-001"
     assert result.timed_out_origin == "http://10.10.10.10/"
     assert result.artifact_paths == []
@@ -372,6 +446,7 @@ def test_content_run_timeout_imports_nonempty_partial_output(
     assert result.commands_completed == 0
     assert result.commands_timed_out == 1
     assert result.partial_artifacts_imported == 1
+    assert result.completed_artifacts_imported == 0
     assert len(result.artifact_paths) == 1
     assert Path(result.artifact_paths[0]).is_file()
     assert partial[0]["tags"] == ["partial", "timed_out"]
@@ -381,6 +456,46 @@ def test_content_run_timeout_imports_nonempty_partial_output(
         for path in project["project_state"]["discovered_paths"]
     )
     assert (input_dir / "report.md").is_file()
+
+
+def test_content_run_preserves_completed_first_step_when_second_times_out(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, input_dir, output_dir = _written_plan(tmp_path)
+
+    with pytest.raises(ContentDiscoveryExecutionIncomplete) as exc_info:
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_SuccessThenTimeoutContentRunner(write_partial=True),
+            wordlist_check=lambda _path: True,
+        )
+
+    result = exc_info.value.result
+    execution_json, _execution_markdown = write_content_discovery_execution_result(
+        result,
+        output_dir,
+    )
+    metadata = json.loads(execution_json.read_text(encoding="utf-8"))
+    manifest = json.loads((input_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+    gobuster_artifacts = [
+        artifact for artifact in manifest["artifacts"] if artifact["type"] == "gobuster"
+    ]
+
+    assert result.commands_started == 2
+    assert result.commands_completed == 1
+    assert result.commands_timed_out == 1
+    assert result.completed_artifacts_imported == 1
+    assert result.partial_artifacts_imported == 1
+    assert result.timed_out_step_id == "CONTENT-STEP-002"
+    assert result.timed_out_origin == "http://10.10.10.10:65524/"
+    assert len(result.artifact_paths) == 2
+    assert len(gobuster_artifacts) == 2
+    assert any(artifact["tags"] == [] for artifact in gobuster_artifacts)
+    assert any(artifact["tags"] == ["partial", "timed_out"] for artifact in gobuster_artifacts)
+    assert metadata["completed_artifacts_imported"] == 1
+    assert (input_dir / "report.md").is_file()
+    assert (input_dir / "project_state.json").is_file()
 
 
 class _MockContentRunner:
@@ -404,6 +519,15 @@ class _MockContentRunner:
             simulated=False,
             error=None,
         )
+
+
+class _RecordingContentRunner(_MockContentRunner):
+    def __init__(self) -> None:
+        self.commands = []
+
+    def run(self, command):
+        self.commands.append(command)
+        return super().run(command)
 
 
 class _NeverRunContentRunner:
@@ -436,6 +560,40 @@ class _TimeoutContentRunner:
             started_at="2026-06-11T00:00:00+00:00",
             ended_at="2026-06-11T00:02:00+00:00",
             duration_seconds=120.0,
+            executed=True,
+            simulated=False,
+            error=(
+                f"Content discovery command {command.id} for {command.argv[3]} "
+                f"started and exceeded {command.timeout_seconds} seconds."
+            ),
+        )
+
+
+class _SuccessThenTimeoutContentRunner:
+    def __init__(self, write_partial: bool) -> None:
+        self.write_partial = write_partial
+        self.calls = 0
+
+    def run(self, command):
+        self.calls += 1
+        if self.calls == 1:
+            return _MockContentRunner().run(command)
+        if self.write_partial:
+            Path(command.output_file).write_text(
+                "private (Status: 301) [Size: 169] "
+                "[--> http://10.10.10.10:65524/private/]\n",
+                encoding="utf-8",
+            )
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=None,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-06-11T00:00:00+00:00",
+            ended_at="2026-06-11T00:15:00+00:00",
+            duration_seconds=900.0,
             executed=True,
             simulated=False,
             error=(

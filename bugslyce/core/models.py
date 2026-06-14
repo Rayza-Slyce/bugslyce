@@ -502,7 +502,10 @@ class ReconContentDiscoveryExecutionResult:
     commands_started: int
     commands_completed: int
     commands_timed_out: int
+    selected_step_id: str | None
+    selected_origin: str | None
     partial_artifacts_imported: int
+    completed_artifacts_imported: int
     timed_out_step_id: str | None
     timed_out_origin: str | None
     command_results: list[ReconCommandResult]

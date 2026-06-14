@@ -420,6 +420,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly confirm approved root content discovery execution.",
     )
+    content_run_parser.add_argument(
+        "--step-id",
+        help="Execute only this existing step ID from the approved plan.",
+    )
     content_followup_parser = recon_subparsers.add_parser(
         "content-followup",
         help="Check selected paths already found by content discovery.",
@@ -831,6 +835,7 @@ def _recon(args: argparse.Namespace) -> int:
             result = run_content_discovery_workflow(
                 plan_path=args.plan_path,
                 scope_file=args.scope_file,
+                step_id=args.step_id,
             )
             write_content_discovery_execution_result(
                 result,

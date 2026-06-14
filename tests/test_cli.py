@@ -256,6 +256,7 @@ def test_cli_recon_content_run_help_exits_successfully(capsys) -> None:
     assert "--plan" in captured.out
     assert "--scope" in captured.out
     assert "--confirm" in captured.out
+    assert "--step-id" in captured.out
     assert "--url" not in captured.out
     assert "--wordlist" not in captured.out
 
@@ -269,6 +270,8 @@ def test_cli_recon_content_run_requires_confirm(tmp_path: Path, capsys) -> None:
             str(tmp_path / "content_discovery_plan.json"),
             "--scope",
             str(tmp_path / "scope.md"),
+            "--step-id",
+            "CONTENT-STEP-002",
         ]
     )
 
@@ -363,7 +366,10 @@ def test_cli_recon_content_run_timeout_is_honest(
         commands_started=1,
         commands_completed=0,
         commands_timed_out=1,
+        selected_step_id=None,
+        selected_origin=None,
         partial_artifacts_imported=0,
+        completed_artifacts_imported=0,
         timed_out_step_id="CONTENT-STEP-001",
         timed_out_origin="http://10.10.10.10/",
         command_results=[],
@@ -400,6 +406,71 @@ def test_cli_recon_content_run_timeout_is_honest(
     assert "Commands started: 1" in captured.err
     assert "Commands timed out: 1" in captured.err
     assert "No gobuster command was executed." not in captured.err
+
+
+def test_cli_recon_content_run_forwards_selected_step(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    captured_kwargs = {}
+    result = ReconContentDiscoveryExecutionResult(
+        mode="content-run",
+        plan_path=str(tmp_path / "content_discovery_plan.json"),
+        target="10.10.10.10",
+        profile="lab-root-light",
+        input_dir=str(tmp_path / "private_recon" / "lab"),
+        output_dir=str(tmp_path / "bugslyce-output" / "plan"),
+        origins=["http://10.10.10.10:65524/"],
+        artifact_paths=[],
+        manifest_path=str(tmp_path / "private_recon" / "lab" / "recon_manifest.json"),
+        report_path=str(tmp_path / "private_recon" / "lab" / "report.md"),
+        project_state_path=str(tmp_path / "private_recon" / "lab" / "project_state.json"),
+        execution_count=1,
+        commands_started=1,
+        commands_completed=1,
+        commands_timed_out=0,
+        selected_step_id="CONTENT-STEP-002",
+        selected_origin="http://10.10.10.10:65524/",
+        partial_artifacts_imported=0,
+        completed_artifacts_imported=1,
+        timed_out_step_id=None,
+        timed_out_origin=None,
+        command_results=[],
+        no_recursion=True,
+        no_extensions=True,
+        no_arbitrary_urls=True,
+        no_exploitation=True,
+        warnings=[],
+    )
+
+    def fake_workflow(**kwargs):
+        captured_kwargs.update(kwargs)
+        return result
+
+    monkeypatch.setattr("bugslyce.cli.run_content_discovery_workflow", fake_workflow)
+    monkeypatch.setattr(
+        "bugslyce.cli.write_content_discovery_execution_result",
+        lambda *_args: (tmp_path / "execution.json", tmp_path / "execution.md"),
+    )
+
+    exit_code = main(
+        [
+            "recon",
+            "content-run",
+            "--plan",
+            result.plan_path,
+            "--scope",
+            str(tmp_path / "scope.md"),
+            "--step-id",
+            "CONTENT-STEP-002",
+            "--confirm",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_kwargs["step_id"] == "CONTENT-STEP-002"
+    assert "Selected step ID: CONTENT-STEP-002" in capsys.readouterr().out
 
 
 def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:

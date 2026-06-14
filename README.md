@@ -390,6 +390,26 @@ authentication, proxy, or arbitrary gobuster options. It does not use
 recursion, ffuf, feroxbuster, dirsearch, form submission, credential brute
 force, or exploitation.
 
+`lab-root-tiny` remains the short smoke/proving profile. `lab-root-light` uses
+the broader approved system wordlist and may take substantially longer. For a
+multi-origin plan, an operator can narrow execution to one existing immutable
+plan step:
+
+```bash
+bugslyce recon content-run \
+  --plan ./bugslyce-output/content-plan/content_discovery_plan.json \
+  --scope ./private_recon/example/scope.md \
+  --step-id CONTENT-STEP-002 \
+  --confirm
+```
+
+The selector cannot add an origin or alter the planned URL, wordlist, flags,
+threads, or output path. Without `--step-id`, all approved plan steps run in
+order. If a later step times out, completed earlier outputs remain imported;
+non-empty partial timeout output is also preserved and labelled. Execution
+metadata records selected step/origin, completed and partial imports, and the
+exact timed-out step/origin.
+
 ### Content-Result Follow-up
 
 BugSlyce can perform bounded HEAD checks for selected paths already present in

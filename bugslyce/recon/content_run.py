@@ -124,6 +124,7 @@ def run_content_discovery_workflow(
     scope_file: Path,
     runner: LiveContentDiscoveryRunner | None = None,
     wordlist_check: Callable[[Path], bool] | None = None,
+    step_id: str | None = None,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
 
@@ -132,6 +133,7 @@ def run_content_discovery_workflow(
     target = validate_explicit_nmap_target_scope(plan.target, scope_file)
     input_dir = Path(plan.input_dir)
     output_dir = Path(plan.output_dir)
+    selected_steps = _select_steps(plan, step_id)
 
     state_before = build_project_state(input_dir)
     if (
@@ -146,7 +148,7 @@ def run_content_discovery_workflow(
             max_origins=max(MAX_CONTENT_PLAN_ORIGINS, len(state_before.http_services)),
         )
     )
-    if any(origin not in current_origins for origin in plan.origins):
+    if any(step.origin not in current_origins for step in selected_steps):
         raise ValueError(
             "Content discovery plan contains an origin not present in current BugSlyce evidence."
         )
@@ -161,12 +163,12 @@ def run_content_discovery_workflow(
     output_dir.mkdir(parents=True, exist_ok=True)
     commands = [
         build_live_content_discovery_command(step, plan)
-        for step in plan.steps
+        for step in selected_steps
     ]
     live_runner = runner or LiveContentDiscoveryRunner(
         output_dir,
         target,
-        set(plan.origins),
+        {step.origin for step in selected_steps},
         plan.profile,
     )
     command_results = []
@@ -190,6 +192,7 @@ def run_content_discovery_workflow(
                 command_results,
                 partial_sources,
                 timed_out_result=result,
+                selected_step_id=step_id,
             )
             raise ContentDiscoveryExecutionIncomplete(result.error or "Content discovery timed out.", execution_result)
         if result.error or result.exit_code != 0:
@@ -210,6 +213,7 @@ def run_content_discovery_workflow(
         command_results,
         artifact_sources,
         timed_out_result=None,
+        selected_step_id=step_id,
     )
 
 
@@ -243,11 +247,16 @@ def render_content_discovery_execution_markdown(
             f"- Original recon directory: `{result.input_dir}`",
             f"- Plan output directory: `{result.output_dir}`",
             f"- Origins executed: {len(result.origins)}",
+            f"- Selected step ID: `{result.selected_step_id or 'all planned steps'}`",
+            f"- Selected origin: `{result.selected_origin or 'all planned origins'}`",
             f"- Commands started: {result.commands_started}",
             f"- Commands completed: {result.commands_completed}",
             f"- Commands timed out: {result.commands_timed_out}",
+            f"- Timed-out step ID: `{result.timed_out_step_id or 'none'}`",
+            f"- Timed-out origin: `{result.timed_out_origin or 'none'}`",
             f"- Gobuster artifacts written: {len(result.artifact_paths)}",
             f"- Partial artifacts imported: {result.partial_artifacts_imported}",
+            f"- Completed artifacts imported: {result.completed_artifacts_imported}",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
             "",
@@ -275,11 +284,16 @@ def render_content_discovery_execution_summary(
             f"Plan path: {result.plan_path}",
             f"Original recon directory: {result.input_dir}",
             f"Planned/executed origins: {len(result.origins)}",
+            f"Selected step ID: {result.selected_step_id or 'all planned steps'}",
+            f"Selected origin: {result.selected_origin or 'all planned origins'}",
             f"Commands started: {result.commands_started}",
             f"Commands completed: {result.commands_completed}",
             f"Commands timed out: {result.commands_timed_out}",
+            f"Timed-out step ID: {result.timed_out_step_id or 'none'}",
+            f"Timed-out origin: {result.timed_out_origin or 'none'}",
             f"Gobuster artifacts written: {len(result.artifact_paths)}",
             f"Partial artifacts imported: {result.partial_artifacts_imported}",
+            f"Completed artifacts imported: {result.completed_artifacts_imported}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
             (
@@ -451,6 +465,7 @@ def _finalize_execution(
     command_results,
     artifact_sources: list[tuple[str, Path, bool]],
     timed_out_result,
+    selected_step_id: str | None,
 ) -> ReconContentDiscoveryExecutionResult:
     input_dir = Path(plan.input_dir)
     output_dir = Path(plan.output_dir)
@@ -502,7 +517,16 @@ def _finalize_execution(
         commands_started=len(command_results),
         commands_completed=completed,
         commands_timed_out=timed_out,
+        selected_step_id=selected_step_id,
+        selected_origin=(
+            step_by_id[selected_step_id].origin
+            if selected_step_id is not None
+            else None
+        ),
         partial_artifacts_imported=sum(partial for _step, _path, partial in copied),
+        completed_artifacts_imported=sum(
+            not partial for _step, _path, partial in copied
+        ),
         timed_out_step_id=timed_out_result.command_id if timed_out_result else None,
         timed_out_origin=(
             step_by_id[timed_out_result.command_id].origin
@@ -516,6 +540,20 @@ def _finalize_execution(
         no_exploitation=True,
         warnings=project_state.warnings,
     )
+
+
+def _select_steps(
+    plan: ContentDiscoveryPlan,
+    step_id: str | None,
+) -> list[ContentDiscoveryStep]:
+    if step_id is None:
+        return list(plan.steps)
+    matches = [step for step in plan.steps if step.step_id == step_id]
+    if not matches:
+        raise ValueError(
+            f"Content discovery step '{step_id}' is not present in the approved plan."
+        )
+    return matches
 
 
 def _is_timeout_result(result) -> bool:
