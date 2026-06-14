@@ -87,6 +87,22 @@ bugslyce project --help
 bugslyce recon --help
 ```
 
+## Local Readiness Check
+
+```bash
+bugslyce doctor
+```
+
+Doctor checks the local Python runtime, BugSlyce package resources, virtual
+environment status, command availability for `nmap`, `curl`, and `gobuster`,
+and the bundled and system content-discovery wordlists. It uses import,
+filesystem, and `PATH` inspection only. It does not execute those tools, run
+recon, create files, or make network requests.
+
+Missing `gobuster` or the larger dirbuster wordlist limits content-discovery
+profiles but does not make the rest of BugSlyce unusable. Unsupported Python
+or a missing bundled `lab-root-tiny` resource is reported as not ready.
+
 ## Running The Demo
 
 ```bash

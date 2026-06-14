@@ -16,6 +16,7 @@ from bugslyce.config import (
     reset_config,
 )
 from bugslyce.core.project import build_project_state
+from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.project_session import (
@@ -135,6 +136,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "wizard":
         print(render_wizard())
         return 0
+    if args.command == "doctor":
+        report = build_doctor_report()
+        print(render_doctor_text(report))
+        return doctor_exit_code(report)
 
     parser.print_help()
     return 1
@@ -164,6 +169,10 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "wizard",
         help="Show safe guided workflow previews without running recon.",
+    )
+    subparsers.add_parser(
+        "doctor",
+        help="Check local BugSlyce readiness without executing tools.",
     )
 
     config_parser = subparsers.add_parser(
