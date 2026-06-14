@@ -19,10 +19,12 @@ from bugslyce.core.project import build_project_state
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.project_session import (
+    build_project_next,
     initialize_project,
     inspect_project_status,
     load_project,
     render_project_init_summary,
+    render_project_next,
     render_project_show,
     render_project_status,
 )
@@ -210,6 +212,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Inspect project recon progress without running recon.",
     )
     project_status_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
+    project_next_parser = project_subparsers.add_parser(
+        "next",
+        help="Preview the next safe project action without executing it.",
+    )
+    project_next_parser.add_argument(
         "--project",
         dest="project_file",
         required=True,
@@ -687,9 +700,21 @@ def _project(args: argparse.Namespace) -> int:
         print(render_project_status(result))
         return 0
 
+    if args.project_command == "next":
+        try:
+            result = build_project_next(args.project_file)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_next(result))
+        return 0
+
     print(
         "Error: project command required. Use 'bugslyce project init --help', "
-        "'bugslyce project show --help', or 'bugslyce project status --help'.",
+        "'bugslyce project show --help', 'bugslyce project status --help', "
+        "or 'bugslyce project next --help'.",
         file=sys.stderr,
     )
     return 2

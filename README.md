@@ -147,6 +147,33 @@ When a recon manifest exists, project status reuses the local recon status
 advisor and the saved scope file. If recon has not started, it reports that no
 pack exists and suggests a first safe planning or scoped discovery action.
 
+For a guided copy/paste preview of the next bounded action:
+
+```bash
+bugslyce project next \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json
+```
+
+`project next` reads the saved project, local recon manifest, parsed evidence,
+and status signals. It prints the recommended next safe action and an exact
+command preview using the saved target, scope, and output paths. Live command
+previews retain `--confirm`. Content discovery execution is suggested only
+when an expected project-derived plan has BugSlyce planner provenance,
+matching target/profile, and matching recon input directory.
+
+When no automated follow-up appears pending, guidance switches to manual
+review of `report.md` and an optional evidence-pack export. If
+`lab-root-tiny` completed without `lab-root-light`, it can also preview the
+optional broader planning command. Suggested commands never add recursion,
+arbitrary wordlists, brute force, exploitation, NSE scripts, UDP scanning,
+form submission, or external LLM uploads.
+
+The guided command does not create plan directories, update recon status
+files, mutate evidence, execute a command, or make a network request.
+Operators must review scope and manually run any preview they choose. This is
+the deterministic foundation for a future interactive wizard, not an
+interactive wizard itself.
+
 Project management performs no live recon, subprocess execution, or network
 requests. Project files are local JSON only and do not store API keys,
 credentials, provider tokens, or other secrets. This session layer is

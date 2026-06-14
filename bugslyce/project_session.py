@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 import re
+import shlex
 
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.status import (
@@ -53,6 +54,28 @@ class ProjectStatusResult:
     status_json_path: str | None
     status_markdown_path: str | None
     next_action: str
+
+
+@dataclass(frozen=True)
+class GuidedProjectAction:
+    """One deterministic, non-executing project guidance item."""
+
+    id: str
+    title: str
+    command_preview: str
+    optional: bool = False
+
+
+@dataclass(frozen=True)
+class ProjectNextResult:
+    """Read-only guided next-step result for a saved project."""
+
+    project: BugSlyceProject
+    project_file: str
+    recon_pack_exists: bool
+    status_summary: str
+    recommended_action: GuidedProjectAction
+    optional_actions: list[GuidedProjectAction]
 
 
 def initialize_project(
@@ -188,6 +211,180 @@ def inspect_project_status(project_file: Path) -> ProjectStatusResult:
     )
 
 
+def build_project_next(project_file: Path) -> ProjectNextResult:
+    """Build safe command previews from a project and its local evidence."""
+
+    project_file = project_file.expanduser().resolve()
+    project = load_project(project_file)
+    output_dir = Path(project.output_dir)
+    scope_file = Path(project.scope_file)
+    manifest_path = output_dir / "recon_manifest.json"
+    if not manifest_path.is_file():
+        return ProjectNextResult(
+            project=project,
+            project_file=str(project_file),
+            recon_pack_exists=False,
+            status_summary="No recon pack exists yet.",
+            recommended_action=_nmap_discovery_action(project),
+            optional_actions=[],
+        )
+
+    status = build_recon_status(output_dir, scope_file)
+    if status.target != project.target:
+        raise ValueError(
+            "Project target does not match the target in recon_manifest.json."
+        )
+    phase_status = {phase.id: phase.status for phase in status.phases}
+    detected = lambda phase_id: phase_status.get(phase_id) == "detected"
+    artifact_names = _manifest_artifact_names(manifest_path)
+    has_discovery = any(
+        name in {"nmap-allports.txt", "nmap-top1000.txt"}
+        for name in artifact_names
+    )
+    has_gobuster = any(name.startswith("gobuster-") for name in artifact_names)
+    status_summary = (
+        f"Detected phases: {sum(value == 'detected' for value in phase_status.values())}/"
+        f"{len(phase_status)}; HTTP services: "
+        f"{status.artifact_overview.get('http_services', 0)}; unique discovered paths: "
+        f"{status.artifact_overview.get('unique_discovered_paths', 0)}."
+    )
+
+    if has_discovery and not detected("nmap_services"):
+        recommended = _live_action(
+            "nmap-services",
+            "Run service/version detection on already discovered open TCP ports.",
+            [
+                ".venv/bin/bugslyce",
+                "recon",
+                "nmap-services",
+                "--input-dir",
+                project.output_dir,
+                "--scope",
+                project.scope_file,
+                "--confirm",
+            ],
+        )
+    elif (
+        detected("nmap_services")
+        and status.artifact_overview.get("http_services", 0) > 0
+        and not detected("http_metadata")
+    ):
+        recommended = _live_action(
+            "http-metadata",
+            "Collect bounded metadata from the discovered HTTP services.",
+            _input_scope_confirm_argv("http-metadata", project),
+        )
+    elif (
+        detected("http_metadata")
+        and not detected("path_followup")
+        and not has_gobuster
+    ):
+        recommended = _live_action(
+            "path-followup",
+            "Check same-origin paths already present in collected HTTP evidence.",
+            _input_scope_confirm_argv("path-followup", project),
+        )
+    elif status.next_actions[0].find("content-followup") != -1:
+        recommended = _live_action(
+            "content-followup",
+            "Follow up eligible paths already found by content discovery.",
+            _input_scope_confirm_argv("content-followup", project),
+        )
+    elif status.next_actions[0].find("body-fetch") != -1:
+        recommended = _live_action(
+            "body-fetch",
+            "Fetch bounded bodies for eligible high-signal followed paths.",
+            _input_scope_confirm_argv("body-fetch", project),
+        )
+    elif status.artifact_overview.get("http_services", 0) > 0 and not has_gobuster:
+        tiny_plan = _validated_plan_path(project, "lab-root-tiny")
+        if tiny_plan is not None:
+            recommended = _live_action(
+                "content-run-tiny",
+                "Run the reviewed lab-root-tiny content discovery plan.",
+                [
+                    ".venv/bin/bugslyce",
+                    "recon",
+                    "content-run",
+                    "--plan",
+                    str(tiny_plan),
+                    "--scope",
+                    project.scope_file,
+                    "--confirm",
+                ],
+            )
+        else:
+            recommended = _content_plan_action(project, "lab-root-tiny")
+    else:
+        recommended = GuidedProjectAction(
+            id="manual-review",
+            title="Review the Operator Summary and raw evidence manually.",
+            command_preview=_format_command(
+                ["less", str(output_dir / "report.md")]
+            ),
+        )
+
+    optional_actions: list[GuidedProjectAction] = []
+    profiles = status.workflow_summary.content_discovery_profiles
+    if "lab-root-tiny" in profiles and "lab-root-light" not in profiles:
+        light_plan = _validated_plan_path(project, "lab-root-light")
+        if light_plan is not None:
+            optional_actions.append(
+                GuidedProjectAction(
+                    id="content-run-light",
+                    title=(
+                        "Optional broader root discovery: inspect the saved "
+                        "lab-root-light plan, then run one immutable step at a time."
+                    ),
+                    command_preview=_format_command(
+                        [
+                            ".venv/bin/bugslyce",
+                            "recon",
+                            "content-run",
+                            "--plan",
+                            str(light_plan),
+                            "--scope",
+                            project.scope_file,
+                            "--step-id",
+                            "CONTENT-STEP-001",
+                            "--confirm",
+                        ]
+                    ),
+                    optional=True,
+                )
+            )
+        else:
+            optional_actions.append(_content_plan_action(project, "lab-root-light", optional=True))
+    if recommended.id == "manual-review":
+        optional_actions.append(
+            GuidedProjectAction(
+                id="export",
+                title="Optionally create a portable evidence pack after review.",
+                command_preview=_format_command(
+                    [
+                        ".venv/bin/bugslyce",
+                        "recon",
+                        "export",
+                        "--input-dir",
+                        project.output_dir,
+                        "--output",
+                        f"{project.output_dir}-evidence-pack.zip",
+                    ]
+                ),
+                optional=True,
+            )
+        )
+
+    return ProjectNextResult(
+        project=project,
+        project_file=str(project_file),
+        recon_pack_exists=True,
+        status_summary=status_summary,
+        recommended_action=recommended,
+        optional_actions=optional_actions,
+    )
+
+
 def render_project_init_summary(project: BugSlyceProject, project_path: Path) -> str:
     """Render project creation output."""
 
@@ -263,6 +460,198 @@ def render_project_status(result: ProjectStatusResult) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def render_project_next(result: ProjectNextResult) -> str:
+    """Render guided command previews without executing them."""
+
+    lines = [
+        "BugSlyce guided next step",
+        f"Project name: {result.project.name}",
+        f"Target: {result.project.target}",
+        f"Recon pack exists: {str(result.recon_pack_exists).lower()}",
+        f"Current status summary: {result.status_summary}",
+        "",
+        "Recommended next safe action:",
+        f"- {result.recommended_action.title}",
+        "",
+        "Suggested command preview:",
+        result.recommended_action.command_preview,
+    ]
+    for action in result.optional_actions:
+        lines.extend(
+            [
+                "",
+                "Optional safe action:",
+                f"- {action.title}",
+                "",
+                "Suggested command preview:",
+                action.command_preview,
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Safety reminder: review current scope and command details before running anything.",
+            "Suggested commands are previews only.",
+            "No commands were executed.",
+            "No network requests were made.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _nmap_discovery_action(project: BugSlyceProject) -> GuidedProjectAction:
+    profile = project.default_profiles.get("tcp_discovery", "lab-tcp-full")
+    return _live_action(
+        "nmap-discover",
+        "Start with scoped full TCP discovery.",
+        [
+            ".venv/bin/bugslyce",
+            "recon",
+            "nmap-discover",
+            "--target",
+            project.target,
+            "--scope",
+            project.scope_file,
+            "--profile",
+            profile,
+            "--output",
+            project.output_dir,
+            "--confirm",
+        ],
+    )
+
+
+def _content_plan_action(
+    project: BugSlyceProject,
+    profile: str,
+    optional: bool = False,
+) -> GuidedProjectAction:
+    suffix = "tiny" if profile == "lab-root-tiny" else "light"
+    title = (
+        "Create a reviewed lab-root-tiny content discovery plan."
+        if profile == "lab-root-tiny"
+        else (
+            "Optional broader root discovery: create a lab-root-light plan and "
+            "run selected steps one origin at a time."
+        )
+    )
+    return GuidedProjectAction(
+        id=f"content-plan-{suffix}",
+        title=title,
+        command_preview=_format_command(
+            [
+                ".venv/bin/bugslyce",
+                "recon",
+                "content-plan",
+                "--input-dir",
+                project.output_dir,
+                "--scope",
+                project.scope_file,
+                "--profile",
+                profile,
+                "--output",
+                f"{project.output_dir}-content-plan-{suffix}",
+            ]
+        ),
+        optional=optional,
+    )
+
+
+def _live_action(action_id: str, title: str, argv: list[str]) -> GuidedProjectAction:
+    if "--confirm" not in argv:
+        raise ValueError(f"Live command preview '{action_id}' must include --confirm.")
+    return GuidedProjectAction(
+        id=action_id,
+        title=title,
+        command_preview=_format_command(argv),
+    )
+
+
+def _input_scope_confirm_argv(command: str, project: BugSlyceProject) -> list[str]:
+    return [
+        ".venv/bin/bugslyce",
+        "recon",
+        command,
+        "--input-dir",
+        project.output_dir,
+        "--scope",
+        project.scope_file,
+        "--confirm",
+    ]
+
+
+def _validated_plan_path(
+    project: BugSlyceProject,
+    profile: str,
+) -> Path | None:
+    suffix = "tiny" if profile == "lab-root-tiny" else "light"
+    plan_path = Path(f"{project.output_dir}-content-plan-{suffix}") / "content_discovery_plan.json"
+    if not plan_path.is_file():
+        return None
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if (
+        payload.get("created_by") != "bugslyce-content-planner"
+        or payload.get("target") != project.target
+        or payload.get("profile") != profile
+    ):
+        return None
+    steps = payload.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return None
+    if profile == "lab-root-light" and not any(
+        isinstance(step, dict) and step.get("id") == "CONTENT-STEP-001"
+        for step in steps
+    ):
+        return None
+    input_dir = payload.get("input_dir")
+    if not isinstance(input_dir, str):
+        return None
+    if Path(input_dir).expanduser().resolve() != Path(project.output_dir):
+        return None
+    return plan_path.resolve()
+
+
+def _manifest_artifact_names(manifest_path: Path) -> list[str]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not parse recon manifest {manifest_path}: {exc}") from exc
+    artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+    if not isinstance(artifacts, list):
+        raise ValueError("Recon manifest field 'artifacts' must be a list.")
+    return [
+        Path(str(artifact.get("file", ""))).name
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+    ]
+
+
+def _format_command(argv: list[str]) -> str:
+    quoted = [shlex.quote(value) for value in argv]
+    if len(quoted) <= 3:
+        return " ".join(quoted)
+    groups = [" ".join(quoted[:3])]
+    index = 3
+    while index < len(quoted):
+        current = quoted[index]
+        if (
+            current.startswith("--")
+            and index + 1 < len(quoted)
+            and not quoted[index + 1].startswith("--")
+        ):
+            groups.append(f"{current} {quoted[index + 1]}")
+            index += 2
+        else:
+            groups.append(current)
+            index += 1
+    return " \\\n  ".join(groups)
 
 
 def _validate_target(target: str) -> str:
