@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from bugslyce.branding import get_banner
+
 
 def render_wizard() -> str:
     """Render preview-only guidance without inspecting or changing local state."""
 
     return "\n".join(
         [
+            get_banner(),
+            "",
             "BugSlyce guided mode",
-            "local-first recon triage for authorised testing",
+            "Local-first recon triage for authorised testing.",
             "",
             "This guided mode currently prints safe workflow guidance only.",
             "",

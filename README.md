@@ -128,6 +128,12 @@ any suggested command.
 This command is groundwork for a future interactive guided mode. It does not
 prompt for targets or execute suggested actions.
 
+Guided mode includes a lightweight boxed BugSlyce wordmark with the
+`by Rayza Slyce` credit. The local-first tagline remains in the guidance below
+the wordmark. This branding is display-only: it is not added to recon
+commands, reports, status output, exports, project guidance, or
+machine-readable files.
+
 ## Project Sessions
 
 BugSlyce projects are small local JSON session files that remember a target,

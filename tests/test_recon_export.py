@@ -233,6 +233,7 @@ def test_cli_export_succeeds_without_live_activity(tmp_path: Path, capsys) -> No
     captured = capsys.readouterr()
 
     assert exit_code == 0
+    assert "by Rayza Slyce" not in captured.out
     assert output_path.is_file()
     assert "BugSlyce evidence pack export complete" in captured.out
     assert "No live commands were executed." in captured.out

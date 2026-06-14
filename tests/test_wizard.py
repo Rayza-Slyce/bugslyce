@@ -16,8 +16,11 @@ def test_wizard_prints_safe_guided_workflow(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 0
+    assert captured.out.startswith("+------------------------------------------------+")
+    assert "by Rayza Slyce" in captured.out
+    assert "|                   BugSlyce                     |" not in captured.out
     assert "BugSlyce guided mode" in captured.out
-    assert "local-first recon triage for authorised testing" in captured.out
+    assert "Local-first recon triage for authorised testing." in captured.out
     assert "bugslyce project init" in captured.out
     assert "bugslyce project status" in captured.out
     assert "bugslyce project next" in captured.out

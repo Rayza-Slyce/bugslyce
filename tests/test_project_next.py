@@ -201,6 +201,7 @@ def test_project_next_cli_prints_guidance_and_safety_lines(
     assert "Suggested commands are previews only." in captured.out
     assert "No commands were executed." in captured.out
     assert "No network requests were made." in captured.out
+    assert "by Rayza Slyce" not in captured.out
 
 
 def test_project_next_help_exists(capsys) -> None:

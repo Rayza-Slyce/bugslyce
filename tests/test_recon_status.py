@@ -308,6 +308,7 @@ def test_cli_status_writes_outputs_and_prints_local_only_summary(
     assert "Target: 10.10.10.10" in captured.out
     assert "No commands were executed." in captured.out
     assert "No network requests were made." in captured.out
+    assert "by Rayza Slyce" not in captured.out
     assert (input_dir / "recon_status.json").is_file()
     assert (input_dir / "recon_status.md").is_file()
 
