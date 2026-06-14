@@ -12,6 +12,7 @@ from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.core.scope import parse_scope, scope_entry_target
 from bugslyce.reports.provenance import WorkflowProvenance, build_workflow_provenance
+from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -31,6 +32,8 @@ class ReconStatusResult:
 
     target: str
     input_dir: str
+    source_input_dir: str
+    generated_at: str
     manifest_profile: str | None
     workflow_summary: WorkflowProvenance
     scope_file: str | None
@@ -46,6 +49,7 @@ class ReconStatusResult:
 def build_recon_status(
     input_dir: Path,
     scope_file: Path | None = None,
+    clock: Clock | None = None,
 ) -> ReconStatusResult:
     """Inspect a recon directory without executing commands or rewriting evidence."""
 
@@ -102,6 +106,8 @@ def build_recon_status(
     return ReconStatusResult(
         target=target,
         input_dir=str(input_dir),
+        source_input_dir=str(input_dir),
+        generated_at=utc_now_iso(clock),
         manifest_profile=profile,
         workflow_summary=workflow_summary,
         scope_file=str(resolved_scope) if resolved_scope else None,
@@ -144,6 +150,8 @@ def render_recon_status_markdown(result: ReconStatusResult) -> str:
 
     lines = [
         "# BugSlyce Recon Status",
+        "",
+        f"Generated at: `{result.generated_at}`",
         "",
         "## Target",
         "",
@@ -220,6 +228,7 @@ def render_recon_status_summary(
     detected_count = sum(phase.status == "detected" for phase in result.phases)
     lines = [
         "BugSlyce recon status complete",
+        f"Generated at: {result.generated_at}",
         f"Target: {result.target}",
         f"Input directory: {result.input_dir}",
         f"Manifest profile (raw): {result.manifest_profile or 'not recorded'}",

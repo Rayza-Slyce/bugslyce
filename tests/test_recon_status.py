@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 
@@ -22,6 +23,7 @@ FIXTURE = (
     / "demo_recon"
     / "lab_raw_recon_pack"
 )
+FIXED_TIME = datetime(2026, 6, 14, 13, 45, 12, tzinfo=timezone.utc)
 
 
 def test_status_refuses_missing_input_directory(tmp_path: Path) -> None:
@@ -63,6 +65,20 @@ def test_status_detects_fixture_phases_and_counts(tmp_path: Path) -> None:
     assert result.artifact_overview["open_ports"] == 3
     assert result.artifact_overview["http_services"] == 2
     assert result.artifact_overview["gobuster_outputs"] == 3
+
+
+def test_status_writes_generated_at_and_source_input_dir(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path)
+
+    result = build_recon_status(input_dir, clock=lambda: FIXED_TIME)
+    json_path, markdown_path = write_recon_status(result, input_dir)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    markdown = markdown_path.read_text(encoding="utf-8")
+
+    assert result.generated_at == "2026-06-14T13:45:12Z"
+    assert payload["generated_at"] == "2026-06-14T13:45:12Z"
+    assert payload["source_input_dir"] == str(input_dir.resolve())
+    assert "Generated at: `2026-06-14T13:45:12Z`" in markdown
 
 
 def test_status_cleans_profile_display_and_reports_raw_unique_duplicate_paths(

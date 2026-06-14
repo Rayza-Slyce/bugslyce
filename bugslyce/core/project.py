@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime, timezone
 import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
@@ -31,6 +30,7 @@ from bugslyce.parsers.manifest import parse_recon_manifest
 from bugslyce.parsers.notes import parse_notes
 from bugslyce.parsers.subdomains import parse_subdomains
 from bugslyce.parsers.urls import parse_urls
+from bugslyce.time_utils import utc_now_iso
 
 
 InputParser = Callable[[Path], object]
@@ -241,7 +241,7 @@ def build_project_state(input_dir: Path) -> ProjectState:
         recon_manifest=manifest,
         evidence=evidence,
         warnings=warnings,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=utc_now_iso(),
     )
 
 

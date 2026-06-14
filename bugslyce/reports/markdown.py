@@ -42,6 +42,8 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     lines: list[str] = [
         "# BugSlyce Recon Pack",
         "",
+        f"Generated at: `{project_state.generated_at}`",
+        "",
         "This is an evidence-grounded recon pack built from structured local inputs. "
         "Candidates are manual review leads, priority means manual attention priority rather than severity, "
         "and no confirmed findings are claimed.",

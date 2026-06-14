@@ -14,6 +14,7 @@ from bugslyce.recon.status import (
     render_recon_status_summary,
     write_recon_status,
 )
+from bugslyce.time_utils import Clock, utc_now_iso
 
 
 PROJECT_FILENAME = "bugslyce_project.json"
@@ -37,6 +38,7 @@ class BugSlyceProject:
     output_dir: str
     created_by: str
     default_profiles: dict[str, str]
+    created_at: str | None
     notes: list[str] = field(default_factory=list)
 
 
@@ -59,6 +61,7 @@ def initialize_project(
     scope_file: Path,
     output_dir: Path,
     force: bool = False,
+    clock: Clock | None = None,
 ) -> tuple[BugSlyceProject, Path]:
     """Validate and write one local project file."""
 
@@ -91,6 +94,7 @@ def initialize_project(
         output_dir=str(output_dir),
         created_by="bugslyce",
         default_profiles=dict(DEFAULT_PROFILES),
+        created_at=utc_now_iso(clock),
         notes=[],
     )
     project_path.write_text(
@@ -145,6 +149,7 @@ def load_project(project_file: Path) -> BugSlyceProject:
         output_dir=str(output_dir),
         created_by=_required_text(payload, "created_by"),
         default_profiles=dict(raw_profiles),
+        created_at=_optional_text(payload.get("created_at")),
         notes=list(raw_notes),
     )
 
@@ -194,6 +199,7 @@ def render_project_init_summary(project: BugSlyceProject, project_path: Path) ->
             f"Scope file: {project.scope_file}",
             f"Output directory: {project.output_dir}",
             f"Project file path: {project_path}",
+            f"Created at: {project.created_at or 'not recorded'}",
             "No commands were executed.",
             "No network requests were made.",
         ]
@@ -216,6 +222,7 @@ def render_project_show(project: BugSlyceProject, project_file: Path) -> str:
             f"Scope file: {project.scope_file}",
             f"Output directory: {project.output_dir}",
             f"Created by: {project.created_by}",
+            f"Created at: {project.created_at or 'not recorded'}",
             f"Default profiles: {profiles}",
             f"Notes: {len(project.notes)}",
             "No commands were executed.",
@@ -276,3 +283,10 @@ def _required_text(payload: dict[str, object], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Project field '{key}' is required.")
     return value.strip()
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None

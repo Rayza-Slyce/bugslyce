@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import subprocess
 
@@ -20,6 +20,7 @@ from bugslyce.recon.nmap_profiles import (
     validate_live_nmap_discovery_command,
     validate_live_nmap_service_scan_command,
 )
+from bugslyce.time_utils import format_utc_iso, utc_now
 
 
 class SimulatedReconRunner:
@@ -31,9 +32,9 @@ class SimulatedReconRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Simulate one command result without invoking any external process."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_recon_command(command, self.planned_output_dir)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = "; ".join(validation.errors) if validation.errors else None
         return ReconCommandResult(
             command_id=command.id,
@@ -42,8 +43,8 @@ class SimulatedReconRunner:
             stdout_path=None,
             stderr_path=None,
             output_file=command.output_file,
-            started_at=started.isoformat(),
-            ended_at=ended.isoformat(),
+            started_at=format_utc_iso(started),
+            ended_at=format_utc_iso(ended),
             duration_seconds=max(0.0, (ended - started).total_seconds()),
             executed=False,
             simulated=True,
@@ -60,10 +61,10 @@ class LiveCurlHeaderRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run only the approved curl header argv shape."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_curl_header_command(command, self.planned_output_dir)
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -85,7 +86,7 @@ class LiveCurlHeaderRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -95,7 +96,7 @@ class LiveCurlHeaderRunner:
                 error=f"Curl header request exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -109,7 +110,7 @@ class LiveCurlHeaderRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -130,10 +131,10 @@ class LiveNmapDiscoveryRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated nmap TCP discovery command."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_nmap_discovery_command(command, self.planned_output_dir)
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -155,7 +156,7 @@ class LiveNmapDiscoveryRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -165,7 +166,7 @@ class LiveNmapDiscoveryRunner:
                 error=f"Nmap discovery exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -179,7 +180,7 @@ class LiveNmapDiscoveryRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Nmap exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -204,13 +205,13 @@ class LiveNmapServiceRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated nmap service/version command."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_nmap_service_scan_command(
             command,
             self.planned_output_dir,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -232,7 +233,7 @@ class LiveNmapServiceRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -242,7 +243,7 @@ class LiveNmapServiceRunner:
                 error=f"Nmap service scan exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -256,7 +257,7 @@ class LiveNmapServiceRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Nmap exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -284,7 +285,7 @@ class LiveHTTPMetadataRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated curl metadata request."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_http_metadata_command(
             command,
             self.output_dir,
@@ -292,7 +293,7 @@ class LiveHTTPMetadataRunner:
             self.allowed_origins,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -314,7 +315,7 @@ class LiveHTTPMetadataRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -324,7 +325,7 @@ class LiveHTTPMetadataRunner:
                 error=f"HTTP metadata request exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -338,7 +339,7 @@ class LiveHTTPMetadataRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -368,7 +369,7 @@ class LivePathFollowupRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated discovered-path HEAD request."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_path_followup_command(
             command,
             self.output_dir,
@@ -377,7 +378,7 @@ class LivePathFollowupRunner:
             self.allowed_urls,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -399,7 +400,7 @@ class LivePathFollowupRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -409,7 +410,7 @@ class LivePathFollowupRunner:
                 error=f"Discovered-path follow-up exceeded {command.timeout_seconds} seconds.",
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -423,7 +424,7 @@ class LivePathFollowupRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -453,7 +454,7 @@ class LiveContentDiscoveryRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated lab-root-light gobuster command."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_content_discovery_command(
             command,
             self.output_dir,
@@ -462,7 +463,7 @@ class LiveContentDiscoveryRunner:
             self.profile,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -484,7 +485,7 @@ class LiveContentDiscoveryRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -498,7 +499,7 @@ class LiveContentDiscoveryRunner:
                 executed=True,
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -512,7 +513,7 @@ class LiveContentDiscoveryRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Gobuster exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -542,7 +543,7 @@ class LiveContentFollowupRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated content-result HEAD request."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_content_followup_command(
             command,
             self.output_dir,
@@ -551,7 +552,7 @@ class LiveContentFollowupRunner:
             self.allowed_urls,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -573,7 +574,7 @@ class LiveContentFollowupRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -584,7 +585,7 @@ class LiveContentFollowupRunner:
                 executed=True,
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -598,7 +599,7 @@ class LiveContentFollowupRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -628,7 +629,7 @@ class LiveBodyFetchRunner:
     def run(self, command: ReconCommand) -> ReconCommandResult:
         """Run one validated selective body-fetch request."""
 
-        started = datetime.now(timezone.utc)
+        started = utc_now()
         validation = validate_live_body_fetch_command(
             command,
             self.output_dir,
@@ -637,7 +638,7 @@ class LiveBodyFetchRunner:
             self.allowed_urls,
         )
         if not validation.valid:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -659,7 +660,7 @@ class LiveBodyFetchRunner:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -670,7 +671,7 @@ class LiveBodyFetchRunner:
                 executed=True,
             )
         except OSError as exc:
-            ended = datetime.now(timezone.utc)
+            ended = utc_now()
             return _live_result(
                 command,
                 started,
@@ -684,7 +685,7 @@ class LiveBodyFetchRunner:
         if completed.stderr:
             stderr_path.write_text(completed.stderr, encoding="utf-8")
             stderr_file = str(stderr_path)
-        ended = datetime.now(timezone.utc)
+        ended = utc_now()
         error = None if completed.returncode == 0 else f"Curl exited with code {completed.returncode}."
         return _live_result(
             command,
@@ -712,8 +713,8 @@ def _live_result(
         stdout_path=None,
         stderr_path=stderr_path,
         output_file=command.output_file,
-        started_at=started.isoformat(),
-        ended_at=ended.isoformat(),
+        started_at=format_utc_iso(started),
+        ended_at=format_utc_iso(ended),
         duration_seconds=max(0.0, (ended - started).total_seconds()),
         executed=exit_code is not None if executed is None else executed,
         simulated=False,

@@ -152,6 +152,28 @@ requests. Project files are local JSON only and do not store API keys,
 credentials, provider tokens, or other secrets. This session layer is
 groundwork for a future guided wizard mode rather than a database.
 
+## Timestamp Provenance
+
+BugSlyce writes operator-facing metadata timestamps in UTC ISO-8601 format
+with seconds precision and a trailing `Z`, for example
+`2026-06-14T13:45:12Z`.
+
+New project files include `created_at`. Recon status files include
+`generated_at` and `source_input_dir`. Evidence export manifests include
+`exported_at`, and reports display the generation time already recorded in
+`project_state.json`. Structured command results use the same UTC formatting
+for their existing start/end timestamp fields.
+
+ZIP entry timestamps deliberately remain fixed at `1980-01-01T00:00:00` so
+archive layout metadata stays deterministic. The real export time is stored
+inside `bugslyce_export_manifest.json` and the export README instead. Tests
+inject fixed clocks and do not depend on wall-clock time.
+
+Older project, manifest, status, and recon files without these timestamp
+fields remain supported. Timestamps record local metadata provenance only;
+they do not prove when a security condition began or establish a
+vulnerability.
+
 ## Recon Plan Mode
 
 BugSlyce can preview future recon activity without executing commands:

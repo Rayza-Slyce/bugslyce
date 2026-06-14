@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 
@@ -23,6 +24,7 @@ FIXTURE = (
     / "demo_recon"
     / "lab_raw_recon_pack"
 )
+FIXED_TIME = datetime(2026, 6, 14, 13, 45, 12, tzinfo=timezone.utc)
 
 
 def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path) -> None:
@@ -34,6 +36,7 @@ def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path)
         "10.10.10.10",
         scope,
         output_dir,
+        clock=lambda: FIXED_TIME,
     )
     payload = json.loads(project_path.read_text(encoding="utf-8"))
 
@@ -45,6 +48,7 @@ def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path)
     assert payload["scope_file"] == str(scope.resolve())
     assert payload["output_dir"] == str(output_dir.resolve())
     assert payload["created_by"] == "bugslyce"
+    assert payload["created_at"] == "2026-06-14T13:45:12Z"
     assert payload["default_profiles"] == {
         "tcp_discovery": "lab-tcp-full",
         "content_discovery_smoke": "lab-root-tiny",
@@ -133,6 +137,7 @@ def test_project_show_prints_saved_details(tmp_path: Path, capsys) -> None:
         "10.10.10.10",
         scope,
         tmp_path / "output",
+        clock=lambda: FIXED_TIME,
     )
 
     exit_code = main(["project", "show", "--project", str(project_path)])
@@ -143,6 +148,7 @@ def test_project_show_prints_saved_details(tmp_path: Path, capsys) -> None:
     assert "Name: show-test" in captured.out
     assert "Target: 10.10.10.10" in captured.out
     assert f"Scope file: {scope.resolve()}" in captured.out
+    assert "Created at: 2026-06-14T13:45:12Z" in captured.out
     assert "No commands were executed." in captured.out
     assert "No network requests were made." in captured.out
 
@@ -236,6 +242,31 @@ def test_load_project_rejects_missing_saved_scope(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Project scope file does not exist"):
         load_project(project_path)
+
+
+def test_old_project_without_created_at_still_loads_and_displays(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    scope = _scope_file(tmp_path)
+    _project, project_path = initialize_project(
+        "old-project",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+        clock=lambda: FIXED_TIME,
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload.pop("created_at")
+    project_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    project = load_project(project_path)
+    exit_code = main(["project", "show", "--project", str(project_path)])
+    captured = capsys.readouterr()
+
+    assert project.created_at is None
+    assert exit_code == 0
+    assert "Created at: not recorded" in captured.out
 
 
 def test_cli_project_init_prints_local_only_safety_lines(tmp_path: Path, capsys) -> None:

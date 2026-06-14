@@ -32,6 +32,7 @@ def test_markdown_report_renders_for_basic_saas() -> None:
 
     assert report.startswith("# BugSlyce Recon Pack")
     assert "basic_saas" in report
+    assert f"Generated at: `{_state.generated_at}`" in report
 
 
 def test_markdown_report_includes_required_sections() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import zipfile
 
@@ -10,6 +11,9 @@ import pytest
 
 from bugslyce.cli import main
 from bugslyce.recon.export import export_recon_evidence_pack
+
+
+FIXED_TIME = datetime(2026, 6, 14, 13, 45, 12, tzinfo=timezone.utc)
 
 
 def test_export_refuses_missing_input_directory(tmp_path: Path) -> None:
@@ -50,7 +54,11 @@ def test_export_contains_pack_metadata_scope_and_manifest_artifacts(tmp_path: Pa
     input_dir = _export_input(tmp_path)
     output_path = tmp_path / "pack.zip"
 
-    result = export_recon_evidence_pack(input_dir, output_path)
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
 
     with zipfile.ZipFile(output_path) as archive:
         names = set(archive.namelist())
@@ -80,10 +88,12 @@ def test_export_contains_pack_metadata_scope_and_manifest_artifacts(tmp_path: Pa
     assert result.files_included == export_manifest["files_included"]
     assert export_manifest["target"] == "10.10.10.10"
     assert export_manifest["raw_profile"] == "lab-tcp-full-plus-services"
+    assert export_manifest["exported_at"] == "2026-06-14T13:45:12Z"
     assert export_manifest["file_count"] == len(names)
     assert export_manifest["warning"] == "sensitive recon evidence"
     assert export_manifest["no_live_commands_executed"] is True
     assert "may contain sensitive recon evidence" in readme
+    assert "Exported at: `2026-06-14T13:45:12Z`" in readme
     assert "No live commands were executed during export." in readme
 
 
@@ -176,10 +186,22 @@ def test_export_is_deterministic_for_unchanged_input(tmp_path: Path) -> None:
     first = tmp_path / "first.zip"
     second = tmp_path / "second.zip"
 
-    export_recon_evidence_pack(input_dir, first)
-    export_recon_evidence_pack(input_dir, second)
+    export_recon_evidence_pack(input_dir, first, clock=lambda: FIXED_TIME)
+    export_recon_evidence_pack(input_dir, second, clock=lambda: FIXED_TIME)
 
     assert first.read_bytes() == second.read_bytes()
+
+
+def test_export_zip_entry_timestamps_remain_fixed(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    with zipfile.ZipFile(output_path) as archive:
+        assert {info.date_time for info in archive.infolist()} == {
+            (1980, 1, 1, 0, 0, 0)
+        }
 
 
 def test_cli_export_help(capsys) -> None:

@@ -164,6 +164,8 @@ def test_simulated_runner_returns_result_without_execution(tmp_path: Path) -> No
     assert result.error is None
     assert result.stdout_path is None
     assert result.stderr_path is None
+    assert result.started_at.endswith("Z")
+    assert result.ended_at.endswith("Z")
     assert not Path(command.output_file).exists()
 
 

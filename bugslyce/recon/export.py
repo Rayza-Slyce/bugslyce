@@ -7,9 +7,13 @@ import json
 from pathlib import Path, PurePosixPath
 import zipfile
 
+from bugslyce.time_utils import Clock, utc_now_iso
+
 
 EXPORT_VERSION = "1.0"
-EXPORT_README = """# BugSlyce Evidence Pack Export
+EXPORT_README_TEMPLATE = """# BugSlyce Evidence Pack Export
+
+Exported at: `{exported_at}`
 
 This archive may contain sensitive recon evidence, including target IP
 addresses, URLs, response headers, saved HTML, service banners, and discovered
@@ -33,6 +37,7 @@ class ReconExportResult:
     output_path: str
     target: str
     raw_profile: str | None
+    exported_at: str
     files_included: list[str]
     missing_files: list[str]
     warnings: list[str]
@@ -43,6 +48,7 @@ def export_recon_evidence_pack(
     input_dir: Path,
     output_path: Path,
     force: bool = False,
+    clock: Clock | None = None,
 ) -> ReconExportResult:
     """Create a deterministic ZIP containing only approved local evidence files."""
 
@@ -65,6 +71,7 @@ def export_recon_evidence_pack(
     manifest = _load_manifest(manifest_path)
     target = _required_text(manifest, "target", "Recon manifest does not contain a target.")
     raw_profile = _optional_text(manifest.get("profile"))
+    exported_at = utc_now_iso(clock)
 
     included: dict[str, Path] = {}
     missing_files: list[str] = []
@@ -124,6 +131,7 @@ def export_recon_evidence_pack(
     export_manifest = {
         "export_version": EXPORT_VERSION,
         "created_by": "bugslyce",
+        "exported_at": exported_at,
         "source_input_dir": str(input_dir),
         "target": target,
         "raw_profile": raw_profile,
@@ -141,7 +149,8 @@ def export_recon_evidence_pack(
         compression=zipfile.ZIP_DEFLATED,
         compresslevel=9,
     ) as archive:
-        _write_bytes(archive, "BUGSLYCE_EXPORT_README.md", EXPORT_README.encode("utf-8"))
+        export_readme = EXPORT_README_TEMPLATE.format(exported_at=exported_at)
+        _write_bytes(archive, "BUGSLYCE_EXPORT_README.md", export_readme.encode("utf-8"))
         _write_bytes(
             archive,
             "bugslyce_export_manifest.json",
@@ -160,6 +169,7 @@ def export_recon_evidence_pack(
         output_path=str(output_path),
         target=target,
         raw_profile=raw_profile,
+        exported_at=exported_at,
         files_included=archive_files,
         missing_files=sorted(set(missing_files)),
         warnings=warnings,
@@ -176,6 +186,7 @@ def render_recon_export_summary(result: ReconExportResult) -> str:
         f"Output path: {result.output_path}",
         f"Target: {result.target}",
         f"Raw profile: {result.raw_profile or 'not recorded'}",
+        f"Exported at: {result.exported_at}",
         f"Files included: {len(result.files_included)}",
         f"Missing files recorded: {len(result.missing_files)}",
     ]
