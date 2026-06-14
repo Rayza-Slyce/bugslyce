@@ -452,6 +452,33 @@ cleanly with status 0 and state that no request was executed. Missing inputs,
 malformed manifests, and scope failures remain errors. A clean no-op does not
 replace the metadata for the latest phase that actually executed requests.
 
+### Recon Status And Next Steps
+
+BugSlyce can inspect an existing local recon directory without running recon:
+
+```bash
+bugslyce recon status \
+  --input-dir ./private_recon/example \
+  --scope ./private_recon/example/scope.md
+```
+
+The command reports the manifest target, detected phases, artifact counts,
+latest and phase-specific execution metadata, and deterministic next-step
+advice. The optional scope file adds an exact target-alignment status; an
+out-of-scope result is reported as a warning and never triggers activity.
+
+`recon status` writes repeatable `recon_status.json` and `recon_status.md`
+files. It does not replace the recon pack, project state, or execution
+metadata. It performs no subprocess execution or network requests. Advice is
+based only on saved local evidence and remains conservative: it can recommend
+the next bounded BugSlyce phase, optional broader planned root discovery, or
+manual review when no eligible automated follow-up appears pending.
+
+This is useful when resuming an authorised lab after a VPN target expires,
+checking what completed before a timeout, or deciding whether a fresh run is
+needed. Absence of evidence is not proof of safety, and manual validation
+remains required.
+
 ### Selective Body Fetch
 
 BugSlyce can fetch saved HTML/application bodies for high-signal paths that

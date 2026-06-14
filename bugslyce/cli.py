@@ -97,6 +97,11 @@ from bugslyce.recon.preflight import (
     write_preflight_result,
 )
 from bugslyce.recon.profiles import recon_profile_names
+from bugslyce.recon.status import (
+    build_recon_status,
+    render_recon_status_summary,
+    write_recon_status,
+)
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 
@@ -471,6 +476,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Explicitly confirm bounded selective body GET requests.",
+    )
+    status_parser = recon_subparsers.add_parser(
+        "status",
+        help="Inspect local recon progress and safe next steps without live activity.",
+    )
+    status_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing BugSlyce recon directory to inspect.",
+    )
+    status_parser.add_argument(
+        "--scope",
+        dest="scope_file",
+        type=Path,
+        help="Optional scope file used to report exact target alignment.",
     )
 
     return parser
@@ -930,6 +951,22 @@ def _recon(args: argparse.Namespace) -> int:
         print(render_body_fetch_execution_summary(result))
         return 0
 
+    if args.recon_command == "status":
+        try:
+            result = build_recon_status(
+                input_dir=args.input_dir,
+                scope_file=args.scope_file,
+            )
+            json_path, markdown_path = write_recon_status(result, args.input_dir)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+
+        print(render_recon_status_summary(result, json_path, markdown_path))
+        return 0
+
     print(
         "Error: recon command required. Use 'bugslyce recon plan --help' "
         "'bugslyce recon execute --help', 'bugslyce recon preflight --help', "
@@ -940,7 +977,8 @@ def _recon(args: argparse.Namespace) -> int:
         "'bugslyce recon content-plan --help', "
         "'bugslyce recon content-run --help', "
         "'bugslyce recon content-followup --help', "
-        "or 'bugslyce recon body-fetch --help'.",
+        "'bugslyce recon body-fetch --help', "
+        "or 'bugslyce recon status --help'.",
         file=sys.stderr,
     )
     return 2
