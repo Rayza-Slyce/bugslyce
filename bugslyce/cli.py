@@ -115,6 +115,7 @@ from bugslyce.recon.status import (
 )
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
+from bugslyce.wizard import render_wizard
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -131,6 +132,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _project(args)
     if args.command == "recon":
         return _recon(args)
+    if args.command == "wizard":
+        print(render_wizard())
+        return 0
 
     parser.print_help()
     return 1
@@ -155,6 +159,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Directory where report.md and project_state.json will be written.",
+    )
+
+    subparsers.add_parser(
+        "wizard",
+        help="Show safe guided workflow previews without running recon.",
     )
 
     config_parser = subparsers.add_parser(

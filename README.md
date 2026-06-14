@@ -110,6 +110,24 @@ For private local use, keep real/private recon under `private_recon/`, `raw-reco
 
 Do not commit real targets, API keys, screenshots, Burp files, HAR files, or raw private outputs.
 
+## Guided Starting Point
+
+`bugslyce wizard` is a safe, preview-only entrypoint for new or returning
+operators:
+
+```bash
+bugslyce wizard
+```
+
+It explains the local project workflow and prints templates for project
+creation, project status, next-step previews, report review, and evidence-pack
+export. It does not require a project file, create files, execute recon, or
+make network requests. Operators must review programme scope and manually run
+any suggested command.
+
+This command is groundwork for a future interactive guided mode. It does not
+prompt for targets or execute suggested actions.
+
 ## Project Sessions
 
 BugSlyce projects are small local JSON session files that remember a target,
