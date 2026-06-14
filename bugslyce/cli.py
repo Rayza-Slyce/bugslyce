@@ -836,6 +836,7 @@ def _recon(args: argparse.Namespace) -> int:
                 plan_path=args.plan_path,
                 scope_file=args.scope_file,
                 step_id=args.step_id,
+                progress_callback=print,
             )
             write_content_discovery_execution_result(
                 result,

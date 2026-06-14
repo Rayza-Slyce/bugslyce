@@ -296,6 +296,10 @@ def test_content_followup_workflow_writes_manifest_report_and_metadata(
     assert all(Path(path).is_file() for path in result.artifact_paths)
     assert execution_json.is_file()
     assert execution_markdown.is_file()
+    assert execution_markdown.read_text(encoding="utf-8").startswith(
+        "# BugSlyce Content-Result Follow-up"
+    )
+    assert json.loads(execution_json.read_text(encoding="utf-8"))["mode"] == "content-followup"
     assert (input_dir / "report.md").is_file()
     assert any(
         artifact.get("description")

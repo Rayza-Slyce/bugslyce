@@ -7,6 +7,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import shutil
+import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -125,6 +126,7 @@ def run_content_discovery_workflow(
     runner: LiveContentDiscoveryRunner | None = None,
     wordlist_check: Callable[[Path], bool] | None = None,
     step_id: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
 
@@ -172,8 +174,25 @@ def run_content_discovery_workflow(
         plan.profile,
     )
     command_results = []
-    for command in commands:
+    total_commands = len(commands)
+    for index, command in enumerate(commands, start=1):
+        step = next(step for step in selected_steps if step.step_id == command.id)
+        _emit_progress(
+            progress_callback,
+            "\n".join(
+                [
+                    "BugSlyce content discovery step starting",
+                    f"Step: {step.step_id}",
+                    f"Progress: {index}/{total_commands}",
+                    f"Origin: {step.origin}",
+                    f"Profile: {plan.profile}",
+                    f"Timeout: {command.timeout_seconds} seconds",
+                ]
+            ),
+        )
+        started = time.monotonic()
         result = live_runner.run(command)
+        elapsed = max(0.0, time.monotonic() - started)
         if result.executed:
             command_results.append(result)
         if _is_timeout_result(result):
@@ -194,14 +213,52 @@ def run_content_discovery_workflow(
                 timed_out_result=result,
                 selected_step_id=step_id,
             )
+            partial_imported = any(
+                Path(path).name == Path(result.output_file).name
+                for path in execution_result.artifact_paths
+            )
+            _emit_progress(
+                progress_callback,
+                "\n".join(
+                    [
+                        "BugSlyce content discovery step timed out",
+                        f"Step: {step.step_id}",
+                        f"Origin: {step.origin}",
+                        f"Elapsed seconds: {elapsed:.2f}",
+                        f"Partial output imported: {str(partial_imported).lower()}",
+                    ]
+                ),
+            )
             raise ContentDiscoveryExecutionIncomplete(result.error or "Content discovery timed out.", execution_result)
         if result.error or result.exit_code != 0:
+            _emit_progress(
+                progress_callback,
+                "\n".join(
+                    [
+                        "BugSlyce content discovery step failed",
+                        f"Step: {step.step_id}",
+                        f"Origin: {step.origin}",
+                        f"Elapsed seconds: {elapsed:.2f}",
+                    ]
+                ),
+            )
             raise ValueError(result.error or "Content discovery did not complete successfully.")
         output_path = Path(result.output_file)
         if not output_path.is_file():
             raise ValueError(
                 "Content discovery completed without creating its expected output file."
             )
+        _emit_progress(
+            progress_callback,
+            "\n".join(
+                [
+                    "BugSlyce content discovery step complete",
+                    f"Step: {step.step_id}",
+                    f"Elapsed seconds: {elapsed:.2f}",
+                    f"Artifact: {output_path}",
+                ]
+            ),
+        )
     artifact_sources = [
         (result.command_id, Path(result.output_file), False)
         for result in command_results
@@ -225,10 +282,24 @@ def write_content_discovery_execution_result(
 
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "content_discovery_execution.json"
-    markdown_path = output_dir / "content_discovery_execution.md"
-    json_path.write_text(json.dumps(asdict(result), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    markdown_path.write_text(render_content_discovery_execution_markdown(result), encoding="utf-8")
+    payload = json.dumps(asdict(result), indent=2, sort_keys=True) + "\n"
+    markdown = render_content_discovery_execution_markdown(result)
+
+    legacy_json_path = output_dir / "content_discovery_execution.json"
+    legacy_markdown_path = output_dir / "content_discovery_execution.md"
+    legacy_json_path.write_text(payload, encoding="utf-8")
+    legacy_markdown_path.write_text(markdown, encoding="utf-8")
+
+    input_dir = Path(result.input_dir).expanduser().resolve()
+    input_dir.mkdir(parents=True, exist_ok=True)
+    json_path = input_dir / "recon_execution.json"
+    markdown_path = input_dir / "recon_execution.md"
+    phase_json_path = input_dir / "recon_execution_content_run.json"
+    phase_markdown_path = input_dir / "recon_execution_content_run.md"
+    for path in (json_path, phase_json_path):
+        path.write_text(payload, encoding="utf-8")
+    for path in (markdown_path, phase_markdown_path):
+        path.write_text(markdown, encoding="utf-8")
     return json_path, markdown_path
 
 
@@ -554,6 +625,11 @@ def _select_steps(
             f"Content discovery step '{step_id}' is not present in the approved plan."
         )
     return matches
+
+
+def _emit_progress(callback: Callable[[str], None] | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
 
 
 def _is_timeout_result(result) -> bool:

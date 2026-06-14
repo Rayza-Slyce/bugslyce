@@ -410,6 +410,18 @@ non-empty partial timeout output is also preserved and labelled. Execution
 metadata records selected step/origin, completed and partial imports, and the
 exact timed-out step/origin.
 
+The latest completed live phase writes generic metadata to
+`recon_execution.json` and `recon_execution.md` in the recon directory.
+Content discovery also keeps `recon_execution_content_run.json` and
+`recon_execution_content_run.md`, plus the existing plan-directory
+`content_discovery_execution.*` files.
+
+Longer content discovery runs print simple status blocks before and after each
+approved step, including step ID, origin, progress count, timeout, elapsed
+time, and artifact or timeout state. This is deliberately not a streaming
+progress bar: BugSlyce retains the validated `subprocess.run` execution model
+and does not stream process output.
+
 ### Content-Result Follow-up
 
 BugSlyce can perform bounded HEAD checks for selected paths already present in

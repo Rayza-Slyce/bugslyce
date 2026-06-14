@@ -303,6 +303,10 @@ def test_body_fetch_workflow_writes_html_manifest_report_and_metadata(tmp_path: 
     assert result.commands_timed_out == 0
     assert execution_json.is_file()
     assert execution_markdown.is_file()
+    assert execution_markdown.read_text(encoding="utf-8").startswith(
+        "# BugSlyce Selective Body Fetch"
+    )
+    assert json.loads(execution_json.read_text(encoding="utf-8"))["mode"] == "body-fetch"
     assert (input_dir / "report.md").is_file()
     assert all(Path(path).is_file() for path in result.artifact_paths)
     assert any(

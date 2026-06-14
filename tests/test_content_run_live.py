@@ -148,6 +148,52 @@ def test_content_run_executes_only_selected_existing_step(tmp_path: Path) -> Non
     assert not (input_dir / "gobuster-10.10.10.10-80-root.txt").exists()
 
 
+def test_content_run_progress_reports_selected_step_before_and_after_runner(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path)
+    messages: list[str] = []
+    runner = _ProgressAssertingRunner(messages)
+
+    run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=runner,
+        wordlist_check=lambda _path: True,
+        step_id="CONTENT-STEP-002",
+        progress_callback=messages.append,
+    )
+
+    output = "\n".join(messages)
+    assert "BugSlyce content discovery step starting" in output
+    assert "Step: CONTENT-STEP-002" in output
+    assert "Progress: 1/1" in output
+    assert "Origin: http://10.10.10.10:65524/" in output
+    assert "Profile: lab-root-light" in output
+    assert "Timeout: 900 seconds" in output
+    assert "BugSlyce content discovery step complete" in output
+    assert "Elapsed seconds:" in output
+    assert "Artifact:" in output
+
+
+def test_content_run_progress_reports_each_planned_step(tmp_path: Path) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path)
+    messages: list[str] = []
+
+    run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=_MockContentRunner(),
+        wordlist_check=lambda _path: True,
+        progress_callback=messages.append,
+    )
+
+    output = "\n".join(messages)
+    assert "Progress: 1/2" in output
+    assert "Progress: 2/2" in output
+    assert output.count("BugSlyce content discovery step complete") == 2
+
+
 def test_content_run_refuses_unknown_selected_step_without_running(tmp_path: Path) -> None:
     plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path)
     runner = _NeverRunContentRunner()
@@ -458,6 +504,29 @@ def test_content_run_timeout_imports_nonempty_partial_output(
     assert (input_dir / "report.md").is_file()
 
 
+def test_content_run_timeout_progress_is_honest(tmp_path: Path) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path)
+    messages: list[str] = []
+
+    with pytest.raises(ContentDiscoveryExecutionIncomplete):
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_TimeoutContentRunner(write_partial=True),
+            wordlist_check=lambda _path: True,
+            step_id="CONTENT-STEP-001",
+            progress_callback=messages.append,
+        )
+
+    output = "\n".join(messages)
+    assert "BugSlyce content discovery step timed out" in output
+    assert "Step: CONTENT-STEP-001" in output
+    assert "Origin: http://10.10.10.10/" in output
+    assert "Elapsed seconds:" in output
+    assert "Partial output imported: true" in output
+    assert "No gobuster command was executed" not in output
+
+
 def test_content_run_preserves_completed_first_step_when_second_times_out(
     tmp_path: Path,
 ) -> None:
@@ -498,6 +567,49 @@ def test_content_run_preserves_completed_first_step_when_second_times_out(
     assert (input_dir / "project_state.json").is_file()
 
 
+def test_content_run_overwrites_generic_latest_metadata_and_keeps_phase_copy(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, input_dir, output_dir = _written_plan(tmp_path)
+    (input_dir / "recon_execution.md").write_text(
+        "# BugSlyce Selective Body Fetch\n",
+        encoding="utf-8",
+    )
+    (input_dir / "recon_execution.json").write_text(
+        json.dumps({"mode": "body-fetch"}),
+        encoding="utf-8",
+    )
+
+    result = run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=_MockContentRunner(),
+        wordlist_check=lambda _path: True,
+        step_id="CONTENT-STEP-001",
+    )
+    latest_json, latest_markdown = write_content_discovery_execution_result(
+        result,
+        output_dir,
+    )
+    latest_payload = json.loads(latest_json.read_text(encoding="utf-8"))
+    latest_text = latest_markdown.read_text(encoding="utf-8")
+
+    assert latest_json == input_dir / "recon_execution.json"
+    assert latest_markdown == input_dir / "recon_execution.md"
+    assert latest_payload["mode"] == "content-run"
+    assert latest_payload["profile"] == "lab-root-light"
+    assert latest_payload["selected_step_id"] == "CONTENT-STEP-001"
+    assert latest_payload["selected_origin"] == "http://10.10.10.10/"
+    assert latest_payload["completed_artifacts_imported"] == 1
+    assert latest_payload["partial_artifacts_imported"] == 0
+    assert latest_text.startswith("# BugSlyce Content Discovery Execution")
+    assert "Selective Body Fetch" not in latest_text
+    assert (input_dir / "recon_execution_content_run.json").is_file()
+    assert (input_dir / "recon_execution_content_run.md").is_file()
+    assert (output_dir / "content_discovery_execution.json").is_file()
+    assert (output_dir / "content_discovery_execution.md").is_file()
+
+
 class _MockContentRunner:
     def run(self, command):
         Path(command.output_file).write_text(
@@ -527,6 +639,17 @@ class _RecordingContentRunner(_MockContentRunner):
 
     def run(self, command):
         self.commands.append(command)
+        return super().run(command)
+
+
+class _ProgressAssertingRunner(_MockContentRunner):
+    def __init__(self, messages: list[str]) -> None:
+        self.messages = messages
+
+    def run(self, command):
+        assert self.messages
+        assert "step starting" in self.messages[-1]
+        assert f"Step: {command.id}" in self.messages[-1]
         return super().run(command)
 
 
