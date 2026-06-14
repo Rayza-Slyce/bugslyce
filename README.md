@@ -54,15 +54,37 @@ The current version still ingests files and does not execute recon. Future autom
 ## Local Development Install
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e .
 python -m pip install -e ".[dev]"
+bugslyce --version
+bugslyce wizard
 ```
+
+The editable install exposes the `bugslyce` console command while keeping the
+source tree live for development. Calling `.venv/bin/bugslyce` directly
+remains supported when the virtual environment is not activated. The bundled
+`bugslyce/wordlists/lab-root-tiny.txt` file is included as package data.
 
 ## Running Tests
 
 ```bash
 pytest
+```
+
+## Local Sanity Check
+
+After installation, these commands verify the local CLI surfaces without
+starting recon:
+
+```bash
+pytest
+bugslyce --help
+bugslyce wizard
+bugslyce project --help
+bugslyce recon --help
 ```
 
 ## Running The Demo
