@@ -61,6 +61,39 @@ from bugslyce.time_utils import Clock, utc_now_iso
 PIPELINE_PROFILE = "lab-safe-tiny"
 PIPELINE_JSON_FILENAME = "project_pipeline.json"
 PIPELINE_MARKDOWN_FILENAME = "project_pipeline.md"
+SKIPPED_STEP_MESSAGES = {
+    "PIPELINE-STEP-002": (
+        "Existing nmap discovery evidence detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-003": (
+        "Existing service/version evidence detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-004": (
+        "Existing HTTP metadata evidence detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-005": (
+        "Existing evidence-derived path follow-up artifacts detected; "
+        "phase skipped during resume."
+    ),
+    "PIPELINE-STEP-006": (
+        "Existing lab-root-tiny content plan detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-007": (
+        "Existing lab-root-tiny content discovery output detected; "
+        "phase skipped during resume."
+    ),
+    "PIPELINE-STEP-008": (
+        "Existing content-result follow-up artifacts detected; "
+        "phase skipped during resume."
+    ),
+    "PIPELINE-STEP-009": (
+        "Existing selective body-fetch artifacts detected; "
+        "phase skipped during resume."
+    ),
+    "PIPELINE-STEP-012": (
+        "Existing completed evidence pack detected; export skipped during resume."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -160,7 +193,7 @@ def run_project_pipeline(
             steps[index] = replace(
                 step,
                 status="skipped_existing",
-                message="Existing evidence detected; phase skipped during resume.",
+                message=SKIPPED_STEP_MESSAGES[step.step_id],
             )
     result = PipelineResult(
         project_name=project.name,
@@ -223,7 +256,7 @@ def run_project_pipeline(
         if step.status == "skipped_existing":
             _emit(
                 progress_callback,
-                f"[{position}/12] {step.name} skipped; existing evidence detected.",
+                f"[{position}/12] {step.name} skipped.\n{step.message}",
             )
             continue
         _emit(progress_callback, f"[{position}/12] {step.name} starting...")
@@ -309,6 +342,7 @@ def write_project_pipeline_result(result: PipelineResult) -> tuple[Path, Path]:
 def render_project_pipeline_markdown(result: PipelineResult) -> str:
     """Render detailed pipeline execution metadata."""
 
+    outputs = _final_output_paths(result)
     lines = [
         "# BugSlyce Project Pipeline",
         "",
@@ -320,13 +354,16 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
         f"- Output directory: `{result.output_dir}`",
         f"- Started at: `{result.started_at}`",
         f"- Completed at: `{result.completed_at or 'not completed'}`",
-        f"- Final status: `{result.final_status}`",
-        f"- Resume: `{str(result.resume_requested).lower()}`",
+        "",
+        "## Summary",
+        "",
+        f"- Resume requested: `{str(result.resume_requested).lower()}`",
         f"- Reused existing evidence: `{str(result.reused_existing_evidence).lower()}`",
         f"- Completed steps: `{result.completed_steps}`",
         f"- Skipped existing steps: `{result.skipped_steps}`",
         f"- No-op steps: `{result.no_op_steps}`",
         f"- Failed step: `{result.failed_step or 'none'}`",
+        f"- Final status: `{result.final_status}`",
         f"- No unapproved actions: `{str(result.no_unapproved_actions).lower()}`",
         "",
         "## Steps",
@@ -357,9 +394,20 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
         [
             "## Final Outputs",
             "",
-            f"- Report: `{result.report_path or 'not written'}`",
-            f"- Runbook: `{result.runbook_path or 'not written'}`",
-            f"- Evidence pack: `{result.export_path or 'not written'}`",
+            f"- Report: `{outputs['report']}`",
+            f"- Recon status: `{outputs['status']}`",
+            f"- Runbook: `{outputs['runbook']}`",
+            f"- Pipeline metadata JSON: `{outputs['pipeline_json']}`",
+            f"- Pipeline metadata Markdown: `{outputs['pipeline_markdown']}`",
+            f"- Evidence pack: `{outputs['export']}`",
+            "",
+            "## Suggested Review Commands",
+            "",
+            "```bash",
+            f"less {outputs['report']}",
+            f".venv/bin/bugslyce project next --project {result.project_file}",
+            f".venv/bin/bugslyce project status --project {result.project_file}",
+            "```",
             "",
             "No NSE scripts, UDP scans, brute force, exploitation, recursive discovery, form submission, authentication testing, or arbitrary commands were run.",
             "",
@@ -369,8 +417,10 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
 
 
 def render_project_pipeline_summary(result: PipelineResult) -> str:
-    """Render a concise final pipeline summary."""
+    """Render a clear final pipeline and operator review summary."""
 
+    outputs = _final_output_paths(result)
+    failed_count = sum(step.status == "failed" for step in result.steps)
     return "\n".join(
         [
             "BugSlyce project pipeline complete",
@@ -379,12 +429,51 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
             f"Profile: {result.profile}",
             f"Resume: {str(result.resume_requested).lower()}",
             f"Final status: {result.final_status}",
-            f"Report path: {result.report_path or 'not written'}",
-            f"Runbook path: {result.runbook_path or 'not written'}",
-            f"Evidence pack path: {result.export_path or 'not written'}",
+            "",
+            "Step summary:",
+            f"* Completed: {result.completed_steps}",
+            f"* Skipped existing: {result.skipped_steps}",
+            f"* No-op: {result.no_op_steps}",
+            f"* Failed: {failed_count}",
+            "",
+            "Final outputs:",
+            f"* Report: {outputs['report']}",
+            f"* Status: {outputs['status']}",
+            f"* Runbook: {outputs['runbook']}",
+            f"* Pipeline metadata: {outputs['pipeline_markdown']}",
+            f"* Evidence pack: {outputs['export']}",
+            "",
+            "Recommended next action:",
+            "* Review the Operator Summary:",
+            f"  less {outputs['report']}",
+            "",
+            "Optional:",
+            "* Preview next safe action:",
+            f"  .venv/bin/bugslyce project next --project {result.project_file}",
+            "",
             "No NSE scripts, UDP scans, brute force, exploitation, recursive discovery, form submission, authentication testing, or arbitrary commands were run.",
         ]
     )
+
+
+def _final_output_paths(result: PipelineResult) -> dict[str, str]:
+    output_dir = Path(result.output_dir)
+    status_generated = any(
+        step.step_id == "PIPELINE-STEP-010" and step.status == "completed"
+        for step in result.steps
+    )
+    return {
+        "report": result.report_path or "not generated",
+        "status": (
+            str(output_dir / "recon_status.md")
+            if status_generated
+            else "not generated"
+        ),
+        "runbook": result.runbook_path or "not generated",
+        "pipeline_json": str(output_dir / PIPELINE_JSON_FILENAME),
+        "pipeline_markdown": str(output_dir / PIPELINE_MARKDOWN_FILENAME),
+        "export": result.export_path or "not generated",
+    }
 
 
 def _validate_pipeline(

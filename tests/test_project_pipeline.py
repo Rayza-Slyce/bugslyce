@@ -77,8 +77,20 @@ def test_cli_project_run_forwards_resume(
             project_name="pipeline-test",
             target="10.10.10.10",
             profile=PIPELINE_PROFILE,
+            project_file=str(project_file),
+            output_dir=str(output_dir),
             resume_requested=True,
+            completed_steps=3,
+            skipped_steps=9,
+            no_op_steps=0,
             final_status="completed",
+            steps=[
+                SimpleNamespace(
+                    step_id=f"PIPELINE-STEP-{index:03d}",
+                    status="completed" if index == 10 else "skipped_existing",
+                )
+                for index in range(1, 11)
+            ],
             report_path=str(output_dir / "report.md"),
             runbook_path=str(output_dir / "runbook.md"),
             export_path=f"{output_dir}-evidence-pack.zip",
@@ -103,6 +115,12 @@ def test_cli_project_run_forwards_resume(
     assert received["resume"] is True
     assert received["project_file"] == project_file
     assert "Resume: true" in captured.out
+    assert "Step summary:" in captured.out
+    assert "* Completed: 3" in captured.out
+    assert "* Skipped existing: 9" in captured.out
+    assert "* No-op: 0" in captured.out
+    assert "Final outputs:" in captured.out
+    assert f"less {output_dir / 'report.md'}" in captured.out
 
 
 def test_pipeline_rejects_unsupported_profile_and_invalid_project(
@@ -270,9 +288,17 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert payload["final_status"] == "completed"
     assert payload["no_unapproved_actions"] is True
     assert len(payload["steps"]) == 12
-    assert "No NSE scripts, UDP scans, brute force" in markdown_path.read_text(
-        encoding="utf-8"
-    )
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "## Summary" in markdown
+    assert "- Completed steps: `12`" in markdown
+    assert "- Skipped existing steps: `0`" in markdown
+    assert "## Final Outputs" in markdown
+    assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown
+    assert f"- Pipeline metadata JSON: `{json_path}`" in markdown
+    assert f"- Pipeline metadata Markdown: `{markdown_path}`" in markdown
+    assert "## Suggested Review Commands" in markdown
+    assert f"less {output_dir / 'report.md'}" in markdown
+    assert "No NSE scripts, UDP scans, brute force" in markdown
 
 
 def test_pipeline_records_noop_followups_and_continues(
@@ -346,7 +372,18 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert result.skipped_steps == 3
     assert "Resume: true" in progress[0]
     assert (
-        "[2/12] nmap full TCP discovery skipped; existing evidence detected."
+        "[2/12] nmap full TCP discovery skipped.\n"
+        "Existing nmap discovery evidence detected; phase skipped during resume."
+        in progress
+    )
+    assert (
+        "[3/12] nmap service/version scan skipped.\n"
+        "Existing service/version evidence detected; phase skipped during resume."
+        in progress
+    )
+    assert (
+        "[4/12] HTTP metadata collection skipped.\n"
+        "Existing HTTP metadata evidence detected; phase skipped during resume."
         in progress
     )
     payload = json.loads(
@@ -355,7 +392,7 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert payload["resume_requested"] is True
     assert payload["reused_existing_evidence"] is True
     assert payload["skipped_steps"] == 3
-    assert "Resume: `true`" in (
+    assert "Resume requested: `true`" in (
         output_dir / PIPELINE_MARKDOWN_FILENAME
     ).read_text(encoding="utf-8")
 
@@ -553,18 +590,43 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
     _write_prior_pipeline(project_file, output_dir, export_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    progress: list[str] = []
 
     result = run_project_pipeline(
         project_file,
         PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
     )
 
     assert calls == ["status", "status-write", "runbook", "runbook-write"]
     assert result.steps[11].status == "skipped_existing"
+    assert result.steps[11].message == (
+        "Existing completed evidence pack detected; export skipped during resume."
+    )
     assert result.export_path == str(export_path)
     assert result.final_status == "completed"
+    assert (
+        "[12/12] evidence pack export skipped.\n"
+        "Existing completed evidence pack detected; export skipped during resume."
+        in progress
+    )
+    assert result.steps[4].message.startswith(
+        "Existing evidence-derived path follow-up artifacts"
+    )
+    assert result.steps[5].message.startswith(
+        "Existing lab-root-tiny content plan"
+    )
+    assert result.steps[6].message.startswith(
+        "Existing lab-root-tiny content discovery output"
+    )
+    assert result.steps[7].message.startswith(
+        "Existing content-result follow-up artifacts"
+    )
+    assert result.steps[8].message.startswith(
+        "Existing selective body-fetch artifacts"
+    )
 
 
 def test_resumed_required_failure_stops_later_steps(

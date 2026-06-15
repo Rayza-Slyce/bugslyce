@@ -242,6 +242,20 @@ runbook, and evidence export phases in order. It requires explicit
 confirmation, stops on the first required failure, and writes
 `project_pipeline.json` and `project_pipeline.md`.
 
+After a successful pipeline, review the generated summary and local evidence:
+
+```bash
+less bugslyce-output/NAME/report.md
+bugslyce project next \
+  --project bugslyce-output/NAME/bugslyce_project.json
+bugslyce project status \
+  --project bugslyce-output/NAME/bugslyce_project.json
+```
+
+The final terminal and Markdown summaries distinguish completed, skipped
+existing, no-op, and failed steps, then list the report, status, runbook,
+pipeline metadata, and evidence-pack paths.
+
 This first pipeline version expects a fresh scaffolded project. It refuses an
 existing recon manifest, content-plan directory, or evidence-pack ZIP rather
 than mixing old and new evidence. It does not add NSE scripts, UDP scans,
