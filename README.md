@@ -177,6 +177,27 @@ machine-readable files.
 BugSlyce projects are small local JSON session files that remember a target,
 scope file, recon output directory, and conservative default profiles:
 
+### Project Scaffold
+
+```bash
+bugslyce project scaffold \
+  --name authorised-lab \
+  --target 10.10.10.10 \
+  --projects-dir ./bugslyce-output
+```
+
+This creates `bugslyce-output/authorised-lab/scope.md` and
+`bugslyce-output/authorised-lab/bugslyce_project.json`. The scope file is a
+conservative starter template, not proof of authorisation. Review and edit it
+to match the actual programme or lab scope before running recon.
+
+Scaffolding performs no recon or network requests. Existing non-scaffold
+files, reports, manifests, and raw evidence are never overwritten. `--force`
+can replace only the two BugSlyce-owned scaffold files in an otherwise clean
+project directory.
+
+### Project Init
+
 ```bash
 bugslyce project init \
   --name authorised-lab \
