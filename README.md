@@ -400,6 +400,9 @@ Recommended checks before creating a release tag:
 4. Review `report.md`, pipeline metadata, runbook, status, and export contents.
 5. Review this README for command and safety accuracy.
 
+See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging
+`v0.1.0`.
+
 This repository is at an MVP checkpoint. No release has been tagged or
 published by this documentation phase.
 

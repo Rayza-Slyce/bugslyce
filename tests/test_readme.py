@@ -76,3 +76,29 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
 
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "docs/DEMO_WALKTHROUGH.md" in readme
+
+
+def test_release_checklist_documents_v010_release_gate() -> None:
+    root = Path(__file__).resolve().parents[1]
+    checklist_path = root / "docs" / "RELEASE_CHECKLIST.md"
+    assert checklist_path.is_file()
+
+    checklist = checklist_path.read_text(encoding="utf-8")
+    lowered = checklist.lower()
+    for expected in (
+        "v0.1.0",
+        ".venv/bin/pytest",
+        "bugslyce doctor",
+        "lab-safe-tiny",
+        "--resume",
+        "git tag v0.1.0",
+    ):
+        assert expected in checklist
+
+    assert "brute force" in lowered
+    assert "exploitation" in lowered
+    assert "private evidence" in lowered
+    assert "no zip evidence packs are staged" in lowered
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "docs/RELEASE_CHECKLIST.md" in readme
