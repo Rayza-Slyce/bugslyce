@@ -211,6 +211,21 @@ The inventory is read-only: it creates no files, runs no recon, and makes no
 network requests. It is useful when resuming work or switching between local
 lab targets.
 
+### Project Runbook
+
+```bash
+bugslyce project runbook \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json
+```
+
+This writes `runbook.md` into the saved project output directory. The runbook
+summarises project paths, local recon status, the current safe next action,
+command previews, scope reminders, and evidence-pack export guidance.
+
+Runbook generation uses local project metadata and evidence only. It performs
+no recon, executes no suggested command, and makes no network requests. The
+generated file can be safely regenerated when resuming a project later.
+
 ### Project Init
 
 ```bash

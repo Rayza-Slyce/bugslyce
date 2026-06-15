@@ -20,6 +20,7 @@ from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.project_session import (
+    build_project_runbook,
     build_project_next,
     initialize_project,
     inspect_project_status,
@@ -28,10 +29,12 @@ from bugslyce.project_session import (
     render_project_init_summary,
     render_project_inventory,
     render_project_next,
+    render_project_runbook_summary,
     render_project_scaffold_summary,
     render_project_show,
     render_project_status,
     scaffold_project,
+    write_project_runbook,
 )
 from bugslyce.recon.curl_headers import (
     render_curl_header_execution_summary,
@@ -248,6 +251,17 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Existing parent directory containing BugSlyce project folders.",
+    )
+    project_runbook_parser = project_subparsers.add_parser(
+        "runbook",
+        help="Write a local project runbook with safe command previews.",
+    )
+    project_runbook_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
     )
     project_show_parser = project_subparsers.add_parser(
         "show",
@@ -758,6 +772,18 @@ def _project(args: argparse.Namespace) -> int:
         print(render_project_inventory(result))
         return 0
 
+    if args.project_command == "runbook":
+        try:
+            result = build_project_runbook(args.project_file)
+            write_project_runbook(result)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_runbook_summary(result))
+        return 0
+
     if args.project_command == "show":
         try:
             project = load_project(args.project_file)
@@ -794,6 +820,7 @@ def _project(args: argparse.Namespace) -> int:
     print(
         "Error: project command required. Use 'bugslyce project scaffold --help', "
         "'bugslyce project list --help', "
+        "'bugslyce project runbook --help', "
         "'bugslyce project init --help', "
         "'bugslyce project show --help', 'bugslyce project status --help', "
         "or 'bugslyce project next --help'.",

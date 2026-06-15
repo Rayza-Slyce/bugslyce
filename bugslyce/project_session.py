@@ -19,6 +19,7 @@ from bugslyce.time_utils import Clock, utc_now_iso
 
 
 PROJECT_FILENAME = "bugslyce_project.json"
+PROJECT_RUNBOOK_FILENAME = "runbook.md"
 PROJECT_SCHEMA_VERSION = "1.0"
 SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 DEFAULT_PROFILES = {
@@ -108,6 +109,17 @@ class ProjectInventoryResult:
 
     projects_directory: str
     entries: list[ProjectInventoryEntry]
+
+
+@dataclass(frozen=True)
+class ProjectRunbookResult:
+    """Generated local project runbook metadata."""
+
+    project: BugSlyceProject
+    project_file: str
+    runbook_path: str
+    generated_at: str
+    content: str
 
 
 def initialize_project(
@@ -534,6 +546,51 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
     )
 
 
+def build_project_runbook(
+    project_file: Path,
+    clock: Clock | None = None,
+) -> ProjectRunbookResult:
+    """Build a local Markdown runbook from project next-step guidance."""
+
+    project_file = project_file.expanduser().resolve()
+    next_result = build_project_next(project_file)
+    output_dir = Path(next_result.project.output_dir).expanduser().resolve()
+    if not output_dir.is_dir():
+        raise ValueError(f"Project output directory does not exist: {output_dir}")
+
+    runbook_path = output_dir / PROJECT_RUNBOOK_FILENAME
+    resolved_runbook = runbook_path.resolve(strict=False)
+    if resolved_runbook.parent != output_dir:
+        raise ValueError("Runbook path must remain inside the project output directory.")
+
+    generated_at = utc_now_iso(clock)
+    content = _render_project_runbook(
+        next_result,
+        project_file=project_file,
+        generated_at=generated_at,
+    )
+    return ProjectRunbookResult(
+        project=next_result.project,
+        project_file=str(project_file),
+        runbook_path=str(resolved_runbook),
+        generated_at=generated_at,
+        content=content,
+    )
+
+
+def write_project_runbook(result: ProjectRunbookResult) -> Path:
+    """Write only the generated runbook file inside the project output directory."""
+
+    output_dir = Path(result.project.output_dir).expanduser().resolve()
+    runbook_path = Path(result.runbook_path)
+    if runbook_path.parent != output_dir or runbook_path.name != PROJECT_RUNBOOK_FILENAME:
+        raise ValueError("Runbook path must remain inside the project output directory.")
+    if runbook_path.exists() and not runbook_path.is_file():
+        raise ValueError(f"Runbook path is not a regular file: {runbook_path}")
+    runbook_path.write_text(result.content, encoding="utf-8")
+    return runbook_path
+
+
 def render_project_init_summary(project: BugSlyceProject, project_path: Path) -> str:
     """Render project creation output."""
 
@@ -635,6 +692,21 @@ def render_project_inventory(result: ProjectInventoryResult) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def render_project_runbook_summary(result: ProjectRunbookResult) -> str:
+    """Render local runbook write confirmation."""
+
+    return "\n".join(
+        [
+            "BugSlyce project runbook written",
+            f"Project name: {result.project.name}",
+            f"Target: {result.project.target}",
+            f"Runbook path: {result.runbook_path}",
+            "No commands were executed.",
+            "No network requests were made.",
+        ]
+    )
 
 
 def render_project_show(project: BugSlyceProject, project_file: Path) -> str:
@@ -933,6 +1005,106 @@ def _render_scope_template(target: str) -> str:
             "",
         ]
     )
+
+
+def _render_project_runbook(
+    result: ProjectNextResult,
+    *,
+    project_file: Path,
+    generated_at: str,
+) -> str:
+    project = result.project
+    output_dir = Path(project.output_dir)
+    lines = [
+        "# BugSlyce Project Runbook",
+        "",
+        f"Generated at: `{generated_at}`",
+        "",
+        "## Project",
+        "",
+        f"* Name: {project.name}",
+        f"* Target: {project.target}",
+        f"* Scope file: `{project.scope_file}`",
+        f"* Output directory: `{project.output_dir}`",
+        f"* Project file: `{project_file}`",
+        "",
+        "## Scope Reminder",
+        "",
+        "Review `scope.md` before running recon.",
+        "This runbook does not grant authorisation.",
+        "Only test targets you are authorised to assess.",
+        "",
+        "## Current Status",
+        "",
+        f"* Recon pack exists: {str(result.recon_pack_exists).lower()}",
+        f"* Status summary: {result.status_summary}",
+        (
+            "* Current recommended next safe action: "
+            f"{result.recommended_action.title}"
+        ),
+        "",
+        "## Suggested Next Command",
+        "",
+        "```bash",
+        result.recommended_action.command_preview,
+        "```",
+    ]
+    if result.optional_actions:
+        lines.extend(["", "## Optional Safe Commands"])
+        for action in result.optional_actions:
+            lines.extend(
+                [
+                    "",
+                    f"### {action.title}",
+                    "",
+                    "```bash",
+                    action.command_preview,
+                    "```",
+                ]
+            )
+
+    project_arg = shlex.quote(str(project_file))
+    output_arg = shlex.quote(project.output_dir)
+    report_arg = shlex.quote(str(output_dir / "report.md"))
+    export_arg = shlex.quote(f"{project.output_dir}-evidence-pack.zip")
+    lines.extend(
+        [
+            "",
+            "## Typical Safe Workflow",
+            "",
+            "1. Run doctor:",
+            "   `bugslyce doctor`",
+            "",
+            "2. Check project status:",
+            f"   `bugslyce project status --project {project_arg}`",
+            "",
+            "3. Preview the next action:",
+            f"   `bugslyce project next --project {project_arg}`",
+            "",
+            "4. Run reviewed commands manually.",
+            "",
+            "5. Review the report:",
+            f"   `less {report_arg}`",
+            "",
+            "6. Export an evidence pack:",
+            (
+                "   `bugslyce recon export "
+                f"--input-dir {output_arg} --output {export_arg}`"
+            ),
+            "",
+            "## Safety Notes",
+            "",
+            "* This runbook is generated from local project metadata and local evidence.",
+            "* Suggested commands are previews only.",
+            "* No commands were executed during runbook generation.",
+            "* No network requests were made.",
+            "* Manual validation is required before claiming any finding.",
+            "* Absence of evidence is not proof of safety.",
+            "* Do not run recon outside authorised scope.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _inventory_recon_pack_label(value: bool | None) -> str:
