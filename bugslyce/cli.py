@@ -23,8 +23,10 @@ from bugslyce.project_session import (
     build_project_next,
     initialize_project,
     inspect_project_status,
+    list_projects,
     load_project,
     render_project_init_summary,
+    render_project_inventory,
     render_project_next,
     render_project_scaffold_summary,
     render_project_show,
@@ -236,6 +238,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Replace only existing BugSlyce scaffold files when safe.",
+    )
+    project_list_parser = project_subparsers.add_parser(
+        "list",
+        help="List immediate-child local BugSlyce projects.",
+    )
+    project_list_parser.add_argument(
+        "--projects-dir",
+        required=True,
+        type=Path,
+        help="Existing parent directory containing BugSlyce project folders.",
     )
     project_show_parser = project_subparsers.add_parser(
         "show",
@@ -735,6 +747,17 @@ def _project(args: argparse.Namespace) -> int:
         print(render_project_scaffold_summary(result))
         return 0
 
+    if args.project_command == "list":
+        try:
+            result = list_projects(args.projects_dir)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        print(render_project_inventory(result))
+        return 0
+
     if args.project_command == "show":
         try:
             project = load_project(args.project_file)
@@ -770,6 +793,7 @@ def _project(args: argparse.Namespace) -> int:
 
     print(
         "Error: project command required. Use 'bugslyce project scaffold --help', "
+        "'bugslyce project list --help', "
         "'bugslyce project init --help', "
         "'bugslyce project show --help', 'bugslyce project status --help', "
         "or 'bugslyce project next --help'.",

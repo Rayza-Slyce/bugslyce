@@ -196,6 +196,21 @@ files, reports, manifests, and raw evidence are never overwritten. `--force`
 can replace only the two BugSlyce-owned scaffold files in an otherwise clean
 project directory.
 
+### Project Inventory
+
+```bash
+bugslyce project list --projects-dir ./bugslyce-output
+```
+
+Project inventory checks only immediate child directories containing
+`bugslyce_project.json`. It shows each target, creation time, recon-pack
+presence, and project path in deterministic name order. Malformed project
+files are reported without preventing valid projects from being listed.
+
+The inventory is read-only: it creates no files, runs no recon, and makes no
+network requests. It is useful when resuming work or switching between local
+lab targets.
+
 ### Project Init
 
 ```bash

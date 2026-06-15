@@ -90,6 +90,26 @@ class ProjectScaffoldResult:
     project_file: str
 
 
+@dataclass(frozen=True)
+class ProjectInventoryEntry:
+    """One valid or invalid immediate-child project inventory entry."""
+
+    name: str
+    target: str
+    recon_pack_exists: bool | None
+    created_at: str | None
+    project_file: str
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectInventoryResult:
+    """Read-only inventory of projects beneath one local directory."""
+
+    projects_directory: str
+    entries: list[ProjectInventoryEntry]
+
+
 def initialize_project(
     name: str,
     target: str,
@@ -201,6 +221,58 @@ def scaffold_project(
         project_directory=str(project_dir),
         scope_file=str(scope_file),
         project_file=str(project_file),
+    )
+
+
+def list_projects(projects_dir: Path) -> ProjectInventoryResult:
+    """List immediate-child BugSlyce projects without mutating project state."""
+
+    projects_dir = projects_dir.expanduser().resolve()
+    if not projects_dir.exists():
+        raise ValueError(f"Projects directory does not exist: {projects_dir}")
+    if not projects_dir.is_dir():
+        raise ValueError(f"Projects path is not a directory: {projects_dir}")
+
+    entries: list[ProjectInventoryEntry] = []
+    project_files = sorted(
+        (
+            child / PROJECT_FILENAME
+            for child in projects_dir.iterdir()
+            if child.is_dir() and (child / PROJECT_FILENAME).is_file()
+        ),
+        key=lambda path: (path.parent.name.lower(), path.parent.name),
+    )
+    for project_file in project_files:
+        try:
+            project = load_project(project_file)
+        except ValueError as exc:
+            entries.append(
+                ProjectInventoryEntry(
+                    name=project_file.parent.name,
+                    target="invalid",
+                    recon_pack_exists=None,
+                    created_at=None,
+                    project_file=str(project_file.resolve()),
+                    error=str(exc),
+                )
+            )
+            continue
+        entries.append(
+            ProjectInventoryEntry(
+                name=project.name,
+                target=project.target,
+                recon_pack_exists=(
+                    Path(project.output_dir) / "recon_manifest.json"
+                ).is_file(),
+                created_at=project.created_at,
+                project_file=str(project_file.resolve()),
+            )
+        )
+
+    entries.sort(key=lambda entry: (entry.name.lower(), entry.name, entry.project_file))
+    return ProjectInventoryResult(
+        projects_directory=str(projects_dir),
+        entries=entries,
     )
 
 
@@ -500,6 +572,71 @@ def render_project_scaffold_summary(result: ProjectScaffoldResult) -> str:
     )
 
 
+def render_project_inventory(result: ProjectInventoryResult) -> str:
+    """Render a deterministic local project inventory."""
+
+    lines = [
+        "BugSlyce projects",
+        "",
+        f"Projects directory: {result.projects_directory}",
+        f"Projects found: {len(result.entries)}",
+    ]
+    if not result.entries:
+        lines.extend(
+            [
+                "",
+                "No BugSlyce project files were found.",
+                "Create one with:",
+                "bugslyce project scaffold --name NAME --target TARGET "
+                f"--projects-dir {shlex.quote(result.projects_directory)}",
+            ]
+        )
+    else:
+        rows = [
+            (
+                entry.name,
+                entry.target,
+                _inventory_recon_pack_label(entry.recon_pack_exists),
+                entry.created_at or "not recorded",
+                entry.project_file,
+            )
+            for entry in result.entries
+        ]
+        headers = ("Name", "Target", "Recon Pack", "Created At", "Path")
+        widths = [
+            max(len(headers[index]), *(len(row[index]) for row in rows))
+            for index in range(len(headers))
+        ]
+        lines.extend(
+            [
+                "",
+                _format_inventory_row(headers, widths),
+                _format_inventory_row(
+                    tuple("-" * width for width in widths),
+                    widths,
+                ),
+            ]
+        )
+        lines.extend(_format_inventory_row(row, widths) for row in rows)
+
+        invalid_entries = [entry for entry in result.entries if entry.error]
+        if invalid_entries:
+            lines.extend(["", "Warnings:"])
+            lines.extend(
+                f"* Invalid project file {entry.project_file}: {entry.error}"
+                for entry in invalid_entries
+            )
+
+    lines.extend(
+        [
+            "",
+            "No commands were executed.",
+            "No network requests were made.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def render_project_show(project: BugSlyceProject, project_file: Path) -> str:
     """Render project metadata without inspecting recon state."""
 
@@ -796,6 +933,21 @@ def _render_scope_template(target: str) -> str:
             "",
         ]
     )
+
+
+def _inventory_recon_pack_label(value: bool | None) -> str:
+    if value is None:
+        return "invalid"
+    return "yes" if value else "no"
+
+
+def _format_inventory_row(
+    values: tuple[str, ...],
+    widths: list[int],
+) -> str:
+    return "  ".join(
+        value.ljust(widths[index]) for index, value in enumerate(values)
+    ).rstrip()
 
 
 def _required_text(payload: dict[str, object], key: str) -> str:
