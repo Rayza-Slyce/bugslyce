@@ -226,6 +226,28 @@ Runbook generation uses local project metadata and evidence only. It performs
 no recon, executes no suggested command, and makes no network requests. The
 generated file can be safely regenerated when resuming a project later.
 
+### Safe Project Pipeline
+
+```bash
+bugslyce project run \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json \
+  --profile lab-safe-tiny \
+  --confirm
+```
+
+The `lab-safe-tiny` pipeline runs the existing approved full-TCP discovery,
+service scan, HTTP metadata, evidence-derived path follow-up, tiny root
+content discovery, content-result follow-up, selective body fetch, status,
+runbook, and evidence export phases in order. It requires explicit
+confirmation, stops on the first required failure, and writes
+`project_pipeline.json` and `project_pipeline.md`.
+
+This first pipeline version expects a fresh scaffolded project. It refuses an
+existing recon manifest, content-plan directory, or evidence-pack ZIP rather
+than mixing old and new evidence. It does not add NSE scripts, UDP scans,
+brute force, exploitation, recursion, form submission, authentication
+testing, arbitrary flags, arbitrary wordlists, or arbitrary commands.
+
 ### Project Init
 
 ```bash

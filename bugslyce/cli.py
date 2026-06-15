@@ -36,6 +36,12 @@ from bugslyce.project_session import (
     scaffold_project,
     write_project_runbook,
 )
+from bugslyce.project_pipeline import (
+    PIPELINE_PROFILE,
+    ProjectPipelineFailed,
+    render_project_pipeline_summary,
+    run_project_pipeline,
+)
 from bugslyce.recon.curl_headers import (
     render_curl_header_execution_summary,
     run_curl_header_workflow,
@@ -262,6 +268,27 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Path to bugslyce_project.json.",
+    )
+    project_run_parser = project_subparsers.add_parser(
+        "run",
+        help="Run the confirmed approved lab-safe-tiny project pipeline.",
+    )
+    project_run_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
+    project_run_parser.add_argument(
+        "--profile",
+        required=True,
+        help=f"Approved project pipeline profile: {PIPELINE_PROFILE}.",
+    )
+    project_run_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Explicitly confirm bounded live project pipeline execution.",
     )
     project_show_parser = project_subparsers.add_parser(
         "show",
@@ -784,6 +811,35 @@ def _project(args: argparse.Namespace) -> int:
         print(render_project_runbook_summary(result))
         return 0
 
+    if args.project_command == "run":
+        if not args.confirm:
+            print(
+                "Error: live project pipeline execution requires explicit --confirm.",
+                file=sys.stderr,
+            )
+            print("No pipeline phase was executed.", file=sys.stderr)
+            return 2
+        try:
+            result = run_project_pipeline(
+                project_file=args.project_file,
+                profile=args.profile,
+                progress_callback=print,
+            )
+        except ProjectPipelineFailed as exc:
+            result = exc.result
+            failed = next(step for step in result.steps if step.status == "failed")
+            print(f"Error: {exc}", file=sys.stderr)
+            print(f"Pipeline stopped at step {failed.step_id}.", file=sys.stderr)
+            print("No later steps were executed.", file=sys.stderr)
+            print("Review the error and local evidence.", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No pipeline phase was executed.", file=sys.stderr)
+            return 2
+        print(render_project_pipeline_summary(result))
+        return 0
+
     if args.project_command == "show":
         try:
             project = load_project(args.project_file)
@@ -821,6 +877,7 @@ def _project(args: argparse.Namespace) -> int:
         "Error: project command required. Use 'bugslyce project scaffold --help', "
         "'bugslyce project list --help', "
         "'bugslyce project runbook --help', "
+        "'bugslyce project run --help', "
         "'bugslyce project init --help', "
         "'bugslyce project show --help', 'bugslyce project status --help', "
         "or 'bugslyce project next --help'.",
