@@ -1,47 +1,52 @@
-"""README release-readiness checks."""
+"""README MVP release-readiness checks."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 
-def test_readme_contains_mvp_workflow_and_candidate_language() -> None:
-    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+    lowered = readme.lower()
 
-    assert "does not gather recon itself yet" in readme
-    assert "candidates are manual review leads" in readme.lower()
-    assert "Priority means manual attention priority" in readme
-    assert "Automated recon is planned later" in readme
-    assert "## Recon Plan Mode" in readme
-    assert "It does not execute nmap, curl, gobuster, ffuf" in readme
-    assert "`lab-full`" in readme
-    assert "`bug-bounty-standard`" in readme
-    assert "`passive-only`" in readme
-    assert "`recon_manifest.json` remains the bridge" in readme
-    assert "### Recon Execution Dry Run" in readme
-    assert "bugslyce recon execute" in readme
-    assert "It does not run commands." in readme
-    assert "Live recon execution is not implemented yet" in readme
-    assert "### Recon Safety Preflight" in readme
-    assert "bugslyce recon preflight" in readme
-    assert "Expected local tool availability using PATH lookup only" in readme
-    assert "Preflight does not run commands or contact targets" in readme
-    assert "required safety layer" in readme
-    assert "### Passive-only Execution" in readme
-    assert "--passive-only" in readme
-    assert "--input-dir" in readme
-    assert "`recon_execution.json`" in readme
-    assert "does not run network commands or execute command-preview strings" in readme
-    assert "### Structured Command Foundation" in readme
-    assert "structured argument lists rather than shell command strings" in readme
-    assert "The simulated runner remains available" in readme
-    assert "ports derived from saved BugSlyce discovery output" in readme
-    assert "bounded timeouts" in readme
-    assert "### Scoped Curl Header Request" in readme
-    assert "bugslyce recon curl-headers" in readme
-    assert "Requires explicit `--confirm`" in readme
-    assert "exact URL host to appear" in readme
-    assert "NSE-based nmap scanning and live gobuster execution remain unimplemented" in readme
-    assert "valid manifest is present, it is the primary input description" in readme
-    assert "are not required and do not generate missing-file warnings" in readme
-    assert "manifest-listed artifacts still generate warnings" in readme
+    for command in (
+        "bugslyce doctor",
+        "bugslyce project scaffold",
+        "bugslyce project run",
+        "bugslyce project next",
+        "bugslyce recon export",
+    ):
+        assert command in readme
+
+    assert "lab-safe-tiny" in readme
+    assert "--resume" in readme
+    assert "report.md" in readme
+    assert "evidence-pack.zip" in readme
+    assert "manual validation" in lowered
+
+    for boundary in (
+        "No NSE scripts",
+        "No UDP scans",
+        "No brute force",
+        "No exploitation",
+        "No recursive discovery",
+        "No form submission",
+        "No authentication testing",
+        "No LLM calls",
+    ):
+        assert boundary in readme
+
+
+def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "## Current MVP Limitations" in readme
+    assert "## MVP Release Checkpoint" in readme
+    assert "Current version: `0.1.0`" in readme
+    assert "Release tag: not yet created" in readme
+    assert "There is no vulnerability confirmation" in readme
+    assert "does not replace human programme-scope review" in readme
