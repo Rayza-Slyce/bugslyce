@@ -12,6 +12,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     lowered = readme.lower()
 
     for command in (
+        "bugslyce",
         "bugslyce doctor",
         "bugslyce project scaffold",
         "bugslyce project run",
@@ -21,6 +22,8 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
         assert command in readme
 
     assert "lab-safe-tiny" in readme
+    assert "Quick Safe Recon" in readme
+    assert "Manual Setup Only" in readme
     assert "--resume" in readme
     assert "report.md" in readme
     assert "evidence-pack.zip" in readme
@@ -60,10 +63,13 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
     walkthrough = walkthrough_path.read_text(encoding="utf-8")
     lowered = walkthrough.lower()
     for expected in (
+        "bugslyce",
         "bugslyce doctor",
         "bugslyce project scaffold",
         "bugslyce project run",
         "lab-safe-tiny",
+        "Quick Safe Recon",
+        "Manual Setup Only",
         "--resume",
         "report.md",
     ):

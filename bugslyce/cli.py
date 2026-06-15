@@ -17,6 +17,7 @@ from bugslyce.config import (
 )
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
+from bugslyce.interactive import run_interactive_launcher
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
 from bugslyce.project_session import (
@@ -135,8 +136,21 @@ from bugslyce.wizard import render_wizard
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the BugSlyce CLI."""
 
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    if not raw_argv:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            try:
+                return run_interactive_launcher()
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                print("No commands were executed.", file=sys.stderr)
+                print("No network requests were made.", file=sys.stderr)
+                return 2
+        parser.print_help()
+        return 0
+
+    args = parser.parse_args(raw_argv)
 
     if args.command == "run":
         return _run(args.input_dir, args.output_dir)

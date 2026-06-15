@@ -62,6 +62,20 @@ package data.
 
 ## Quick Start
 
+For a new user in an interactive terminal, start with:
+
+```bash
+bugslyce
+```
+
+The interactive launcher can run doctor/readiness checks, scaffold a project,
+choose **Quick Safe Recon** or **Manual Setup Only**, confirm authorisation,
+and optionally run the safe MVP pipeline. Quick Safe Recon maps to the current
+`lab-safe-tiny` pipeline. Manual Setup Only creates local project files and
+prints the next safe command preview without running recon.
+
+Advanced users and automation can use the direct commands below.
+
 Check local readiness:
 
 ```bash

@@ -10,6 +10,25 @@ target you are explicitly authorised to assess. Review the actual programme
 or lab scope before running recon; this document does not grant
 authorisation.
 
+## Interactive Mode
+
+The easiest MVP path in an interactive terminal is:
+
+```bash
+bugslyce
+```
+
+The launcher presents:
+
+- **Quick Safe Recon**: maps to the current `lab-safe-tiny` pipeline for a
+  fast, bounded first pass with the tiny bundled wordlist.
+- **Manual Setup Only**: creates the project and scope template, then prints
+  the next safe command preview without running recon.
+
+The launcher still requires exact `YES` confirmation before creating a
+project or running live recon. Non-interactive shells should use the direct
+commands below.
+
 ## 1. Check Local Readiness
 
 From the BugSlyce repository or an activated editable-install environment:
