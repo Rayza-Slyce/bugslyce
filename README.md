@@ -107,6 +107,10 @@ bugslyce project next \
 
 `project next` prints command previews only. It does not execute them.
 
+See [docs/DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) for a complete
+fictional-target MVP walkthrough from readiness checks through review, resume,
+and evidence handling.
+
 ## Pipeline Workflow
 
 The fixed `lab-safe-tiny` pipeline runs these approved stages in order:

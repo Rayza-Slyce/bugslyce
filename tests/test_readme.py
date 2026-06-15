@@ -50,3 +50,29 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     assert "Release tag: not yet created" in readme
     assert "There is no vulnerability confirmation" in readme
     assert "does not replace human programme-scope review" in readme
+
+
+def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
+    root = Path(__file__).resolve().parents[1]
+    walkthrough_path = root / "docs" / "DEMO_WALKTHROUGH.md"
+    assert walkthrough_path.is_file()
+
+    walkthrough = walkthrough_path.read_text(encoding="utf-8")
+    lowered = walkthrough.lower()
+    for expected in (
+        "bugslyce doctor",
+        "bugslyce project scaffold",
+        "bugslyce project run",
+        "lab-safe-tiny",
+        "--resume",
+        "report.md",
+    ):
+        assert expected in walkthrough
+
+    assert "brute force" in lowered
+    assert "exploitation" in lowered
+    assert "authorised lab-style target" in lowered
+    assert "example target `10.10.10.10` is a placeholder" in lowered
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "docs/DEMO_WALKTHROUGH.md" in readme
