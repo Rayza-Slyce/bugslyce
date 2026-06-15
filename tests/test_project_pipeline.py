@@ -36,6 +36,7 @@ def test_project_run_help_exists(capsys) -> None:
     assert "--project" in captured.out
     assert "--profile" in captured.out
     assert "--confirm" in captured.out
+    assert "--resume" in captured.out
 
 
 def test_cli_project_run_requires_confirm(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -60,6 +61,48 @@ def test_cli_project_run_requires_confirm(tmp_path: Path, monkeypatch, capsys) -
     assert exit_code != 0
     assert "requires explicit --confirm" in captured.err
     assert "No pipeline phase was executed." in captured.err
+
+
+def test_cli_project_run_forwards_resume(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    received: dict[str, object] = {}
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace(
+            project_name="pipeline-test",
+            target="10.10.10.10",
+            profile=PIPELINE_PROFILE,
+            resume_requested=True,
+            final_status="completed",
+            report_path=str(output_dir / "report.md"),
+            runbook_path=str(output_dir / "runbook.md"),
+            export_path=f"{output_dir}-evidence-pack.zip",
+        )
+
+    monkeypatch.setattr("bugslyce.cli.run_project_pipeline", fake_pipeline)
+    exit_code = main(
+        [
+            "project",
+            "run",
+            "--project",
+            str(project_file),
+            "--profile",
+            PIPELINE_PROFILE,
+            "--confirm",
+            "--resume",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert received["resume"] is True
+    assert received["project_file"] == project_file
+    assert "Resume: true" in captured.out
 
 
 def test_pipeline_rejects_unsupported_profile_and_invalid_project(
@@ -261,6 +304,301 @@ def test_pipeline_records_noop_followups_and_continues(
     assert "content-followup-write" not in calls
     assert "body-fetch-write" not in calls
     assert "export" in calls
+
+
+def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+        ],
+    )
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    progress: list[str] = []
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
+    )
+
+    assert "nmap-discover" not in calls
+    assert "nmap-services" not in calls
+    assert "http-metadata" not in calls
+    assert calls[0] == "path-followup"
+    assert [step.status for step in result.steps[:4]] == [
+        "completed",
+        "skipped_existing",
+        "skipped_existing",
+        "skipped_existing",
+    ]
+    assert result.resume_requested is True
+    assert result.reused_existing_evidence is True
+    assert result.skipped_steps == 3
+    assert "Resume: true" in progress[0]
+    assert (
+        "[2/12] nmap full TCP discovery skipped; existing evidence detected."
+        in progress
+    )
+    payload = json.loads(
+        (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    assert payload["resume_requested"] is True
+    assert payload["reused_existing_evidence"] is True
+    assert payload["skipped_steps"] == 3
+    assert "Resume: `true`" in (
+        output_dir / PIPELINE_MARKDOWN_FILENAME
+    ).read_text(encoding="utf-8")
+
+
+def test_resume_uses_valid_tiny_plan_and_skips_content_plan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+        ],
+    )
+    plan_path = _write_plan_file(output_dir)
+    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert result.steps[5].status == "skipped_existing"
+    assert "content-plan" not in calls
+    assert "content-run" in calls
+
+
+def test_resume_records_followup_noops_and_continues(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+            "gobuster-tiny-10.10.10.10-80-root.txt",
+        ],
+    )
+    plan_path = _write_plan_file(output_dir)
+    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_followup_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ContentFollowupNoWork(4)),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_body_fetch_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(BodyFetchNoWork(2)),
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert result.steps[7].status == "noop"
+    assert result.steps[8].status == "noop"
+    assert result.no_op_steps == 2
+    assert result.steps[9].status == "completed"
+    assert result.steps[10].status == "completed"
+    assert result.steps[11].status == "completed"
+
+
+def test_resume_refuses_target_and_content_plan_mismatches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(output_dir, ["nmap-allports.txt"], target="192.0.2.10")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    with pytest.raises(ValueError, match="does not match the existing recon manifest"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+        ],
+    )
+    plan_path = _write_plan_file(output_dir)
+    project = json.loads(project_file.read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.load_content_discovery_plan",
+        lambda path: SimpleNamespace(
+            target="192.0.2.10",
+            profile="lab-root-tiny",
+            input_dir=str(output_dir),
+            output_dir=str(plan_path.parent),
+            scope_file=project["scope_file"],
+        ),
+    )
+    with pytest.raises(ValueError, match="Existing content plan does not match"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+
+def test_resume_refuses_incoherent_or_missing_manifest_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    _write_resume_evidence(output_dir, ["nmap-services-all.txt"])
+    with pytest.raises(ValueError, match="not a coherent pipeline prefix"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+    manifest = {
+        "schema_version": "1.0",
+        "target": "10.10.10.10",
+        "artifacts": [{"type": "nmap", "file": "nmap-allports.txt"}],
+    }
+    (output_dir / "recon_manifest.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="references missing artifact"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+
+def test_resume_rejects_manifest_artifact_path_escape(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not project evidence\n", encoding="utf-8")
+    (output_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "artifacts": [{"type": "nmap", "file": "../outside.txt"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    with pytest.raises(ValueError, match="escapes the project output directory"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+
+def test_resume_export_requires_verified_completion_and_can_be_skipped(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    export_path.write_bytes(b"existing")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    with pytest.raises(ValueError, match="completed prior pipeline cannot be verified"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+    artifact_names = [
+        "nmap-allports.txt",
+        "nmap-services-all.txt",
+        "curl-headers-10.10.10.10-80.txt",
+        "curl-headers-followup-10.10.10.10-80-manual.txt",
+        "gobuster-tiny-10.10.10.10-80-root.txt",
+        "curl-headers-content-followup-10.10.10.10-80-admin.txt",
+        "body-fetch-10.10.10.10-80-admin.html",
+    ]
+    _write_resume_evidence(output_dir, artifact_names)
+    plan_path = _write_plan_file(output_dir)
+    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    _write_prior_pipeline(project_file, output_dir, export_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert calls == ["status", "status-write", "runbook", "runbook-write"]
+    assert result.steps[11].status == "skipped_existing"
+    assert result.export_path == str(export_path)
+    assert result.final_status == "completed"
+
+
+def test_resumed_required_failure_stops_later_steps(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(output_dir, ["nmap-allports.txt"])
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def fail_services(*args, **kwargs):
+        calls.append("nmap-services")
+        raise ValueError("mocked resumed service failure")
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_nmap_service_workflow",
+        fail_services,
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            PIPELINE_PROFILE,
+            resume=True,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    assert result.steps[1].status == "skipped_existing"
+    assert result.steps[2].status == "failed"
+    assert result.failed_step == "PIPELINE-STEP-003"
+    assert result.steps[3].status == "pending"
+    assert "http-metadata" not in calls
 
 
 def test_pipeline_stops_on_required_failure_and_records_pending_later_steps(
@@ -498,4 +836,82 @@ def _patch_successful_pipeline(
     monkeypatch.setattr(
         "bugslyce.project_pipeline.export_recon_evidence_pack",
         phase("export", output_path=f"{output_dir}-evidence-pack.zip"),
+    )
+
+
+def _write_resume_evidence(
+    output_dir: Path,
+    names: list[str],
+    *,
+    target: str = "10.10.10.10",
+) -> None:
+    artifacts = []
+    for name in names:
+        (output_dir / name).write_text("local fixture evidence\n", encoding="utf-8")
+        artifact_type = "nmap" if name.startswith("nmap-") else "http_headers"
+        if name.startswith("gobuster"):
+            artifact_type = "gobuster"
+        elif name.startswith("body-fetch-"):
+            artifact_type = "html"
+        artifacts.append({"type": artifact_type, "file": name})
+    (output_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": target,
+                "profile": "lab-tcp-full",
+                "artifacts": artifacts,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_plan_file(output_dir: Path) -> Path:
+    plan_dir = Path(f"{output_dir}-content-plan-tiny")
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = plan_dir / "content_discovery_plan.json"
+    plan_path.write_text("{}\n", encoding="utf-8")
+    return plan_path
+
+
+def _patch_plan_loader(
+    monkeypatch,
+    project_file: Path,
+    output_dir: Path,
+    plan_path: Path,
+) -> None:
+    project = json.loads(project_file.read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.load_content_discovery_plan",
+        lambda path: SimpleNamespace(
+            target="10.10.10.10",
+            profile="lab-root-tiny",
+            input_dir=str(output_dir),
+            output_dir=str(plan_path.parent),
+            scope_file=project["scope_file"],
+        ),
+    )
+
+
+def _write_prior_pipeline(
+    project_file: Path,
+    output_dir: Path,
+    export_path: Path,
+) -> None:
+    (output_dir / PIPELINE_JSON_FILENAME).write_text(
+        json.dumps(
+            {
+                "target": "10.10.10.10",
+                "profile": PIPELINE_PROFILE,
+                "project_file": str(project_file.resolve()),
+                "output_dir": str(output_dir.resolve()),
+                "final_status": "completed",
+                "export_path": str(export_path.resolve()),
+                "steps": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )

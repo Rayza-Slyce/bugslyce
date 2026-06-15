@@ -32,6 +32,7 @@ from bugslyce.recon.content_plan import (
 )
 from bugslyce.recon.content_run import (
     ContentDiscoveryExecutionIncomplete,
+    load_content_discovery_plan,
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
 )
@@ -89,6 +90,12 @@ class PipelineResult:
     started_at: str
     completed_at: str | None
     final_status: str
+    resume_requested: bool
+    reused_existing_evidence: bool
+    skipped_steps: int
+    no_op_steps: int
+    completed_steps: int
+    failed_step: str | None
     steps: list[PipelineStep]
     report_path: str | None
     runbook_path: str | None
@@ -104,10 +111,19 @@ class ProjectPipelineFailed(ValueError):
         self.result = result
 
 
+@dataclass(frozen=True)
+class ResumeAssessment:
+    """Validated existing state that can be reused by a resumed pipeline."""
+
+    skipped_step_ids: frozenset[str]
+    prior_pipeline: dict[str, object] | None
+
+
 def run_project_pipeline(
     project_file: Path,
     profile: str,
     *,
+    resume: bool = False,
     clock: Clock | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> PipelineResult:
@@ -126,16 +142,26 @@ def run_project_pipeline(
     plan_dir = Path(f"{output_dir}-content-plan-tiny")
     plan_path = plan_dir / "content_discovery_plan.json"
     export_path = Path(f"{output_dir}-evidence-pack.zip")
-    _validate_fresh_pipeline(
+    assessment = _validate_pipeline(
         project.target,
+        project_file,
         scope_file,
         output_dir,
         plan_dir,
+        plan_path,
         export_path,
         build_doctor_report(),
+        resume=resume,
     )
 
     steps = _pending_steps()
+    for index, step in enumerate(steps):
+        if step.step_id in assessment.skipped_step_ids:
+            steps[index] = replace(
+                step,
+                status="skipped_existing",
+                message="Existing evidence detected; phase skipped during resume.",
+            )
     result = PipelineResult(
         project_name=project.name,
         target=project.target,
@@ -146,10 +172,24 @@ def run_project_pipeline(
         started_at=utc_now_iso(clock),
         completed_at=None,
         final_status="running",
+        resume_requested=resume,
+        reused_existing_evidence=bool(assessment.skipped_step_ids),
+        skipped_steps=len(assessment.skipped_step_ids),
+        no_op_steps=0,
+        completed_steps=0,
+        failed_step=None,
         steps=steps,
-        report_path=None,
+        report_path=(
+            str(output_dir / "report.md")
+            if (output_dir / "report.md").is_file()
+            else None
+        ),
         runbook_path=None,
-        export_path=None,
+        export_path=(
+            str(export_path)
+            if "PIPELINE-STEP-012" in assessment.skipped_step_ids
+            else None
+        ),
         no_unapproved_actions=True,
     )
     _emit(
@@ -160,6 +200,7 @@ def run_project_pipeline(
                 f"Project: {project.name}",
                 f"Target: {project.target}",
                 f"Profile: {profile}",
+                f"Resume: {str(resume).lower()}",
                 "This pipeline performs bounded live recon against the project target.",
                 "Review scope before running.",
             ]
@@ -174,10 +215,17 @@ def run_project_pipeline(
         "plan_path": plan_path,
         "export_path": export_path,
         "target": project.target,
+        "resume": resume,
     }
     step_runners = _step_runners(context, clock)
     for index, step in enumerate(result.steps):
         position = index + 1
+        if step.status == "skipped_existing":
+            _emit(
+                progress_callback,
+                f"[{position}/12] {step.name} skipped; existing evidence detected.",
+            )
+            continue
         _emit(progress_callback, f"[{position}/12] {step.name} starting...")
         started_step = replace(step, status="running", started_at=utc_now_iso(clock))
         result = _replace_step(result, index, started_step)
@@ -192,6 +240,7 @@ def run_project_pipeline(
                 output_paths=[],
             )
             result = _replace_step(result, index, completed_step)
+            result = _refresh_result_counts(result)
             _emit(progress_callback, f"[{position}/12] {step.name} no-op")
             continue
         except (
@@ -231,10 +280,11 @@ def run_project_pipeline(
         )
         result = _replace_step(result, index, completed_step)
         result = replace(result, **updates)
+        result = _refresh_result_counts(result)
         _emit(progress_callback, f"[{position}/12] {step.name} complete")
 
     result = replace(
-        result,
+        _refresh_result_counts(result),
         completed_at=utc_now_iso(clock),
         final_status="completed",
     )
@@ -271,6 +321,12 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
         f"- Started at: `{result.started_at}`",
         f"- Completed at: `{result.completed_at or 'not completed'}`",
         f"- Final status: `{result.final_status}`",
+        f"- Resume: `{str(result.resume_requested).lower()}`",
+        f"- Reused existing evidence: `{str(result.reused_existing_evidence).lower()}`",
+        f"- Completed steps: `{result.completed_steps}`",
+        f"- Skipped existing steps: `{result.skipped_steps}`",
+        f"- No-op steps: `{result.no_op_steps}`",
+        f"- Failed step: `{result.failed_step or 'none'}`",
         f"- No unapproved actions: `{str(result.no_unapproved_actions).lower()}`",
         "",
         "## Steps",
@@ -321,6 +377,7 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
             f"Project: {result.project_name}",
             f"Target: {result.target}",
             f"Profile: {result.profile}",
+            f"Resume: {str(result.resume_requested).lower()}",
             f"Final status: {result.final_status}",
             f"Report path: {result.report_path or 'not written'}",
             f"Runbook path: {result.runbook_path or 'not written'}",
@@ -330,26 +387,46 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
     )
 
 
-def _validate_fresh_pipeline(
+def _validate_pipeline(
     target: str,
+    project_file: Path,
     scope_file: Path,
     output_dir: Path,
     plan_dir: Path,
+    plan_path: Path,
     export_path: Path,
     doctor: DoctorReport,
-) -> None:
+    *,
+    resume: bool,
+) -> ResumeAssessment:
     if not output_dir.is_dir():
         raise ValueError(f"Project output directory does not exist: {output_dir}")
     validate_explicit_nmap_target_scope(target, scope_file)
-    if (output_dir / "recon_manifest.json").exists():
-        raise ValueError(
-            "Existing recon pack detected. Use project status/next or start with "
-            "a clean project directory."
-        )
-    if plan_dir.exists():
-        raise ValueError(f"Content plan directory already exists: {plan_dir}")
-    if export_path.exists():
-        raise ValueError(f"Evidence pack output already exists: {export_path}")
+    _validate_readiness(doctor)
+    if not resume:
+        if (output_dir / "recon_manifest.json").exists():
+            raise ValueError(
+                "Existing recon pack detected. Use project status/next or start with "
+                "a clean project directory."
+            )
+        if plan_dir.exists():
+            raise ValueError(f"Content plan directory already exists: {plan_dir}")
+        if export_path.exists():
+            raise ValueError(f"Evidence pack output already exists: {export_path}")
+        return ResumeAssessment(frozenset(), None)
+
+    return _assess_resume_state(
+        target=target,
+        project_file=project_file,
+        scope_file=scope_file,
+        output_dir=output_dir,
+        plan_dir=plan_dir,
+        plan_path=plan_path,
+        export_path=export_path,
+    )
+
+
+def _validate_readiness(doctor: DoctorReport) -> None:
     if not doctor.python_supported or not doctor.project_commands_available:
         raise ValueError("BugSlyce doctor reports required runtime checks are not ready.")
     if not doctor.bundled_wordlist_available:
@@ -363,6 +440,250 @@ def _validate_fresh_pipeline(
             + ", ".join(missing_tools)
             + "."
         )
+
+
+def _assess_resume_state(
+    *,
+    target: str,
+    project_file: Path,
+    scope_file: Path,
+    output_dir: Path,
+    plan_dir: Path,
+    plan_path: Path,
+    export_path: Path,
+) -> ResumeAssessment:
+    manifest_path = output_dir / "recon_manifest.json"
+    manifest = (
+        _load_json_object(manifest_path, "recon manifest")
+        if manifest_path.exists()
+        else None
+    )
+    artifact_names: set[str] = set()
+    if manifest is not None:
+        manifest_target = _required_json_text(manifest, "target", "Recon manifest")
+        if manifest_target.lower().rstrip(".") != target.lower().rstrip("."):
+            raise ValueError(
+                "Project target does not match the existing recon manifest target."
+            )
+        artifact_names = _validated_manifest_artifact_names(manifest, output_dir)
+
+    prior_pipeline_path = output_dir / PIPELINE_JSON_FILENAME
+    prior_pipeline = (
+        _load_json_object(prior_pipeline_path, "project pipeline metadata")
+        if prior_pipeline_path.exists()
+        else None
+    )
+    if prior_pipeline is not None:
+        _validate_prior_pipeline(
+            prior_pipeline,
+            target=target,
+            project_file=project_file,
+            output_dir=output_dir,
+        )
+
+    if plan_dir.exists() and not plan_dir.is_dir():
+        raise ValueError(f"Content plan path is not a directory: {plan_dir}")
+    if plan_dir.exists() and not plan_path.is_file():
+        raise ValueError(
+            "Content plan directory exists without content_discovery_plan.json; "
+            "resume state is ambiguous."
+        )
+    plan_complete = False
+    if plan_path.is_file():
+        plan = load_content_discovery_plan(plan_path)
+        if (
+            plan.target.lower().rstrip(".") != target.lower().rstrip(".")
+            or plan.profile != CONTENT_DISCOVERY_TINY_PROFILE
+            or Path(plan.input_dir).expanduser().resolve() != output_dir
+            or Path(plan.output_dir).expanduser().resolve() != plan_dir
+            or Path(plan.scope_file).expanduser().resolve() != scope_file
+        ):
+            raise ValueError(
+                "Existing content plan does not match this project target, profile, "
+                "scope, or output paths."
+            )
+        plan_complete = True
+
+    prior_statuses = _prior_step_statuses(prior_pipeline)
+    detected = {
+        "PIPELINE-STEP-002": "nmap-allports.txt" in artifact_names,
+        "PIPELINE-STEP-003": any(
+            name.startswith("nmap-services") for name in artifact_names
+        ),
+        "PIPELINE-STEP-004": any(
+            name.startswith(("homepage-", "robots-", "curl-headers-"))
+            and not name.startswith(
+                ("curl-headers-followup-", "curl-headers-content-followup-")
+            )
+            for name in artifact_names
+        ),
+        "PIPELINE-STEP-005": any(
+            name.startswith("curl-headers-followup-") for name in artifact_names
+        ),
+        "PIPELINE-STEP-006": plan_complete,
+        "PIPELINE-STEP-007": any(
+            name.startswith("gobuster-tiny-") for name in artifact_names
+        ),
+        "PIPELINE-STEP-008": any(
+            name.startswith("curl-headers-content-followup-")
+            for name in artifact_names
+        )
+        or prior_statuses.get("PIPELINE-STEP-008") == "noop",
+        "PIPELINE-STEP-009": any(
+            name.startswith("body-fetch-") for name in artifact_names
+        )
+        or prior_statuses.get("PIPELINE-STEP-009") == "noop",
+    }
+    _validate_resume_phase_order(detected)
+
+    skipped = {step_id for step_id, complete in detected.items() if complete}
+    if export_path.exists():
+        if not export_path.is_file():
+            raise ValueError(f"Evidence pack output is not a file: {export_path}")
+        if prior_pipeline is None or prior_pipeline.get("final_status") != "completed":
+            raise ValueError(
+                "Evidence pack output exists but a completed prior pipeline cannot "
+                "be verified; refusing resume before live phases."
+            )
+        recorded_export = prior_pipeline.get("export_path")
+        if not isinstance(recorded_export, str) or (
+            Path(recorded_export).expanduser().resolve() != export_path
+        ):
+            raise ValueError(
+                "Existing evidence pack path does not match completed pipeline metadata."
+            )
+        skipped.add("PIPELINE-STEP-012")
+
+    return ResumeAssessment(frozenset(skipped), prior_pipeline)
+
+
+def _load_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not parse {label} {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label.capitalize()} must contain a JSON object.")
+    return payload
+
+
+def _required_json_text(
+    payload: dict[str, object],
+    key: str,
+    label: str,
+) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} does not contain a valid {key}.")
+    return value.strip()
+
+
+def _validated_manifest_artifact_names(
+    manifest: dict[str, object],
+    output_dir: Path,
+) -> set[str]:
+    raw_artifacts = manifest.get("artifacts")
+    if not isinstance(raw_artifacts, list):
+        raise ValueError("Recon manifest artifacts must be a list.")
+    names: set[str] = set()
+    for index, artifact in enumerate(raw_artifacts, start=1):
+        if not isinstance(artifact, dict):
+            raise ValueError(f"Recon manifest artifact {index} must be an object.")
+        raw_file = artifact.get("file")
+        if not isinstance(raw_file, str) or not raw_file.strip():
+            raise ValueError(f"Recon manifest artifact {index} has no valid file path.")
+        candidate = Path(raw_file).expanduser()
+        resolved = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (output_dir / candidate).resolve()
+        )
+        try:
+            resolved.relative_to(output_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"Recon manifest artifact escapes the project output directory: {raw_file}"
+            ) from exc
+        if not resolved.is_file():
+            raise ValueError(
+                f"Recon manifest references missing artifact; resume is ambiguous: {raw_file}"
+            )
+        names.add(resolved.name)
+    return names
+
+
+def _validate_prior_pipeline(
+    payload: dict[str, object],
+    *,
+    target: str,
+    project_file: Path,
+    output_dir: Path,
+) -> None:
+    if _required_json_text(payload, "target", "Project pipeline metadata").lower().rstrip(
+        "."
+    ) != target.lower().rstrip("."):
+        raise ValueError("Prior pipeline metadata target does not match this project.")
+    if payload.get("profile") != PIPELINE_PROFILE:
+        raise ValueError("Prior pipeline metadata uses an unsupported project profile.")
+    for key, expected in (("project_file", project_file), ("output_dir", output_dir)):
+        value = payload.get(key)
+        if not isinstance(value, str) or Path(value).expanduser().resolve() != expected:
+            raise ValueError(
+                f"Prior pipeline metadata {key} does not match this project."
+            )
+
+
+def _prior_step_statuses(
+    payload: dict[str, object] | None,
+) -> dict[str, str]:
+    if payload is None:
+        return {}
+    raw_steps = payload.get("steps")
+    if not isinstance(raw_steps, list):
+        return {}
+    statuses: dict[str, str] = {}
+    for step in raw_steps:
+        if not isinstance(step, dict):
+            continue
+        step_id = step.get("step_id")
+        status = step.get("status")
+        if isinstance(step_id, str) and isinstance(status, str):
+            statuses[step_id] = status
+    return statuses
+
+
+def _validate_resume_phase_order(detected: dict[str, bool]) -> None:
+    missing_seen = False
+    for step_id in (
+        "PIPELINE-STEP-002",
+        "PIPELINE-STEP-003",
+        "PIPELINE-STEP-004",
+        "PIPELINE-STEP-005",
+        "PIPELINE-STEP-006",
+        "PIPELINE-STEP-007",
+        "PIPELINE-STEP-008",
+        "PIPELINE-STEP-009",
+    ):
+        if not detected[step_id]:
+            missing_seen = True
+        elif missing_seen:
+            raise ValueError(
+                "Existing resume evidence is not a coherent pipeline prefix; "
+                f"{step_id} is present after an earlier missing phase."
+            )
+
+
+def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
+    return replace(
+        result,
+        skipped_steps=sum(step.status == "skipped_existing" for step in result.steps),
+        no_op_steps=sum(step.status == "noop" for step in result.steps),
+        completed_steps=sum(step.status == "completed" for step in result.steps),
+        failed_step=next(
+            (step.step_id for step in result.steps if step.status == "failed"),
+            None,
+        ),
+    )
 
 
 def _pending_steps() -> list[PipelineStep]:
@@ -403,6 +724,7 @@ def _step_runners(
     export_path = context["export_path"]
     target = context["target"]
     project_file = context["project_file"]
+    resume = context["resume"]
     assert isinstance(output_dir, Path)
     assert isinstance(scope_file, Path)
     assert isinstance(plan_dir, Path)
@@ -410,9 +732,11 @@ def _step_runners(
     assert isinstance(export_path, Path)
     assert isinstance(target, str)
     assert isinstance(project_file, Path)
+    assert isinstance(resume, bool)
 
     def validation():
-        return "Local readiness, fresh output, and exact scope checks passed.", [], {}
+        state = "resume provenance" if resume else "fresh output"
+        return f"Local readiness, {state}, and exact scope checks passed.", [], {}
 
     def nmap_discover():
         result = run_nmap_discovery_workflow(
@@ -557,7 +881,7 @@ def _failed_result(
         output_paths=[],
     )
     return replace(
-        _replace_step(result, index, failed_step),
+        _refresh_result_counts(_replace_step(result, index, failed_step)),
         completed_at=utc_now_iso(clock),
         final_status="failed",
     )

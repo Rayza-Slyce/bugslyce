@@ -248,6 +248,28 @@ than mixing old and new evidence. It does not add NSE scripts, UDP scans,
 brute force, exploitation, recursion, form submission, authentication
 testing, arbitrary flags, arbitrary wordlists, or arbitrary commands.
 
+### Pipeline Resume
+
+```bash
+bugslyce project run \
+  --project ./bugslyce-output/authorised-lab/bugslyce_project.json \
+  --profile lab-safe-tiny \
+  --confirm \
+  --resume
+```
+
+Resume mode is conservative. It validates the saved target, scope, manifest
+artefact paths, tiny content plan, and prior pipeline/export provenance before
+any missing live phase can start. It skips only a coherent prefix of clearly
+completed phases, records those stages as `skipped_existing`, and stops on
+ambiguous, mixed-target, missing-artifact, or mismatched-plan state.
+
+Status and runbook files are regenerated on every successful resume. An
+existing evidence ZIP is never overwritten: it is skipped only when matching
+completed pipeline metadata proves that the prior export finished. Fresh runs
+should continue to omit `--resume`; without it, existing recon evidence is
+still refused.
+
 ### Project Init
 
 ```bash

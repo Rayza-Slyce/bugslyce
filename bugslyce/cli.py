@@ -290,6 +290,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly confirm bounded live project pipeline execution.",
     )
+    project_run_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Conservatively reuse clearly completed phases from an interrupted run.",
+    )
     project_show_parser = project_subparsers.add_parser(
         "show",
         help="Show saved project metadata without inspecting recon evidence.",
@@ -823,6 +828,7 @@ def _project(args: argparse.Namespace) -> int:
             result = run_project_pipeline(
                 project_file=args.project_file,
                 profile=args.profile,
+                resume=args.resume,
                 progress_callback=print,
             )
         except ProjectPipelineFailed as exc:
