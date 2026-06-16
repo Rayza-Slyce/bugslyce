@@ -152,7 +152,13 @@ def _start_new_project(
 
     try:
         scaffold = scaffold_project(name=name, target=target, projects_dir=projects_dir)
-        print_func(render_project_scaffold_summary(scaffold))
+        print_func(
+            render_project_scaffold_summary(
+                scaffold,
+                include_next_preview=False,
+                include_safety_footer=False,
+            )
+        )
     except ValueError as exc:
         print_func(f"Error: {exc}")
         print_func("No recon was executed.")
@@ -288,7 +294,7 @@ def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
     print_func("1. Review the generated scope file:")
     print_func(f"   {scaffold.scope_file}")
     print_func("")
-    print_func("2. To run the normal MVP pipeline later:")
+    print_func("2. To run Quick Recon later:")
     print_func(
         "   bugslyce project run "
         f"--project {scaffold.project_file} --profile {PIPELINE_PROFILE} --confirm"
@@ -298,6 +304,8 @@ def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
     print_func(f"   bugslyce project next --project {scaffold.project_file}")
     print_func("")
     print_func("No recon was run.")
+    print_func("No commands were executed.")
+    print_func("No network requests were made.")
 
 
 def _prompt_choice(input_func: InputFunc, prompt: str, valid_choices: set[str]) -> str:

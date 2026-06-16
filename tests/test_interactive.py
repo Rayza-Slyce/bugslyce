@@ -91,10 +91,6 @@ def test_launcher_lowercase_yes_retries_and_exact_yes_confirms(
         lambda **kwargs: calls.append("scaffold")
         or _scaffold_result(project_file),
     )
-    monkeypatch.setattr(
-        "bugslyce.interactive.render_project_scaffold_summary",
-        lambda result: "SCAFFOLD SUMMARY",
-    )
     output: list[str] = []
     inputs = iter(["1", "demo", "10.10.10.10", "projects", "2", "yes", "YES"])
 
@@ -118,10 +114,6 @@ def test_unavailable_recon_modes_retry_until_available(
     monkeypatch.setattr(
         "bugslyce.interactive.scaffold_project",
         lambda **kwargs: _scaffold_result(project_file),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.render_project_scaffold_summary",
-        lambda result: "SCAFFOLD SUMMARY",
     )
     output: list[str] = []
     inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "4", "2", "YES"])
@@ -150,10 +142,6 @@ def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(
         or _scaffold_result(project_file),
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.render_project_scaffold_summary",
-        lambda result: "SCAFFOLD SUMMARY",
-    )
-    monkeypatch.setattr(
         "bugslyce.interactive.build_project_next",
         lambda path: pytest.fail("manual setup should not need low-level next preview"),
     )
@@ -172,7 +160,11 @@ def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(
 
     assert exit_code == 0
     assert calls == ["scaffold"]
-    assert "SCAFFOLD SUMMARY" in output
+    rendered = "\n".join(output)
+    assert "BugSlyce project scaffold created" in rendered
+    assert "Suggested command preview:" not in rendered
+    assert rendered.count("No commands were executed.") == 1
+    assert rendered.count("No network requests were made.") == 1
     assert "Project created." in output
     assert "Next steps:" in output
     assert any("bugslyce project run" in line for line in output)
@@ -186,10 +178,6 @@ def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None
     monkeypatch.setattr(
         "bugslyce.interactive.scaffold_project",
         lambda **kwargs: _scaffold_result(project_file),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.render_project_scaffold_summary",
-        lambda result: "SCAFFOLD SUMMARY",
     )
 
     def fake_pipeline(**kwargs):
@@ -228,10 +216,6 @@ def test_quick_recon_no_run_shows_command_preview(
         lambda **kwargs: _scaffold_result(project_file),
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.render_project_scaffold_summary",
-        lambda result: "SCAFFOLD SUMMARY",
-    )
-    monkeypatch.setattr(
         "bugslyce.interactive.build_project_next",
         lambda path: pytest.fail("quick no-run should not need low-level next preview"),
     )
@@ -249,8 +233,12 @@ def test_quick_recon_no_run_shows_command_preview(
     )
 
     assert exit_code == 0
+    rendered = "\n".join(output)
     assert any("--profile lab-safe-tiny --confirm" in line for line in output)
     assert "Quick Recon was not started." in output
+    assert "Suggested command preview:" not in rendered
+    assert rendered.count("No commands were executed.") == 1
+    assert rendered.count("No network requests were made.") == 1
     assert "Project created." in output
 
 

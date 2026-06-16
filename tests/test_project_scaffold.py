@@ -133,6 +133,7 @@ def test_cli_scaffold_prints_safe_summary_and_next_preview(
     assert exit_code == 0
     assert "BugSlyce project scaffold created" in captured.out
     assert "Review scope.md before running recon." in captured.out
+    assert "Suggested command preview:" in captured.out
     assert f"bugslyce project next --project {project_file.resolve()}" in captured.out
     assert "No commands were executed." in captured.out
     assert "No network requests were made." in captured.out

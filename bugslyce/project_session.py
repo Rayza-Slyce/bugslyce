@@ -609,24 +609,38 @@ def render_project_init_summary(project: BugSlyceProject, project_path: Path) ->
     )
 
 
-def render_project_scaffold_summary(result: ProjectScaffoldResult) -> str:
+def render_project_scaffold_summary(
+    result: ProjectScaffoldResult,
+    *,
+    include_next_preview: bool = True,
+    include_safety_footer: bool = True,
+) -> str:
     """Render project scaffold creation output and next-step preview."""
 
-    return "\n".join(
-        [
-            "BugSlyce project scaffold created",
-            f"Name: {result.project.name}",
-            f"Target: {result.project.target}",
-            f"Project directory: {result.project_directory}",
-            f"Scope file: {result.scope_file}",
-            f"Project file: {result.project_file}",
-            "Review scope.md before running recon.",
-            "Suggested command preview:",
-            f"bugslyce project next --project {shlex.quote(result.project_file)}",
-            "No commands were executed.",
-            "No network requests were made.",
-        ]
-    )
+    lines = [
+        "BugSlyce project scaffold created",
+        f"Name: {result.project.name}",
+        f"Target: {result.project.target}",
+        f"Project directory: {result.project_directory}",
+        f"Scope file: {result.scope_file}",
+        f"Project file: {result.project_file}",
+    ]
+    if include_next_preview:
+        lines.extend(
+            [
+                "Review scope.md before running recon.",
+                "Suggested command preview:",
+                f"bugslyce project next --project {shlex.quote(result.project_file)}",
+            ]
+        )
+    if include_safety_footer:
+        lines.extend(
+            [
+                "No commands were executed.",
+                "No network requests were made.",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def render_project_inventory(result: ProjectInventoryResult) -> str:
