@@ -20,14 +20,17 @@ bugslyce
 
 The launcher presents:
 
-- **Quick Safe Recon**: maps to the current `lab-safe-tiny` pipeline for a
+- **Quick Recon**: maps to the current `lab-safe-tiny` pipeline for a
   fast, bounded first pass with the tiny bundled wordlist.
 - **Manual Setup Only**: creates the project and scope template, then prints
   the next safe command preview without running recon.
+- **Standard Recon** and **Deep Recon**: planned future modes that are not
+  available yet.
 
 The launcher still requires exact `YES` confirmation before creating a
-project or running live recon. Non-interactive shells should use the direct
-commands below.
+project or running live recon. Recon mode names do not make activity
+automatically safe; authorisation and scope still matter. Non-interactive
+shells should use the direct commands below.
 
 ## 1. Check Local Readiness
 

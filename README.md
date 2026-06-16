@@ -69,10 +69,13 @@ bugslyce
 ```
 
 The interactive launcher can run doctor/readiness checks, scaffold a project,
-choose **Quick Safe Recon** or **Manual Setup Only**, confirm authorisation,
-and optionally run the safe MVP pipeline. Quick Safe Recon maps to the current
-`lab-safe-tiny` pipeline. Manual Setup Only creates local project files and
-prints the next safe command preview without running recon.
+choose **Quick Recon** or **Manual Setup Only**, confirm authorisation, and
+optionally run the MVP pipeline. Quick Recon maps to the current
+`lab-safe-tiny` pipeline. **Standard Recon** and **Deep Recon** are planned
+future modes and are not available yet. Recon mode names do not make activity
+automatically safe; authorisation and scope still matter. Manual Setup Only
+creates local project files and prints the next safe command preview without
+running recon.
 
 Advanced users and automation can use the direct commands below.
 

@@ -29,9 +29,10 @@ from bugslyce.project_session import (
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
 
-QUICK_SAFE_RECON_LABEL = "Quick Safe Recon"
+QUICK_RECON_LABEL = "Quick Recon"
 MANUAL_SETUP_LABEL = "Manual Setup Only"
-STANDARD_SAFE_RECON_LABEL = "Standard Safe Recon"
+STANDARD_RECON_LABEL = "Standard Recon"
+DEEP_RECON_LABEL = "Deep Recon"
 
 
 def run_interactive_launcher(
@@ -73,13 +74,17 @@ def render_recon_mode_menu() -> str:
     return "\n".join(
         [
             "Recon mode:",
-            "1. Quick Safe Recon",
-            "   Fast, bounded first-pass recon using the tiny bundled wordlist.",
-            "   Best for first look, lab smoke tests, and cautious initial triage.",
+            "1. Quick Recon",
+            "   Fast first-pass recon using the bounded MVP pipeline.",
+            "   Good for initial lab/CTF triage and quickly finding review leads.",
             "2. Manual Setup Only",
             "   Create the project and scope template, then show the next safe "
             "command without running recon.",
-            "3. Standard Safe Recon",
+            "3. Standard Recon",
+            "   Broader recon for normal authorised review.",
+            "   Coming later; not available yet.",
+            "4. Deep Recon",
+            "   More thorough recon for deeper authorised review.",
             "   Coming later; not available yet.",
         ]
     )
@@ -93,7 +98,9 @@ def map_user_recon_mode_to_internal_profile(choice: str) -> str | None:
     if choice == "2":
         return None
     if choice == "3":
-        raise ValueError("Standard Safe Recon is not available yet.")
+        raise ValueError("Standard Recon is not available yet.")
+    if choice == "4":
+        raise ValueError("Deep Recon is not available yet.")
     raise ValueError("Unknown recon mode.")
 
 
@@ -123,20 +130,21 @@ def _start_new_project(
     )
     print_func("")
     print_func(render_recon_mode_menu())
-    mode_choice = _prompt_choice(input_func, "Choose recon mode", {"1", "2", "3"})
-    try:
-        profile = map_user_recon_mode_to_internal_profile(mode_choice)
-    except ValueError as exc:
-        print_func(str(exc))
-        print_func("No project was created.")
-        print_func("No commands were executed.")
-        print_func("No network requests were made.")
-        return 2
+    profile = _prompt_available_recon_mode(input_func, print_func)
 
-    if not _prompt_yes_exact(
+    print_func("")
+    print_func(f"BugSlyce will prepare recon for: {target}")
+    print_func(
+        "Only continue if this is your own lab, a CTF/THM box, or an "
+        "explicitly in-scope target."
+    )
+    if not _prompt_yes_exact_with_retries(
         input_func,
-        "Do you confirm this is an authorised lab or in-scope target? Type YES to continue:",
+        print_func,
+        "Type YES to confirm you are authorised to test this target:",
+        "Type YES to continue, or press Enter to cancel:",
     ):
+        print_func("Confirmation was not provided.")
         print_func("No project was created.")
         print_func("No commands were executed.")
         print_func("No network requests were made.")
@@ -152,20 +160,17 @@ def _start_new_project(
 
     project_file = Path(scaffold.project_file)
     if profile is None:
-        _print_project_next(project_file, print_func)
+        _print_interactive_next_steps(scaffold, print_func)
         return 0
 
-    if not _prompt_yes_exact(
+    if not _prompt_yes_exact_with_retries(
         input_func,
-        "Run Quick Safe Recon now? Type YES to run, or anything else to only scaffold:",
+        print_func,
+        "Run Quick Recon now? Type YES to run, or press Enter to only create the project:",
+        "Type YES to run Quick Recon, or press Enter to only create the project:",
     ):
-        print_func("Quick Safe Recon was not started.")
-        print_func("Run it later with:")
-        print_func(
-            "bugslyce project run "
-            f"--project {project_file} --profile {PIPELINE_PROFILE} --confirm"
-        )
-        _print_project_next(project_file, print_func)
+        print_func("Quick Recon was not started.")
+        _print_interactive_next_steps(scaffold, print_func)
         return 0
 
     return _run_pipeline(project_file, print_func, resume=False)
@@ -188,7 +193,12 @@ def _resume_existing_project(
         print_func("No network requests were made.")
         return 2
 
-    if not _prompt_yes_exact(input_func, "Run resume now? Type YES to continue:"):
+    if not _prompt_yes_exact_with_retries(
+        input_func,
+        print_func,
+        "Run resume now? Type YES to continue, or press Enter to show the resume command only:",
+        "Type YES to resume, or press Enter to show the resume command only:",
+    ):
         print_func("Resume was not started.")
         print_func("Run it later with:")
         print_func(
@@ -225,6 +235,19 @@ def _list_existing_projects(
     return 0
 
 
+def _prompt_available_recon_mode(
+    input_func: InputFunc,
+    print_func: PrintFunc,
+) -> str | None:
+    while True:
+        mode_choice = _prompt_choice(input_func, "Choose recon mode", {"1", "2", "3", "4"})
+        try:
+            return map_user_recon_mode_to_internal_profile(mode_choice)
+        except ValueError:
+            print_func("This recon mode is not available yet.")
+            print_func("Choose Quick Recon or Manual Setup Only.")
+
+
 def _run_pipeline(project_file: Path, print_func: PrintFunc, *, resume: bool) -> int:
     try:
         result = run_project_pipeline(
@@ -257,6 +280,26 @@ def _print_project_next(project_file: Path, print_func: PrintFunc) -> None:
         print_func(f"Could not build project next preview: {exc}")
 
 
+def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
+    print_func("")
+    print_func("Project created.")
+    print_func("")
+    print_func("Next steps:")
+    print_func("1. Review the generated scope file:")
+    print_func(f"   {scaffold.scope_file}")
+    print_func("")
+    print_func("2. To run the normal MVP pipeline later:")
+    print_func(
+        "   bugslyce project run "
+        f"--project {scaffold.project_file} --profile {PIPELINE_PROFILE} --confirm"
+    )
+    print_func("")
+    print_func("3. To preview next safe action:")
+    print_func(f"   bugslyce project next --project {scaffold.project_file}")
+    print_func("")
+    print_func("No recon was run.")
+
+
 def _prompt_choice(input_func: InputFunc, prompt: str, valid_choices: set[str]) -> str:
     choice = input_func(f"{prompt}: ").strip()
     if choice not in valid_choices:
@@ -273,8 +316,25 @@ def _prompt_text(input_func: InputFunc, prompt: str, *, default: str | None = No
     return value
 
 
-def _prompt_yes_exact(input_func: InputFunc, prompt: str) -> bool:
-    return input_func(f"{prompt} ").strip() == "YES"
+def _prompt_yes_exact_with_retries(
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    first_prompt: str,
+    retry_prompt: str,
+    *,
+    attempts: int = 3,
+) -> bool:
+    prompt = first_prompt
+    for attempt in range(attempts):
+        value = input_func(f"{prompt} ").strip()
+        if value == "YES":
+            return True
+        if value == "":
+            return False
+        if attempt < attempts - 1:
+            print_func("Confirmation must be exactly YES.")
+            prompt = retry_prompt
+    return False
 
 
 def _resolve_prompt_path(value: str, cwd: Path) -> Path:
