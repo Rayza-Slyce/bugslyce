@@ -202,9 +202,13 @@ def test_start_new_project_default_projects_dir_uses_home_level_output(
     )
 
     rendered = "\n".join(output)
+    rendered_prompts = "\n".join(prompts)
     assert exit_code == 0
     assert received["projects_dir"] == expected_projects_dir
-    assert any(f"Projects directory [{expected_projects_dir}]" in prompt for prompt in prompts)
+    assert "Projects directory" in rendered_prompts
+    assert "Press Enter to use default" in rendered_prompts
+    assert str(expected_projects_dir) in rendered_prompts
+    assert "Or type a different path:" in rendered_prompts
     assert "Project summary:" in rendered
     assert f"* Projects directory: {expected_projects_dir}" in rendered
     assert f"* Project directory: {expected_projects_dir / 'demo'}" in rendered
@@ -492,7 +496,11 @@ def test_list_projects_default_uses_home_level_output(
 
     assert exit_code == 0
     assert calls == [expected_projects_dir]
-    assert any(f"Projects directory [{expected_projects_dir}]" in prompt for prompt in prompts)
+    rendered_prompts = "\n".join(prompts)
+    assert "Projects directory" in rendered_prompts
+    assert "Press Enter to use default" in rendered_prompts
+    assert str(expected_projects_dir) in rendered_prompts
+    assert "Or type a different path:" in rendered_prompts
     assert "PROJECT LIST" in output
 
 

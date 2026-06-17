@@ -303,11 +303,17 @@ def _default_projects_dir() -> Path:
 
 def _prompt_projects_dir(input_func: InputFunc, cwd: Path) -> Path:
     default_dir = _default_projects_dir()
-    value = _prompt_text(
-        input_func,
-        f"Projects directory [{default_dir}]",
-        default=str(default_dir),
+    value = input_func(
+        "\n".join(
+            [
+                "Projects directory",
+                f"Press Enter to use default: {default_dir}",
+                "Or type a different path: ",
+            ]
+        )
     )
+    if not value.strip():
+        value = str(default_dir)
     return _resolve_prompt_path(value, cwd)
 
 
