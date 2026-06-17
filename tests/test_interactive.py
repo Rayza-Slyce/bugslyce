@@ -172,6 +172,73 @@ def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(
     assert "No recon was run." in output
 
 
+def test_start_new_project_default_projects_dir_uses_home_level_output(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("bugslyce.interactive.Path.home", lambda: home)
+    expected_projects_dir = home / "bugslyce-output"
+    project_file = expected_projects_dir / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+
+    def fake_scaffold(**kwargs):
+        received.update(kwargs)
+        return _scaffold_result(project_file)
+
+    monkeypatch.setattr("bugslyce.interactive.scaffold_project", fake_scaffold)
+    output: list[str] = []
+    prompts: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "", "2", "YES"])
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(inputs)
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path / "cwd",
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["projects_dir"] == expected_projects_dir
+    assert any(f"Projects directory [{expected_projects_dir}]" in prompt for prompt in prompts)
+    assert "Project summary:" in rendered
+    assert f"* Projects directory: {expected_projects_dir}" in rendered
+    assert f"* Project directory: {expected_projects_dir / 'demo'}" in rendered
+    assert "* Recon mode: Manual Setup Only" in rendered
+    assert str(project_file) in rendered
+
+
+def test_start_new_project_custom_projects_dir_still_resolves_from_cwd(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    expected_projects_dir = (tmp_path / "cwd" / "custom-output").resolve()
+    project_file = expected_projects_dir / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "custom-output", "2", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path / "cwd",
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["projects_dir"] == expected_projects_dir
+    assert f"* Projects directory: {expected_projects_dir}" in rendered
+
+
 def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
     received: dict[str, object] = {}
@@ -204,6 +271,44 @@ def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None
     assert received["resume"] is False
     assert callable(received["progress_callback"])
     assert "PIPELINE SUMMARY" in output
+
+
+def test_quick_recon_run_now_uses_resolved_home_project_file(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("bugslyce.interactive.Path.home", lambda: home)
+    project_file = home / "bugslyce-output" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_pipeline_summary",
+        lambda result: "PIPELINE SUMMARY",
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "", "1", "YES", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path / "cwd",
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["project_file"] == project_file
+    assert f"* Project directory: {project_file.parent}" in rendered
+    assert "* Recon mode: Quick Recon" in rendered
 
 
 def test_quick_recon_no_run_shows_command_preview(
@@ -353,6 +458,42 @@ def test_list_projects_and_doctor_paths(monkeypatch, tmp_path: Path) -> None:
     inputs = iter(["4"])
     assert run_interactive_launcher(lambda prompt: next(inputs), output.append, tmp_path) == 0
     assert "DOCTOR REPORT" in output
+
+
+def test_list_projects_default_uses_home_level_output(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("bugslyce.interactive.Path.home", lambda: home)
+    expected_projects_dir = home / "bugslyce-output"
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        "bugslyce.interactive.list_projects",
+        lambda path: calls.append(path) or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_inventory",
+        lambda result: "PROJECT LIST",
+    )
+    output: list[str] = []
+    prompts: list[str] = []
+    inputs = iter(["3", ""])
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(inputs)
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path / "cwd",
+    )
+
+    assert exit_code == 0
+    assert calls == [expected_projects_dir]
+    assert any(f"Projects directory [{expected_projects_dir}]" in prompt for prompt in prompts)
+    assert "PROJECT LIST" in output
 
 
 def test_interactive_module_has_no_direct_execution_apis() -> None:

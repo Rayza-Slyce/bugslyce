@@ -32,6 +32,10 @@ project or running live recon. Recon mode names do not make activity
 automatically safe; authorisation and scope still matter. Non-interactive
 shells should use the direct commands below.
 
+Interactive mode defaults to `~/bugslyce-output` so project output is
+predictable regardless of the current working directory. Direct CLI commands
+still use the paths you provide.
+
 ## 1. Check Local Readiness
 
 From the BugSlyce repository or an activated editable-install environment:

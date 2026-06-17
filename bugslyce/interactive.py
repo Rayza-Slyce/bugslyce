@@ -33,6 +33,7 @@ QUICK_RECON_LABEL = "Quick Recon"
 MANUAL_SETUP_LABEL = "Manual Setup Only"
 STANDARD_RECON_LABEL = "Standard Recon"
 DEEP_RECON_LABEL = "Deep Recon"
+DEFAULT_PROJECTS_DIR_NAME = "bugslyce-output"
 
 
 def run_interactive_launcher(
@@ -120,18 +121,13 @@ def _start_new_project(
 ) -> int:
     name = _prompt_text(input_func, "Project name")
     target = _prompt_text(input_func, "Target IP or domain")
-    projects_dir = _resolve_prompt_path(
-        _prompt_text(
-            input_func,
-            "Projects directory [bugslyce-output]",
-            default="bugslyce-output",
-        ),
-        cwd,
-    )
+    projects_dir = _prompt_projects_dir(input_func, cwd)
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
 
+    print_func("")
+    print_func(_render_project_summary(name, target, projects_dir, profile))
     print_func("")
     print_func(f"BugSlyce will prepare recon for: {target}")
     print_func(
@@ -223,14 +219,7 @@ def _list_existing_projects(
     print_func: PrintFunc,
     cwd: Path,
 ) -> int:
-    projects_dir = _resolve_prompt_path(
-        _prompt_text(
-            input_func,
-            "Projects directory [bugslyce-output]",
-            default="bugslyce-output",
-        ),
-        cwd,
-    )
+    projects_dir = _prompt_projects_dir(input_func, cwd)
     try:
         print_func(render_project_inventory(list_projects(projects_dir)))
     except ValueError as exc:
@@ -306,6 +295,39 @@ def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
     print_func("No recon was run.")
     print_func("No commands were executed.")
     print_func("No network requests were made.")
+
+
+def _default_projects_dir() -> Path:
+    return (Path.home() / DEFAULT_PROJECTS_DIR_NAME).expanduser().resolve()
+
+
+def _prompt_projects_dir(input_func: InputFunc, cwd: Path) -> Path:
+    default_dir = _default_projects_dir()
+    value = _prompt_text(
+        input_func,
+        f"Projects directory [{default_dir}]",
+        default=str(default_dir),
+    )
+    return _resolve_prompt_path(value, cwd)
+
+
+def _render_project_summary(
+    name: str,
+    target: str,
+    projects_dir: Path,
+    profile: str | None,
+) -> str:
+    mode = QUICK_RECON_LABEL if profile == PIPELINE_PROFILE else MANUAL_SETUP_LABEL
+    return "\n".join(
+        [
+            "Project summary:",
+            f"* Name: {name}",
+            f"* Target: {target}",
+            f"* Projects directory: {projects_dir}",
+            f"* Project directory: {projects_dir / name}",
+            f"* Recon mode: {mode}",
+        ]
+    )
 
 
 def _prompt_choice(input_func: InputFunc, prompt: str, valid_choices: set[str]) -> str:

@@ -77,6 +77,10 @@ automatically safe; authorisation and scope still matter. Manual Setup Only
 creates local project files and prints the next safe command preview without
 running recon.
 
+Interactive mode defaults to `~/bugslyce-output` so project output is
+predictable regardless of the current working directory. Direct CLI commands
+still use the paths you provide.
+
 Advanced users and automation can use the direct commands below.
 
 Check local readiness:
