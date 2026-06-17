@@ -73,7 +73,7 @@ SKIPPED_STEP_MESSAGES = {
         "Existing HTTP metadata evidence detected; phase skipped during resume."
     ),
     "PIPELINE-STEP-005": (
-        "Existing evidence-derived path follow-up artifacts detected; "
+        "Existing evidence-derived path follow-up artefacts detected; "
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-006": (
@@ -84,11 +84,11 @@ SKIPPED_STEP_MESSAGES = {
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-008": (
-        "Existing content-result follow-up artifacts detected; "
+        "Existing content-result follow-up artefacts detected; "
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-009": (
-        "Existing selective body-fetch artifacts detected; "
+        "Existing selective body-fetch artefacts detected; "
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-012": (
@@ -674,7 +674,7 @@ def _validated_manifest_artifact_names(
 ) -> set[str]:
     raw_artifacts = manifest.get("artifacts")
     if not isinstance(raw_artifacts, list):
-        raise ValueError("Recon manifest artifacts must be a list.")
+        raise ValueError("Recon manifest artefacts must be a list.")
     names: set[str] = set()
     for index, artifact in enumerate(raw_artifacts, start=1):
         if not isinstance(artifact, dict):

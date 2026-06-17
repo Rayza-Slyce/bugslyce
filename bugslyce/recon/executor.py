@@ -142,7 +142,7 @@ def render_execution_preview_markdown(preview: ReconExecutionPreview) -> str:
                 f"- Risk level: `{step.risk_level}`",
                 f"- Scope sensitive: `{str(step.scope_sensitive).lower()}`",
                 f"- Command preview: `{step.command_preview}`" if step.command_preview else "- Command preview: none",
-                "- Expected artifacts: "
+                "- Expected artefacts: "
                 + (", ".join(f"`{value}`" for value in step.expected_artifacts) or "none"),
                 "",
             ]
@@ -193,7 +193,7 @@ def run_passive_execution(
     preflight_passed: bool,
     preflight_warnings: list[str] | None = None,
 ) -> ReconExecutionResult:
-    """Build deterministic recon-pack outputs from existing local artifacts only."""
+    """Build deterministic recon-pack outputs from existing local artefacts only."""
 
     if plan.profile != "passive-only":
         raise ValueError(
@@ -245,7 +245,7 @@ def render_passive_execution_markdown(result: ReconExecutionResult) -> str:
     lines.extend(
         [
             "",
-            "This execution only parsed and packaged existing local artifacts.",
+            "This execution only parsed and packaged existing local artefacts.",
             "No network commands were executed.",
             "",
         ]
@@ -310,13 +310,13 @@ def _parse_step(value: object, index: int) -> ReconPlanStep:
 
 def _parse_artifact(value: object, index: int) -> ReconPlannedArtifact:
     if not isinstance(value, dict):
-        raise ValueError(f"Recon planned artifact #{index} must be an object.")
+        raise ValueError(f"Recon planned artefact #{index} must be an object.")
     return ReconPlannedArtifact(
-        type=_required_text(value, "type", f"planned artifact #{index}"),
-        file=_required_text(value, "file", f"planned artifact #{index}"),
-        url=_optional_text(value, "url", f"planned artifact #{index}"),
-        base_url=_optional_text(value, "base_url", f"planned artifact #{index}"),
-        description=_optional_text(value, "description", f"planned artifact #{index}"),
+        type=_required_text(value, "type", f"planned artefact #{index}"),
+        file=_required_text(value, "file", f"planned artefact #{index}"),
+        url=_optional_text(value, "url", f"planned artefact #{index}"),
+        base_url=_optional_text(value, "base_url", f"planned artefact #{index}"),
+        description=_optional_text(value, "description", f"planned artefact #{index}"),
     )
 
 

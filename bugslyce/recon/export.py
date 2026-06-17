@@ -107,14 +107,14 @@ def export_recon_evidence_pack(
         raise ValueError("Recon manifest field 'artifacts' must be a list.")
     for index, artifact in enumerate(artifacts, start=1):
         if not isinstance(artifact, dict):
-            raise ValueError(f"Recon manifest artifact #{index} must be a JSON object.")
+            raise ValueError(f"Recon manifest artefact #{index} must be a JSON object.")
         reference = _optional_text(artifact.get("file"))
         if reference is None:
-            raise ValueError(f"Recon manifest artifact #{index} does not contain a file path.")
+            raise ValueError(f"Recon manifest artefact #{index} does not contain a file path.")
         source_path, relative_path = _resolve_reference(
             input_dir,
             reference,
-            f"manifest artifact #{index}",
+            f"manifest artefact #{index}",
         )
         if not source_path.is_file():
             missing_files.append(reference)

@@ -255,7 +255,7 @@ def run_content_discovery_workflow(
                     "BugSlyce content discovery step complete",
                     f"Step: {step.step_id}",
                     f"Elapsed seconds: {elapsed:.2f}",
-                    f"Artifact: {output_path}",
+                    f"Artefact: {output_path}",
                 ]
             ),
         )
@@ -325,9 +325,9 @@ def render_content_discovery_execution_markdown(
             f"- Commands timed out: {result.commands_timed_out}",
             f"- Timed-out step ID: `{result.timed_out_step_id or 'none'}`",
             f"- Timed-out origin: `{result.timed_out_origin or 'none'}`",
-            f"- Gobuster artifacts written: {len(result.artifact_paths)}",
-            f"- Partial artifacts imported: {result.partial_artifacts_imported}",
-            f"- Completed artifacts imported: {result.completed_artifacts_imported}",
+            f"- Gobuster artefacts written: {len(result.artifact_paths)}",
+            f"- Partial artefacts imported: {result.partial_artifacts_imported}",
+            f"- Completed artefacts imported: {result.completed_artifacts_imported}",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
             "",
@@ -362,9 +362,9 @@ def render_content_discovery_execution_summary(
             f"Commands timed out: {result.commands_timed_out}",
             f"Timed-out step ID: {result.timed_out_step_id or 'none'}",
             f"Timed-out origin: {result.timed_out_origin or 'none'}",
-            f"Gobuster artifacts written: {len(result.artifact_paths)}",
-            f"Partial artifacts imported: {result.partial_artifacts_imported}",
-            f"Completed artifacts imported: {result.completed_artifacts_imported}",
+            f"Gobuster artefacts written: {len(result.artifact_paths)}",
+            f"Partial artefacts imported: {result.partial_artifacts_imported}",
+            f"Completed artefacts imported: {result.completed_artifacts_imported}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
             (
@@ -421,7 +421,7 @@ def _parse_step(
         raise ValueError(f"Content discovery step #{index} lacks an expected artifact.")
     expected_file = _required_text(expected_artifact_value, "file")
     if Path(expected_file).name != expected_file:
-        raise ValueError(f"Content discovery step #{index} has an unsafe artifact filename.")
+        raise ValueError(f"Content discovery step #{index} has an unsafe artefact filename.")
     expected_artifact = ReconPlannedArtifact(
         type=_required_text(expected_artifact_value, "type"),
         file=expected_file,

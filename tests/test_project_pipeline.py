@@ -656,7 +656,7 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
         in progress
     )
     assert result.steps[4].message.startswith(
-        "Existing evidence-derived path follow-up artifacts"
+            "Existing evidence-derived path follow-up artefacts"
     )
     assert result.steps[5].message.startswith(
         "Existing lab-root-tiny content plan"
@@ -665,10 +665,10 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
         "Existing lab-root-tiny content discovery output"
     )
     assert result.steps[7].message.startswith(
-        "Existing content-result follow-up artifacts"
+        "Existing content-result follow-up artefacts"
     )
     assert result.steps[8].message.startswith(
-        "Existing selective body-fetch artifacts"
+        "Existing selective body-fetch artefacts"
     )
 
 

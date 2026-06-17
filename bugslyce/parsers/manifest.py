@@ -76,7 +76,7 @@ def _parse_artifact(
 ) -> ReconManifestArtifact | None:
     if not isinstance(value, dict):
         warnings.warn(
-            f"Skipping non-object manifest artifact #{index}: {manifest_path}",
+            f"Skipping non-object manifest artefact #{index}: {manifest_path}",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -87,21 +87,21 @@ def _parse_artifact(
     artifact_file = _optional_text(value, "file")
     if not artifact_type or not artifact_file:
         warnings.warn(
-            f"Skipping manifest artifact #{index} without required type/file: {manifest_path}",
+            f"Skipping manifest artefact #{index} without required type/file: {manifest_path}",
             RuntimeWarning,
             stacklevel=2,
         )
         return None
     if artifact_type not in SUPPORTED_ARTIFACT_TYPES:
         warnings.warn(
-            f"Skipping unsupported manifest artifact type '{artifact_type}': {artifact_file}",
+            f"Skipping unsupported manifest artefact type '{artifact_type}': {artifact_file}",
             RuntimeWarning,
             stacklevel=2,
         )
         return None
     if not _is_safe_relative_path(root, artifact_file):
         warnings.warn(
-            f"Skipping unsafe manifest artifact path outside input directory: {artifact_file}",
+            f"Skipping unsafe manifest artefact path outside input directory: {artifact_file}",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -110,7 +110,7 @@ def _parse_artifact(
     artifact_path = (root / artifact_file).resolve()
     if not artifact_path.is_file():
         warnings.warn(
-            f"Skipping missing manifest artifact file: {artifact_file}",
+            f"Skipping missing manifest artefact file: {artifact_file}",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -119,7 +119,7 @@ def _parse_artifact(
     port = value.get("port")
     if port is not None and (not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535):
         warnings.warn(
-            f"Ignoring invalid port for manifest artifact: {artifact_file}",
+            f"Ignoring invalid port for manifest artefact: {artifact_file}",
             RuntimeWarning,
             stacklevel=2,
         )

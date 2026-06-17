@@ -186,7 +186,7 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                 endpoint,
                 asset,
                 ROBOTS_ARTIFACT,
-                f"Robots artifact review for {endpoint.hostname}",
+                f"Robots artefact review for {endpoint.hostname}",
                 "A robots.txt URL is present in structured URL evidence and may reference additional paths.",
                 [
                     "Review the robots.txt content already collected or retrieve it only within authorised scope.",
@@ -382,7 +382,7 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
     for (candidate_type, host), artifacts in artifact_groups.items():
         asset = assets_by_host.get(host)
         if candidate_type == ROBOTS_ARTIFACT:
-            title = f"Robots artifact review for {host}"
+            title = f"Robots artefact review for {host}"
             rationale = "Structured robots evidence includes directives or user-agent context."
             validation = [
                 "Review robots directives as recon context.",
@@ -390,10 +390,10 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                 "Record linked path evidence before escalating a lead.",
             ]
         else:
-            title = f"Encoded or hidden artifact review for {host}"
-            rationale = "Saved HTML metadata contains a hidden element or encoded-looking artifact."
+            title = f"Encoded or hidden artefact review for {host}"
+            rationale = "Saved HTML metadata contains a hidden element or encoded-looking artefact."
             validation = [
-                "Review the saved HTML context without assuming the artifact meaning.",
+                "Review the saved HTML context without assuming the artefact meaning.",
                 "Do not decode or interpret content without authorised manual review.",
                 "Record surrounding page evidence before escalating a lead.",
             ]
@@ -433,7 +433,7 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
             seen,
             CREDENTIAL_LIKE_ARTIFACT_REVIEW,
             url,
-            title=f"Credential-like artifact review in {title_context}",
+            title=f"Credential-like artefact review in {title_context}",
             priority=priority,
             rationale=(
                 "Parsed HTML/comment evidence contains credential-like or sensitive "
@@ -447,8 +447,8 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                 for evidence_id in artifact.evidence_ids
             ),
             suggested_manual_validation=[
-                "Review saved HTML/source context before interpreting the artifact.",
-                "Confirm whether the artifact is a clue, placeholder, or sensitive exposure.",
+                "Review saved HTML/source context before interpreting the artefact.",
+                "Confirm whether the artefact is a clue, placeholder, or sensitive exposure.",
                 "Do not attempt authentication unless explicitly authorised.",
                 "Do not brute force.",
                 "Record evidence before escalating any claim.",

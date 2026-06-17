@@ -125,7 +125,7 @@ def validate_live_http_metadata_command(
             errors.append("Curl metadata URL must belong to a discovered HTTP service.")
         expected_url = urljoin(origin, "robots.txt") if artifact_type == "robots" else origin
         if argv[url_index] != expected_url:
-            errors.append("Curl metadata URL path is not approved for this artifact type.")
+            errors.append("Curl metadata URL path is not approved for this artefact type.")
         expected_name = _expected_filename(parsed, artifact_type)
         if Path(command.output_file).name != expected_name:
             errors.append(f"Curl metadata output must use deterministic filename {expected_name}.")

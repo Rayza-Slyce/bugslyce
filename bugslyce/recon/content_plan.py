@@ -225,7 +225,7 @@ def render_content_discovery_plan(plan: ContentDiscoveryPlan) -> str:
                 f"- Requires confirmation: `{str(step.requires_confirmation).lower()}`",
                 f"- Scope sensitive: `{str(step.scope_sensitive).lower()}`",
                 f"- Command preview: `{shlex.join(step.command_preview)}`",
-                f"- Expected artifact: `{step.expected_artifact.file}`",
+                f"- Expected artefact: `{step.expected_artifact.file}`",
                 "- Recursive discovery: `false`",
                 "- Ready for execution: `false`",
                 "",

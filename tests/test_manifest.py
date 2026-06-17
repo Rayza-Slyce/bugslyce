@@ -84,9 +84,9 @@ def test_manifest_skips_unsafe_unknown_and_missing_artifacts(tmp_path: Path) -> 
     messages = [str(item.message) for item in captured]
     assert manifest is not None
     assert manifest.artifacts == []
-    assert any("unsafe manifest artifact path" in message for message in messages)
-    assert any("unsupported manifest artifact type" in message for message in messages)
-    assert any("missing manifest artifact file" in message for message in messages)
+    assert any("unsafe manifest artefact path" in message for message in messages)
+    assert any("unsupported manifest artefact type" in message for message in messages)
+    assert any("missing manifest artefact file" in message for message in messages)
 
 
 def test_manifest_led_project_suppresses_missing_legacy_input_warnings(tmp_path: Path) -> None:
@@ -136,7 +136,7 @@ def test_valid_manifest_project_keeps_missing_artifact_warning(tmp_path: Path) -
     state = build_project_state(tmp_path)
 
     assert state.recon_manifest is not None
-    assert any("missing manifest artifact file" in warning for warning in state.warnings)
+    assert any("missing manifest artefact file" in warning for warning in state.warnings)
     assert not any("subdomains.txt" in warning for warning in state.warnings)
 
 
@@ -155,7 +155,7 @@ def test_valid_manifest_project_keeps_unknown_artifact_warning(tmp_path: Path) -
     state = build_project_state(tmp_path)
 
     assert state.recon_manifest is not None
-    assert any("unsupported manifest artifact type" in warning for warning in state.warnings)
+    assert any("unsupported manifest artefact type" in warning for warning in state.warnings)
     assert not any("httpx.jsonl" in warning for warning in state.warnings)
 
 
@@ -174,7 +174,7 @@ def test_valid_manifest_is_authoritative_over_filename_discovery(tmp_path: Path)
     state = build_project_state(tmp_path)
 
     assert state.http_artifacts == []
-    assert any("unsupported manifest artifact type" in warning for warning in state.warnings)
+    assert any("unsupported manifest artefact type" in warning for warning in state.warnings)
 
 
 def test_manifest_metadata_overrides_filename_hints(tmp_path: Path) -> None:

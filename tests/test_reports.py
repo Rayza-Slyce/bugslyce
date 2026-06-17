@@ -222,7 +222,7 @@ def test_lab_recon_pack_report_uses_evidence_first_sections() -> None:
     assert "## Attack Surface Summary" in report
     assert "## Manual Review Queue" in report
     assert "High-port HTTP services" in report
-    assert "Robots artifacts" in report
+    assert "Robots artefacts" in report
 
 
 def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
@@ -233,10 +233,10 @@ def test_raw_recon_pack_report_includes_structured_evidence_sections() -> None:
     assert "# BugSlyce Recon Pack" in report
     assert "## Recon Manifest" in report
     assert "Schema version: `1.0`" in report
-    assert "Artifact count: 14" in report
+    assert "Artefact count: 14" in report
     assert "### Port Services" in report
     assert "### Discovered Paths" in report
-    assert "### HTTP Artifacts" in report
+    assert "### HTTP Artefacts" in report
     assert "### Raw Evidence References" in report
 
 
@@ -278,7 +278,7 @@ def test_report_workflow_summary_preserves_duplicate_path_evidence(
         1,
     )[0]
     path_table = report.split("### Discovered Paths", 1)[1].split(
-        "### HTTP Artifacts",
+        "### HTTP Artefacts",
         1,
     )[0]
     raw_count = len(state.discovered_paths)
@@ -462,7 +462,7 @@ def test_operator_summary_promotes_credential_like_homepage_artifacts() -> None:
     manual_queue = report.split("## Manual Review Queue", 1)[1]
 
     first_item = review_first.strip().split("\n", 1)[0]
-    assert "Credential-like artifact review in homepage HTML" in first_item
+    assert "Credential-like artefact review in homepage HTML" in first_item
     assert "EVID-ART-USER" in review_first
     assert "EVID-ART-PASS" in review_first
     assert "EVID-ART-SECRET" in review_first
@@ -514,12 +514,12 @@ def test_encoded_artifact_classification_keeps_signal_noise_and_raw_rows() -> No
     candidates = generate_candidates(state)
     report = render_markdown_report(state, candidates)
     summary = report.split("## Operator Summary", 1)[1].split("## Scope Summary", 1)[0]
-    classification = report.split("### Encoded Artifact Classification", 1)[1].split(
+    classification = report.split("### Encoded Artefact Classification", 1)[1].split(
         "### Raw Evidence References",
         1,
     )[0]
-    raw_artifacts = report.split("### HTTP Artifacts", 1)[1].split(
-        "### Encoded Artifact Classification",
+    raw_artifacts = report.split("### HTTP Artefacts", 1)[1].split(
+        "### Encoded Artefact Classification",
         1,
     )[0]
 

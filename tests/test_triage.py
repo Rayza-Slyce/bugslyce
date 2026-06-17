@@ -76,6 +76,8 @@ def test_html_comment_username_creates_credential_like_review_candidate() -> Non
     )
 
     assert candidate.priority == "high"
+    assert "Credential-like artefact review" in candidate.title
+    assert candidate.candidate_type == "credential_like_artifact_review"
     assert candidate.affected_endpoints == ["https://app.example-bounty.test/"]
     assert candidate.evidence_ids == ["EVID-ART-USER"]
     assert "valid credential" not in candidate.rationale.lower()

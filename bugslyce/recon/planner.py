@@ -47,7 +47,7 @@ def build_recon_plan(
     safety_notes = [
         NO_EXECUTION_NOTE,
         "This plan is a preview for future controlled execution and must be reviewed by an operator.",
-        "Keep raw recon artifacts and generated outputs in local, gitignored directories.",
+        "Keep raw recon artefacts and generated outputs in local, gitignored directories.",
         *recon_profile.safety_notes,
     ]
     return ReconPlan(
@@ -107,7 +107,7 @@ def render_recon_plan(plan: ReconPlan) -> str:
                 f"- Requires confirmation: `{str(step.requires_confirmation).lower()}`",
                 f"- Scope sensitive: `{str(step.scope_sensitive).lower()}`",
                 f"- Command preview: `{step.command_preview}`" if step.command_preview else "- Command preview: none",
-                "- Expected artifacts: "
+                "- Expected artefacts: "
                 + (", ".join(f"`{item}`" for item in step.expected_artifacts) or "none"),
                 "",
             ]
@@ -115,7 +115,7 @@ def render_recon_plan(plan: ReconPlan) -> str:
 
     lines.extend(["## Planned Manifest Entries", ""])
     if not plan.planned_artifacts:
-        lines.append("- No new raw artifacts are planned for this profile.")
+        lines.append("- No new raw artefacts are planned for this profile.")
     else:
         for artifact in plan.planned_artifacts:
             context = artifact.url or artifact.base_url or "context determined from future evidence"
@@ -138,7 +138,7 @@ def render_recon_plan_summary(plan: ReconPlan, json_path: Path, markdown_path: P
         f"JSON path: {json_path}",
         f"Markdown path: {markdown_path}",
         f"Planned steps: {len(plan.steps)}",
-        f"Planned artifacts: {len(plan.planned_artifacts)}",
+        f"Planned artefacts: {len(plan.planned_artifacts)}",
     ]
     lines.extend(f"Warning: {warning}" for warning in plan.warnings)
     lines.append(NO_EXECUTION_NOTE)
@@ -314,9 +314,9 @@ def _passive_only_plan() -> tuple[list[ReconPlanStep], list[ReconPlannedArtifact
         [
             _step(
                 "STEP-001",
-                "Inventory supplied artifacts",
+                "Inventory supplied artefacts",
                 "offline-import",
-                "Identify supported local recon artifacts already supplied by the operator.",
+                "Identify supported local recon artefacts already supplied by the operator.",
                 None,
                 [],
                 False,
@@ -327,7 +327,7 @@ def _passive_only_plan() -> tuple[list[ReconPlanStep], list[ReconPlannedArtifact
                 "STEP-002",
                 "Validate recon manifest",
                 "offline-import",
-                "Validate local manifest metadata and constrain artifact paths to the input directory.",
+                "Validate local manifest metadata and constrain artefact paths to the input directory.",
                 None,
                 ["recon_manifest.json"],
                 False,

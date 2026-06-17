@@ -39,14 +39,19 @@ programme or lab rules. Review the generated `scope.md` before every live run.
 
 ## Install
 
-For local development:
+### Development Checkout
+
+For local development from a checkout:
 
 ```bash
-python -m venv .venv
+git clone git@github.com:Rayza-Slyce/bugslyce.git
+cd bugslyce
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e .
 bugslyce --version
+bugslyce
 ```
 
 Install development dependencies with:
@@ -59,6 +64,34 @@ The editable install exposes the `bugslyce` console command. During
 development, `.venv/bin/bugslyce` remains available without activating the
 virtual environment. The bundled `lab-root-tiny` wordlist is installed as
 package data.
+
+### Local Convenience Alias
+
+On a local development machine, you can add a shell alias for a fixed checkout:
+
+```bash
+alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"
+```
+
+This is only a convenience shortcut for that local path. The editable install
+above is the preferred development setup.
+
+### Future User Install With pipx
+
+BugSlyce is not published to PyPI. Once the repository is ready and tagged, a
+normal user install can use `pipx` directly from Git:
+
+```bash
+pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
+bugslyce
+```
+
+For local editable testing with `pipx`:
+
+```bash
+pipx install -e ~/projects/bugslyce
+bugslyce
+```
 
 ## Quick Start
 
@@ -429,4 +462,4 @@ published by this documentation phase.
 
 ## License
 
-See `LICENSE` for the project license.
+See `LICENSE` for the project licence.

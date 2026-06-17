@@ -173,7 +173,7 @@ def test_content_run_progress_reports_selected_step_before_and_after_runner(
     assert "Timeout: 900 seconds" in output
     assert "BugSlyce content discovery step complete" in output
     assert "Elapsed seconds:" in output
-    assert "Artifact:" in output
+    assert "Artefact:" in output
 
 
 def test_content_run_progress_reports_each_planned_step(tmp_path: Path) -> None:
@@ -298,7 +298,7 @@ def test_content_run_refuses_missing_wordlist_without_running(tmp_path: Path) ->
         ),
         (
             lambda payload: _escape_output(payload),
-            "unsafe artifact filename",
+            "unsafe artefact filename",
         ),
     ],
 )

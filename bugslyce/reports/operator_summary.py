@@ -156,7 +156,7 @@ def _candidate_service_lead(candidate: Candidate) -> OperatorSummaryLead | None:
             why="Multiple distinct HTTP service origins are recorded for the same host.",
             endpoints=candidate.affected_endpoints,
             evidence_ids=candidate.evidence_ids,
-            next_action="Compare titles, technologies, and application behavior across the service origins.",
+            next_action="Compare titles, technologies, and application behaviour across the service origins.",
             signal="medium",
             score=78,
         )
@@ -214,7 +214,7 @@ def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
                 ),
                 endpoints=[url],
                 evidence_ids=evidence_ids,
-                next_action="Review the saved HTML and linked artifacts in context before escalating any lead.",
+                next_action="Review the saved HTML and linked artefacts in context before escalating any lead.",
                 signal="medium" if interesting or body_fetch else "low",
                 score=82 if interesting or body_fetch else 58,
             )
@@ -243,7 +243,7 @@ def _encoded_artifact_lead(project_state: ProjectState) -> OperatorSummaryLead |
         classification.category == LIKELY_SIGNAL for classification in classifications
     )
     return OperatorSummaryLead(
-        title="Encoded or hidden HTML artifacts require contextual review",
+        title="Encoded or hidden HTML artefacts require contextual review",
         why=(
             "Saved HTML contains encoded-looking or hidden-element metadata classified as "
             "possible or likely signal. Obvious documentation and default-page noise is "
@@ -251,7 +251,7 @@ def _encoded_artifact_lead(project_state: ProjectState) -> OperatorSummaryLead |
         ),
         endpoints=endpoints,
         evidence_ids=evidence_ids,
-        next_action="Review surrounding saved HTML before decoding, interpreting, or escalating these artifacts.",
+        next_action="Review surrounding saved HTML before decoding, interpreting, or escalating these artefacts.",
         signal="medium" if likely_count else "low",
         score=68 if likely_count else 52,
     )
@@ -273,7 +273,7 @@ def _unusual_robots_lead(project_state: ProjectState) -> OperatorSummaryLead | N
         why="Collected robots.txt evidence contains a non-default user-agent value.",
         endpoints=_dedupe(artifact.url for artifact in artifacts if artifact.url),
         evidence_ids=evidence_ids,
-        next_action="Review the robots content and correlate it with other collected artifacts.",
+        next_action="Review the robots content and correlate it with other collected artefacts.",
         signal="low",
         score=48,
     )

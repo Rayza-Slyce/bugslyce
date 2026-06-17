@@ -32,7 +32,7 @@ PROFILES = {
         allows_live_commands=False,
         safety_notes=[
             "No live network commands are included in this profile.",
-            "Only supplied local artifacts should be parsed and assembled.",
+            "Only supplied local artefacts should be parsed and assembled.",
             "Use this profile when scope is unclear, sensitive, or limited to existing evidence.",
         ],
     ),

@@ -31,7 +31,7 @@ SURFACE_LABELS = {
     "low_signal_static": "Static/CDN low-signal areas",
     "high_port_http_service": "High-port HTTP services",
     "multiple_http_services": "Hosts with multiple HTTP services",
-    "robots_artifact": "Robots artifacts",
+    "robots_artifact": "Robots artefacts",
     "hidden_path_review": "Hidden-looking path surfaces",
 }
 
@@ -173,7 +173,7 @@ def _recon_manifest(lines: list[str], project_state: ProjectState) -> None:
             f"- Target: `{_md(manifest.target)}`",
             f"- Created by: {_md(manifest.created_by or 'unspecified')}",
             f"- Profile (raw): {_md(manifest.profile or 'unspecified')}",
-            f"- Artifact count: {len(manifest.artifacts)}",
+            f"- Artefact count: {len(manifest.artifacts)}",
             "",
         ]
     )
@@ -327,7 +327,7 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
             [
                 f"- Open ports recorded: {summary.open_port_count}",
                 f"- HTTP services recorded: {summary.http_service_count}",
-                f"- Interesting artifacts recorded: {summary.interesting_artifact_count}",
+                f"- Interesting artefacts recorded: {summary.interesting_artifact_count}",
                 f"- Manual review candidates: {summary.candidate_count}",
                 "",
             ]
@@ -377,9 +377,9 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
     if project_state.http_artifacts:
         lines.extend(
             [
-                "### HTTP Artifacts",
+                "### HTTP Artefacts",
                 "",
-                "| URL | Artifact Type | Value | Evidence IDs |",
+                "| URL | Artefact Type | Value | Evidence IDs |",
                 "| --- | --- | --- | --- |",
             ]
         )
@@ -420,7 +420,7 @@ def _encoded_artifact_classification(
     if not classified:
         return
 
-    lines.extend(["### Encoded Artifact Classification", ""])
+    lines.extend(["### Encoded Artefact Classification", ""])
     groups = (
         ("Likely / Possible Signal", {LIKELY_SIGNAL, POSSIBLE_SIGNAL}),
         ("Likely Noise", {LIKELY_NOISE}),
@@ -433,7 +433,7 @@ def _encoded_artifact_classification(
         ]
         lines.extend([f"#### {heading}", ""])
         if not items:
-            lines.extend(["No artifacts in this classification group.", ""])
+            lines.extend(["No artefacts in this classification group.", ""])
             continue
         for artifact, classification in items[:6]:
             lines.extend(
@@ -446,7 +446,7 @@ def _encoded_artifact_classification(
                 ]
             )
         if len(items) > 6:
-            lines.append(f"- ... +{len(items) - 6} more; see the full HTTP Artifacts table above.")
+            lines.append(f"- ... +{len(items) - 6} more; see the full HTTP Artefacts table above.")
         lines.append("")
 
 

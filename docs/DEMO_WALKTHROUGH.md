@@ -18,6 +18,10 @@ The easiest MVP path in an interactive terminal is:
 bugslyce
 ```
 
+In a development checkout, run this after activating the virtual environment
+and installing the package with `python -m pip install -e .`. Direct
+`.venv/bin/bugslyce` usage still works for local development.
+
 The launcher presents:
 
 - **Quick Recon**: maps to the current `lab-safe-tiny` pipeline for a

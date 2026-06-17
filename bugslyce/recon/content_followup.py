@@ -151,7 +151,7 @@ def run_content_followup_workflow(
         manifest,
     )
     if considered == 0:
-        raise ValueError("No discovered_path records from content discovery artifacts were found.")
+        raise ValueError("No discovered_path records from content discovery artefacts were found.")
     if not selected_urls:
         raise ContentFollowupNoWork(considered)
 
@@ -281,7 +281,7 @@ def render_content_followup_execution_markdown(
             f"- Commands started: {result.commands_started}",
             f"- Commands completed: {result.commands_completed}",
             f"- Commands timed out: {result.commands_timed_out}",
-            f"- Artifacts written: {len(result.artifact_paths)}",
+            f"- Artefacts written: {len(result.artifact_paths)}",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
             "",
@@ -304,7 +304,7 @@ def render_content_followup_execution_summary(
             f"Input/output directory: {result.input_dir}",
             f"Discovered paths considered: {result.discovered_paths_considered}",
             f"Follow-up URLs selected: {len(result.followup_urls_selected)}",
-            f"Artifacts written: {len(result.artifact_paths)}",
+            f"Artefacts written: {len(result.artifact_paths)}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
             "Content-result follow-up requests were executed.",

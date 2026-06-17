@@ -147,7 +147,7 @@ def test_status_detects_followup_body_report_and_execution_metadata(
     (input_dir / "report.md").write_text(
         "# BugSlyce Recon Pack\n\n"
         "## Operator Summary\n\n"
-        "### Encoded Artifact Classification\n",
+        "### Encoded Artefact Classification\n",
         encoding="utf-8",
     )
     latest = {

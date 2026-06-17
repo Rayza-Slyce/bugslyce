@@ -64,7 +64,7 @@ def classify_encoded_artifact(artifact: HTTPArtifact) -> ArtifactClassification:
     value = artifact.value.strip()
     lowered = value.lower()
     if not value:
-        return ArtifactClassification(LIKELY_NOISE, "Empty artifact value.")
+        return ArtifactClassification(LIKELY_NOISE, "Empty artefact value.")
     if any(marker.lower() in lowered for marker in NOISE_MARKERS):
         return ArtifactClassification(
             LIKELY_NOISE,

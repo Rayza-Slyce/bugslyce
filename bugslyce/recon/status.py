@@ -379,7 +379,7 @@ def _detect_phases(
         (
             "encoded_classification",
             "Encoded-artifact classification visible",
-            "Encoded Artifact Classification" in report_text,
+            "Encoded Artefact Classification" in report_text,
             "report contains encoded-artifact classification",
         ),
         (

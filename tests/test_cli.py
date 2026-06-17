@@ -327,7 +327,7 @@ def test_cli_recon_path_followup_clean_noop_returns_success(
     )
     monkeypatch.setattr(
         "bugslyce.cli.write_path_followup_execution_result",
-        lambda *_args, **_kwargs: pytest.fail("no-op should not write execution artifacts"),
+        lambda *_args, **_kwargs: pytest.fail("no-op should not write execution artefacts"),
     )
 
     exit_code = main(
@@ -347,7 +347,7 @@ def test_cli_recon_path_followup_clean_noop_returns_success(
     assert "Error:" not in captured.out
     assert "Error:" not in captured.err
     assert "No eligible same-origin paths were found" in captured.out
-    assert "HTTP artifacts considered: 3" in captured.out
+    assert "HTTP artefacts considered: 3" in captured.out
     assert "No path-followup request was executed." in captured.out
 
 

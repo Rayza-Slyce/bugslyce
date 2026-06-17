@@ -113,7 +113,7 @@ bugslyce project run \
 - [ ] No `.venv/`, `__pycache__/`, or cache files are staged.
 - [ ] No secrets, API keys, tokens, or credentials are present.
 - [ ] Version in `pyproject.toml` is reviewed.
-- [ ] License section is reviewed.
+- [ ] Licence section is reviewed.
 
 ## Manual Tagging Notes
 

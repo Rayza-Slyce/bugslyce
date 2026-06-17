@@ -86,7 +86,7 @@ def run_path_followup_workflow(
         raise ValueError("Path follow-up requires recon_manifest.json from an HTTP metadata run.")
     if not _has_http_metadata_artifacts(manifest):
         raise ValueError(
-            "Path follow-up requires saved HTML or robots artifacts from an HTTP metadata run."
+            "Path follow-up requires saved HTML or robots artefacts from an HTTP metadata run."
         )
 
     initial_state = build_project_state(input_dir)
@@ -181,7 +181,7 @@ def render_path_followup_execution_markdown(
             f"- Target: `{result.target}`",
             f"- Input/output directory: `{result.input_dir}`",
             f"- Paths processed: {len(result.followup_urls)}",
-            f"- Artifacts written: {len(result.artifact_paths)}",
+            f"- Artefacts written: {len(result.artifact_paths)}",
             f"- Manifest: `{result.manifest_path}`",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
@@ -199,7 +199,7 @@ def render_path_followup_no_work(outcome: PathFollowupNoWork) -> str:
     return "\n".join(
         [
             "No eligible same-origin paths were found in existing HTTP evidence.",
-            f"HTTP artifacts considered: {outcome.considered}",
+            f"HTTP artefacts considered: {outcome.considered}",
             (
                 "All currently observed paths are absent, static, off-scope, "
                 "duplicate, or not actionable for path follow-up."
@@ -220,7 +220,7 @@ def render_path_followup_execution_summary(
             f"Target: {result.target}",
             f"Input/output directory: {result.input_dir}",
             f"Paths processed: {len(result.followup_urls)}",
-            f"Artifacts written: {len(result.artifact_paths)}",
+            f"Artefacts written: {len(result.artifact_paths)}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
             "Discovered-path follow-up requests were executed.",

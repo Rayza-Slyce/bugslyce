@@ -393,12 +393,12 @@ def _build_parser() -> argparse.ArgumentParser:
     execute_parser.add_argument(
         "--passive-only",
         action="store_true",
-        help="Package existing local artifacts for a passive-only plan.",
+        help="Package existing local artefacts for a passive-only plan.",
     )
     execute_parser.add_argument(
         "--input-dir",
         type=Path,
-        help="Optional local artifact directory; defaults to the plan output directory.",
+        help="Optional local artefact directory; defaults to the plan output directory.",
     )
     preflight_parser = recon_subparsers.add_parser(
         "preflight",
@@ -551,7 +551,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--input-dir",
         required=True,
         type=Path,
-        help="Existing BugSlyce output directory containing HTTP metadata artifacts.",
+        help="Existing BugSlyce output directory containing HTTP metadata artefacts.",
     )
     path_followup_parser.add_argument(
         "--scope",
@@ -935,7 +935,7 @@ def _recon(args: argparse.Namespace) -> int:
             print(
                 "Error: Live recon execution is not implemented yet. "
                 "Re-run with --dry-run to preview planned execution or "
-                "--passive-only to package existing local artifacts.",
+                "--passive-only to package existing local artefacts.",
                 file=sys.stderr,
             )
             print("No commands were executed.", file=sys.stderr)

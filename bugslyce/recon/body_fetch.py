@@ -149,7 +149,7 @@ def run_body_fetch_workflow(
     initial_state = build_project_state(input_dir)
     considered, selected_urls = select_body_fetch_urls(initial_state, target, manifest)
     if considered == 0:
-        raise ValueError("No prior content-followup header artifacts were found.")
+        raise ValueError("No prior content-followup header artefacts were found.")
     if not selected_urls:
         raise BodyFetchNoWork(considered)
 
@@ -274,7 +274,7 @@ def render_body_fetch_execution_markdown(result: ReconBodyFetchExecutionResult) 
             f"- Commands started: {result.commands_started}",
             f"- Commands completed: {result.commands_completed}",
             f"- Commands timed out: {result.commands_timed_out}",
-            f"- Artifacts written: {len(result.artifact_paths)}",
+            f"- Artefacts written: {len(result.artifact_paths)}",
             f"- Report: `{result.report_path}`",
             f"- Project state: `{result.project_state_path}`",
             "",
@@ -295,7 +295,7 @@ def render_body_fetch_execution_summary(result: ReconBodyFetchExecutionResult) -
             f"Input/output directory: {result.input_dir}",
             f"Candidate URLs considered: {result.candidate_urls_considered}",
             f"Body URLs selected: {len(result.body_urls_selected)}",
-            f"Artifacts written: {len(result.artifact_paths)}",
+            f"Artefacts written: {len(result.artifact_paths)}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
             "Selective body fetch requests were executed.",
