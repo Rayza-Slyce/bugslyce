@@ -416,6 +416,82 @@ def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:
     assert "EVID-ART-NOISE" in low_signal
 
 
+def test_operator_summary_promotes_credential_like_homepage_artifacts() -> None:
+    state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
+    pickle_artifacts = [
+        HTTPArtifact(
+            url="http://10.81.143.79/",
+            artifact_type="page_title",
+            value="Rick is sup4r cool",
+            source_file="homepage-pickle.html",
+            evidence_ids=["EVID-ART-TITLE"],
+            tags=[],
+        ),
+        HTTPArtifact(
+            url="http://10.81.143.79/",
+            artifact_type="html_comment",
+            value="Note to self, remember username! Username: R1ckRul3s",
+            source_file="homepage-pickle.html",
+            evidence_ids=["EVID-ART-USER"],
+            tags=[],
+        ),
+        HTTPArtifact(
+            url="http://10.81.143.79/",
+            artifact_type="keyword_hit",
+            value="password",
+            source_file="homepage-pickle.html",
+            evidence_ids=["EVID-ART-PASS"],
+            tags=[],
+        ),
+        HTTPArtifact(
+            url="http://10.81.143.79/",
+            artifact_type="keyword_hit",
+            value="secret",
+            source_file="homepage-pickle.html",
+            evidence_ids=["EVID-ART-SECRET"],
+            tags=[],
+        ),
+    ]
+    state = replace(state, http_artifacts=[*state.http_artifacts, *pickle_artifacts])
+    candidates = generate_candidates(state)
+    report = render_markdown_report(state, candidates)
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    manual_queue = report.split("## Manual Review Queue", 1)[1]
+
+    first_item = review_first.strip().split("\n", 1)[0]
+    assert "Credential-like artifact review in homepage HTML" in first_item
+    assert "EVID-ART-USER" in review_first
+    assert "EVID-ART-PASS" in review_first
+    assert "EVID-ART-SECRET" in review_first
+    assert "Signal: `high`" in review_first
+    assert "Do not submit forms, brute force" in review_first
+    assert "valid without explicit authorisation" in review_first
+    assert "Static assets" not in first_item
+    assert "SSH service context" not in first_item
+
+    credential_candidate = next(
+        candidate
+        for candidate in candidates
+        if candidate.candidate_type == "credential_like_artifact_review"
+        and candidate.affected_endpoints == ["http://10.81.143.79/"]
+    )
+    assert credential_candidate.priority == "high"
+    assert credential_candidate.evidence_ids == [
+        "EVID-ART-USER",
+        "EVID-ART-PASS",
+        "EVID-ART-SECRET",
+    ]
+    assert f"#### {credential_candidate.id}" in manual_queue
+    assert "Candidate type: `credential_like_artifact_review`" in manual_queue
+    assert "Do not brute force." in manual_queue
+    assert "Do not attempt authentication unless explicitly authorised." in manual_queue
+    assert "confirmed credential" not in review_first.lower()
+    assert "vulnerable" not in review_first.lower()
+
+
 def test_encoded_artifact_classification_keeps_signal_noise_and_raw_rows() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
     signal = HTTPArtifact(

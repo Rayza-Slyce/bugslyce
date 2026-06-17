@@ -11,6 +11,7 @@ from bugslyce.triage.classify import (
     ADMIN_SURFACE,
     API_SURFACE,
     AUTH_SURFACE,
+    CREDENTIAL_LIKE_ARTIFACT_REVIEW,
     ENVIRONMENT_SURFACE,
     ENCODED_ARTIFACT_REVIEW,
     EXPOSED_SERVICE_CONTEXT,
@@ -37,6 +38,28 @@ from bugslyce.triage.scoring import (
     priority_for_endpoint,
     priority_for_service,
 )
+
+COMMENT_SIGNAL_TERMS = {
+    "api key",
+    "credential",
+    "key",
+    "login",
+    "pass",
+    "password",
+    "secret",
+    "token",
+    "user",
+    "username",
+}
+KEYWORD_SIGNAL_TERMS = {
+    "admin",
+    "api",
+    "key",
+    "login",
+    "password",
+    "secret",
+    "token",
+}
 
 
 def generate_candidates(project_state: ProjectState) -> list[Candidate]:
@@ -393,6 +416,50 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
             kill_switch_guidance=asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE,
         )
 
+    credential_groups = _credential_like_artifact_groups(project_state)
+    for url, artifacts in credential_groups.items():
+        host = normalise_artifact_host(url)
+        if not host:
+            continue
+        asset = assets_by_host.get(host)
+        has_sensitive_comment = any(_is_sensitive_comment(artifact) for artifact in artifacts)
+        priority = "high" if has_sensitive_comment else "medium"
+        if asset and asset.in_scope is False:
+            priority = "kill_switch"
+        path = urlparse(url).path or "/"
+        title_context = "homepage HTML" if path in {"", "/"} else f"HTML for {path}"
+        _add_candidate(
+            candidates,
+            seen,
+            CREDENTIAL_LIKE_ARTIFACT_REVIEW,
+            url,
+            title=f"Credential-like artifact review in {title_context}",
+            priority=priority,
+            rationale=(
+                "Parsed HTML/comment evidence contains credential-like or sensitive "
+                "keyword context requiring manual review."
+            ),
+            affected_assets=[host],
+            affected_endpoints=[url],
+            evidence_ids=_dedupe(
+                evidence_id
+                for artifact in artifacts
+                for evidence_id in artifact.evidence_ids
+            ),
+            suggested_manual_validation=[
+                "Review saved HTML/source context before interpreting the artifact.",
+                "Confirm whether the artifact is a clue, placeholder, or sensitive exposure.",
+                "Do not attempt authentication unless explicitly authorised.",
+                "Do not brute force.",
+                "Record evidence before escalating any claim.",
+            ],
+            kill_switch_guidance=(
+                "Do not treat keyword-only hits as valid credentials without manual validation."
+                if priority != "kill_switch"
+                else asset_kill_switch_guidance(asset) or VALIDATION_GUIDANCE
+            ),
+        )
+
     dead_groups: dict[str, list] = {}
     for path in project_state.discovered_paths:
         if "dead_path" in path.tags:
@@ -579,6 +646,30 @@ def _has_hidden_path_marker(path: str) -> bool:
 
 def normalise_artifact_host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
+
+
+def _credential_like_artifact_groups(project_state: ProjectState) -> dict[str, list]:
+    groups: dict[str, list] = {}
+    for artifact in project_state.http_artifacts:
+        if not artifact.url or not artifact.evidence_ids:
+            continue
+        if _is_sensitive_comment(artifact) or _is_sensitive_keyword_hit(artifact):
+            groups.setdefault(artifact.url, []).append(artifact)
+    return groups
+
+
+def _is_sensitive_comment(artifact) -> bool:
+    if artifact.artifact_type != "html_comment":
+        return False
+    value = artifact.value.lower()
+    return any(term in value for term in COMMENT_SIGNAL_TERMS)
+
+
+def _is_sensitive_keyword_hit(artifact) -> bool:
+    return (
+        artifact.artifact_type == "keyword_hit"
+        and artifact.value.strip().lower() in KEYWORD_SIGNAL_TERMS
+    )
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:

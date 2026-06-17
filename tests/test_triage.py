@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from bugslyce.core.models import HTTPArtifact
 from bugslyce.core.project import build_project_state
 from bugslyce.triage.candidates import generate_candidates
 
@@ -48,6 +50,125 @@ def test_auth_endpoints_create_auth_review_candidates() -> None:
     assert any("/account" in endpoint for endpoint in app_auth_candidates[0].affected_endpoints)
     assert "manual review" in app_auth_candidates[0].title.lower()
     assert len(app_auth_candidates[0].evidence_ids) == len(app_auth_candidates[0].affected_endpoints)
+
+
+def test_html_comment_username_creates_credential_like_review_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="html_comment",
+                value="Note to self, remember username! Username: R1ckRul3s",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-USER"],
+                tags=[],
+            ),
+        ],
+    )
+
+    candidate = next(
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    )
+
+    assert candidate.priority == "high"
+    assert candidate.affected_endpoints == ["https://app.example-bounty.test/"]
+    assert candidate.evidence_ids == ["EVID-ART-USER"]
+    assert "valid credential" not in candidate.rationale.lower()
+    assert any("Do not brute force" in item for item in candidate.suggested_manual_validation)
+    assert any(
+        "Do not attempt authentication unless explicitly authorised" in item
+        for item in candidate.suggested_manual_validation
+    )
+
+
+def test_keyword_only_sensitive_hits_create_medium_grouped_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-PASS"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-SECRET"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert len(credential_candidates) == 1
+    assert credential_candidates[0].priority == "medium"
+    assert credential_candidates[0].evidence_ids == ["EVID-ART-PASS", "EVID-ART-SECRET"]
+    assert "confirmed credential" not in credential_candidates[0].kill_switch_guidance.lower()
+
+
+def test_comment_and_keyword_hits_on_same_url_are_grouped() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="html_comment",
+                value="Username: R1ckRul3s",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-USER"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-PASS"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-SECRET"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert len(credential_candidates) == 1
+    assert credential_candidates[0].priority == "high"
+    assert credential_candidates[0].evidence_ids == [
+        "EVID-ART-USER",
+        "EVID-ART-PASS",
+        "EVID-ART-SECRET",
+    ]
 
 
 def test_api_account_resource_path_does_not_create_auth_candidate() -> None:

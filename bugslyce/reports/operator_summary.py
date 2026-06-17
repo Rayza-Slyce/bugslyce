@@ -15,6 +15,7 @@ from bugslyce.reports.artifact_classifier import (
 
 
 REVIEW_TYPE_ORDER = (
+    "credential_like_artifact_review",
     "high_port_http_service",
     "multiple_http_services",
 )
@@ -106,7 +107,7 @@ def build_operator_summary(
     ranked = sorted(
         deduped.values(),
         key=lambda item: (-item.score, item.title, item.endpoints),
-    )[:6]
+    )[:8]
 
     return OperatorSummary(
         review_first=ranked,
@@ -118,6 +119,27 @@ def build_operator_summary(
 def _candidate_service_lead(candidate: Candidate) -> OperatorSummaryLead | None:
     if not candidate.evidence_ids:
         return None
+    if candidate.candidate_type == "credential_like_artifact_review":
+        high_signal = candidate.priority == "high"
+        homepage_context = any(urlparse(endpoint).path in {"", "/"} for endpoint in candidate.affected_endpoints)
+        return OperatorSummaryLead(
+            title=candidate.title,
+            why=(
+                "Parsed HTML evidence contains a comment referencing credential-like "
+                "context and related sensitive keyword hits."
+                if high_signal
+                else "Parsed HTML evidence contains sensitive keyword context requiring manual review."
+            ),
+            endpoints=candidate.affected_endpoints,
+            evidence_ids=candidate.evidence_ids,
+            next_action=(
+                "Review the saved HTML/source context manually. Do not submit forms, "
+                "brute force, or treat any value as valid without explicit authorisation "
+                "and manual validation."
+            ),
+            signal="high" if high_signal else "medium",
+            score=(98 if homepage_context else 96) if high_signal else 84,
+        )
     if candidate.candidate_type == "high_port_http_service":
         return OperatorSummaryLead(
             title=candidate.title,
