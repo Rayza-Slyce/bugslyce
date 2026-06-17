@@ -113,7 +113,9 @@ from bugslyce.recon.nmap_services import (
     write_nmap_service_execution_result,
 )
 from bugslyce.recon.path_followup import (
+    PathFollowupNoWork,
     render_path_followup_execution_summary,
+    render_path_followup_no_work,
     run_path_followup_workflow,
     write_path_followup_execution_result,
 )
@@ -1164,6 +1166,9 @@ def _recon(args: argparse.Namespace) -> int:
                 scope_file=args.scope_file,
             )
             write_path_followup_execution_result(result, Path(result.input_dir))
+        except PathFollowupNoWork as outcome:
+            print(render_path_followup_no_work(outcome))
+            return 0
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             print("No discovered-path request was executed.", file=sys.stderr)

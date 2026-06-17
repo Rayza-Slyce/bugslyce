@@ -12,6 +12,7 @@ from bugslyce.core.models import ReconContentDiscoveryExecutionResult
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_run import ContentDiscoveryExecutionIncomplete
+from bugslyce.recon.path_followup import PathFollowupNoWork
 
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
@@ -313,6 +314,41 @@ def test_cli_recon_content_followup_requires_confirm(tmp_path: Path, capsys) -> 
     assert exit_code == 2
     assert "requires explicit --confirm" in captured.err
     assert "No content-result request was executed." in captured.err
+
+
+def test_cli_recon_path_followup_clean_noop_returns_success(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.cli.run_path_followup_workflow",
+        lambda **_kwargs: (_ for _ in ()).throw(PathFollowupNoWork(3)),
+    )
+    monkeypatch.setattr(
+        "bugslyce.cli.write_path_followup_execution_result",
+        lambda *_args, **_kwargs: pytest.fail("no-op should not write execution artifacts"),
+    )
+
+    exit_code = main(
+        [
+            "recon",
+            "path-followup",
+            "--input-dir",
+            str(tmp_path),
+            "--scope",
+            str(tmp_path / "scope.md"),
+            "--confirm",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Error:" not in captured.out
+    assert "Error:" not in captured.err
+    assert "No eligible same-origin paths were found" in captured.out
+    assert "HTTP artifacts considered: 3" in captured.out
+    assert "No path-followup request was executed." in captured.out
 
 
 def test_cli_recon_content_followup_clean_noop_returns_success(

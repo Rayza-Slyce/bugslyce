@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.core.scope import parse_scope, scope_entry_target
+from bugslyce.recon.path_followup import discover_same_origin_followup_urls
 from bugslyce.reports.provenance import WorkflowProvenance, build_workflow_provenance
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
@@ -509,6 +510,11 @@ def _next_actions(
         target,
     )
     body_considered, body_pending = _pending_body_fetches(project_state, manifest, target)
+    path_followup_pending = discover_same_origin_followup_urls(
+        project_state,
+        target,
+        max_followups=max(1, len(project_state.http_artifacts)),
+    )
 
     actions: list[str] = []
     if (has("nmap_full") or _has_nmap_discovery(manifest)) and not has("nmap_services"):
@@ -533,8 +539,11 @@ def _next_actions(
             f"{len(body_pending)} eligible URL(s) remain from {body_considered} "
             "followed path(s) considered."
         )
-    elif has("http_metadata") and not has("path_followup") and not (
-        has("content_tiny") or has("content_light")
+    elif (
+        path_followup_pending
+        and has("http_metadata")
+        and not has("path_followup")
+        and not (has("content_tiny") or has("content_light"))
     ):
         actions.append(
             "Recommended next safe action: run `bugslyce recon path-followup` "

@@ -80,12 +80,29 @@ def test_project_next_services_with_http_suggests_http_metadata(
 def test_project_next_metadata_suggests_path_followup(tmp_path: Path) -> None:
     project_file, output_dir = _project(tmp_path)
     _write_pack(output_dir, "metadata")
+    (output_dir / "homepage-80.html").write_text(
+        '<html><a href="/manual">manual</a></html>',
+        encoding="utf-8",
+    )
 
     result = build_project_next(project_file)
 
     assert result.recommended_action.id == "path-followup"
     assert "recon path-followup" in result.recommended_action.command_preview
     assert "--confirm" in result.recommended_action.command_preview
+
+
+def test_project_next_metadata_without_eligible_paths_suggests_content_plan(
+    tmp_path: Path,
+) -> None:
+    project_file, output_dir = _project(tmp_path)
+    _write_pack(output_dir, "metadata")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "content-plan-tiny"
+    assert "recon path-followup" not in result.recommended_action.command_preview
+    assert "recon content-plan" in result.recommended_action.command_preview
 
 
 def test_project_next_http_evidence_suggests_tiny_content_plan(

@@ -25,6 +25,16 @@ from bugslyce.triage.candidates import generate_candidates
 FOLLOWUP_ARTIFACT_TYPES = {"link", "script_or_asset", "allow_rule", "disallow_rule"}
 
 
+class PathFollowupNoWork(Exception):
+    """Clean outcome when no same-origin path follow-up URL is eligible."""
+
+    def __init__(self, considered: int) -> None:
+        super().__init__(
+            "No eligible same-origin paths were found in existing HTTP evidence."
+        )
+        self.considered = considered
+
+
 def discover_same_origin_followup_urls(
     project_state: ProjectState,
     target: str,
@@ -94,7 +104,7 @@ def run_path_followup_workflow(
         max_followups=max(MAX_PATH_FOLLOWUPS, len(initial_state.http_artifacts)),
     )
     if not all_urls:
-        raise ValueError("No eligible same-origin paths were found in existing HTTP evidence.")
+        raise PathFollowupNoWork(len(initial_state.http_artifacts))
     followup_urls = all_urls[:MAX_PATH_FOLLOWUPS]
     warnings = list(initial_state.warnings)
     if len(all_urls) > MAX_PATH_FOLLOWUPS:
@@ -179,6 +189,22 @@ def render_path_followup_execution_markdown(
             "Discovered-path follow-up requests were executed.",
             "No content discovery, brute force, exploitation, or form submission was run.",
             "",
+        ]
+    )
+
+
+def render_path_followup_no_work(outcome: PathFollowupNoWork) -> str:
+    """Render a calm CLI summary for an idempotent no-work result."""
+
+    return "\n".join(
+        [
+            "No eligible same-origin paths were found in existing HTTP evidence.",
+            f"HTTP artifacts considered: {outcome.considered}",
+            (
+                "All currently observed paths are absent, static, off-scope, "
+                "duplicate, or not actionable for path follow-up."
+            ),
+            "No path-followup request was executed.",
         ]
     )
 

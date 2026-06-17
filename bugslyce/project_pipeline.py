@@ -51,6 +51,7 @@ from bugslyce.recon.nmap_services import (
     write_nmap_service_execution_result,
 )
 from bugslyce.recon.path_followup import (
+    PathFollowupNoWork,
     run_path_followup_workflow,
     write_path_followup_execution_result,
 )
@@ -264,7 +265,7 @@ def run_project_pipeline(
         result = _replace_step(result, index, started_step)
         try:
             message, output_paths, updates = step_runners[step.step_id]()
-        except (ContentFollowupNoWork, BodyFetchNoWork) as outcome:
+        except (PathFollowupNoWork, ContentFollowupNoWork, BodyFetchNoWork) as outcome:
             completed_step = replace(
                 started_step,
                 status="noop",

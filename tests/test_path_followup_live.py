@@ -12,7 +12,9 @@ import pytest
 from bugslyce.core.models import ReconCommandResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.path_followup import (
+    PathFollowupNoWork,
     discover_same_origin_followup_urls,
+    render_path_followup_no_work,
     run_path_followup_workflow,
     write_path_followup_execution_result,
 )
@@ -268,11 +270,19 @@ def test_path_followup_refuses_missing_input_metadata_and_scope(tmp_path: Path) 
         )
 
 
-def test_path_followup_refuses_when_no_eligible_paths_exist(tmp_path: Path) -> None:
+def test_path_followup_no_eligible_paths_is_clean_noop(tmp_path: Path) -> None:
     input_dir, scope = _http_metadata_directory(tmp_path, include_paths=False)
 
-    with pytest.raises(ValueError, match="No eligible same-origin paths"):
-        run_path_followup_workflow(input_dir, scope, runner=_MockPathFollowupRunner())
+    class NoRunner:
+        def run(self, _command):
+            raise AssertionError("runner must not be called for no-op path-followup")
+
+    with pytest.raises(PathFollowupNoWork) as exc_info:
+        run_path_followup_workflow(input_dir, scope, runner=NoRunner())
+
+    rendered = render_path_followup_no_work(exc_info.value)
+    assert "No eligible same-origin paths were found" in rendered
+    assert "No path-followup request was executed." in rendered
 
 
 def test_path_followup_cap_is_deterministic(tmp_path: Path) -> None:

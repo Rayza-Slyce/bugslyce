@@ -439,6 +439,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         detected("http_metadata")
         and not detected("path_followup")
         and not has_gobuster
+        and status.next_actions[0].find("path-followup") != -1
     ):
         recommended = _live_action(
             "path-followup",

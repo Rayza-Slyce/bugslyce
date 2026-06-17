@@ -206,6 +206,17 @@ def test_status_advises_http_metadata_after_service_detection(tmp_path: Path) ->
     assert "`bugslyce recon http-metadata`" in result.next_actions[0]
 
 
+def test_status_advises_content_plan_when_metadata_has_no_eligible_paths(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="metadata")
+
+    result = build_recon_status(input_dir)
+
+    assert "`bugslyce recon path-followup`" not in result.next_actions[0]
+    assert "`bugslyce recon content-plan`" in result.next_actions[0]
+
+
 def test_status_advises_content_plan_after_http_path_metadata(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, stage="path-followup")
 
@@ -342,7 +353,7 @@ def _status_input(
     scope.write_text("## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
     artifacts: list[dict[str, object]] = []
 
-    if stage in {"discovery", "services", "path-followup", "gobuster", "content-followup"}:
+    if stage in {"discovery", "services", "metadata", "path-followup", "gobuster", "content-followup"}:
         discovery_name = "nmap-allports.txt"
         (input_dir / discovery_name).write_text(
             "Nmap scan report for 10.10.10.10\n"
@@ -352,7 +363,7 @@ def _status_input(
         )
         artifacts.append({"type": "nmap", "file": discovery_name})
 
-    if stage in {"services", "path-followup", "gobuster", "content-followup"}:
+    if stage in {"services", "metadata", "path-followup", "gobuster", "content-followup"}:
         service_name = "nmap-services-all.txt"
         (input_dir / service_name).write_text(
             "Nmap scan report for 10.10.10.10\n"
@@ -362,7 +373,7 @@ def _status_input(
         )
         artifacts.append({"type": "nmap", "file": service_name})
 
-    if stage in {"path-followup", "gobuster", "content-followup"}:
+    if stage in {"metadata", "path-followup", "gobuster", "content-followup"}:
         (input_dir / "homepage-10.10.10.10-80.html").write_text(
             "<html><title>Home</title></html>",
             encoding="utf-8",
@@ -374,17 +385,18 @@ def _status_input(
                 "url": "http://10.10.10.10/",
             }
         )
-        (input_dir / "curl-headers-followup-10.10.10.10-80-manual.txt").write_text(
-            "HTTP/1.1 404 Not Found\n",
-            encoding="utf-8",
-        )
-        artifacts.append(
-            {
-                "type": "http_headers",
-                "file": "curl-headers-followup-10.10.10.10-80-manual.txt",
-                "url": "http://10.10.10.10/manual",
-            }
-        )
+        if stage != "metadata":
+            (input_dir / "curl-headers-followup-10.10.10.10-80-manual.txt").write_text(
+                "HTTP/1.1 404 Not Found\n",
+                encoding="utf-8",
+            )
+            artifacts.append(
+                {
+                    "type": "http_headers",
+                    "file": "curl-headers-followup-10.10.10.10-80-manual.txt",
+                    "url": "http://10.10.10.10/manual",
+                }
+            )
 
     if stage in {"gobuster", "content-followup"}:
         gobuster_name = (

@@ -21,6 +21,7 @@ from bugslyce.project_pipeline import (
 from bugslyce.project_session import scaffold_project
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
+from bugslyce.recon.path_followup import PathFollowupNoWork
 
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -332,6 +333,40 @@ def test_pipeline_records_noop_followups_and_continues(
     assert "export" in calls
 
 
+def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_path_followup_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PathFollowupNoWork(5)),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_path_followup_execution_result",
+        lambda *args, **kwargs: pytest.fail("no-op should not write path-followup metadata"),
+    )
+    progress: list[str] = []
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
+    )
+
+    assert result.final_status == "completed"
+    assert result.steps[4].status == "noop"
+    assert result.no_op_steps == 1
+    assert "path-followup-write" not in calls
+    assert "content-plan" in calls
+    assert calls.index("content-plan") < calls.index("content-run")
+    assert "[5/12] discovered-path follow-up no-op" in progress
+    assert "export" in calls
+
+
 def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     tmp_path: Path,
     monkeypatch,
@@ -347,6 +382,10 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     )
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_path_followup_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PathFollowupNoWork(4)),
+    )
     progress: list[str] = []
 
     result = run_project_pipeline(
@@ -360,16 +399,19 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert "nmap-discover" not in calls
     assert "nmap-services" not in calls
     assert "http-metadata" not in calls
-    assert calls[0] == "path-followup"
+    assert "path-followup" not in calls
+    assert calls[0] == "content-plan"
     assert [step.status for step in result.steps[:4]] == [
         "completed",
         "skipped_existing",
         "skipped_existing",
         "skipped_existing",
     ]
+    assert result.steps[4].status == "noop"
     assert result.resume_requested is True
     assert result.reused_existing_evidence is True
     assert result.skipped_steps == 3
+    assert result.no_op_steps == 1
     assert "Resume: true" in progress[0]
     assert (
         "[2/12] nmap full TCP discovery skipped.\n"
@@ -386,6 +428,7 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
         "Existing HTTP metadata evidence detected; phase skipped during resume."
         in progress
     )
+    assert "[5/12] discovered-path follow-up no-op" in progress
     payload = json.loads(
         (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
     )
