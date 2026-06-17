@@ -24,6 +24,7 @@ from bugslyce.project_session import (
     render_project_status,
     render_project_scaffold_summary,
     scaffold_project,
+    _validate_target,
 )
 
 InputFunc = Callable[[str], str]
@@ -120,14 +121,19 @@ def _start_new_project(
     cwd: Path,
 ) -> int:
     name = _prompt_text(input_func, "Project name")
-    target = _prompt_text(input_func, "Target IP or domain")
+    target_input, target = _prompt_target_with_retries(input_func, print_func)
+    if not target:
+        print_func("No project was created.")
+        print_func("No commands were executed.")
+        print_func("No network requests were made.")
+        return 2
     projects_dir = _prompt_projects_dir(input_func, cwd)
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
 
     print_func("")
-    print_func(_render_project_summary(name, target, projects_dir, profile))
+    print_func(_render_project_summary(name, target, projects_dir, profile, target_input))
     print_func("")
     print_func(f"BugSlyce will prepare recon for: {target}")
     print_func(
@@ -322,18 +328,50 @@ def _render_project_summary(
     target: str,
     projects_dir: Path,
     profile: str | None,
+    target_input: str | None = None,
 ) -> str:
     mode = QUICK_RECON_LABEL if profile == PIPELINE_PROFILE else MANUAL_SETUP_LABEL
-    return "\n".join(
+    lines = [
+        "Project summary:",
+        f"* Name: {name}",
+    ]
+    if target_input and target_input.strip().lower() != target:
+        lines.append(f"* Input: {target_input}")
+    lines.extend(
         [
-            "Project summary:",
-            f"* Name: {name}",
             f"* Target: {target}",
             f"* Projects directory: {projects_dir}",
             f"* Project directory: {projects_dir / name}",
             f"* Recon mode: {mode}",
         ]
     )
+    return "\n".join(lines)
+
+
+def _prompt_target_with_retries(
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    *,
+    attempts: int = 3,
+) -> tuple[str, str | None]:
+    prompt = "Target IP, hostname, or simple URL"
+    for attempt in range(attempts):
+        value = input_func(f"{prompt}: ").strip()
+        if not value and attempt > 0:
+            print_func("Target entry was cancelled.")
+            return "", None
+        try:
+            return value, _validate_target(value)
+        except ValueError as exc:
+            print_func(str(exc))
+            print_func("Examples:")
+            print_func("* 10.10.10.10")
+            print_func("* example.com")
+            print_func("* https://example.com")
+            if attempt < attempts - 1:
+                prompt = "Type a valid target, or press Enter to cancel"
+    print_func("Target entry was cancelled.")
+    return "", None
 
 
 def _prompt_choice(input_func: InputFunc, prompt: str, valid_choices: set[str]) -> str:

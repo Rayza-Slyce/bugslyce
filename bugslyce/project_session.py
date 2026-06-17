@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import ipaddress
 import json
 from pathlib import Path
 import re
 import shlex
+from urllib.parse import urlparse
 
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.status import (
@@ -22,6 +24,7 @@ PROJECT_FILENAME = "bugslyce_project.json"
 PROJECT_RUNBOOK_FILENAME = "runbook.md"
 PROJECT_SCHEMA_VERSION = "1.0"
 SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+HOSTNAME_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 DEFAULT_PROFILES = {
     "tcp_discovery": "lab-tcp-full",
     "content_discovery_smoke": "lab-root-tiny",
@@ -976,16 +979,56 @@ def _format_command(argv: list[str]) -> str:
 
 
 def _validate_target(target: str) -> str:
-    value = target.strip().lower().rstrip(".")
-    if (
-        not value
-        or value.startswith("*.")
-        or "/" in value
-        or "://" in value
-        or scope_entry_target(value) != value
-    ):
-        raise ValueError("Target must be one plain IP address or hostname.")
+    value = target.strip().lower()
+    if not value or any(character.isspace() for character in value):
+        raise ValueError(_target_validation_message())
+
+    if "://" in value:
+        parsed = urlparse(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            raise ValueError(_target_validation_message())
+        value = parsed.hostname.lower()
+
+    value = value.rstrip(".")
+    if not _is_valid_ipv4(value) and not _is_valid_hostname(value):
+        raise ValueError(_target_validation_message())
+    if scope_entry_target(value) != value:
+        raise ValueError(_target_validation_message())
     return value
+
+
+def _is_valid_ipv4(value: str) -> bool:
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_hostname(value: str) -> bool:
+    if not value or value.startswith("*.") or value.startswith(".") or value.endswith("."):
+        return False
+    if set(value) <= set("0123456789."):
+        return False
+    labels = value.split(".")
+    return all(label and HOSTNAME_LABEL.fullmatch(label) for label in labels)
+
+
+def _target_validation_message() -> str:
+    return (
+        "Target must be a plain IPv4 address, hostname, or simple http/https URL. "
+        "Do not include paths, queries, fragments, credentials, malformed IP-like "
+        "values, or non-http schemes."
+    )
 
 
 def _render_scope_template(target: str) -> str:

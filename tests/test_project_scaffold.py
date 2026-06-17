@@ -53,10 +53,76 @@ def test_scaffold_rejects_unsafe_names(tmp_path: Path, name: str) -> None:
         scaffold_project(name, "10.10.10.10", tmp_path / "projects")
 
 
-@pytest.mark.parametrize("target", ["not a host", "http://example.com", "10.0.0.0/24"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "not a host",
+        "10.0.0.0/24",
+        "10.10.10",
+        "10.10",
+        "999.10.10.10",
+        "10.10.10.999",
+        ".example.com",
+        "example..com",
+        "https://example.com/admin",
+        "https://example.com?x=1",
+        "https://user:pass@example.com",
+        "https://example.com#fragment",
+        "http://10.10.10.10/path",
+        "ftp://example.com",
+        "ssh://example.com",
+    ],
+)
 def test_scaffold_rejects_invalid_single_target(tmp_path: Path, target: str) -> None:
-    with pytest.raises(ValueError, match="plain IP address or hostname"):
+    with pytest.raises(ValueError, match="plain IPv4 address, hostname"):
         scaffold_project("test", target, tmp_path / "projects")
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("10.10.10.10", "10.10.10.10"),
+        ("example.com", "example.com"),
+        ("https://example.com", "example.com"),
+        ("http://10.10.10.10", "10.10.10.10"),
+    ],
+)
+def test_scaffold_accepts_and_normalises_supported_targets(
+    tmp_path: Path,
+    target: str,
+    expected: str,
+) -> None:
+    result = scaffold_project("test", target, tmp_path / "projects")
+    payload = json.loads(Path(result.project_file).read_text(encoding="utf-8"))
+
+    assert result.project.target == expected
+    assert payload["target"] == expected
+    assert f"* {expected}" in Path(result.scope_file).read_text(encoding="utf-8")
+
+
+def test_cli_scaffold_rejects_invalid_target_before_writing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    projects_dir = tmp_path / "projects"
+
+    exit_code = main(
+        [
+            "project",
+            "scaffold",
+            "--name",
+            "bad-target",
+            "--target",
+            "10.10.10",
+            "--projects-dir",
+            str(projects_dir),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "plain IPv4 address, hostname" in captured.err
+    assert not (projects_dir / "bad-target").exists()
 
 
 def test_scaffold_refuses_existing_nonempty_directory_without_force(

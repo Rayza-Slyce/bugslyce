@@ -106,6 +106,130 @@ def test_launcher_lowercase_yes_retries_and_exact_yes_confirms(
     assert "Project created." in output
 
 
+def test_launcher_invalid_target_retries_then_accepts_ipv4(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10", "10.10.10.10", "projects", "2", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["target"] == "10.10.10.10"
+    assert "Target must be a plain IPv4 address, hostname, or simple http/https URL." in rendered
+    assert "* 10.10.10.10" in rendered
+    assert "Project created." in output
+
+
+def test_launcher_invalid_target_cancel_creates_nothing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: pytest.fail("scaffold must not run after target cancel"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run after target cancel"),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "https://example.com/admin", ""])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 2
+    assert "Target entry was cancelled." in output
+    assert "No project was created." in output
+    assert "No commands were executed." in output
+    assert "No network requests were made." in output
+    assert "paths, queries, fragments, credentials" in rendered
+
+
+@pytest.mark.parametrize(
+    ("target_input", "expected_target"),
+    [
+        ("https://example.com", "example.com"),
+        ("http://10.10.10.10", "10.10.10.10"),
+    ],
+)
+def test_launcher_accepts_simple_urls_and_normalises_target(
+    monkeypatch,
+    tmp_path: Path,
+    target_input: str,
+    expected_target: str,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", target_input, "projects", "2", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["target"] == expected_target
+    assert f"* Input: {target_input}" in rendered
+    assert f"* Target: {expected_target}" in rendered
+
+
+@pytest.mark.parametrize(
+    "target_input",
+    [
+        "https://example.com/admin",
+        "https://example.com?x=1",
+        "https://user:pass@example.com",
+    ],
+)
+def test_launcher_rejects_unsafe_url_targets(
+    monkeypatch,
+    tmp_path: Path,
+    target_input: str,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: pytest.fail("scaffold must not run for invalid URL target"),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", target_input, ""])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 2
+    assert "Target must be a plain IPv4 address, hostname, or simple http/https URL." in rendered
+    assert "No project was created." in output
+
+
 def test_unavailable_recon_modes_retry_until_available(
     monkeypatch,
     tmp_path: Path,

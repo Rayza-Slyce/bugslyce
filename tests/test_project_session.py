@@ -72,11 +72,22 @@ def test_project_init_rejects_unsafe_names(
 @pytest.mark.parametrize(
     "target",
     [
-        "http://example.com/",
         "*.example.com",
         "10.10.10.0/24",
         "../target",
         "not a host",
+        "10.10.10",
+        "10.10",
+        "999.10.10.10",
+        "10.10.10.999",
+        ".example.com",
+        "example..com",
+        "http://example.com/admin",
+        "https://example.com/login",
+        "https://example.com/?q=test",
+        "https://example.com#fragment",
+        "ftp://example.com",
+        "https://user:pass@example.com",
     ],
 )
 def test_project_init_rejects_non_single_target(
@@ -85,7 +96,7 @@ def test_project_init_rejects_non_single_target(
 ) -> None:
     scope = _scope_file(tmp_path)
 
-    with pytest.raises(ValueError, match="plain IP address or hostname"):
+    with pytest.raises(ValueError, match="plain IPv4 address, hostname"):
         initialize_project("test", target, scope, tmp_path / "output")
 
 
@@ -100,6 +111,32 @@ def test_project_init_accepts_domain_target(tmp_path: Path) -> None:
     )
 
     assert project.target == "app.example.test"
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("10.10.10.10", "10.10.10.10"),
+        ("192.168.1.5", "192.168.1.5"),
+        ("example.com", "example.com"),
+        ("sub.example.com", "sub.example.com"),
+        ("target.local", "target.local"),
+        ("http://10.10.10.10", "10.10.10.10"),
+        ("https://10.10.10.10", "10.10.10.10"),
+        ("http://example.com", "example.com"),
+        ("https://example.com", "example.com"),
+    ],
+)
+def test_project_init_accepts_and_normalises_supported_targets(
+    tmp_path: Path,
+    target: str,
+    expected: str,
+) -> None:
+    scope = _scope_file(tmp_path, target=expected)
+
+    project, _path = initialize_project("target-test", target, scope, tmp_path / "output")
+
+    assert project.target == expected
 
 
 def test_project_init_rejects_missing_scope(tmp_path: Path) -> None:
