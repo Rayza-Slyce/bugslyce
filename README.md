@@ -95,61 +95,35 @@ The live MVP workflow enforces these boundaries:
 Scope matching is a safety control, not a substitute for reading the actual
 programme or lab rules. Review the generated `scope.md` before every live run.
 
-## Install
+Install
 
-### Development Checkout
+The easiest way to install BugSlyce is with "pipx", which keeps CLI tools isolated from your system Python environment.
 
-For local development from a checkout:
+Install "pipx" if you do not already have it:
 
-```bash
+sudo apt install pipx
+pipx ensurepath
+
+Restart your terminal, then install BugSlyce directly from GitHub:
+
+pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
+bugslyce
+
+To check the install:
+
+bugslyce --version
+bugslyce doctor
+
+For contributors or local development:
+
 git clone git@github.com:Rayza-Slyce/bugslyce.git
 cd bugslyce
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e .
-bugslyce --version
-bugslyce
-```
-
-Install development dependencies with:
-
-```bash
 python -m pip install -e ".[dev]"
-```
-
-The editable install exposes the `bugslyce` console command. During
-development, `.venv/bin/bugslyce` remains available without activating the
-virtual environment. The bundled `lab-root-tiny` wordlist is installed as
-package data.
-
-### Local Convenience Alias
-
-On a local development machine, you can add a shell alias for a fixed checkout:
-
-```bash
-alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"
-```
-
-This is only a convenience shortcut for that local path. The editable install
-above is the preferred development setup.
-
-### Future User Install With pipx
-
-BugSlyce is not published to PyPI. Once the repository is ready and tagged, a
-normal user install can use `pipx` directly from Git:
-
-```bash
-pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
 bugslyce
-```
 
-For local editable testing with `pipx`:
-
-```bash
-pipx install -e ~/projects/bugslyce
-bugslyce
-```
 
 ## Quick Start
 
@@ -353,9 +327,7 @@ tokens, or other secrets.
 - `lab-root-light` uses the expected local dirbuster small wordlist and is a
   broader optional root-only profile.
 
-`lab-root-light` is not part of the one-command MVP pipeline. It should be
-planned explicitly and, for larger multi-origin runs, executed one immutable
-planned step at a time.
+`lab-root-light` is not yet part of the one-command MVP pipeline. 
 
 ### Evidence Pack Export
 
@@ -442,13 +414,6 @@ The test suite mocks live process execution and must not contact targets.
 - Release tag: `v0.1.0`
 - Package publishing: not performed
 
-Recommended checks before future release tags:
-
-1. Run the full test suite.
-2. Run `bugslyce doctor` on the intended operator environment.
-3. Run one authorised lab smoke with a fresh scaffolded project.
-4. Review `report.md`, pipeline metadata, runbook, status, and export contents.
-5. Review this README for command and safety accuracy.
 
 See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging
 future releases.
