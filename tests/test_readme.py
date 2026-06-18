@@ -21,6 +21,10 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     ):
         assert command in readme
 
+    assert "[![Tests]" in readme
+    assert "actions/workflows/tests.yml" in readme
+    assert "## Why BugSlyce?" in readme
+    assert "## What It Looks Like" in readme
     assert "lab-safe-tiny" in readme
     assert "python3 -m venv .venv" in readme
     assert "python -m pip install -e ." in readme
@@ -32,6 +36,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "Standard Recon" in readme
     assert "Deep Recon" in readme
     assert "Manual Setup Only" in readme
+    assert "Credential-like artefact review" in readme
     assert "automatically safe" in readme
     assert "--resume" in readme
     assert "report.md" in readme
@@ -60,7 +65,7 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     assert "## Current MVP Limitations" in readme
     assert "## MVP Release Checkpoint" in readme
     assert "Current version: `0.1.0`" in readme
-    assert "Release tag: not yet created" in readme
+    assert "Release tag: `v0.1.0`" in readme
     assert "There is no vulnerability confirmation" in readme
     assert "does not replace human programme-scope review" in readme
 
@@ -120,3 +125,25 @@ def test_release_checklist_documents_v010_release_gate() -> None:
 
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "docs/RELEASE_CHECKLIST.md" in readme
+
+
+def test_public_repo_security_and_ci_docs_exist() -> None:
+    root = Path(__file__).resolve().parents[1]
+    security_path = root / "SECURITY.md"
+    workflow_path = root / ".github" / "workflows" / "tests.yml"
+
+    assert security_path.is_file()
+    assert workflow_path.is_file()
+
+    security = security_path.read_text(encoding="utf-8")
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert "# Security Policy" in security
+    assert "Reporting a Vulnerability" in security
+    assert "authorised testing" in security
+    assert "private bug bounty programme data" in security
+
+    assert "name: Tests" in workflow
+    assert "python-version: \"3.12\"" in workflow
+    assert 'python -m pip install -e ".[dev]"' in workflow
+    assert "pytest" in workflow

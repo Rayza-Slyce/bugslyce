@@ -1,93 +1,105 @@
 # BugSlyce
 
-**BugSlyce** is a local-first recon triage assistant for authorised labs, CTFs, and bug bounty work.
+[![Tests](https://github.com/Rayza-Slyce/bugslyce/actions/workflows/tests.yml/badge.svg)](https://github.com/Rayza-Slyce/bugslyce/actions/workflows/tests.yml)
 
-It helps you go from:
+BugSlyce is a local-first recon triage assistant for authorised labs and
+bug bounty-style recon. It runs a bounded, scope-aware evidence collection
+workflow, preserves raw artefacts, builds a BugSlyce Recon Pack, and
+prioritises evidence-backed leads for manual review.
+
+BugSlyce does not claim confirmed vulnerabilities. Its candidates and
+priorities describe where an operator may want to look next, not exploit
+severity or proof of impact.
+
+Current version: `0.1.0`
+
+## Why BugSlyce?
+
+BugSlyce is for the messy middle of recon: when you have enough raw output to
+lose track, but not enough confirmed signal to write a finding. It keeps the
+evidence, groups the leads, and helps you decide what deserves manual
+attention first.
+
+It is designed for solo operators, CTF players, and bug bounty learners who
+want repeatable first-pass recon without scattering notes, terminal output,
+and screenshots across random folders.
+
+## What It Looks Like
+
+Interactive launcher:
+
+<p align="center">
+  <img src="docs/images/bugslyce-interactive-menu.png" alt="BugSlyce interactive launcher" width="420">
+</p>
+
+Completed pipeline summary:
 
 ```text
-I have an in-scope target.
+BugSlyce project pipeline complete
+Final status: completed
+
+Step summary:
+* Completed: 11
+* No-op: 1
+* Failed: 0
+
+Final outputs:
+* Report: ~/bugslyce-output/example/report.md
+* Runbook: ~/bugslyce-output/example/runbook.md
+* Evidence pack: ~/bugslyce-output/example-evidence-pack.zip
 ```
 
-to:
+Operator Summary lead:
 
 ```text
-Here is the evidence.
-Here is what looks worth reviewing first.
-Here is what is probably noise.
+Review First
+
+1. Credential-like artefact review in homepage HTML
+   Why: Parsed HTML evidence contains a comment referencing credential-like context and related sensitive keyword hits.
+   Next: Review the saved HTML/source context manually. Do not submit forms, brute force, or treat any value as valid without explicit authorisation and manual validation.
+   Signal: high
 ```
 
-BugSlyce is not an autopwn tool. It does not claim confirmed vulnerabilities, exploit targets, brute force credentials, submit forms, or run arbitrary commands. It collects bounded recon evidence, keeps it local, and turns it into a structured review pack.
+```mermaid
+flowchart LR
+    A[Target + scope] --> B[Quick Recon]
+    B --> C[Local evidence]
+    C --> D[Operator Summary]
+    C --> E[Runbook]
+    C --> F[Evidence ZIP]
+```
 
-Current release: **v0.1.0**
+## Safety Model
 
----
+BugSlyce is intended only for targets you are authorised to assess.
 
-## What BugSlyce Does
+The live MVP workflow enforces these boundaries:
 
-BugSlyce creates a local project for a target, runs a controlled recon pipeline, and generates a readable evidence pack.
+- A local scope file is required.
+- The project target must match a target-like in-scope entry.
+- Live project pipelines require explicit `--confirm`.
+- The only one-command pipeline profile is `lab-safe-tiny`.
+- Live phases use fixed, validated command shapes and bounded timeouts.
+- Evidence and generated reports remain local.
+- No NSE scripts.
+- No UDP scans.
+- No brute force.
+- No exploitation.
+- No recursive discovery.
+- No form submission.
+- No authentication testing.
+- No arbitrary user-supplied command flags, paths, URLs, or wordlists in the
+  pipeline.
+- No LLM calls in the deterministic MVP pipeline.
 
-The current MVP can:
-
-* launch with a simple interactive menu using `bugslyce`
-* create a scoped project
-* validate IPv4 addresses, hostnames, and simple `http://` / `https://` URLs
-* run a bounded **Quick Recon** pipeline
-* collect TCP, service, and HTTP evidence
-* perform small, controlled content discovery
-* preserve raw artefacts for review
-* generate a human-readable report
-* produce a project runbook
-* export a portable evidence ZIP
-* highlight credential-like comments or sensitive artefacts for manual review
-* separate useful review leads from low-signal rabbit holes
-
-Everything stays local unless you choose to share it.
-
----
-
-## What BugSlyce Does Not Do
-
-BugSlyce v0.1.0 does **not** run:
-
-* exploitation
-* brute force
-* credential attacks
-* authentication testing
-* form submission
-* UDP scans
-* NSE scripts
-* recursive crawling
-* arbitrary user-supplied commands
-* LLM analysis
-* cloud upload or sync
-
-Candidates in the report are **manual review leads**, not confirmed findings.
-
----
+Scope matching is a safety control, not a substitute for reading the actual
+programme or lab rules. Review the generated `scope.md` before every live run.
 
 ## Install
 
-Recommended install from the public GitHub repository:
+### Development Checkout
 
-```bash
-pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
-bugslyce
-```
-
-If you do not have `pipx` installed:
-
-```bash
-sudo apt install pipx
-pipx ensurepath
-```
-
-Then restart your terminal and run:
-
-```bash
-bugslyce
-```
-
-For contributors or local development:
+For local development from a checkout:
 
 ```bash
 git clone git@github.com:Rayza-Slyce/bugslyce.git
@@ -95,285 +107,72 @@ cd bugslyce
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
+python -m pip install -e .
+bugslyce --version
+bugslyce
+```
+
+Install development dependencies with:
+
+```bash
 python -m pip install -e ".[dev]"
+```
+
+The editable install exposes the `bugslyce` console command. During
+development, `.venv/bin/bugslyce` remains available without activating the
+virtual environment. The bundled `lab-root-tiny` wordlist is installed as
+package data.
+
+### Local Convenience Alias
+
+On a local development machine, you can add a shell alias for a fixed checkout:
+
+```bash
+alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"
+```
+
+This is only a convenience shortcut for that local path. The editable install
+above is the preferred development setup.
+
+### Future User Install With pipx
+
+BugSlyce is not published to PyPI. Once the repository is ready and tagged, a
+normal user install can use `pipx` directly from Git:
+
+```bash
+pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
 bugslyce
 ```
 
----
+For local editable testing with `pipx`:
 
-## First Run
+```bash
+pipx install -e ~/projects/bugslyce
+bugslyce
+```
 
-Start BugSlyce with:
+## Quick Start
+
+For a new user in an interactive terminal, start with:
 
 ```bash
 bugslyce
 ```
 
-You will see the interactive launcher:
-
-```text
-1. Start a new project
-2. Resume an existing project
-3. List projects
-4. Run doctor/readiness check
-5. Exit
-```
-
-For a new target, choose:
-
-```text
-Start a new project
-```
-
-BugSlyce will ask for:
-
-* project name
-* target IP, hostname, or simple URL
-* output directory
-* recon mode
-* authorisation confirmation
-
-By default, projects are stored in:
-
-```text
-~/bugslyce-output
-```
-
-That keeps your recon output away from the source code repository.
-
----
-
-## Recon Modes
-
-### Quick Recon
-
-Available in v0.1.0.
-
-Quick Recon is the current MVP pipeline. It is designed for a fast, bounded first look at an authorised target.
-
-It performs:
-
-* project and scope validation
-* full TCP discovery using the approved lab profile
-* service/version detection on discovered TCP ports
-* HTTP metadata collection
-* same-origin path follow-up where evidence supports it
-* tiny root content discovery using the bundled wordlist
-* selected content follow-up
-* selected body fetch for useful application pages
-* status generation
-* runbook generation
-* evidence pack export
-
-Quick Recon is intentionally conservative. It is enough to produce useful evidence and review leads, not enough to replace manual testing.
-
-### Manual Setup Only
-
-Available in v0.1.0.
-
-Manual Setup Only creates the project and starter scope file without running recon. Use this when you want to inspect or edit the scope before any live activity.
-
-### Standard Recon
-
-Planned for a future release.
-
-Standard Recon is intended to add broader but still controlled recon coverage.
-
-### Deep Recon
-
-Planned for a future release.
-
-Deep Recon is intended to add richer analysis, stronger artefact grouping, CMS review leads, and optional evidence review workflows.
-
----
-
-## Target Input
-
-BugSlyce accepts:
-
-```text
-10.10.10.10
-example.com
-sub.example.com
-https://example.com
-http://10.10.10.10
-```
-
-Simple URLs are normalised to the target host.
-
-For example:
-
-```text
-https://example.com
-```
-
-becomes:
-
-```text
-example.com
-```
-
-BugSlyce rejects malformed or ambiguous input such as:
-
-```text
-10.10.10
-https://example.com/admin
-https://example.com?x=1
-https://user:pass@example.com
-ftp://example.com
-```
-
-URL path seeding is not supported in v0.1.0.
-
----
-
-## Output
-
-A completed Quick Recon project can include:
-
-```text
-report.md
-project_state.json
-recon_manifest.json
-recon_status.md
-recon_status.json
-runbook.md
-project_pipeline.md
-project_pipeline.json
-recon_execution.md
-recon_execution.json
-raw nmap/curl/HTML/robots/gobuster artefacts
-evidence-pack.zip
-```
-
-The most important file is:
-
-```text
-report.md
-```
-
-It starts with an **Operator Summary**.
-
-The Operator Summary is split into:
-
-* **Review First** — evidence-backed leads worth looking at manually
-* **Low-Signal / Avoid Rabbit Holes** — areas that are probably not worth over-prioritising
-* **Current Coverage** — what the recon pack did and did not observe
-
-Evidence IDs link the summary back to the raw and structured artefacts.
-
----
-
-## Example Review Lead
-
-BugSlyce may produce a lead like this:
-
-```text
-Credential-like artefact review in homepage HTML
-
-Why:
-Parsed HTML evidence contains a comment referencing credential-like context
-and related sensitive keyword hits.
-
-Next:
-Review the saved HTML/source context manually.
-Do not submit forms, brute force, or treat any value as valid without
-explicit authorisation and manual validation.
-```
-
-That is not a confirmed vulnerability.
-
-It means:
-
-```text
-This looks worth reviewing first.
-```
-
-not:
-
-```text
-This is exploitable.
-```
-
----
-
-## Evidence Pack Export
-
-Quick Recon automatically exports an evidence pack when the pipeline completes.
-
-You can also export one manually:
-
-```bash
-bugslyce recon export \
-  --input-dir ~/bugslyce-output/example-project \
-  --output ~/bugslyce-output/example-project-evidence-pack.zip \
-  --force
-```
-
-The evidence pack may contain target IPs, URLs, service banners, response headers, HTML, discovered paths, and other sensitive recon material.
-
-Review it before sharing.
-
----
-
-## Safety Model
-
-BugSlyce is intended only for targets you are authorised to assess.
-
-The MVP safety model includes:
-
-* local scope file required
-* explicit confirmation before live recon
-* fixed command shapes
-* bounded timeouts
-* validated target input
-* local evidence storage
-* no arbitrary user command flags in the pipeline
-* no exploitation or brute force
-* no authentication testing
-* no LLM calls in the deterministic workflow
-
-Scope matching is a safety control, not a substitute for reading the actual lab, CTF, or programme rules.
-
-Always confirm authorisation before running recon.
-
----
-
-## Local Data Safety
-
-Do not commit private recon data.
-
-Keep real target material in ignored locations such as:
-
-```text
-~/bugslyce-output
-private_recon/
-```
-
-Do not commit:
-
-* raw recon output
-* screenshots
-* Burp files
-* HAR files
-* exported evidence ZIPs
-* API keys
-* cookies
-* tokens
-* `.env` secrets
-* private programme scope
-
-Absence of evidence is not proof of safety.
-
----
-
-## Useful Commands
-
-Most users should start with:
-
-```bash
-bugslyce
-```
+The interactive launcher can run doctor/readiness checks, scaffold a project,
+choose **Quick Recon** or **Manual Setup Only**, confirm authorisation, and
+optionally run the MVP pipeline. Quick Recon maps to the current
+`lab-safe-tiny` pipeline. **Standard Recon** and **Deep Recon** are planned
+future modes and are not available yet. Recon mode names do not make activity
+automatically safe; authorisation and scope still matter. Manual Setup Only
+creates local project files and prints the next safe command preview without
+running recon.
+
+Interactive mode defaults to `~/bugslyce-output` so project output is
+predictable regardless of the current working directory. Direct CLI commands
+still use the paths you provide.
+
+Advanced users and automation can still use direct commands.
 
 Check local readiness:
 
@@ -381,94 +180,279 @@ Check local readiness:
 bugslyce doctor
 ```
 
-List local BugSlyce projects:
+For direct operation, scaffold a project, review `scope.md`, then run the
+approved MVP pipeline only after confirming authorisation and scope:
 
 ```bash
-bugslyce project list --projects-dir ~/bugslyce-output
+bugslyce project scaffold --name example-lab --target 10.10.10.10 --projects-dir bugslyce-output
+bugslyce project run --project bugslyce-output/example-lab/bugslyce_project.json --profile lab-safe-tiny --confirm
 ```
 
-Preview the next action for a project:
+Review the evidence-backed Operator Summary:
+
+```bash
+less bugslyce-output/example-lab/report.md
+```
+
+Ask BugSlyce what local action is appropriate next:
 
 ```bash
 bugslyce project next \
-  --project ~/bugslyce-output/example-project/bugslyce_project.json
+  --project bugslyce-output/example-lab/bugslyce_project.json
 ```
 
-Resume an interrupted Quick Recon project:
+`project next` prints command previews only. It does not execute them.
+
+See [docs/DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) for a complete
+fictional-target MVP walkthrough from readiness checks through review, resume,
+and evidence handling.
+
+## Pipeline Workflow
+
+The fixed `lab-safe-tiny` pipeline runs these approved stages in order:
+
+1. Validate the project, scope, and local readiness.
+2. Run full TCP discovery with the fixed `lab-tcp-full` profile.
+3. Run service/version detection on discovered open TCP ports.
+4. Collect bounded HTTP headers, `robots.txt`, and homepage HTML.
+5. Follow same-origin paths already present in collected evidence.
+6. Create a non-executing `lab-root-tiny` content plan.
+7. Execute that exact approved tiny root-discovery plan.
+8. Follow selected paths found by content discovery.
+9. Fetch bodies only for eligible high-signal HTML/application paths.
+10. Generate local recon status.
+11. Generate the project runbook.
+12. Export a portable evidence pack.
+
+The pipeline stops on a required failure. Content follow-up and body fetch may
+complete as clean no-ops when no eligible new work remains.
+
+After a successful run:
+
+```bash
+less bugslyce-output/example-lab/report.md
+bugslyce project status \
+  --project bugslyce-output/example-lab/bugslyce_project.json
+bugslyce project next \
+  --project bugslyce-output/example-lab/bugslyce_project.json
+```
+
+## Resume Workflow
+
+Fresh runs omit `--resume` and refuse an existing recon manifest, tiny plan
+directory, or evidence ZIP.
+
+To continue an interrupted or partially completed project:
 
 ```bash
 bugslyce project run \
-  --project ~/bugslyce-output/example-project/bugslyce_project.json \
+  --project bugslyce-output/example-lab/bugslyce_project.json \
   --profile lab-safe-tiny \
   --confirm \
   --resume
 ```
 
-Advanced and phase-specific commands are available under:
+Resume is conservative:
+
+- It revalidates local readiness, target, and scope.
+- It reuses only a coherent prefix of clearly completed phases.
+- It validates manifest artefact paths inside the project directory.
+- It validates tiny-plan target, profile, scope, input, and output provenance.
+- It refuses mixed-target, missing-artefact, path-escape, or otherwise
+  ambiguous state.
+- It regenerates status and runbook output.
+- It does not overwrite an existing evidence ZIP.
+- It skips an existing ZIP only when completed pipeline metadata verifies the
+  prior export.
+
+`project_pipeline.md` and `project_pipeline.json` record completed,
+`skipped_existing`, no-op, failed, and pending stages.
+
+## Outputs
+
+A completed project may contain:
+
+- `report.md`: the human-readable BugSlyce Recon Pack and Operator Summary.
+- `project_state.json`: structured parsed assets, services, paths, evidence,
+  and candidates.
+- `recon_manifest.json`: target and raw artefact provenance.
+- `recon_status.md` and `recon_status.json`: detected phases, coverage, latest
+  execution, and deterministic next-step advice.
+- `runbook.md`: project paths, scope reminders, current status, and safe
+  command previews.
+- `project_pipeline.md` and `project_pipeline.json`: pipeline timing, step
+  status, reused evidence, failures, and final output paths.
+- `recon_execution.md` and `recon_execution.json`: latest live phase metadata.
+- Phase-specific execution metadata where applicable.
+- Raw nmap, curl, HTML, robots, and gobuster artefacts referenced by the
+  manifest.
+- `bugslyce-output/example-lab-evidence-pack.zip`: portable evidence archive.
+
+The evidence pack contains an export manifest and safety README. It may
+contain target IPs, URLs, response headers, HTML, service banners, and
+discovered paths. Review it before sharing.
+
+ZIP entry timestamps remain fixed for reproducible packaging. Real UTC export
+time is stored inside the archive metadata.
+
+## Operator Summary
+
+`report.md` starts with a deterministic Operator Summary:
+
+- **Review First** ranks the most useful evidence-backed leads.
+- **Low-Signal / Avoid Rabbit Holes** identifies dead paths, static assets,
+  default-page noise, and other context that should not be over-weighted.
+- **Current Coverage** records what the recon pack has and has not observed.
+- Evidence IDs link summary statements to the detailed raw and structured
+  evidence below.
+
+Encoded-looking artefacts are classified conservatively as `likely_signal`,
+`possible_signal`, or `likely_noise`. BugSlyce does not decode them
+automatically or claim what they mean.
+
+Manual review candidates are leads, not confirmed vulnerabilities. Priority
+means manual attention priority, not exploit severity. Manual validation is
+required before reporting any issue.
+
+## Command Surface
+
+Most operators should start with the interactive launcher:
+
+```bash
+bugslyce
+```
+
+Useful direct commands:
+
+```bash
+bugslyce doctor
+bugslyce project next --project bugslyce-output/example-lab/bugslyce_project.json
+bugslyce project run --project bugslyce-output/example-lab/bugslyce_project.json --profile lab-safe-tiny --confirm --resume
+bugslyce recon export --input-dir bugslyce-output/example-lab --output bugslyce-output/example-lab-evidence-pack.zip
+```
+
+For the full command surface:
 
 ```bash
 bugslyce project --help
 bugslyce recon --help
 ```
 
----
+Lower-level recon commands remain available for debugging, reviewed manual
+operation, and phase-specific recovery. Live lower-level commands retain their
+own confirmation, scope, structured argument, timeout, output-path, and
+provenance checks. Use each command's `--help` before manual operation.
 
-## Development Checks
+Project metadata is local JSON. It should not contain credentials, API keys,
+tokens, or other secrets.
 
-For development:
+### Content Discovery Profiles
+
+- `lab-root-tiny` uses the bundled small generic wordlist. It is the approved
+  proving profile used by `lab-safe-tiny`.
+- `lab-root-light` uses the expected local dirbuster small wordlist and is a
+  broader optional root-only profile.
+
+`lab-root-light` is not part of the one-command MVP pipeline. It should be
+planned explicitly and, for larger multi-origin runs, executed one immutable
+planned step at a time.
+
+### Evidence Pack Export
 
 ```bash
-python -m pip install -e ".[dev]"
-pytest
-bugslyce doctor
-bugslyce --help
+bugslyce recon export \
+  --input-dir bugslyce-output/example-lab \
+  --output bugslyce-output/example-lab-evidence-pack.zip
 ```
 
-The test suite should not contact live targets.
+Export reads local files only. It does not run recon or make network requests.
+It includes allowlisted reports, status, execution metadata, scope, and
+manifest-referenced raw artefacts. Paths outside the input directory and
+traversal references are rejected.
 
----
+## Existing Evidence Import
 
-## Current Limitations
+The original deterministic import command remains available:
 
-BugSlyce v0.1.0 is an MVP.
+```bash
+bugslyce run INPUT_DIR --output OUTPUT_DIR
+```
 
-Current limitations:
+BugSlyce can parse selected saved nmap normal output, gobuster output, curl
+headers, robots files, HTML, `httpx.jsonl`, URL lists, subdomain lists, and
+`recon_manifest.json`. This mode performs local parsing and report generation;
+it does not run live recon.
 
-* only Quick Recon is implemented
-* Standard Recon and Deep Recon are not available yet
-* no authenticated testing
-* no deep crawler
-* no CMS-specific CVE research leads yet
-* no LLM evidence review yet
-* no vulnerability confirmation
-* no exploit workflow
-* simple URLs are normalised to host targets only
-* ranking is deterministic heuristic triage, not proof of risk
+When present, `recon_manifest.json` provides the primary target and artefact
+context. Raw evidence remains available for auditability even when repeated
+discovery profiles observe the same path. Human-facing status and provenance
+summaries distinguish raw discovered-path rows from unique URL strings.
 
-BugSlyce assists evidence collection and prioritisation. It does not replace manual validation or responsible disclosure judgement.
+## Current MVP Limitations
 
----
+- `lab-safe-tiny` is intentionally conservative and is not thorough recon.
+- `lab-root-light` is optional and manually planned; it is not part of the
+  default project pipeline.
+- Resume may refuse evidence when completion or provenance is ambiguous.
+- There is no deep crawler or recursive discovery.
+- There is no authenticated testing.
+- There is no vulnerability confirmation or exploitation workflow.
+- There is no brute force, form submission, NSE, or UDP pipeline phase.
+- There is no LLM analysis in the default deterministic workflow.
+- There is no cloud sync or evidence upload.
+- Scope matching uses simple target-like exact host and supported suffix or
+  wildcard forms. It does not replace human programme-scope review.
+- Status and candidate ranking are deterministic heuristics, not proof that a
+  target is safe or vulnerable.
+- BugSlyce assists evidence collection and triage; it does not replace manual
+  validation or responsible disclosure judgement.
 
-## Roadmap
+## Local Data Safety
 
-Planned future work includes:
+Real targets and evidence should remain in gitignored locations such as
+`private_recon/` and `bugslyce-output/`.
 
-* Standard Recon mode
-* Deep Recon mode
-* richer CMS and framework fingerprinting
-* known CVE research leads for detected technologies
-* optional local or API-based LLM evidence review
-* improved report formatting
-* more tested lab/CTF examples
-* stable evidence pack format for wider use
+Do not commit:
 
-Optional LLM review should remain advisory. It should suggest manual next steps from local evidence, not run commands or claim confirmed findings.
+- Real target identifiers or private programme scope.
+- Raw recon output, screenshots, Burp files, or HAR files.
+- Export ZIPs.
+- API keys, credentials, cookies, tokens, or `.env` secrets.
 
----
-## Licence
+Absence of evidence is not proof of safety.
 
-BugSlyce is released under the MIT Licence.
+## Development Sanity Checks
 
-See [LICENSE](LICENSE) for details.
+These checks do not start live recon:
 
+```bash
+.venv/bin/pytest
+.venv/bin/bugslyce doctor
+.venv/bin/bugslyce wizard
+.venv/bin/bugslyce project run --help
+.venv/bin/bugslyce recon --help
+```
 
+The test suite mocks live process execution and must not contact targets.
+
+## MVP Release Checkpoint
+
+- Current version: `0.1.0`
+- Main MVP pipeline: `lab-safe-tiny`
+- Release tag: `v0.1.0`
+- Package publishing: not performed
+
+Recommended checks before future release tags:
+
+1. Run the full test suite.
+2. Run `bugslyce doctor` on the intended operator environment.
+3. Run one authorised lab smoke with a fresh scaffolded project.
+4. Review `report.md`, pipeline metadata, runbook, status, and export contents.
+5. Review this README for command and safety accuracy.
+
+See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging
+future releases.
+
+## License
+
+BugSlyce is released under the MIT Licence. See `LICENSE` for the full text.
