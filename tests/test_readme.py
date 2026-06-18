@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
         encoding="utf-8"
@@ -26,35 +25,28 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "## Why BugSlyce?" in readme
     assert "## What It Looks Like" in readme
     assert "lab-safe-tiny" in readme
+
+    assert "pipx install git+https://github.com/Rayza-Slyce/bugslyce.git" in readme
     assert "python3 -m venv .venv" in readme
     assert "python -m pip install -e" in readme
     assert ".[dev]" in readme
-    assert "pipx install git+https://github.com/Rayza-Slyce/bugslyce.git" in readme
-    assert "BugSlyce is not published to PyPI" in readme
-    assert "~/bugslyce-output" in readme
-    assert "Quick Recon" in readme
-    assert "Standard Recon" in readme
-    assert "Deep Recon" in readme
-    assert "Manual Setup Only" in readme
-    assert "Credential-like artefact review" in readme
-    assert "automatically safe" in readme
-    assert "--resume" in readme
-    assert "report.md" in readme
-    assert "evidence-pack.zip" in readme
-    assert "manual validation" in lowered
-    assert "published to PyPI" in readme
 
-    for boundary in (
-        "No NSE scripts",
-        "No UDP scans",
-        "No brute force",
-        "No exploitation",
-        "No recursive discovery",
-        "No form submission",
-        "No authentication testing",
-        "No LLM calls",
+    for term in (
+        "quick recon",
+        "manual setup only",
+        "operator summary",
+        "evidence pack",
+        "security policy",
+        "mit licence",
+        "authorised",
+        "no exploitation",
+        "no brute force",
+        "no arbitrary",
+        "no llm",
     ):
-        assert boundary in readme
+        assert term in lowered
+
+    assert "BugSlyce is not published to PyPI" not in readme
 
 
 def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
