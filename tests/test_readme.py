@@ -27,7 +27,8 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "## What It Looks Like" in readme
     assert "lab-safe-tiny" in readme
     assert "python3 -m venv .venv" in readme
-    assert "python -m pip install -e ." in readme
+    assert "python -m pip install -e" in readme
+    assert ".[dev]" in readme
     assert 'alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"' in readme
     assert "pipx install git+https://github.com/Rayza-Slyce/bugslyce.git" in readme
     assert "BugSlyce is not published to PyPI" in readme
