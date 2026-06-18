@@ -100,7 +100,7 @@ programme or lab rules. Review the generated `scope.md` before every live run.
 The easiest way to install BugSlyce is with `pipx`, which keeps CLI tools
 isolated from your system Python environment.
 
-Install "pipx" if you do not already have it:
+Install `pipx` if you do not already have it:
 
 ```bash
 sudo apt install pipx

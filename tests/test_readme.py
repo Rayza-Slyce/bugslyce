@@ -31,6 +31,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "python -m pip install -e" in readme
     assert ".[dev]" in readme
     assert "## Licence" in readme
+    assert "## License" not in readme
 
     for term in (
         "quick recon",
