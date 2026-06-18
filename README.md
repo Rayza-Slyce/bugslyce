@@ -95,27 +95,35 @@ The live MVP workflow enforces these boundaries:
 Scope matching is a safety control, not a substitute for reading the actual
 programme or lab rules. Review the generated `scope.md` before every live run.
 
-Install
+## Install
 
-The easiest way to install BugSlyce is with "pipx", which keeps CLI tools isolated from your system Python environment.
+The easiest way to install BugSlyce is with `pipx`, which keeps CLI tools
+isolated from your system Python environment.
 
 Install "pipx" if you do not already have it:
 
+```bash
 sudo apt install pipx
 pipx ensurepath
+```
 
 Restart your terminal, then install BugSlyce directly from GitHub:
 
+```bash
 pipx install git+https://github.com/Rayza-Slyce/bugslyce.git
 bugslyce
+```
 
 To check the install:
 
+```bash
 bugslyce --version
 bugslyce doctor
+```
 
 For contributors or local development:
 
+```bash
 git clone git@github.com:Rayza-Slyce/bugslyce.git
 cd bugslyce
 python3 -m venv .venv
@@ -123,7 +131,7 @@ source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev]"
 bugslyce
-
+```
 
 ## Quick Start
 
@@ -393,6 +401,14 @@ Do not commit:
 
 Absence of evidence is not proof of safety.
 
+## Security Policy
+
+Please report sensitive vulnerabilities in BugSlyce privately. Do not open
+public issues containing third-party target evidence, credentials, cookies,
+tokens, API keys, or private programme data.
+
+See [SECURITY.md](SECURITY.md) for details.
+
 ## Development Sanity Checks
 
 These checks do not start live recon:
@@ -418,6 +434,6 @@ The test suite mocks live process execution and must not contact targets.
 See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging
 future releases.
 
-## License
+## Licence
 
 BugSlyce is released under the MIT Licence. See `LICENSE` for the full text.

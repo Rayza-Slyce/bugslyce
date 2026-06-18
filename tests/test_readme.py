@@ -30,6 +30,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "python3 -m venv .venv" in readme
     assert "python -m pip install -e" in readme
     assert ".[dev]" in readme
+    assert "## Licence" in readme
 
     for term in (
         "quick recon",
@@ -47,6 +48,9 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
         assert term in lowered
 
     assert "BugSlyce is not published to PyPI" not in readme
+    assert "Future User Install With pipx" not in readme
+    assert "Once the repository is ready and tagged" not in readme
+    assert 'alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"' not in readme
 
 
 def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
