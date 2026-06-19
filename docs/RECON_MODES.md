@@ -393,6 +393,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   unavailable.
 - Phase 63A: artefact interpretation foundation for hash-looking candidates
   and context weighting.
+- Phase 63B: encoding and transform candidate foundation for already-collected
+  artefacts.
 - Phase 63: Standard Recon v1 with modest bounded additions.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
   appropriate.
@@ -419,3 +421,14 @@ analysis, report grouping, and evidence chaining.
 
 This phase does not enable Standard Recon, does not enable Deep Recon, and
 does not change Quick Recon behaviour.
+
+## Phase 63B Encoding/Transform Interpretation Note
+
+Phase 63B adds an offline encoding and transform candidate foundation for
+already-collected artefacts. It can recognise possible Base64, Base32, hex,
+URL-encoded, binary ASCII, reversed-text, and ROT/Caesar-style candidates with
+bounded local previews and lightweight context weighting.
+
+This phase does not enable Standard Recon, does not enable Deep Recon, and
+does not change Quick Recon behaviour. It does not add scanning, online
+decoders, recursive decoding, report integration, or evidence-pack changes.
