@@ -13,6 +13,13 @@ from bugslyce.project_pipeline import (
     render_project_pipeline_summary,
     run_project_pipeline,
 )
+from bugslyce.recon.modes import (
+    DEEP_MODE_ID,
+    QUICK_MODE_ID,
+    STANDARD_MODE_ID,
+    get_recon_mode,
+    resolve_executable_profile,
+)
 from bugslyce.project_session import (
     build_project_next,
     inspect_project_status,
@@ -30,10 +37,10 @@ from bugslyce.project_session import (
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
 
-QUICK_RECON_LABEL = "Quick Recon"
+QUICK_RECON_LABEL = get_recon_mode(QUICK_MODE_ID).display_name
 MANUAL_SETUP_LABEL = "Manual Setup Only"
-STANDARD_RECON_LABEL = "Standard Recon"
-DEEP_RECON_LABEL = "Deep Recon"
+STANDARD_RECON_LABEL = get_recon_mode(STANDARD_MODE_ID).display_name
+DEEP_RECON_LABEL = get_recon_mode(DEEP_MODE_ID).display_name
 DEFAULT_PROJECTS_DIR_NAME = "bugslyce-output"
 
 
@@ -73,20 +80,23 @@ def run_interactive_launcher(
 def render_recon_mode_menu() -> str:
     """Render user-facing recon mode names."""
 
+    quick = get_recon_mode(QUICK_MODE_ID)
+    standard = get_recon_mode(STANDARD_MODE_ID)
+    deep = get_recon_mode(DEEP_MODE_ID)
     return "\n".join(
         [
             "Recon mode:",
-            "1. Quick Recon",
+            f"1. {quick.display_name}",
             "   Fast first-pass recon using the bounded MVP pipeline.",
             "   Good for initial lab/CTF triage and quickly finding review leads.",
-            "2. Manual Setup Only",
+            f"2. {MANUAL_SETUP_LABEL}",
             "   Create the project and scope template, then show the next safe "
             "command without running recon.",
-            "3. Standard Recon",
-            "   Broader recon for normal authorised review.",
+            f"3. {standard.display_name}",
+            f"   {standard.purpose.capitalize()}.",
             "   Coming later; not available yet.",
-            "4. Deep Recon",
-            "   More thorough recon for deeper authorised review.",
+            f"4. {deep.display_name}",
+            f"   {deep.purpose.capitalize()}.",
             "   Coming later; not available yet.",
         ]
     )
@@ -96,13 +106,13 @@ def map_user_recon_mode_to_internal_profile(choice: str) -> str | None:
     """Map launcher recon mode choices to internal profile IDs."""
 
     if choice == "1":
-        return PIPELINE_PROFILE
+        return resolve_executable_profile(QUICK_MODE_ID)
     if choice == "2":
         return None
     if choice == "3":
-        raise ValueError("Standard Recon is not available yet.")
+        return resolve_executable_profile(STANDARD_MODE_ID)
     if choice == "4":
-        raise ValueError("Deep Recon is not available yet.")
+        return resolve_executable_profile(DEEP_MODE_ID)
     raise ValueError("Unknown recon mode.")
 
 

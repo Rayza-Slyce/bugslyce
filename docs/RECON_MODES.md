@@ -400,3 +400,10 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Later: CTF/lab context separation.
 - Later: post-access local evidence mode.
 - Later: cron misconfiguration review leads.
+
+## Phase 62 Registry Note
+
+Phase 62 formalises the internal mode/profile registry as the source of truth
+for mode IDs, display names, internal profile names, status, and availability.
+Quick Recon remains the only available executable mode and continues to map to
+`lab-safe-tiny`. Standard Recon and Deep Recon remain planned and unavailable.

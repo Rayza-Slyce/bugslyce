@@ -41,6 +41,7 @@ from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
     write_http_metadata_execution_result,
 )
+from bugslyce.recon.modes import QUICK_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
     write_nmap_discovery_execution_result,
@@ -59,7 +60,7 @@ from bugslyce.recon.status import build_recon_status, write_recon_status
 from bugslyce.time_utils import Clock, utc_now_iso
 
 
-PIPELINE_PROFILE = "lab-safe-tiny"
+PIPELINE_PROFILE = QUICK_RECON_PROFILE
 PIPELINE_JSON_FILENAME = "project_pipeline.json"
 PIPELINE_MARKDOWN_FILENAME = "project_pipeline.md"
 SKIPPED_STEP_MESSAGES = {

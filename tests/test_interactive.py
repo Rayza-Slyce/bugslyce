@@ -52,9 +52,9 @@ def test_recon_mode_menu_uses_user_facing_names() -> None:
     assert "lab-safe-tiny" not in menu
     assert map_user_recon_mode_to_internal_profile("1") == PIPELINE_PROFILE
     assert map_user_recon_mode_to_internal_profile("2") is None
-    with pytest.raises(ValueError, match="Standard Recon is not available yet"):
+    with pytest.raises(ValueError, match="Standard Recon is planned but not implemented yet"):
         map_user_recon_mode_to_internal_profile("3")
-    with pytest.raises(ValueError, match="Deep Recon is not available yet"):
+    with pytest.raises(ValueError, match="Deep Recon is planned but not implemented yet"):
         map_user_recon_mode_to_internal_profile("4")
 
 
