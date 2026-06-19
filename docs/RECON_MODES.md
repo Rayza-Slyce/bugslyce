@@ -391,6 +391,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 61: recon mode design documentation.
 - Phase 62: internal mode/profile registry while Standard/Deep remain
   unavailable.
+- Phase 63A: artefact interpretation foundation for hash-looking candidates
+  and context weighting.
 - Phase 63: Standard Recon v1 with modest bounded additions.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
   appropriate.
@@ -407,3 +409,13 @@ Phase 62 formalises the internal mode/profile registry as the source of truth
 for mode IDs, display names, internal profile names, status, and availability.
 Quick Recon remains the only available executable mode and continues to map to
 `lab-safe-tiny`. Standard Recon and Deep Recon remain planned and unavailable.
+
+## Phase 63A Artefact Interpretation Note
+
+Phase 63A adds an offline artefact interpretation foundation for
+hash-looking candidates and lightweight context weighting. It is intended to
+support later Standard Recon, `robots.txt` parsing, hidden HTML/source
+analysis, report grouping, and evidence chaining.
+
+This phase does not enable Standard Recon, does not enable Deep Recon, and
+does not change Quick Recon behaviour.
