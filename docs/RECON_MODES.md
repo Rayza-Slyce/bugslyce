@@ -130,6 +130,72 @@ Standard Recon must not become:
 - Automatic steganography extraction.
 - Automatic form submission.
 
+### Standard Recon v1 Wiring Plan
+
+Standard Recon v1 is planned and still unavailable until implemented. The v1
+product decision is that Standard Recon should initially improve interpretation
+of already-collected evidence, not increase scan volume.
+
+Standard Recon v1 should initially:
+
+- Reuse the existing bounded evidence collection path.
+- Collect no additional network evidence beyond what the current bounded
+  pipeline already collects.
+- Analyse only already-collected evidence.
+- Convert collected robots, HTML, and text artefacts into `ArtefactSource`
+  objects.
+- Run the offline interpretation collector.
+- Render `Manual Review Leads`.
+- Pass the rendered section into the existing report seam.
+- Keep `Manual Review Leads` separate from confirmed findings.
+- Preserve cautious language throughout.
+- Leave runbooks, evidence packs, and CLI output unchanged unless explicitly
+  designed in a later phase.
+
+Standard Recon v1 does not increase scan volume.
+
+- It does not mean bigger wordlists.
+- It does not mean recursive crawling.
+- It does not mean exploiting or validating vulnerabilities.
+- It must not submit forms, attempt authentication, brute force, or fetch new
+  paths because of interpretation leads.
+
+The first value-add is better evidence interpretation.
+
+The future Standard Recon v1 report should include a clearly separated
+`## Manual Review Leads` section after `## Operator Summary` and before
+`## Scope Summary`, using the Phase 64B report seam. This section should
+contain cautious review prompts, not confirmed vulnerabilities.
+
+Expected review-lead wording includes:
+
+- Possible hash candidate detected.
+- Possible encoded or transformed artefact detected.
+- Robots directive contains possible encoded or hash-shaped artefacts.
+- HTML comment contains clue-like wording.
+- Treat this as a review lead, not proof of vulnerability.
+
+Wording to avoid includes:
+
+- Confirmed vulnerability.
+- Confirmed exploitability.
+- Confirmed credential.
+- Confirmed secret.
+- This is a flag.
+- This is a password.
+- Exploit this.
+- Crack this.
+- Attack this path.
+- No vulnerabilities found.
+
+Future implementation should map already-collected evidence into
+`ArtefactSource` objects according to the existing artefact/evidence storage
+architecture. Potential sources may include fetched `robots.txt`, homepage
+HTML, selected high-signal HTML/application response bodies, selected
+same-origin path follow-up bodies, and local notes or fetched text bodies if
+already collected. Source mapping should avoid duplicating large response
+bodies unnecessarily.
+
 ## Deep Recon
 
 Deep Recon is planned and unavailable until designed and implemented in later
@@ -401,7 +467,10 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 64A: offline Markdown renderer for interpretation review leads.
 - Phase 64B: report integration contract for future manual review sections.
 - Phase 64C: offline interpretation collector for already-collected evidence.
-- Phase 63: Standard Recon v1 with modest bounded additions.
+- Phase 65A: Standard Recon v1 wiring design while Standard remains
+  unavailable.
+- Later Standard Recon: modest bounded collection additions after the v1
+  interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
   appropriate.
 - Phase 65: report grouping, operator summary, review lead prioritisation, and

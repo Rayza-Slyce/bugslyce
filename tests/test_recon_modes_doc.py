@@ -34,6 +34,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "evidence chain",
         "Bounded nested discovery",
         "Cron Misconfiguration",
+        "Standard Recon v1",
+        "Manual Review Leads",
+        "already-collected evidence",
+        "ArtefactSource",
+        "offline interpretation collector",
+        "does not increase scan volume",
+        "does not mean bigger wordlists",
+        "does not mean recursive crawling",
+        "not proof of vulnerability",
+        "planned and still unavailable",
     ):
         assert expected.lower() in lowered
 
