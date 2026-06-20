@@ -400,6 +400,7 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 63E: offline interpretation aggregation model for analyser outputs.
 - Phase 64A: offline Markdown renderer for interpretation review leads.
 - Phase 64B: report integration contract for future manual review sections.
+- Phase 64C: offline interpretation collector for already-collected evidence.
 - Phase 63: Standard Recon v1 with modest bounded additions.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
   appropriate.
@@ -496,3 +497,16 @@ does not analyse evidence or create review leads itself.
 This phase does not enable Standard Recon, does not enable Deep Recon, does
 not change Quick Recon behaviour, and does not integrate live interpretation
 analysis into current reports, runbooks, CLI output, or evidence packs.
+
+## Phase 64C Interpretation Collection Note
+
+Phase 64C adds an offline interpretation collector for already-collected
+evidence sources. It classifies provided `ArtefactSource` inputs as generic
+text, `robots.txt`, or HTML/source content, runs the appropriate offline
+analysers, aggregates review leads, and can render a Manual Review Leads
+Markdown section for future report integration.
+
+This phase does not fetch pages, assets, or `robots.txt`, does not enable
+Standard Recon, does not enable Deep Recon, and does not change Quick Recon
+behaviour. It does not wire interpretation collection into current reports,
+runbooks, CLI output, evidence packs, or the live project pipeline.
