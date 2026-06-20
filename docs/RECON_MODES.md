@@ -469,6 +469,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 64C: offline interpretation collector for already-collected evidence.
 - Phase 65A: Standard Recon v1 wiring design while Standard remains
   unavailable.
+- Phase 65B: offline evidence-to-`ArtefactSource` mapper for already-collected
+  project evidence.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -579,3 +581,17 @@ This phase does not fetch pages, assets, or `robots.txt`, does not enable
 Standard Recon, does not enable Deep Recon, and does not change Quick Recon
 behaviour. It does not wire interpretation collection into current reports,
 runbooks, CLI output, evidence packs, or the live project pipeline.
+
+## Phase 65B Evidence-to-ArtefactSource Mapping Note
+
+Phase 65B adds an offline mapper from existing BugSlyce project evidence into
+`ArtefactSource` objects. It uses already-assembled in-memory project state,
+including structured HTTP artefacts and operator note evidence, and preserves
+available source IDs, URLs, local source paths, ports, services, field names,
+and bounded text values for later offline interpretation.
+
+This phase does not fetch files, pages, assets, or `robots.txt`, does not
+enable Standard Recon, does not enable Deep Recon, and does not change Quick
+Recon behaviour. It does not call the interpretation collector, does not pass
+Manual Review Leads into current reports, and does not alter runbooks, CLI
+output, evidence packs, or the live project pipeline.
