@@ -399,6 +399,7 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 63D: specialised offline HTML/source analyser foundation.
 - Phase 63E: offline interpretation aggregation model for analyser outputs.
 - Phase 64A: offline Markdown renderer for interpretation review leads.
+- Phase 64B: report integration contract for future manual review sections.
 - Phase 63: Standard Recon v1 with modest bounded additions.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
   appropriate.
@@ -484,3 +485,14 @@ and bounded raw values/previews.
 This phase does not enable Standard Recon, does not enable Deep Recon, does
 not change Quick Recon behaviour, and does not integrate with current reports,
 runbooks, CLI output, or evidence packs.
+
+## Phase 64B Report Integration Contract Note
+
+Phase 64B adds a report integration contract that can accept a pre-rendered
+Manual Review Leads Markdown section and place it deterministically in the
+report. This is a seam for future Standard Recon interpretation output; it
+does not analyse evidence or create review leads itself.
+
+This phase does not enable Standard Recon, does not enable Deep Recon, does
+not change Quick Recon behaviour, and does not integrate live interpretation
+analysis into current reports, runbooks, CLI output, or evidence packs.

@@ -67,6 +67,94 @@ def test_operator_summary_appears_before_scope_summary() -> None:
     assert report.index("## Operator Summary") < report.index("## Scope Summary")
 
 
+def test_default_report_does_not_include_manual_review_leads_section() -> None:
+    report, _state, _candidates = _basic_saas_report()
+
+    assert "## Manual Review Leads" not in report
+
+
+def test_report_can_include_prerendered_manual_review_leads_section() -> None:
+    _report, state, candidates = _basic_saas_report()
+    manual_review_section = "\n".join(
+        [
+            "## Manual Review Leads",
+            "",
+            (
+                "These leads are derived from collected evidence and should be "
+                "treated as manual review prompts, not proof of vulnerability."
+            ),
+            "",
+            "### LEAD-0042: Possible encoded or transformed artefact detected.",
+            "",
+            "- Priority: high",
+            "- Category: artefact",
+            "- Source: homepage; kind=html; url=http://example.test/",
+            "- Raw value: `L2hpZGRlbi9mbGFn`",
+            "- Decoded/derived preview: `/hidden/flag`",
+            "- Explanation: Derived previews are advisory and may be incorrect.",
+            "- Suggested manual validation:",
+            "  - Validate locally before treating this as evidence.",
+        ]
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        manual_review_leads_markdown=manual_review_section,
+    )
+
+    assert "## Manual Review Leads" in report
+    assert "### LEAD-0042: Possible encoded or transformed artefact detected." in report
+    assert "- Raw value: `L2hpZGRlbi9mbGFn`" in report
+    assert "- Decoded/derived preview: `/hidden/flag`" in report
+    assert "Validate locally before treating this as evidence." in report
+    assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
+    assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
+
+
+def test_report_ignores_whitespace_only_manual_review_section() -> None:
+    _report, state, candidates = _basic_saas_report()
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        manual_review_leads_markdown=" \n\t\n ",
+    )
+
+    assert "## Manual Review Leads" not in report
+    assert report.index("## Operator Summary") < report.index("## Scope Summary")
+
+
+def test_manual_review_section_contract_avoids_confirmed_issue_wording() -> None:
+    _report, state, candidates = _basic_saas_report()
+    manual_review_section = "\n".join(
+        [
+            "## Manual Review Leads",
+            "",
+            "These are review prompts, not proof of vulnerability.",
+            "",
+            "### LEAD-0001: Possible hash candidate detected.",
+            "",
+            "- Category: artefact",
+            "- Explanation: Shape alone does not confirm the hash type.",
+        ]
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        manual_review_leads_markdown=manual_review_section,
+    )
+    inserted = report.split("## Manual Review Leads", 1)[1].split("## Scope Summary", 1)[0].lower()
+
+    assert "vulnerabilities" not in inserted
+    assert "confirmed findings" not in inserted
+    assert "confirmed issues" not in inserted
+    assert "exploits" not in inserted
+    assert "credentials" not in inserted
+    assert "secrets found" not in inserted
+
+
 def test_markdown_report_includes_candidate_and_evidence_ids() -> None:
     report, _state, _candidates = _basic_saas_report()
 

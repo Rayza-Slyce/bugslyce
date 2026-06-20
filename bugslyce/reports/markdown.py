@@ -36,7 +36,12 @@ SURFACE_LABELS = {
 }
 
 
-def render_markdown_report(project_state: ProjectState, candidates: list[Candidate]) -> str:
+def render_markdown_report(
+    project_state: ProjectState,
+    candidates: list[Candidate],
+    *,
+    manual_review_leads_markdown: str | None = None,
+) -> str:
     """Render a cautious deterministic triage report."""
 
     lines: list[str] = [
@@ -51,6 +56,7 @@ def render_markdown_report(project_state: ProjectState, candidates: list[Candida
     ]
 
     _operator_summary(lines, project_state, candidates)
+    _manual_review_leads_section(lines, manual_review_leads_markdown)
     _scope_summary(lines, project_state)
     _recon_manifest(lines, project_state)
     _workflow_provenance(lines, project_state)
@@ -124,6 +130,8 @@ def write_project_outputs(
     project_state: ProjectState,
     candidates: list[Candidate],
     output_dir: Path,
+    *,
+    manual_review_leads_markdown: str | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -131,10 +139,30 @@ def write_project_outputs(
     report_path = output_dir / "report.md"
     json_path = output_dir / "project_state.json"
 
-    report_path.write_text(render_markdown_report(project_state, candidates), encoding="utf-8")
+    report_path.write_text(
+        render_markdown_report(
+            project_state,
+            candidates,
+            manual_review_leads_markdown=manual_review_leads_markdown,
+        ),
+        encoding="utf-8",
+    )
     json_path.write_text(export_project_state_json(project_state, candidates), encoding="utf-8")
 
     return report_path, json_path
+
+
+def _manual_review_leads_section(
+    lines: list[str],
+    manual_review_leads_markdown: str | None,
+) -> None:
+    if manual_review_leads_markdown is None:
+        return
+    section = manual_review_leads_markdown.strip()
+    if not section:
+        return
+    lines.extend(section.splitlines())
+    lines.append("")
 
 
 def export_project_state_json(project_state: ProjectState, candidates: list[Candidate]) -> str:
