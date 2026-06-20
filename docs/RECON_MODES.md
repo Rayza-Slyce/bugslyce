@@ -471,6 +471,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   unavailable.
 - Phase 65B: offline evidence-to-`ArtefactSource` mapper for already-collected
   project evidence.
+- Phase 65C: offline Standard interpretation assembly helper for future
+  Standard Recon wiring.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -595,3 +597,15 @@ enable Standard Recon, does not enable Deep Recon, and does not change Quick
 Recon behaviour. It does not call the interpretation collector, does not pass
 Manual Review Leads into current reports, and does not alter runbooks, CLI
 output, evidence packs, or the live project pipeline.
+
+## Phase 65C Standard Interpretation Assembly Note
+
+Phase 65C adds an offline Standard interpretation assembly helper for future
+Standard Recon use. It chains existing project-state evidence mapping with the
+offline interpretation collector so already-collected project evidence can be
+turned into sources, review leads, and optional Manual Review Leads Markdown.
+
+This phase does not enable Standard Recon, does not enable Deep Recon, does
+not change Quick Recon behaviour, and does not wire Manual Review Leads into
+current reports. It does not modify the project pipeline, recon execution,
+runbooks, CLI output, evidence packs, or the interactive launcher.

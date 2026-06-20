@@ -46,7 +46,7 @@ def test_robots_text_already_present_becomes_robots_source() -> None:
     assert source.port == 80
     assert source.service == "http"
     assert source.field_name == "disallow_rule"
-    assert source.text == "/admin"
+    assert source.text == "Disallow: /admin"
 
 
 def test_homepage_html_artifact_becomes_html_source() -> None:
@@ -70,7 +70,7 @@ def test_homepage_html_artifact_becomes_html_source() -> None:
     assert source.port == 443
     assert source.service == "https"
     assert source.field_name == "html_comment"
-    assert source.text == "flag clue is in the source"
+    assert source.text == "<!-- flag clue is in the source -->"
 
 
 def test_missing_or_empty_source_file_does_not_crash_when_metadata_is_sufficient() -> None:

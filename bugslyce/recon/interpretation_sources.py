@@ -69,7 +69,9 @@ def _source_from_http_artifact(
     index: int,
     max_source_chars: int,
 ) -> ArtefactSource | None:
-    text = _bounded_text(artifact.value, max_source_chars)
+    if not artifact.value.strip():
+        return None
+    text = _bounded_text(_source_text_for_artifact(artifact), max_source_chars)
     if not text:
         return None
     source_kind = _infer_source_kind(artifact)
@@ -128,6 +130,29 @@ def _infer_source_kind(artifact: HTTPArtifact) -> str | None:
     if _looks_html_like(value):
         return "html"
     return None
+
+
+def _source_text_for_artifact(artifact: HTTPArtifact) -> str:
+    value = artifact.value
+    if artifact.artifact_type == "user_agent" or artifact.artifact_type == "unusual_user_agent":
+        return f"User-agent: {value}"
+    if artifact.artifact_type == "allow_rule":
+        return f"Allow: {value}"
+    if artifact.artifact_type == "disallow_rule":
+        return f"Disallow: {value}"
+    if artifact.artifact_type == "html_comment":
+        return f"<!-- {value} -->"
+    if artifact.artifact_type == "hidden_element":
+        return f"<div hidden>{value}</div>"
+    if artifact.artifact_type == "form":
+        return f'<form action="{value}"></form>'
+    if artifact.artifact_type == "input":
+        return f"<input {value}>"
+    if artifact.artifact_type == "link":
+        return f'<a href="{value}">{value}</a>'
+    if artifact.artifact_type == "script_or_asset":
+        return f'<script src="{value}"></script>'
+    return value
 
 
 def _bounded_text(value: str, max_source_chars: int) -> str:
