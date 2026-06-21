@@ -473,6 +473,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   project evidence.
 - Phase 65C: offline Standard interpretation assembly helper for future
   Standard Recon wiring.
+- Phase 65D: internal Standard interpretation report helper for future report
+  wiring.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -609,3 +611,15 @@ This phase does not enable Standard Recon, does not enable Deep Recon, does
 not change Quick Recon behaviour, and does not wire Manual Review Leads into
 current reports. It does not modify the project pipeline, recon execution,
 runbooks, CLI output, evidence packs, or the interactive launcher.
+
+## Phase 65D Standard Interpretation Report Helper Note
+
+Phase 65D adds an internal Standard interpretation report helper that renders
+an in-memory report with Manual Review Leads by using already-collected
+project evidence, the Standard interpretation assembly helper, and the
+existing report seam.
+
+This phase does not enable Standard Recon, does not enable Deep Recon, does
+not change Quick Recon behaviour, and does not write report files. It does not
+modify the live project pipeline, recon execution, CLI output, runbooks,
+evidence packs, or the interactive launcher.
