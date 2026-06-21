@@ -120,9 +120,13 @@ def test_standard_report_ignores_local_robots_paths_but_keeps_unusual_user_agent
     assert local_path not in manual_section
     assert "Unknown or non-standard robots directive preserved for review." not in manual_section
     assert user_agent in manual_section
-    assert "Robots directive contains possible encoded or hash-shaped artefacts." in manual_section
+    assert manual_section.count("### LEAD-") == 1
+    assert "Robots.txt contains an unusual hash-shaped User-Agent value." in manual_section
+    assert "Robots directive contains possible encoded or hash-shaped artefacts." not in manual_section
     assert "possible_md5_shape" in manual_section
-    assert "Unusual robots User-Agent value detected." in manual_section
+    assert "Unusual robots User-Agent value detected." not in manual_section
+    assert "Correlate the value with other collected evidence before escalating." in manual_section
+    assert "Do not brute force or attempt authentication based on robots.txt alone." in manual_section
 
 
 def test_html_source_artifact_renders_html_source_review_lead() -> None:
@@ -170,6 +174,44 @@ def test_standard_report_does_not_render_synthetic_hidden_wrapper_lead() -> None
     assert "<div hidden>" not in manual_section
     assert "Hidden HTML element contains high-signal text." not in manual_section
     assert "No interpretation review leads were generated" in manual_section
+
+
+def test_standard_report_keeps_genuinely_separate_robots_leads() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="unusual_user_agent",
+                value="WeirdCrawler",
+                source_file="robots.txt",
+                evidence_ids=["EVID-ART-UA"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="disallow_rule",
+                value="/admin",
+                source_file="robots.txt",
+                evidence_ids=["EVID-ART-DISALLOW"],
+                tags=[],
+            ),
+        ]
+    )
+
+    report = render_standard_interpretation_report(state, [])
+    manual_section = report.markdown.split("## Manual Review Leads", 1)[1].split(
+        "## Scope Summary",
+        1,
+    )[0]
+
+    assert manual_section.count("### LEAD-") == 2
+    assert "Unusual robots User-Agent value detected." in manual_section
+    assert "Disallowed path contains high-signal wording. Manual review recommended." in (
+        manual_section
+    )
+    assert "Robots.txt contains an unusual hash-shaped User-Agent value." not in (
+        manual_section
+    )
 
 
 def test_generic_encoded_body_renders_transform_review_lead() -> None:

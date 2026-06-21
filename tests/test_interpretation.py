@@ -241,6 +241,29 @@ def test_aggregation_deduplicates_exact_same_context_only() -> None:
     assert leads[0].lead_id == "LEAD-0001"
 
 
+def test_aggregation_preserves_combined_robots_user_agent_artefact_lead() -> None:
+    robots_leads = analyse_robots_txt(
+        ArtefactSource(
+            source_id="robots",
+            source_kind="robots_txt",
+            source_label="robots.txt",
+            text="User-agent: a18672860d0510e5ab6699730763b250",
+        )
+    ).review_leads
+
+    leads = aggregate_interpretation_leads(robots_review_leads=robots_leads)
+
+    assert len(leads) == 1
+    assert leads[0].lead_id == "LEAD-0001"
+    assert leads[0].lead_type == "robots_unusual_user_agent_artefact_review"
+    assert leads[0].title == "Robots.txt contains an unusual hash-shaped User-Agent value."
+    assert leads[0].raw_value == "a18672860d0510e5ab6699730763b250"
+    assert leads[0].related_artefact_types == (POSSIBLE_MD5_SHAPE,)
+    assert "Correlate the value with other collected evidence before escalating." in (
+        leads[0].suggested_manual_validation
+    )
+
+
 def test_aggregation_combines_multiple_analyser_outputs() -> None:
     hash_candidate = find_hash_artefacts(
         ArtefactSource(source_id="hash", text="abcdefabcdefabcdefabcdefabcdefab")

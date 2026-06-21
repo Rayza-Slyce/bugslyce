@@ -48,6 +48,13 @@ ROBOTS_MANUAL_VALIDATION = (
     "Do not submit artefacts to online decoders or hash databases automatically.",
     "Do not brute force or attempt authentication based on robots.txt alone.",
 )
+ROBOTS_USER_AGENT_ARTEFACT_VALIDATION = (
+    "Review the collected robots.txt content in context.",
+    "Validate hash-shaped or encoded-looking artefacts locally.",
+    "Correlate the value with other collected evidence before escalating.",
+    "Do not submit artefacts to online decoders or hash databases automatically.",
+    "Do not brute force or attempt authentication based on robots.txt alone.",
+)
 
 
 @dataclass(frozen=True)
@@ -230,7 +237,44 @@ def _entry_review_leads(
 ) -> tuple[RobotsReviewLead, ...]:
     leads: list[RobotsReviewLead] = []
     keywords = _nearby_keywords(entry.context)
-    if hashes or transforms:
+    unusual_user_agent = (
+        entry.field_name == "user-agent"
+        and _is_unusual_user_agent(entry.raw_value)
+    )
+    has_artefacts = bool(hashes or transforms)
+
+    if unusual_user_agent and has_artefacts:
+        title = (
+            "Robots.txt contains an unusual hash-shaped User-Agent value."
+            if hashes
+            else "Robots.txt contains an unusual encoded-looking User-Agent value."
+        )
+        pattern_description = (
+            "a hash-shaped pattern"
+            if hashes
+            else "an encoded-looking pattern"
+        )
+        leads.append(
+            _lead(
+                "robots_unusual_user_agent_artefact_review",
+                _priority(entry, keywords, hashes, transforms),
+                title,
+                (
+                    "The robots.txt User-Agent value is unusual and also matches "
+                    f"{pattern_description}. Treat it as a CTF/recon clue "
+                    "requiring local manual validation, not proof "
+                    "of vulnerability or valid credentials."
+                ),
+                entry,
+                keywords,
+                hashes,
+                transforms,
+                validation=ROBOTS_USER_AGENT_ARTEFACT_VALIDATION,
+            )
+        )
+        return tuple(leads)
+
+    if has_artefacts:
         leads.append(
             _lead(
                 "robots_artefact_review",
@@ -244,7 +288,7 @@ def _entry_review_leads(
             )
         )
 
-    if entry.field_name == "user-agent" and _is_unusual_user_agent(entry.raw_value):
+    if unusual_user_agent:
         leads.append(
             _lead(
                 "robots_unusual_user_agent",
@@ -326,6 +370,7 @@ def _lead(
     keywords: tuple[str, ...],
     hashes: tuple[HashArtefactCandidate, ...],
     transforms: tuple[TransformArtefactCandidate, ...],
+    validation: tuple[str, ...] = ROBOTS_MANUAL_VALIDATION,
 ) -> RobotsReviewLead:
     return RobotsReviewLead(
         lead_type=lead_type,
@@ -336,7 +381,7 @@ def _lead(
         nearby_keywords=keywords,
         hash_artefacts=hashes,
         transform_artefacts=transforms,
-        suggested_manual_validation=ROBOTS_MANUAL_VALIDATION,
+        suggested_manual_validation=validation,
     )
 
 

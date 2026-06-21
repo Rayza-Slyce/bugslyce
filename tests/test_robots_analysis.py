@@ -144,12 +144,38 @@ def test_hash_shaped_value_reuses_hash_artefact_analysis() -> None:
     lead = next(
         item
         for item in analysis.review_leads
-        if item.lead_type == "robots_artefact_review"
+        if item.lead_type == "robots_unusual_user_agent_artefact_review"
     )
+    assert lead.lead_type == "robots_unusual_user_agent_artefact_review"
     assert lead.priority == "high"
     assert lead.hash_artefacts[0].value == "abcdefabcdefabcdefabcdefabcdefab"
     assert "flag" in lead.nearby_keywords
-    assert "Robots directive contains possible encoded or hash-shaped artefacts." in lead.title
+    assert "unusual hash-shaped User-Agent" in lead.title
+    assert "Correlate the value with other collected evidence before escalating." in (
+        lead.suggested_manual_validation
+    )
+
+
+def test_encoded_unusual_user_agent_uses_encoded_looking_wording() -> None:
+    source = ArtefactSource(
+        source_id="encoded-ua",
+        text="User-agent: L2hpZGRlbi9mbGFn",
+    )
+
+    analysis = analyse_robots_txt(source)
+
+    assert analysis.hash_artefacts == ()
+    assert len(analysis.transform_artefacts) == 1
+    assert analysis.transform_artefacts[0].candidate_type == POSSIBLE_BASE64
+    lead = analysis.review_leads[0]
+    assert lead.lead_type == "robots_unusual_user_agent_artefact_review"
+    assert lead.title == "Robots.txt contains an unusual encoded-looking User-Agent value."
+    assert "encoded-looking pattern" in lead.explanation
+    assert "hash-shaped pattern" not in lead.explanation
+    assert "hash-shaped User-Agent" not in lead.title
+    assert "Validate hash-shaped or encoded-looking artefacts locally." in (
+        lead.suggested_manual_validation
+    )
 
 
 def test_encoded_value_reuses_transform_analysis() -> None:

@@ -483,6 +483,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   path plus offline Manual Review Leads in `report.md`.
 - Phase 66B: Standard Manual Review Lead source-mapping hardening to avoid
   local storage paths and synthetic mapper wrappers becoming review leads.
+- Phase 67A: Standard Manual Review Lead consolidation for related detector
+  outputs on the same artefact.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -656,3 +658,15 @@ wrappers invented by the mapper for compact parsed artefacts.
 This phase does not change Quick behaviour, does not change Standard scan
 volume, does not change live recon collection, and does not make Deep Recon
 available.
+
+## Phase 67A Standard Lead Consolidation Note
+
+Phase 67A consolidates related Standard Manual Review Lead detector outputs
+for the same artefact. For example, a `robots.txt` User-Agent value that is
+both unusual and hash-shaped is rendered as one stronger review lead instead
+of duplicate-looking robots leads.
+
+This improves report readability while preserving source context, raw values,
+related artefact types, and safe manual validation guidance. It does not
+change Quick behaviour, does not change Standard scan volume, does not change
+live recon collection, and does not make Deep Recon available.
