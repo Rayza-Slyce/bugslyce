@@ -71,6 +71,11 @@ def _source_from_http_artifact(
 ) -> ArtefactSource | None:
     if not artifact.value.strip():
         return None
+    if (
+        artifact.artifact_type == "robots"
+        and _looks_like_local_storage_path(artifact.value)
+    ):
+        return None
     text = _bounded_text(_source_text_for_artifact(artifact), max_source_chars)
     if not text:
         return None
@@ -143,7 +148,7 @@ def _source_text_for_artifact(artifact: HTTPArtifact) -> str:
     if artifact.artifact_type == "html_comment":
         return f"<!-- {value} -->"
     if artifact.artifact_type == "hidden_element":
-        return f"<div hidden>{value}</div>"
+        return value
     if artifact.artifact_type == "form":
         return f'<form action="{value}"></form>'
     if artifact.artifact_type == "input":
@@ -179,6 +184,33 @@ def _looks_binary(value: str) -> bool:
 def _looks_html_like(value: str) -> bool:
     lowered = value.lower()
     return any(marker in lowered for marker in HTML_MARKERS)
+
+
+def _looks_like_local_storage_path(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://")):
+        return False
+    if lowered.startswith(("~/", "./", "../")):
+        return True
+    if len(text) >= 3 and text[1:3] in {":\\", ":/"}:
+        return True
+    if text.startswith("/") and any(
+        lowered.endswith(suffix)
+        for suffix in (
+            ".txt",
+            ".html",
+            ".json",
+            ".md",
+            ".xml",
+            ".log",
+            ".zip",
+        )
+    ):
+        return True
+    return False
 
 
 def _source_label(artifact: HTTPArtifact) -> str:

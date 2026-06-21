@@ -481,6 +481,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   wiring.
 - Phase 66A: Standard Recon v1 available with the existing bounded collection
   path plus offline Manual Review Leads in `report.md`.
+- Phase 66B: Standard Manual Review Lead source-mapping hardening to avoid
+  local storage paths and synthetic mapper wrappers becoming review leads.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -643,3 +645,14 @@ not add recursive crawling, does not fetch extra pages, assets,
 form submission, authentication testing, brute force, exploitation, or
 vulnerability validation. Quick Recon behaviour and Quick reports remain
 unchanged. Deep Recon remains unavailable.
+
+## Phase 66B Standard Manual Review Lead Noise Reduction Note
+
+Phase 66B hardens Standard Manual Review Lead source mapping so local artefact
+storage paths, such as saved `robots.txt` file paths, are not interpreted as
+robots directives. It also avoids creating review leads from synthetic HTML
+wrappers invented by the mapper for compact parsed artefacts.
+
+This phase does not change Quick behaviour, does not change Standard scan
+volume, does not change live recon collection, and does not make Deep Recon
+available.

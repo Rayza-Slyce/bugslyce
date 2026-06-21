@@ -86,6 +86,45 @@ def test_robots_artifact_renders_robots_review_lead() -> None:
     assert "Disallowed path contains high-signal wording. Manual review recommended." in report.markdown
 
 
+def test_standard_report_ignores_local_robots_paths_but_keeps_unusual_user_agent_hash() -> None:
+    local_path = "/home/user/bugslyce-output/demo/robots-10.10.10.10-80.txt"
+    user_agent = "a18672860d0510e5ab6699730763b250"
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots",
+                value=local_path,
+                source_file=local_path,
+                evidence_ids=["EVID-ART-ROBOTS-FILE"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="unusual_user_agent",
+                value=user_agent,
+                source_file=local_path,
+                evidence_ids=["EVID-ART-UA"],
+                tags=[],
+            ),
+        ]
+    )
+
+    report = render_standard_interpretation_report(state, [])
+    manual_section = report.markdown.split("## Manual Review Leads", 1)[1].split(
+        "## Scope Summary",
+        1,
+    )[0]
+
+    assert "## Manual Review Leads" in report.markdown
+    assert local_path not in manual_section
+    assert "Unknown or non-standard robots directive preserved for review." not in manual_section
+    assert user_agent in manual_section
+    assert "Robots directive contains possible encoded or hash-shaped artefacts." in manual_section
+    assert "possible_md5_shape" in manual_section
+    assert "Unusual robots User-Agent value detected." in manual_section
+
+
 def test_html_source_artifact_renders_html_source_review_lead() -> None:
     state = _project_state(
         http_artifacts=[
@@ -105,6 +144,32 @@ def test_html_source_artifact_renders_html_source_review_lead() -> None:
     assert "- Category: html_source" in report.markdown
     assert "- Item type: html_comment" in report.markdown
     assert "HTML comment contains clue-like wording." in report.markdown
+
+
+def test_standard_report_does_not_render_synthetic_hidden_wrapper_lead() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="hidden_element",
+                value="p",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-HIDDEN"],
+                tags=[],
+            )
+        ]
+    )
+
+    report = render_standard_interpretation_report(state, [])
+    manual_section = report.markdown.split("## Manual Review Leads", 1)[1].split(
+        "## Scope Summary",
+        1,
+    )[0]
+
+    assert "## Manual Review Leads" in report.markdown
+    assert "<div hidden>" not in manual_section
+    assert "Hidden HTML element contains high-signal text." not in manual_section
+    assert "No interpretation review leads were generated" in manual_section
 
 
 def test_generic_encoded_body_renders_transform_review_lead() -> None:

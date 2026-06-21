@@ -49,6 +49,44 @@ def test_robots_text_already_present_becomes_robots_source() -> None:
     assert source.text == "Disallow: /admin"
 
 
+def test_local_robots_storage_path_artifact_is_not_mapped_as_robots_content() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots",
+                value="/home/user/bugslyce-output/demo/robots-10.10.10.10-80.txt",
+                source_file="/home/user/bugslyce-output/demo/robots-10.10.10.10-80.txt",
+                evidence_ids=["EVID-ART-ROBOTS-FILE"],
+                tags=["robots_artifact"],
+            )
+        ]
+    )
+
+    assert artefact_sources_from_project_state(state) == ()
+
+
+def test_parsed_unusual_robots_user_agent_still_becomes_source() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="unusual_user_agent",
+                value="a18672860d0510e5ab6699730763b250",
+                source_file="/tmp/robots-80.txt",
+                evidence_ids=["EVID-ART-UA"],
+                tags=["robots_artifact"],
+            )
+        ]
+    )
+
+    source = artefact_sources_from_project_state(state)[0]
+
+    assert source.source_kind == "robots_txt"
+    assert source.field_name == "unusual_user_agent"
+    assert source.text == "User-agent: a18672860d0510e5ab6699730763b250"
+
+
 def test_homepage_html_artifact_becomes_html_source() -> None:
     state = _project_state(
         http_artifacts=[
@@ -71,6 +109,28 @@ def test_homepage_html_artifact_becomes_html_source() -> None:
     assert source.service == "https"
     assert source.field_name == "html_comment"
     assert source.text == "<!-- flag clue is in the source -->"
+
+
+def test_compact_hidden_element_does_not_create_synthetic_hidden_markup() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="hidden_element",
+                value="p",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-HIDDEN"],
+                tags=[],
+            )
+        ]
+    )
+
+    source = artefact_sources_from_project_state(state)[0]
+
+    assert source.source_kind == "html"
+    assert source.field_name == "hidden_element"
+    assert source.text == "p"
+    assert "<div hidden>" not in source.text
 
 
 def test_missing_or_empty_source_file_does_not_crash_when_metadata_is_sufficient() -> None:
