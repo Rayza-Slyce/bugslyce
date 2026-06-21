@@ -43,7 +43,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "does not mean bigger wordlists",
         "does not mean recursive crawling",
         "not proof of vulnerability",
-        "planned and still unavailable",
+        "Standard Recon v1 is now available",
+        "does not fetch extra pages",
+        "Deep Recon remains unavailable",
     ):
         assert expected.lower() in lowered
 

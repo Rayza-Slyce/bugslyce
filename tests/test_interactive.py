@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ from bugslyce.interactive import (
     map_user_recon_mode_to_internal_profile,
     run_interactive_launcher,
 )
-from bugslyce.project_pipeline import PIPELINE_PROFILE
+from bugslyce.project_pipeline import PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE
 
 
 def test_no_args_non_interactive_prints_help(capsys) -> None:
@@ -50,10 +51,11 @@ def test_recon_mode_menu_uses_user_facing_names() -> None:
     assert "Quick Safe Recon" not in menu
     assert "Standard Safe Recon" not in menu
     assert "lab-safe-tiny" not in menu
+    assert "Manual Review Leads" in menu
+    assert "without increasing scan volume" in menu
     assert map_user_recon_mode_to_internal_profile("1") == PIPELINE_PROFILE
     assert map_user_recon_mode_to_internal_profile("2") is None
-    with pytest.raises(ValueError, match="Standard Recon is planned but not implemented yet"):
-        map_user_recon_mode_to_internal_profile("3")
+    assert map_user_recon_mode_to_internal_profile("3") == STANDARD_PIPELINE_PROFILE
     with pytest.raises(ValueError, match="Deep Recon is planned but not implemented yet"):
         map_user_recon_mode_to_internal_profile("4")
 
@@ -230,7 +232,7 @@ def test_launcher_rejects_unsafe_url_targets(
     assert "No project was created." in output
 
 
-def test_unavailable_recon_modes_retry_until_available(
+def test_deep_recon_retries_until_available_choice(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -240,7 +242,7 @@ def test_unavailable_recon_modes_retry_until_available(
         lambda **kwargs: _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "4", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "4", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -249,8 +251,8 @@ def test_unavailable_recon_modes_retry_until_available(
     )
 
     assert exit_code == 0
-    assert output.count("This recon mode is not available yet.") == 2
-    assert output.count("Choose Quick Recon or Manual Setup Only.") == 2
+    assert output.count("This recon mode is not available yet.") == 1
+    assert output.count("Choose Quick Recon, Standard Recon, or Manual Setup Only.") == 1
     assert "Project created." in output
 
 
@@ -401,6 +403,44 @@ def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None
     assert "PIPELINE SUMMARY" in output
 
 
+def test_standard_recon_run_now_calls_standard_pipeline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_pipeline_summary",
+        lambda result: "STANDARD PIPELINE SUMMARY",
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "YES", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["project_file"] == project_file
+    assert received["profile"] == STANDARD_PIPELINE_PROFILE
+    assert received["resume"] is False
+    assert "* Recon mode: Standard Recon" in rendered
+    assert "STANDARD PIPELINE SUMMARY" in output
+
+
 def test_quick_recon_run_now_uses_resolved_home_project_file(
     monkeypatch,
     tmp_path: Path,
@@ -475,6 +515,36 @@ def test_quick_recon_no_run_shows_command_preview(
     assert "Project created." in output
 
 
+def test_standard_recon_no_run_shows_standard_command_preview(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "YES", ""])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert "Standard Recon was not started." in output
+    assert "To run Standard Recon later:" in rendered
+    assert f"--profile {STANDARD_PIPELINE_PROFILE} --confirm" in rendered
+    assert "No recon was run." in output
+
+
 def test_resume_yes_calls_pipeline_with_resume(monkeypatch, tmp_path: Path) -> None:
     project_file = tmp_path / "project.json"
     received: dict[str, object] = {}
@@ -519,6 +589,120 @@ def test_resume_yes_calls_pipeline_with_resume(monkeypatch, tmp_path: Path) -> N
     assert received["resume"] is True
     assert "PROJECT SHOW" in output
     assert "PROJECT STATUS" in output
+
+
+def test_resume_uses_prior_standard_pipeline_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "project.json"
+    output_dir = tmp_path / "project-output"
+    output_dir.mkdir()
+    (output_dir / "project_pipeline.json").write_text(
+        json.dumps({"profile": STANDARD_PIPELINE_PROFILE}) + "\n",
+        encoding="utf-8",
+    )
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.load_project",
+        lambda path: SimpleNamespace(
+            name="demo",
+            target="10.10.10.10",
+            output_dir=str(output_dir),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_show",
+        lambda project, path: "PROJECT SHOW",
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.inspect_project_status",
+        lambda path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_status",
+        lambda result: "PROJECT STATUS",
+    )
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_pipeline_summary",
+        lambda result: "PIPELINE SUMMARY",
+    )
+    output: list[str] = []
+    inputs = iter(["2", str(project_file), "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert received["project_file"] == project_file
+    assert received["profile"] == STANDARD_PIPELINE_PROFILE
+    assert received["resume"] is True
+
+
+def test_resume_uses_prior_quick_pipeline_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "project.json"
+    output_dir = tmp_path / "project-output"
+    output_dir.mkdir()
+    (output_dir / "project_pipeline.json").write_text(
+        json.dumps({"profile": PIPELINE_PROFILE}) + "\n",
+        encoding="utf-8",
+    )
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.load_project",
+        lambda path: SimpleNamespace(
+            name="demo",
+            target="10.10.10.10",
+            output_dir=str(output_dir),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_show",
+        lambda project, path: "PROJECT SHOW",
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.inspect_project_status",
+        lambda path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_status",
+        lambda result: "PROJECT STATUS",
+    )
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_pipeline_summary",
+        lambda result: "PIPELINE SUMMARY",
+    )
+    output: list[str] = []
+    inputs = iter(["2", str(project_file), "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert received["project_file"] == project_file
+    assert received["profile"] == PIPELINE_PROFILE
+    assert received["resume"] is True
 
 
 def test_resume_no_shows_command_preview(monkeypatch, tmp_path: Path) -> None:

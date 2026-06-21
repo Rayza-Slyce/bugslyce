@@ -287,7 +287,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     project_run_parser = project_subparsers.add_parser(
         "run",
-        help="Run the confirmed approved lab-safe-tiny project pipeline.",
+        help="Run a confirmed approved project pipeline profile.",
     )
     project_run_parser.add_argument(
         "--project",
@@ -299,7 +299,10 @@ def _build_parser() -> argparse.ArgumentParser:
     project_run_parser.add_argument(
         "--profile",
         required=True,
-        help=f"Approved project pipeline profile: {PIPELINE_PROFILE}.",
+        help=(
+            "Approved project pipeline profile: "
+            f"{PIPELINE_PROFILE} or standard-bounded."
+        ),
     )
     project_run_parser.add_argument(
         "--confirm",

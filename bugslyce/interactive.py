@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -9,7 +10,10 @@ from bugslyce.branding import get_banner
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
+    PIPELINE_JSON_FILENAME,
     ProjectPipelineFailed,
+    STANDARD_PIPELINE_PROFILE,
+    SUPPORTED_PIPELINE_PROFILES,
     render_project_pipeline_summary,
     run_project_pipeline,
 )
@@ -93,8 +97,9 @@ def render_recon_mode_menu() -> str:
             "   Create the project and scope template, then show the next safe "
             "command without running recon.",
             f"3. {standard.display_name}",
-            f"   {standard.purpose.capitalize()}.",
-            "   Coming later; not available yet.",
+            "   Reuses the bounded MVP pipeline and adds offline interpretation "
+            "of already-collected evidence.",
+            "   Adds Manual Review Leads to the report without increasing scan volume.",
             f"4. {deep.display_name}",
             f"   {deep.purpose.capitalize()}.",
             "   Coming later; not available yet.",
@@ -178,20 +183,21 @@ def _start_new_project(
 
     project_file = Path(scaffold.project_file)
     if profile is None:
-        _print_interactive_next_steps(scaffold, print_func)
+        _print_interactive_next_steps(scaffold, print_func, profile=None)
         return 0
 
+    mode_label = _profile_display_name(profile)
     if not _prompt_yes_exact_with_retries(
         input_func,
         print_func,
-        "Run Quick Recon now? Type YES to run, or press Enter to only create the project:",
-        "Type YES to run Quick Recon, or press Enter to only create the project:",
+        f"Run {mode_label} now? Type YES to run, or press Enter to only create the project:",
+        f"Type YES to run {mode_label}, or press Enter to only create the project:",
     ):
-        print_func("Quick Recon was not started.")
-        _print_interactive_next_steps(scaffold, print_func)
+        print_func(f"{mode_label} was not started.")
+        _print_interactive_next_steps(scaffold, print_func, profile=profile)
         return 0
 
-    return _run_pipeline(project_file, print_func, resume=False)
+    return _run_pipeline(project_file, print_func, profile=profile, resume=False)
 
 
 def _resume_existing_project(
@@ -202,6 +208,7 @@ def _resume_existing_project(
     project_file = _resolve_prompt_path(_prompt_text(input_func, "Project file path"), cwd)
     try:
         project = load_project(project_file)
+        resume_profile = _resume_profile_for_project(project)
         print_func(render_project_show(project, project_file))
         print_func("")
         print_func(render_project_status(inspect_project_status(project_file)))
@@ -221,13 +228,18 @@ def _resume_existing_project(
         print_func("Run it later with:")
         print_func(
             "bugslyce project run "
-            f"--project {project_file} --profile {PIPELINE_PROFILE} --confirm --resume"
+            f"--project {project_file} --profile {resume_profile} --confirm --resume"
         )
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 0
 
-    return _run_pipeline(project_file, print_func, resume=True)
+    return _run_pipeline(
+        project_file,
+        print_func,
+        profile=resume_profile,
+        resume=True,
+    )
 
 
 def _list_existing_projects(
@@ -256,14 +268,20 @@ def _prompt_available_recon_mode(
             return map_user_recon_mode_to_internal_profile(mode_choice)
         except ValueError:
             print_func("This recon mode is not available yet.")
-            print_func("Choose Quick Recon or Manual Setup Only.")
+            print_func("Choose Quick Recon, Standard Recon, or Manual Setup Only.")
 
 
-def _run_pipeline(project_file: Path, print_func: PrintFunc, *, resume: bool) -> int:
+def _run_pipeline(
+    project_file: Path,
+    print_func: PrintFunc,
+    *,
+    profile: str,
+    resume: bool,
+) -> int:
     try:
         result = run_project_pipeline(
             project_file=project_file,
-            profile=PIPELINE_PROFILE,
+            profile=profile,
             resume=resume,
             progress_callback=print_func,
         )
@@ -291,7 +309,14 @@ def _print_project_next(project_file: Path, print_func: PrintFunc) -> None:
         print_func(f"Could not build project next preview: {exc}")
 
 
-def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
+def _print_interactive_next_steps(
+    scaffold,
+    print_func: PrintFunc,
+    *,
+    profile: str | None,
+) -> None:
+    run_profile = profile or PIPELINE_PROFILE
+    mode_label = _profile_display_name(run_profile)
     print_func("")
     print_func("Project created.")
     print_func("")
@@ -299,10 +324,10 @@ def _print_interactive_next_steps(scaffold, print_func: PrintFunc) -> None:
     print_func("1. Review the generated scope file:")
     print_func(f"   {scaffold.scope_file}")
     print_func("")
-    print_func("2. To run Quick Recon later:")
+    print_func(f"2. To run {mode_label} later:")
     print_func(
         "   bugslyce project run "
-        f"--project {scaffold.project_file} --profile {PIPELINE_PROFILE} --confirm"
+        f"--project {scaffold.project_file} --profile {run_profile} --confirm"
     )
     print_func("")
     print_func("3. To preview next safe action:")
@@ -340,7 +365,7 @@ def _render_project_summary(
     profile: str | None,
     target_input: str | None = None,
 ) -> str:
-    mode = QUICK_RECON_LABEL if profile == PIPELINE_PROFILE else MANUAL_SETUP_LABEL
+    mode = _profile_display_name(profile) if profile is not None else MANUAL_SETUP_LABEL
     lines = [
         "Project summary:",
         f"* Name: {name}",
@@ -356,6 +381,25 @@ def _render_project_summary(
         ]
     )
     return "\n".join(lines)
+
+
+def _profile_display_name(profile: str | None) -> str:
+    if profile == STANDARD_PIPELINE_PROFILE:
+        return STANDARD_RECON_LABEL
+    return QUICK_RECON_LABEL
+
+
+def _resume_profile_for_project(project) -> str:
+    output_dir = getattr(project, "output_dir", None)
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        return PIPELINE_PROFILE
+    metadata_path = Path(output_dir).expanduser() / PIPELINE_JSON_FILENAME
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return PIPELINE_PROFILE
+    profile = payload.get("profile")
+    return profile if profile in SUPPORTED_PIPELINE_PROFILES else PIPELINE_PROFILE
 
 
 def _prompt_target_with_retries(

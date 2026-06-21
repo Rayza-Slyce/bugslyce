@@ -142,13 +142,15 @@ bugslyce
 ```
 
 The interactive launcher can run doctor/readiness checks, scaffold a project,
-choose **Quick Recon** or **Manual Setup Only**, confirm authorisation, and
-optionally run the MVP pipeline. Quick Recon maps to the current
-`lab-safe-tiny` pipeline. **Standard Recon** and **Deep Recon** are planned
-future modes and are not available yet. Recon mode names do not make activity
-automatically safe; authorisation and scope still matter. Manual Setup Only
-creates local project files and prints the next safe command preview without
-running recon.
+choose **Quick Recon**, **Standard Recon**, or **Manual Setup Only**, confirm
+authorisation, and optionally run the bounded MVP pipeline. Quick Recon maps
+to `lab-safe-tiny`. Standard Recon v1 maps to `standard-bounded`; it reuses
+the same bounded collection path and adds offline interpretation of
+already-collected evidence to the report as Manual Review Leads. **Deep
+Recon** remains a planned future mode and is not available yet. Recon mode
+names do not make activity automatically safe; authorisation and scope still
+matter. Manual Setup Only creates local project files and prints the next safe
+command preview without running recon.
 
 Interactive mode defaults to `~/bugslyce-output` so project output is
 predictable regardless of the current working directory. Direct CLI commands

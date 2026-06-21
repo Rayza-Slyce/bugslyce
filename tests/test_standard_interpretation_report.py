@@ -201,10 +201,11 @@ def test_helper_does_not_call_write_project_outputs() -> None:
     assert "write_project_outputs" not in source
 
 
-def test_quick_standard_and_deep_mode_availability_is_unchanged() -> None:
+def test_quick_and_standard_available_deep_unavailable() -> None:
     assert get_recon_mode("quick").internal_profile == "lab-safe-tiny"
     assert get_recon_mode("quick").is_available
-    assert not get_recon_mode("standard").is_available
+    assert get_recon_mode("standard").internal_profile == "standard-bounded"
+    assert get_recon_mode("standard").is_available
     assert not get_recon_mode("deep").is_available
 
 

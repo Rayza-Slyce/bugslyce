@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from bugslyce.doctor import DoctorReport, build_doctor_report
+from bugslyce.core.project import build_project_state
 from bugslyce.project_session import (
     build_project_runbook,
     load_project,
@@ -41,7 +42,7 @@ from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
     write_http_metadata_execution_result,
 )
-from bugslyce.recon.modes import QUICK_RECON_PROFILE
+from bugslyce.recon.modes import QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
     write_nmap_discovery_execution_result,
@@ -57,10 +58,17 @@ from bugslyce.recon.path_followup import (
     write_path_followup_execution_result,
 )
 from bugslyce.recon.status import build_recon_status, write_recon_status
+from bugslyce.recon.standard_interpretation import (
+    assemble_standard_interpretation_from_project_state,
+)
+from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.time_utils import Clock, utc_now_iso
+from bugslyce.triage.candidates import generate_candidates
 
 
 PIPELINE_PROFILE = QUICK_RECON_PROFILE
+STANDARD_PIPELINE_PROFILE = STANDARD_RECON_PROFILE
+SUPPORTED_PIPELINE_PROFILES = (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE)
 PIPELINE_JSON_FILENAME = "project_pipeline.json"
 PIPELINE_MARKDOWN_FILENAME = "project_pipeline.md"
 SKIPPED_STEP_MESSAGES = {
@@ -162,12 +170,12 @@ def run_project_pipeline(
     clock: Clock | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> PipelineResult:
-    """Run the fixed approved lab-safe-tiny project chain."""
+    """Run the fixed approved project chain."""
 
-    if profile != PIPELINE_PROFILE:
+    if profile not in SUPPORTED_PIPELINE_PROFILES:
         raise ValueError(
             f"Unsupported project pipeline profile '{profile}'. "
-            f"Supported profile: {PIPELINE_PROFILE}."
+            f"Supported profiles: {', '.join(SUPPORTED_PIPELINE_PROFILES)}."
         )
 
     project_file = project_file.expanduser().resolve()
@@ -186,6 +194,7 @@ def run_project_pipeline(
         plan_path,
         export_path,
         build_doctor_report(),
+        profile=profile,
         resume=resume,
     )
 
@@ -251,6 +260,7 @@ def run_project_pipeline(
         "export_path": export_path,
         "target": project.target,
         "resume": resume,
+        "profile": profile,
     }
     step_runners = _step_runners(context, clock)
     for index, step in enumerate(result.steps):
@@ -488,6 +498,7 @@ def _validate_pipeline(
     export_path: Path,
     doctor: DoctorReport,
     *,
+    profile: str,
     resume: bool,
 ) -> ResumeAssessment:
     if not output_dir.is_dir():
@@ -514,6 +525,7 @@ def _validate_pipeline(
         plan_dir=plan_dir,
         plan_path=plan_path,
         export_path=export_path,
+        profile=profile,
     )
 
 
@@ -542,6 +554,7 @@ def _assess_resume_state(
     plan_dir: Path,
     plan_path: Path,
     export_path: Path,
+    profile: str,
 ) -> ResumeAssessment:
     manifest_path = output_dir / "recon_manifest.json"
     manifest = (
@@ -570,6 +583,7 @@ def _assess_resume_state(
             target=target,
             project_file=project_file,
             output_dir=output_dir,
+            profile=profile,
         )
 
     if plan_dir.exists() and not plan_dir.is_dir():
@@ -709,13 +723,17 @@ def _validate_prior_pipeline(
     target: str,
     project_file: Path,
     output_dir: Path,
+    profile: str,
 ) -> None:
     if _required_json_text(payload, "target", "Project pipeline metadata").lower().rstrip(
         "."
     ) != target.lower().rstrip("."):
         raise ValueError("Prior pipeline metadata target does not match this project.")
-    if payload.get("profile") != PIPELINE_PROFILE:
+    existing_profile = payload.get("profile")
+    if existing_profile not in SUPPORTED_PIPELINE_PROFILES:
         raise ValueError("Prior pipeline metadata uses an unsupported project profile.")
+    if existing_profile != profile:
+        raise ValueError("Prior pipeline metadata profile does not match this run.")
     for key, expected in (("project_file", project_file), ("output_dir", output_dir)):
         value = payload.get(key)
         if not isinstance(value, str) or Path(value).expanduser().resolve() != expected:
@@ -816,6 +834,7 @@ def _step_runners(
     target = context["target"]
     project_file = context["project_file"]
     resume = context["resume"]
+    profile = context["profile"]
     assert isinstance(output_dir, Path)
     assert isinstance(scope_file, Path)
     assert isinstance(plan_dir, Path)
@@ -824,6 +843,7 @@ def _step_runners(
     assert isinstance(target, str)
     assert isinstance(project_file, Path)
     assert isinstance(resume, bool)
+    assert isinstance(profile, str)
 
     def validation():
         state = "resume provenance" if resume else "fresh output"
@@ -912,12 +932,22 @@ def _step_runners(
         )
 
     def status():
+        standard_paths = _write_standard_interpretation_report_if_needed(
+            profile,
+            output_dir,
+        )
         result = build_recon_status(output_dir, scope_file, clock=clock)
         json_path, markdown_path = write_recon_status(result, output_dir)
+        output_paths = [*standard_paths, str(json_path), str(markdown_path)]
+        updates = (
+            {"report_path": standard_paths[0]}
+            if standard_paths
+            else {}
+        )
         return (
             "Local recon status generated.",
-            [str(json_path), str(markdown_path)],
-            {},
+            output_paths,
+            updates,
         )
 
     def runbook():
@@ -955,6 +985,24 @@ def _step_runners(
         "PIPELINE-STEP-011": runbook,
         "PIPELINE-STEP-012": export,
     }
+
+
+def _write_standard_interpretation_report_if_needed(
+    profile: str,
+    output_dir: Path,
+) -> list[str]:
+    if profile != STANDARD_PIPELINE_PROFILE:
+        return []
+    project_state = build_project_state(output_dir)
+    candidates = generate_candidates(project_state)
+    assembly = assemble_standard_interpretation_from_project_state(project_state)
+    report_path, json_path = write_project_outputs(
+        project_state,
+        candidates,
+        output_dir,
+        manual_review_leads_markdown=assembly.manual_review_leads_markdown,
+    )
+    return [str(report_path), str(json_path)]
 
 
 def _failed_result(

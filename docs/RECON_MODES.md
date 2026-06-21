@@ -78,13 +78,15 @@ Expected artefacts include:
 
 ## Standard Recon
 
-Standard Recon is planned and unavailable until implemented.
+Standard Recon v1 is available.
 
-Proposed internal profile name: `standard-bounded`.
+Internal profile name: `standard-bounded`.
 
 Standard Recon is the normal broader workflow for authorised manual review. It
-should collect richer evidence than Quick Recon while remaining bounded,
-deterministic, and non-exploitative.
+is intended to collect richer evidence than Quick Recon over time while
+remaining bounded, deterministic, and non-exploitative. In v1, its runtime
+value-add is offline interpretation of already-collected evidence, not
+increased scan volume.
 
 Standard Recon may eventually include modest bounded additions such as:
 
@@ -132,9 +134,9 @@ Standard Recon must not become:
 
 ### Standard Recon v1 Wiring Plan
 
-Standard Recon v1 is planned and still unavailable until implemented. The v1
-product decision is that Standard Recon should initially improve interpretation
-of already-collected evidence, not increase scan volume.
+Standard Recon v1 is now available. The v1 product decision is that Standard
+Recon initially improves interpretation of already-collected evidence, not
+scan volume.
 
 Standard Recon v1 should initially:
 
@@ -156,16 +158,18 @@ Standard Recon v1 does not increase scan volume.
 
 - It does not mean bigger wordlists.
 - It does not mean recursive crawling.
+- It does not add additional fetching, `sitemap.xml`, `security.txt`, static
+  asset fetching, JavaScript extraction, or extra same-origin paths.
 - It does not mean exploiting or validating vulnerabilities.
 - It must not submit forms, attempt authentication, brute force, or fetch new
   paths because of interpretation leads.
 
 The first value-add is better evidence interpretation.
 
-The future Standard Recon v1 report should include a clearly separated
-`## Manual Review Leads` section after `## Operator Summary` and before
-`## Scope Summary`, using the Phase 64B report seam. This section should
-contain cautious review prompts, not confirmed vulnerabilities.
+The Standard Recon v1 report includes a clearly separated `## Manual Review
+Leads` section after `## Operator Summary` and before `## Scope Summary`,
+using the Phase 64B report seam. This section contains cautious review
+prompts, not confirmed vulnerabilities.
 
 Expected review-lead wording includes:
 
@@ -467,7 +471,7 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 - Phase 64A: offline Markdown renderer for interpretation review leads.
 - Phase 64B: report integration contract for future manual review sections.
 - Phase 64C: offline interpretation collector for already-collected evidence.
-- Phase 65A: Standard Recon v1 wiring design while Standard remains
+- Phase 65A: Standard Recon v1 wiring design while Standard remained
   unavailable.
 - Phase 65B: offline evidence-to-`ArtefactSource` mapper for already-collected
   project evidence.
@@ -475,6 +479,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   Standard Recon wiring.
 - Phase 65D: internal Standard interpretation report helper for future report
   wiring.
+- Phase 66A: Standard Recon v1 available with the existing bounded collection
+  path plus offline Manual Review Leads in `report.md`.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -490,8 +496,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
 
 Phase 62 formalises the internal mode/profile registry as the source of truth
 for mode IDs, display names, internal profile names, status, and availability.
-Quick Recon remains the only available executable mode and continues to map to
-`lab-safe-tiny`. Standard Recon and Deep Recon remain planned and unavailable.
+Quick Recon maps to `lab-safe-tiny`. Standard Recon maps to
+`standard-bounded`. Deep Recon remains planned and unavailable.
 
 ## Phase 63A Artefact Interpretation Note
 
@@ -623,3 +629,17 @@ This phase does not enable Standard Recon, does not enable Deep Recon, does
 not change Quick Recon behaviour, and does not write report files. It does not
 modify the live project pipeline, recon execution, CLI output, runbooks,
 evidence packs, or the interactive launcher.
+
+## Phase 66A Standard Recon v1 Availability Note
+
+Phase 66A enables Standard Recon v1 with internal profile
+`standard-bounded`. Standard v1 reuses the existing bounded collection path
+used by Quick Recon and adds offline interpretation of already-collected
+evidence into `report.md` through the `## Manual Review Leads` section.
+
+This phase does not increase scan volume, does not add bigger wordlists, does
+not add recursive crawling, does not fetch extra pages, assets,
+`sitemap.xml`, `security.txt`, JavaScript, or extra paths, and does not add
+form submission, authentication testing, brute force, exploitation, or
+vulnerability validation. Quick Recon behaviour and Quick reports remain
+unchanged. Deep Recon remains unavailable.

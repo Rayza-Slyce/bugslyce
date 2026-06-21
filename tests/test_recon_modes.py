@@ -40,22 +40,18 @@ def test_quick_recon_is_available_and_maps_to_lab_safe_tiny() -> None:
     assert resolve_executable_profile("quick") == "lab-safe-tiny"
 
 
-def test_standard_recon_is_planned_and_unavailable() -> None:
+def test_standard_recon_is_available_and_maps_to_standard_bounded() -> None:
     standard = get_recon_mode("standard")
 
     assert standard.mode_id == "standard"
     assert standard.display_name == "Standard Recon"
     assert standard.internal_profile == STANDARD_RECON_PROFILE
     assert standard.internal_profile == "standard-bounded"
-    assert standard.status == "planned"
-    assert standard.is_available is False
-    assert is_recon_mode_available("standard") is False
-
-    with pytest.raises(
-        ReconModeUnavailable,
-        match="Standard Recon is planned but not implemented yet",
-    ):
-        resolve_executable_profile("standard")
+    assert standard.status == "implemented"
+    assert standard.is_available is True
+    assert is_recon_mode_available("standard") is True
+    assert "already-collected artefacts" in standard.purpose
+    assert resolve_executable_profile("standard") == "standard-bounded"
 
 
 def test_deep_recon_is_planned_and_unavailable() -> None:
@@ -77,8 +73,16 @@ def test_deep_recon_is_planned_and_unavailable() -> None:
 
 
 def test_planned_modes_do_not_fall_back_to_quick() -> None:
-    for mode_id in ("standard", "deep"):
+    for mode_id in ("deep",):
         mode = get_recon_mode(mode_id)
         assert mode.internal_profile != QUICK_RECON_PROFILE
         with pytest.raises(ReconModeUnavailable):
             resolve_executable_profile(mode_id)
+
+
+def test_standard_does_not_fall_back_to_quick() -> None:
+    standard = get_recon_mode("standard")
+
+    assert standard.internal_profile == STANDARD_RECON_PROFILE
+    assert standard.internal_profile != QUICK_RECON_PROFILE
+    assert resolve_executable_profile("standard") == STANDARD_RECON_PROFILE

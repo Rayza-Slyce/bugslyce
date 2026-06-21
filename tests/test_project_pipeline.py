@@ -16,6 +16,7 @@ from bugslyce.project_pipeline import (
     PIPELINE_MARKDOWN_FILENAME,
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
+    STANDARD_PIPELINE_PROFILE,
     run_project_pipeline,
 )
 from bugslyce.project_session import scaffold_project
@@ -302,6 +303,109 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert "No NSE scripts, UDP scans, brute force" in markdown
 
 
+def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    project_state = SimpleNamespace(project_name="pipeline-test")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: project_state,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.generate_candidates",
+        lambda state: [],
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+        lambda state: SimpleNamespace(
+            manual_review_leads_markdown="\n".join(
+                [
+                    "## Manual Review Leads",
+                    "",
+                    (
+                        "These leads are derived from collected evidence and "
+                        "should be treated as manual review prompts, not proof "
+                        "of vulnerability."
+                    ),
+                    "",
+                    "### LEAD-0001: Possible hash candidate detected.",
+                ]
+            )
+        ),
+    )
+
+    def fake_write_project_outputs(
+        state,
+        candidates,
+        output_path,
+        *,
+        manual_review_leads_markdown=None,
+    ):
+        calls.append("standard-report-write")
+        report_path = output_path / "report.md"
+        json_path = output_path / "project_state.json"
+        report_path.write_text(
+            "# Report\n\n"
+            "## Operator Summary\n\n"
+            f"{manual_review_leads_markdown}\n\n"
+            "## Scope Summary\n",
+            encoding="utf-8",
+        )
+        json_path.write_text("{}\n", encoding="utf-8")
+        return report_path, json_path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        fake_write_project_outputs,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        STANDARD_PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert calls == [
+        "nmap-discover",
+        "nmap-discover-write",
+        "nmap-services",
+        "nmap-services-write",
+        "http-metadata",
+        "http-metadata-write",
+        "path-followup",
+        "path-followup-write",
+        "content-plan",
+        "content-plan-write",
+        "content-run",
+        "content-run-write",
+        "content-followup",
+        "content-followup-write",
+        "body-fetch",
+        "body-fetch-write",
+        "standard-report-write",
+        "status",
+        "status-write",
+        "runbook",
+        "runbook-write",
+        "export",
+    ]
+    assert result.profile == STANDARD_PIPELINE_PROFILE
+    assert result.report_path == str(output_dir / "report.md")
+    assert [step.status for step in result.steps] == ["completed"] * 12
+    report = (output_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Manual Review Leads" in report
+    assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
+    assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
+    assert "not proof of vulnerability" in report
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert payload["profile"] == STANDARD_PIPELINE_PROFILE
+
+
 def test_pipeline_records_noop_followups_and_continues(
     tmp_path: Path,
     monkeypatch,
@@ -550,6 +654,29 @@ def test_resume_refuses_target_and_content_plan_mismatches(
     )
     with pytest.raises(ValueError, match="Existing content plan does not match"):
         run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+
+
+def test_resume_refuses_prior_pipeline_profile_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_prior_pipeline(project_file, output_dir, export_path)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Prior pipeline metadata profile does not match this run",
+    ):
+        run_project_pipeline(
+            project_file,
+            STANDARD_PIPELINE_PROFILE,
+            resume=True,
+        )
 
 
 def test_resume_refuses_incoherent_or_missing_manifest_artifacts(

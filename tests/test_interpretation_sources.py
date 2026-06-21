@@ -270,8 +270,8 @@ def test_current_report_generation_remains_unchanged_by_default() -> None:
     assert "## Manual Review Leads" not in report
 
 
-def test_standard_and_deep_remain_unavailable() -> None:
-    assert not get_recon_mode("standard").is_available
+def test_standard_available_and_deep_remains_unavailable() -> None:
+    assert get_recon_mode("standard").is_available
     assert not get_recon_mode("deep").is_available
 
 

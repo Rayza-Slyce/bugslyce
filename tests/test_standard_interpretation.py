@@ -176,10 +176,11 @@ def test_current_report_generation_remains_unchanged_by_default() -> None:
     assert "## Manual Review Leads" not in report
 
 
-def test_quick_standard_and_deep_mode_availability_is_unchanged() -> None:
+def test_quick_and_standard_available_deep_unavailable() -> None:
     assert get_recon_mode("quick").internal_profile == "lab-safe-tiny"
     assert get_recon_mode("quick").is_available
-    assert not get_recon_mode("standard").is_available
+    assert get_recon_mode("standard").internal_profile == "standard-bounded"
+    assert get_recon_mode("standard").is_available
     assert not get_recon_mode("deep").is_available
 
 

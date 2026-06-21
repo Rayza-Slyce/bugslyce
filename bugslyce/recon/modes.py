@@ -56,10 +56,10 @@ RECON_MODES: tuple[ReconMode, ...] = (
         mode_id=STANDARD_MODE_ID,
         display_name="Standard Recon",
         internal_profile=STANDARD_RECON_PROFILE,
-        status="planned",
+        status="implemented",
         purpose=(
-            "broader bounded evidence collection and better artefact "
-            "interpretation"
+            "bounded evidence collection with offline interpretation of "
+            "already-collected artefacts"
         ),
     ),
     ReconMode(
