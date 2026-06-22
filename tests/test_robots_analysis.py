@@ -151,6 +151,9 @@ def test_hash_shaped_value_reuses_hash_artefact_analysis() -> None:
     assert lead.hash_artefacts[0].value == "abcdefabcdefabcdefabcdefabcdefab"
     assert "flag" in lead.nearby_keywords
     assert "unusual hash-shaped User-Agent" in lead.title
+    assert "review signal requiring local manual validation" in lead.explanation
+    assert "CTF" not in lead.explanation
+    assert lead.explanation.lower().count("not proof") == 1
     assert "Correlate the value with other collected evidence before escalating." in (
         lead.suggested_manual_validation
     )
@@ -172,6 +175,9 @@ def test_encoded_unusual_user_agent_uses_encoded_looking_wording() -> None:
     assert lead.title == "Robots.txt contains an unusual encoded-looking User-Agent value."
     assert "encoded-looking pattern" in lead.explanation
     assert "hash-shaped pattern" not in lead.explanation
+    assert "review signal requiring local manual validation" in lead.explanation
+    assert "CTF" not in lead.explanation
+    assert lead.explanation.lower().count("not proof") == 1
     assert "hash-shaped User-Agent" not in lead.title
     assert "Validate hash-shaped or encoded-looking artefacts locally." in (
         lead.suggested_manual_validation

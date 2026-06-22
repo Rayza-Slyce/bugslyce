@@ -261,7 +261,7 @@ def _entry_review_leads(
                 title,
                 (
                     "The robots.txt User-Agent value is unusual and also matches "
-                    f"{pattern_description}. Treat it as a CTF/recon clue "
+                    f"{pattern_description}. Treat it as a review signal "
                     "requiring local manual validation, not proof "
                     "of vulnerability or valid credentials."
                 ),

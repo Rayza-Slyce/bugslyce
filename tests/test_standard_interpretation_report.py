@@ -125,6 +125,12 @@ def test_standard_report_ignores_local_robots_paths_but_keeps_unusual_user_agent
     assert "Robots directive contains possible encoded or hash-shaped artefacts." not in manual_section
     assert "possible_md5_shape" in manual_section
     assert "Unusual robots User-Agent value detected." not in manual_section
+    assert "CTF" not in manual_section
+    explanation_line = next(
+        line for line in manual_section.splitlines() if line.startswith("- Explanation:")
+    )
+    assert explanation_line.lower().count("not proof") == 1
+    assert "Treat this as a review lead, not proof of vulnerability." not in explanation_line
     assert "Correlate the value with other collected evidence before escalating." in manual_section
     assert "Do not brute force or attempt authentication based on robots.txt alone." in manual_section
 

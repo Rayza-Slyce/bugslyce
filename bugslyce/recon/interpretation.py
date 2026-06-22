@@ -180,7 +180,7 @@ def _robots_draft(lead: RobotsReviewLead) -> _ReviewLeadDraft:
         category="robots",
         priority=lead.priority,
         title=lead.title,
-        explanation=f"{lead.explanation} Treat this as a review lead, not proof of vulnerability.",
+        explanation=_with_review_lead_caution(lead.explanation),
         source_id=entry.source_id,
         source_kind="robots_txt",
         source_label=entry.source_label,
@@ -209,7 +209,7 @@ def _html_source_draft(lead: HtmlSourceReviewLead) -> _ReviewLeadDraft:
         category="html_source",
         priority=lead.priority,
         title=lead.title,
-        explanation=f"{lead.explanation} Treat this as a review lead, not proof of vulnerability.",
+        explanation=_with_review_lead_caution(lead.explanation),
         source_id=item.source_id,
         source_kind=item.source_kind,
         source_label=item.source_label,
@@ -253,6 +253,12 @@ def _related_artefact_types(
         seen.add(candidate_type)
         related.append(candidate_type)
     return tuple(related)
+
+
+def _with_review_lead_caution(explanation: str) -> str:
+    if "not proof" in explanation.lower():
+        return explanation
+    return f"{explanation} Treat this as a review lead, not proof of vulnerability."
 
 
 def _dedupe_exact_contexts(drafts: list[_ReviewLeadDraft]) -> tuple[_ReviewLeadDraft, ...]:
