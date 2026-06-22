@@ -485,6 +485,8 @@ The deterministic BugSlyce evidence and artefacts remain primary.
   local storage paths and synthetic mapper wrappers becoming review leads.
 - Phase 67A: Standard Manual Review Lead consolidation for related detector
   outputs on the same artefact.
+- Phase 69A: Standard Investigation Threads foundation for grouping related
+  offline review signals into manual investigation paths.
 - Later Standard Recon: modest bounded collection additions after the v1
   interpretation wiring is implemented and reviewed.
 - Phase 64: controlled same-origin static JavaScript route extraction if still
@@ -670,3 +672,14 @@ This improves report readability while preserving source context, raw values,
 related artefact types, and safe manual validation guidance. It does not
 change Quick behaviour, does not change Standard scan volume, does not change
 live recon collection, and does not make Deep Recon available.
+
+## Phase 69A Standard Investigation Threads Note
+
+Phase 69A adds Standard Investigation Threads. These threads group related
+offline review signals into practical manual investigation paths, such as
+high-port HTTP application review, discovered hidden-path review, and encoded
+or source artefact review.
+
+This improves operator workflow without changing live recon collection. Quick
+behaviour is unchanged, Standard scan volume is unchanged, and Deep Recon
+remains unavailable.

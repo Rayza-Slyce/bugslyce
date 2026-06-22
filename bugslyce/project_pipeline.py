@@ -42,6 +42,10 @@ from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
     write_http_metadata_execution_result,
 )
+from bugslyce.recon.investigation_threads import (
+    build_investigation_threads,
+    render_investigation_threads_markdown,
+)
 from bugslyce.recon.modes import QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
@@ -996,11 +1000,17 @@ def _write_standard_interpretation_report_if_needed(
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
+    threads = build_investigation_threads(
+        project_state,
+        candidates,
+        assembly.review_leads,
+    )
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
         output_dir,
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
+        investigation_threads_markdown=render_investigation_threads_markdown(threads),
     )
     return [str(report_path), str(json_path)]
 

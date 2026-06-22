@@ -335,8 +335,17 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
                     "",
                     "### LEAD-0001: Possible hash candidate detected.",
                 ]
-            )
+            ),
+            review_leads=(),
         ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_investigation_threads",
+        lambda state, candidates, review_leads: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_investigation_threads_markdown",
+        lambda threads: "",
     )
 
     def fake_write_project_outputs(
@@ -345,6 +354,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         output_path,
         *,
         manual_review_leads_markdown=None,
+        investigation_threads_markdown=None,
     ):
         calls.append("standard-report-write")
         report_path = output_path / "report.md"

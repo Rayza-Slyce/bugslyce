@@ -5,7 +5,13 @@ from __future__ import annotations
 from copy import deepcopy
 import inspect
 
-from bugslyce.core.models import Candidate, Evidence, HTTPArtifact, ProjectState
+from bugslyce.core.models import (
+    Candidate,
+    DiscoveredPath,
+    Evidence,
+    HTTPArtifact,
+    ProjectState,
+)
 from bugslyce.recon.modes import get_recon_mode
 from bugslyce.reports.markdown import render_markdown_report
 from bugslyce.reports.standard_interpretation import (
@@ -36,9 +42,10 @@ def test_helper_returns_report_dataclass_with_markdown_and_metadata() -> None:
     assert report.review_lead_count == 1
     assert report.interpretation_assembly.sources_analyzed == 1
     assert report.manual_review_leads_markdown is not None
+    assert report.investigation_threads_markdown is not None
 
 
-def test_helper_places_manual_review_leads_after_operator_summary_before_scope() -> None:
+def test_helper_places_standard_sections_after_operator_summary_before_scope() -> None:
     state = _project_state(
         http_artifacts=[
             HTTPArtifact(
@@ -55,10 +62,14 @@ def test_helper_places_manual_review_leads_after_operator_summary_before_scope()
     report = render_standard_interpretation_report(state, [])
 
     assert "## Manual Review Leads" in report.markdown
+    assert "## Investigation Threads" in report.markdown
     assert report.markdown.index("## Operator Summary") < report.markdown.index(
         "## Manual Review Leads"
     )
     assert report.markdown.index("## Manual Review Leads") < report.markdown.index(
+        "## Investigation Threads"
+    )
+    assert report.markdown.index("## Investigation Threads") < report.markdown.index(
         "## Scope Summary"
     )
     assert "LEAD-0001" in report.markdown
@@ -241,13 +252,38 @@ def test_generic_encoded_body_renders_transform_review_lead() -> None:
     assert "- Decoded/derived preview: `/hidden/flag`" in report.markdown
 
 
+def test_standard_report_includes_investigation_threads_for_hidden_paths() -> None:
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/hidden",
+                status_code=200,
+                content_length=42,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-HIDDEN"],
+                tags=[],
+            )
+        ]
+    )
+
+    report = render_standard_interpretation_report(state, [])
+
+    assert report.investigation_thread_count == 1
+    assert "## Investigation Threads" in report.markdown
+    assert "THREAD-0001: Discovered hidden-path review" in report.markdown
+    assert "`EVID-PATH-HIDDEN`" in report.markdown
+
+
 def test_empty_project_state_renders_safe_empty_manual_review_section() -> None:
     state = _project_state()
 
     report = render_standard_interpretation_report(state, [])
 
     assert "## Manual Review Leads" in report.markdown
+    assert "## Investigation Threads" in report.markdown
     assert "No interpretation review leads were generated from the provided evidence." in report.markdown
+    assert "No investigation threads were generated from the provided evidence." in report.markdown
     assert "No vulnerabilities found" not in report.markdown
     assert "target is clean" not in report.markdown.lower()
 
@@ -269,6 +305,7 @@ def test_default_report_rendering_still_omits_manual_review_leads() -> None:
     markdown = render_markdown_report(state, [])
 
     assert "## Manual Review Leads" not in markdown
+    assert "## Investigation Threads" not in markdown
 
 
 def test_helper_does_not_mutate_project_state_or_candidates() -> None:
@@ -326,6 +363,7 @@ def _project_state(
     *,
     http_artifacts: list[HTTPArtifact] | None = None,
     evidence: list[Evidence] | None = None,
+    discovered_paths: list[DiscoveredPath] | None = None,
 ) -> ProjectState:
     return ProjectState(
         project_name="standard-report-test",
@@ -337,7 +375,7 @@ def _project_state(
         endpoints=[],
         port_services=[],
         http_artifacts=http_artifacts or [],
-        discovered_paths=[],
+        discovered_paths=discovered_paths or [],
         recon_summary=None,
         recon_manifest=None,
         evidence=evidence or [],
