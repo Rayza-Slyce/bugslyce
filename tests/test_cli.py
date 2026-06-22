@@ -71,7 +71,7 @@ def test_cli_version_exits_successfully(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exc_info.value.code == 0
-    assert "bugslyce 0.1.0" in captured.out
+    assert "bugslyce 0.2.0" in captured.out
 
 
 def test_cli_help_exits_successfully(capsys) -> None:

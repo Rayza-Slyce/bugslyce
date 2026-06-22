@@ -897,7 +897,7 @@ def _doctor(
     bundled: bool = True,
 ) -> DoctorReport:
     return DoctorReport(
-        bugslyce_version="0.1.0",
+        bugslyce_version="0.2.0",
         python_version="3.12.3",
         python_supported=True,
         virtual_environment=True,

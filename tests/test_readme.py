@@ -60,9 +60,11 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     )
 
     assert "## Current MVP Limitations" in readme
-    assert "## MVP Release Checkpoint" in readme
-    assert "Current version: `0.1.0`" in readme
-    assert "Release tag: `v0.1.0`" in readme
+    assert "## Release Checkpoint" in readme
+    assert "Current version: `0.2.0`" in readme
+    assert "Release tag: `v0.2.0`" in readme
+    assert "Standard Recon v1 profile: `standard-bounded`" in readme
+    assert "Standard scan volume: same bounded 12-step collection path as Quick" in readme
     assert "There is no vulnerability confirmation" in readme
     assert "does not replace human programme-scope review" in readme
 
@@ -98,7 +100,7 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
     assert "docs/DEMO_WALKTHROUGH.md" in readme
 
 
-def test_release_checklist_documents_v010_release_gate() -> None:
+def test_release_checklist_documents_v020_release_gate() -> None:
     root = Path(__file__).resolve().parents[1]
     checklist_path = root / "docs" / "RELEASE_CHECKLIST.md"
     assert checklist_path.is_file()
@@ -106,15 +108,19 @@ def test_release_checklist_documents_v010_release_gate() -> None:
     checklist = checklist_path.read_text(encoding="utf-8")
     lowered = checklist.lower()
     for expected in (
-        "v0.1.0",
+        "v0.2.0",
         ".venv/bin/pytest",
         "bugslyce doctor",
         "lab-safe-tiny",
+        "standard-bounded",
+        "Manual Review Leads",
         "--resume",
-        "git tag v0.1.0",
+        "git tag v0.2.0",
+        "Deep Recon",
     ):
         assert expected in checklist
 
+    assert "context-neutral" in lowered
     assert "brute force" in lowered
     assert "exploitation" in lowered
     assert "private evidence" in lowered

@@ -11,7 +11,7 @@ BugSlyce does not claim confirmed vulnerabilities. Its candidates and
 priorities describe where an operator may want to look next, not exploit
 severity or proof of impact.
 
-Current version: `0.1.0`
+Current version: `0.2.0`
 
 ## Why BugSlyce?
 
@@ -425,11 +425,15 @@ These checks do not start live recon:
 
 The test suite mocks live process execution and must not contact targets.
 
-## MVP Release Checkpoint
+## Release Checkpoint
 
-- Current version: `0.1.0`
-- Main MVP pipeline: `lab-safe-tiny`
-- Release tag: `v0.1.0`
+- Current version: `0.2.0`
+- Quick Recon profile: `lab-safe-tiny`
+- Standard Recon v1 profile: `standard-bounded`
+- Standard report addition: offline `## Manual Review Leads`
+- Standard scan volume: same bounded 12-step collection path as Quick
+- Deep Recon: planned and unavailable
+- Release tag: `v0.2.0`
 - Package publishing: not performed
 
 
