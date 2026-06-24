@@ -553,6 +553,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
 def build_project_runbook(
     project_file: Path,
     clock: Clock | None = None,
+    standard_investigation_workflow_markdown: str | None = None,
 ) -> ProjectRunbookResult:
     """Build a local Markdown runbook from project next-step guidance."""
 
@@ -572,6 +573,7 @@ def build_project_runbook(
         next_result,
         project_file=project_file,
         generated_at=generated_at,
+        standard_investigation_workflow_markdown=standard_investigation_workflow_markdown,
     )
     return ProjectRunbookResult(
         project=next_result.project,
@@ -1070,6 +1072,7 @@ def _render_project_runbook(
     *,
     project_file: Path,
     generated_at: str,
+    standard_investigation_workflow_markdown: str | None = None,
 ) -> str:
     project = result.project
     output_dir = Path(project.output_dir)
@@ -1107,6 +1110,10 @@ def _render_project_runbook(
         result.recommended_action.command_preview,
         "```",
     ]
+    if standard_investigation_workflow_markdown:
+        section = standard_investigation_workflow_markdown.strip()
+        if section:
+            lines.extend(["", section])
     if result.optional_actions:
         lines.extend(["", "## Optional Safe Commands"])
         for action in result.optional_actions:

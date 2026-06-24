@@ -689,3 +689,10 @@ reports start with broader HTTP service context, then discovered content, then
 encoded/source artefact interpretation. This is report workflow ordering only:
 Quick behaviour is unchanged, Standard scan volume is unchanged, live recon
 collection is unchanged, and Deep Recon remains unavailable.
+
+Phase 70A aligns Standard runbooks with Investigation Threads. Standard
+runbooks can surface a concise `## Standard Investigation Workflow` section
+derived from offline Investigation Threads so operators have a practical manual
+workflow alongside the report. This is offline report/runbook alignment only:
+Quick behaviour is unchanged, Standard scan volume is unchanged, live recon
+collection is unchanged, and Deep Recon remains unavailable.

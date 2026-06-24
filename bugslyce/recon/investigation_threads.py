@@ -141,6 +141,69 @@ def render_investigation_threads_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_standard_investigation_workflow_runbook_section(
+    threads: Sequence[InvestigationThread],
+) -> str:
+    """Render a concise Standard-only runbook workflow from investigation threads."""
+
+    lines = [
+        "## Standard Investigation Workflow",
+        "",
+        (
+            "These steps are derived from offline Investigation Threads and are "
+            "manual review prompts, not confirmed findings."
+        ),
+        "",
+    ]
+    if not threads:
+        lines.extend(
+            [
+                (
+                    "No Standard Investigation Threads were generated from the "
+                    "available offline evidence."
+                ),
+                "",
+            ]
+        )
+        return "\n".join(lines).rstrip() + "\n"
+
+    for thread in threads:
+        lines.extend(
+            [
+                f"### {thread.thread_id}: {thread.title}",
+                "",
+                f"* Priority: {thread.priority}",
+                f"* Category: {thread.category}",
+                f"* Summary: {thread.summary}",
+            ]
+        )
+        if thread.related_endpoints:
+            lines.append("* Related endpoints:")
+            lines.extend(f"  * `{endpoint}`" for endpoint in thread.related_endpoints)
+        if thread.related_evidence_ids:
+            lines.append(
+                "* Related evidence IDs: "
+                + ", ".join(f"`{item}`" for item in thread.related_evidence_ids)
+            )
+        if thread.related_lead_ids:
+            lines.append(
+                "* Related Manual Review Lead IDs: "
+                + ", ".join(f"`{item}`" for item in thread.related_lead_ids)
+            )
+        if thread.related_candidate_ids:
+            lines.append(
+                "* Related candidate IDs: "
+                + ", ".join(f"`{item}`" for item in thread.related_candidate_ids)
+            )
+        if thread.suggested_manual_review_order:
+            lines.append("* Suggested manual review order:")
+            lines.extend(f"  * {step}" for step in thread.suggested_manual_review_order)
+        if thread.kill_switch_guidance:
+            lines.append(f"* Kill-switch guidance: {thread.kill_switch_guidance}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _high_port_http_thread(
     project_state: ProjectState,
     candidates: Sequence[Candidate],

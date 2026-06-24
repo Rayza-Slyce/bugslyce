@@ -115,6 +115,77 @@ def test_completed_project_runbook_includes_manual_review_and_export(
     assert "recon export" in result.content
 
 
+def test_runbook_default_omits_standard_investigation_workflow(
+    tmp_path: Path,
+) -> None:
+    scaffold = scaffold_project("quick-runbook", "10.10.10.10", tmp_path / "projects")
+
+    result = build_project_runbook(
+        Path(scaffold.project_file),
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert "## Standard Investigation Workflow" not in result.content
+
+
+def test_runbook_can_insert_standard_investigation_workflow_after_next_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    scaffold = scaffold_project("standard-runbook", "10.10.10.10", tmp_path / "projects")
+    from bugslyce import project_session
+
+    original = project_session.build_project_next(Path(scaffold.project_file))
+    optional = project_session.GuidedProjectAction(
+        id="optional-export",
+        title="Optional export.",
+        command_preview="bugslyce recon export --help",
+        optional=True,
+    )
+    monkeypatch.setattr(
+        project_session,
+        "build_project_next",
+        lambda path: project_session.ProjectNextResult(
+            project=original.project,
+            project_file=original.project_file,
+            recon_pack_exists=original.recon_pack_exists,
+            status_summary=original.status_summary,
+            recommended_action=original.recommended_action,
+            optional_actions=[optional],
+        ),
+    )
+    workflow = "\n".join(
+        [
+            "## Standard Investigation Workflow",
+            "",
+            (
+                "These steps are derived from offline Investigation Threads and "
+                "are manual review prompts, not confirmed findings."
+            ),
+            "",
+            "### THREAD-0001: High-port HTTP application review",
+            "",
+            "* Priority: medium",
+            "* Kill-switch guidance: Stop if the service is generic.",
+        ]
+    )
+
+    result = build_project_runbook(
+        Path(scaffold.project_file),
+        clock=lambda: FIXED_TIME,
+        standard_investigation_workflow_markdown=workflow,
+    )
+
+    assert "## Standard Investigation Workflow" in result.content
+    assert "THREAD-0001: High-port HTTP application review" in result.content
+    assert result.content.index("## Suggested Next Command") < result.content.index(
+        "## Standard Investigation Workflow"
+    )
+    assert result.content.index("## Standard Investigation Workflow") < result.content.index(
+        "## Optional Safe Commands"
+    )
+
+
 @pytest.mark.parametrize("payload", [None, "{bad"])
 def test_cli_runbook_refuses_missing_or_malformed_project(
     tmp_path: Path,

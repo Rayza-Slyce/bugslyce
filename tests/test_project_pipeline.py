@@ -242,6 +242,24 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     progress: list[str] = []
+    runbook_sections: list[str | None] = []
+
+    def fake_build_project_runbook(
+        project_file_arg,
+        clock=None,
+        standard_investigation_workflow_markdown=None,
+    ):
+        calls.append("runbook")
+        runbook_sections.append(standard_investigation_workflow_markdown)
+        return SimpleNamespace(
+            runbook_path=str(output_dir / "runbook.md"),
+            content=standard_investigation_workflow_markdown or "",
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_runbook",
+        fake_build_project_runbook,
+    )
 
     result = run_project_pipeline(
         project_file,
@@ -278,6 +296,7 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert result.report_path == str(output_dir / "report.md")
     assert result.runbook_path == str(output_dir / "runbook.md")
     assert result.export_path == f"{output_dir}-evidence-pack.zip"
+    assert runbook_sections == [None]
     assert "[1/12] environment and project validation starting..." in progress
     assert "[12/12] evidence pack export complete" in progress
 
@@ -347,6 +366,28 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         "bugslyce.project_pipeline.render_investigation_threads_markdown",
         lambda threads: "",
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
+        lambda threads: "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
+    )
+    runbook_sections: list[str | None] = []
+
+    def fake_build_project_runbook(
+        project_file_arg,
+        clock=None,
+        standard_investigation_workflow_markdown=None,
+    ):
+        calls.append("runbook")
+        runbook_sections.append(standard_investigation_workflow_markdown)
+        return SimpleNamespace(
+            runbook_path=str(output_dir / "runbook.md"),
+            content=standard_investigation_workflow_markdown or "",
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_runbook",
+        fake_build_project_runbook,
+    )
 
     def fake_write_project_outputs(
         state,
@@ -412,6 +453,9 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
     assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
     assert "not proof of vulnerability" in report
+    assert runbook_sections == [
+        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n"
+    ]
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     assert payload["profile"] == STANDARD_PIPELINE_PROFILE
 

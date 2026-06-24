@@ -13,6 +13,7 @@ from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
     render_investigation_threads_markdown,
+    render_standard_investigation_workflow_runbook_section,
 )
 
 
@@ -198,6 +199,72 @@ def test_thread_order_and_ids_are_deterministic() -> None:
     assert markdown.index("### THREAD-0002: Discovered hidden-path review") < markdown.index(
         "### THREAD-0003: Encoded or source artefact review"
     )
+
+
+def test_runbook_workflow_renderer_preserves_thread_order_and_core_fields() -> None:
+    threads = build_investigation_threads(
+        _project_state(
+            http_services=[
+                HTTPService(
+                    url="http://example.test:8080/",
+                    hostname="example.test",
+                    status_code=200,
+                    title=None,
+                    technologies=[],
+                    content_length=None,
+                    evidence_ids=["EVID-SVC"],
+                    tags=[],
+                )
+            ],
+            discovered_paths=[
+                DiscoveredPath(
+                    url="http://example.test/admin",
+                    status_code=200,
+                    content_length=None,
+                    redirect_location=None,
+                    source="gobuster",
+                    evidence_ids=["EVID-PATH"],
+                    tags=[],
+                )
+            ],
+        ),
+        candidates=[
+            _candidate(
+                "CAND-ENC",
+                "encoded_artifact_review",
+                endpoints=["http://example.test/admin"],
+                evidence_ids=["EVID-CAND-ENC"],
+            )
+        ],
+        review_leads=[
+            _lead(
+                "LEAD-0001",
+                category="html_source",
+                lead_type="possible_transform",
+                priority="high",
+                related_artefact_types=("possible_base64",),
+            )
+        ],
+    )
+
+    markdown = render_standard_investigation_workflow_runbook_section(threads)
+    empty = render_standard_investigation_workflow_runbook_section(())
+
+    assert markdown.startswith("## Standard Investigation Workflow")
+    assert "manual review prompts, not confirmed findings" in markdown
+    assert markdown.index("### THREAD-0001: High-port HTTP application review") < markdown.index(
+        "### THREAD-0002: Discovered hidden-path review"
+    )
+    assert markdown.index("### THREAD-0002: Discovered hidden-path review") < markdown.index(
+        "### THREAD-0003: Encoded or source artefact review"
+    )
+    assert "* Related endpoints:" in markdown
+    assert "`EVID-SVC`" in markdown
+    assert "`LEAD-0001`" in markdown
+    assert "`CAND-ENC`" in markdown
+    assert "* Suggested manual review order:" in markdown
+    assert "* Kill-switch guidance:" in markdown
+    assert "No Standard Investigation Threads were generated" in empty
 
 
 def test_renderer_includes_core_thread_fields_and_empty_state() -> None:

@@ -45,6 +45,7 @@ from bugslyce.recon.http_metadata import (
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
     render_investigation_threads_markdown,
+    render_standard_investigation_workflow_runbook_section,
 )
 from bugslyce.recon.modes import QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
@@ -955,7 +956,16 @@ def _step_runners(
         )
 
     def runbook():
-        result = build_project_runbook(project_file, clock=clock)
+        result = build_project_runbook(
+            project_file,
+            clock=clock,
+            standard_investigation_workflow_markdown=(
+                _build_standard_investigation_runbook_section_if_needed(
+                    profile,
+                    output_dir,
+                )
+            ),
+        )
         runbook_path = write_project_runbook(result)
         return (
             "Project runbook generated.",
@@ -1013,6 +1023,23 @@ def _write_standard_interpretation_report_if_needed(
         investigation_threads_markdown=render_investigation_threads_markdown(threads),
     )
     return [str(report_path), str(json_path)]
+
+
+def _build_standard_investigation_runbook_section_if_needed(
+    profile: str,
+    output_dir: Path,
+) -> str | None:
+    if profile != STANDARD_PIPELINE_PROFILE:
+        return None
+    project_state = build_project_state(output_dir)
+    candidates = generate_candidates(project_state)
+    assembly = assemble_standard_interpretation_from_project_state(project_state)
+    threads = build_investigation_threads(
+        project_state,
+        candidates,
+        assembly.review_leads,
+    )
+    return render_standard_investigation_workflow_runbook_section(threads)
 
 
 def _failed_result(
