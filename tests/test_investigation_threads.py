@@ -57,6 +57,10 @@ def test_high_port_http_and_multiple_services_generate_one_thread() -> None:
     assert thread.thread_id == "THREAD-0001"
     assert thread.title == "High-port HTTP application review"
     assert thread.priority == "medium"
+    assert (
+        thread.summary
+        == "A non-default HTTP port or multiple HTTP services may indicate a separate application surface."
+    )
     assert "http://example.test:8080/" in thread.related_endpoints
     assert "EVID-SVC-8080" in thread.related_evidence_ids
     assert "CAND-HP" in thread.related_candidate_ids
@@ -85,6 +89,10 @@ def test_hidden_path_evidence_generates_hidden_path_thread() -> None:
     assert thread.thread_id == "THREAD-0001"
     assert thread.title == "Discovered hidden-path review"
     assert thread.category == "discovered_content"
+    assert (
+        thread.summary
+        == "Hidden-looking discovered paths may deserve bounded manual review when linked to stronger context."
+    )
     assert thread.related_endpoints == ("http://example.test/hidden",)
     assert thread.related_evidence_ids == ("EVID-PATH-HIDDEN",)
     assert "Review the collected response for the discovered path." in (
@@ -120,6 +128,10 @@ def test_encoded_or_source_evidence_generates_artefact_thread() -> None:
     assert thread.thread_id == "THREAD-0001"
     assert thread.title == "Encoded or source artefact review"
     assert thread.category == "artefact_interpretation"
+    assert (
+        thread.summary
+        == "Encoded-looking, hash-shaped, or source-level artefacts should be reviewed after their surrounding service and path context."
+    )
     assert "EVID-ART-ENC" in thread.related_evidence_ids
     assert "LEAD-0001" in thread.related_lead_ids
     assert "Do not submit artefacts to online decoders or hash databases automatically." in (
@@ -172,7 +184,20 @@ def test_thread_order_and_ids_are_deterministic() -> None:
         "THREAD-0002",
         "THREAD-0003",
     ]
-    assert first[0].title == "Encoded or source artefact review"
+    assert [thread.title for thread in first] == [
+        "High-port HTTP application review",
+        "Discovered hidden-path review",
+        "Encoded or source artefact review",
+    ]
+    assert first[2].priority == "high"
+
+    markdown = render_investigation_threads_markdown(first)
+    assert markdown.index("### THREAD-0001: High-port HTTP application review") < markdown.index(
+        "### THREAD-0002: Discovered hidden-path review"
+    )
+    assert markdown.index("### THREAD-0002: Discovered hidden-path review") < markdown.index(
+        "### THREAD-0003: Encoded or source artefact review"
+    )
 
 
 def test_renderer_includes_core_thread_fields_and_empty_state() -> None:

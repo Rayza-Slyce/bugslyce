@@ -683,3 +683,9 @@ or source artefact review.
 This improves operator workflow without changing live recon collection. Quick
 behaviour is unchanged, Standard scan volume is unchanged, and Deep Recon
 remains unavailable.
+
+Phase 69B polishes the default Investigation Threads ordering so Standard
+reports start with broader HTTP service context, then discovered content, then
+encoded/source artefact interpretation. This is report workflow ordering only:
+Quick behaviour is unchanged, Standard scan volume is unchanged, live recon
+collection is unchanged, and Deep Recon remains unavailable.

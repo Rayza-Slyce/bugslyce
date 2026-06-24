@@ -11,6 +11,11 @@ from bugslyce.recon.interpretation import ReviewLead
 
 
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+THREAD_CATEGORY_ORDER = {
+    "http_service": 0,
+    "discovered_content": 1,
+    "artefact_interpretation": 2,
+}
 HIDDEN_PATH_WORDS = (
     "hidden",
     "secret",
@@ -177,7 +182,10 @@ def _high_port_http_thread(
         title="High-port HTTP application review",
         priority=_highest_priority([*(item.priority for item in related_candidates), "medium"]),
         category="http_service",
-        summary="High-port or multi-service HTTP evidence may represent a separate application surface.",
+        summary=(
+            "A non-default HTTP port or multiple HTTP services may indicate a "
+            "separate application surface."
+        ),
         why_it_matters=(
             "Different HTTP ports on the same host can expose distinct application "
             "contexts, configuration, or review signals."
@@ -224,7 +232,10 @@ def _hidden_path_thread(
         title="Discovered hidden-path review",
         priority=_highest_priority([*(item.priority for item in related_candidates), "medium"]),
         category="discovered_content",
-        summary="Hidden-looking discovered paths may deserve bounded manual review.",
+        summary=(
+            "Hidden-looking discovered paths may deserve bounded manual review "
+            "when linked to stronger context."
+        ),
         why_it_matters="Hidden-looking paths can concentrate useful context, but many are generic noise.",
         related_endpoints=_unique_sorted(endpoints),
         related_evidence_ids=_unique_sorted(evidence_ids),
@@ -277,7 +288,10 @@ def _encoded_or_source_thread(
             [*(item.priority for item in related_candidates), *(lead.priority for lead in related_leads), "medium"]
         ),
         category="artefact_interpretation",
-        summary="Encoded-looking, hash-shaped, or source-level artefacts may form a manual review chain.",
+        summary=(
+            "Encoded-looking, hash-shaped, or source-level artefacts should be "
+            "reviewed after their surrounding service and path context."
+        ),
         why_it_matters=(
             "Source and transform signals are review prompts that need local "
             "validation and correlation before any claim."
@@ -327,8 +341,8 @@ def _thread_sort_key(draft: _ThreadDraft) -> tuple[object, ...]:
         else ""
     )
     return (
+        THREAD_CATEGORY_ORDER.get(draft.category, 99),
         PRIORITY_ORDER.get(draft.priority, 99),
-        draft.category,
         draft.title,
         first_context,
     )
