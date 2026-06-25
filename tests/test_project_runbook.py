@@ -41,6 +41,7 @@ def test_runbook_writes_inside_project_with_no_recon_next_step(
     assert "Generated at: `2026-06-15T09:30:00Z`" in content
     assert "* Name: runbook-test" in content
     assert "* Target: 10.10.10.10" in content
+    assert "* Engagement context: Unknown / not specified" in content
     assert f"* Scope file: `{scope_file.resolve()}`" in content
     assert "This runbook does not grant authorisation." in content
     assert "* Recon pack exists: false" in content

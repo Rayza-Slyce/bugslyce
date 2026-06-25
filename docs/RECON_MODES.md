@@ -696,3 +696,9 @@ derived from offline Investigation Threads so operators have a practical manual
 workflow alongside the report. This is offline report/runbook alignment only:
 Quick behaviour is unchanged, Standard scan volume is unchanged, live recon
 collection is unchanged, and Deep Recon remains unavailable.
+
+Phase 71A adds project-level engagement context metadata. Supported stored
+values are `unknown`, `ctf_lab`, `bug_bounty`, and `internal_authorised`.
+This prepares future Standard interpretation for context-aware wording while
+leaving Quick collection, Standard scan volume, live recon collection, and Deep
+availability unchanged.

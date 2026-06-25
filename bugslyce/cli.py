@@ -15,6 +15,7 @@ from bugslyce.config import (
     render_config_show,
     reset_config,
 )
+from bugslyce.core.engagement_context import ALLOWED_ENGAGEMENT_CONTEXTS
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
 from bugslyce.interactive import run_interactive_launcher
@@ -243,6 +244,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite an existing bugslyce_project.json file.",
     )
+    project_init_parser.add_argument(
+        "--engagement-context",
+        choices=ALLOWED_ENGAGEMENT_CONTEXTS,
+        default="unknown",
+        help="Engagement context metadata for this project.",
+    )
     project_scaffold_parser = project_subparsers.add_parser(
         "scaffold",
         help="Create a local project directory and starter scope template.",
@@ -263,6 +270,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Replace only existing BugSlyce scaffold files when safe.",
+    )
+    project_scaffold_parser.add_argument(
+        "--engagement-context",
+        choices=ALLOWED_ENGAGEMENT_CONTEXTS,
+        default="unknown",
+        help="Engagement context metadata for this project.",
     )
     project_list_parser = project_subparsers.add_parser(
         "list",
@@ -787,6 +800,7 @@ def _project(args: argparse.Namespace) -> int:
                 scope_file=args.scope_file,
                 output_dir=args.output_dir,
                 force=args.force,
+                engagement_context=args.engagement_context,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -803,6 +817,7 @@ def _project(args: argparse.Namespace) -> int:
                 target=args.target,
                 projects_dir=args.projects_dir,
                 force=args.force,
+                engagement_context=args.engagement_context,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)

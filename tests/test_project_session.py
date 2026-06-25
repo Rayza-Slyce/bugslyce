@@ -9,6 +9,7 @@ import shutil
 
 import pytest
 
+from bugslyce.core.engagement_context import engagement_context_label, normalise_engagement_context
 from bugslyce.cli import main
 from bugslyce.project_session import (
     PROJECT_FILENAME,
@@ -49,6 +50,7 @@ def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path)
     assert payload["output_dir"] == str(output_dir.resolve())
     assert payload["created_by"] == "bugslyce"
     assert payload["created_at"] == "2026-06-14T13:45:12Z"
+    assert payload["engagement_context"] == "unknown"
     assert payload["default_profiles"] == {
         "tcp_discovery": "lab-tcp-full",
         "content_discovery_smoke": "lab-root-tiny",
@@ -56,6 +58,54 @@ def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path)
     }
     assert payload["notes"] == []
     assert project.target == payload["target"]
+    assert project.engagement_context == "unknown"
+
+
+def test_project_init_accepts_and_labels_engagement_context(tmp_path: Path) -> None:
+    scope = _scope_file(tmp_path)
+
+    project, project_path = initialize_project(
+        "context-test",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert project.engagement_context == "bug_bounty"
+    assert payload["engagement_context"] == "bug_bounty"
+    assert engagement_context_label(project.engagement_context) == "Bug bounty"
+
+
+def test_project_load_defaults_missing_or_invalid_engagement_context(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path)
+    _project, project_path = initialize_project(
+        "legacy-test",
+        "10.10.10.10",
+        scope,
+        tmp_path / "output",
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+
+    payload.pop("engagement_context")
+    project_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_project(project_path).engagement_context == "unknown"
+
+    payload["engagement_context"] = "invalid"
+    project_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_project(project_path).engagement_context == "unknown"
+
+
+def test_engagement_context_helpers_are_conservative() -> None:
+    assert normalise_engagement_context(None) == "unknown"
+    assert normalise_engagement_context("ctf-lab") == "ctf_lab"
+    assert normalise_engagement_context("internal_authorised") == "internal_authorised"
+    assert normalise_engagement_context("surprise") == "unknown"
+    assert engagement_context_label("ctf_lab") == "CTF / lab / TryHackMe"
+    assert engagement_context_label("surprise") == "Unknown / not specified"
 
 
 @pytest.mark.parametrize("name", ["../escape", "bad/name", "bad name", "", "."])
@@ -184,6 +234,7 @@ def test_project_show_prints_saved_details(tmp_path: Path, capsys) -> None:
     assert "BugSlyce project" in captured.out
     assert "Name: show-test" in captured.out
     assert "Target: 10.10.10.10" in captured.out
+    assert "Engagement context: Unknown / not specified" in captured.out
     assert f"Scope file: {scope.resolve()}" in captured.out
     assert "Created at: 2026-06-14T13:45:12Z" in captured.out
     assert "No commands were executed." in captured.out
@@ -211,6 +262,7 @@ def test_project_status_handles_output_without_recon_manifest(
     assert "No recon pack exists yet" in result.next_action
     assert exit_code == 0
     assert "Recon pack exists: false" in captured.out
+    assert "Engagement context: Unknown / not specified" in captured.out
     assert "Recommended first safe action" in captured.out
     assert "No commands were executed." in captured.out
 

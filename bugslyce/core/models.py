@@ -613,6 +613,7 @@ class ProjectState:
     evidence: list[Evidence]
     warnings: list[str]
     generated_at: str
+    engagement_context: str = "unknown"
 
 
 @dataclass(frozen=True)

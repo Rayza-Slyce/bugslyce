@@ -43,6 +43,7 @@ def test_scaffold_creates_scope_and_project_files(tmp_path: Path) -> None:
     assert payload["scope_file"] == str(scope_file.resolve())
     assert payload["output_dir"] == str(project_dir.resolve())
     assert payload["created_by"] == "bugslyce"
+    assert payload["engagement_context"] == "unknown"
     assert payload["default_profiles"]["content_discovery_smoke"] == "lab-root-tiny"
     assert payload["notes"] == []
 
@@ -198,11 +199,41 @@ def test_cli_scaffold_prints_safe_summary_and_next_preview(
 
     assert exit_code == 0
     assert "BugSlyce project scaffold created" in captured.out
+    assert "Engagement context: Unknown / not specified" in captured.out
     assert "Review scope.md before running recon." in captured.out
     assert "Suggested command preview:" in captured.out
     assert f"bugslyce project next --project {project_file.resolve()}" in captured.out
     assert "No commands were executed." in captured.out
     assert "No network requests were made." in captured.out
+
+
+def test_cli_scaffold_accepts_engagement_context(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    projects_dir = tmp_path / "projects"
+
+    exit_code = main(
+        [
+            "project",
+            "scaffold",
+            "--name",
+            "cli-context",
+            "--target",
+            "10.10.10.10",
+            "--projects-dir",
+            str(projects_dir),
+            "--engagement-context",
+            "internal_authorised",
+        ]
+    )
+    captured = capsys.readouterr()
+    project_file = projects_dir / "cli-context" / PROJECT_FILENAME
+    payload = json.loads(project_file.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert payload["engagement_context"] == "internal_authorised"
+    assert "Engagement context: Internal authorised assessment" in captured.out
 
 
 def test_project_scaffold_help_exists(capsys) -> None:
@@ -216,3 +247,4 @@ def test_project_scaffold_help_exists(capsys) -> None:
     assert "--target" in captured.out
     assert "--projects-dir" in captured.out
     assert "--force" in captured.out
+    assert "--engagement-context" in captured.out

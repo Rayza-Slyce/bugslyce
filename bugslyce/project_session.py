@@ -10,6 +10,11 @@ import re
 import shlex
 from urllib.parse import urlparse
 
+from bugslyce.core.engagement_context import (
+    UNKNOWN_CONTEXT,
+    engagement_context_label,
+    normalise_engagement_context,
+)
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.status import (
     ReconStatusResult,
@@ -46,6 +51,7 @@ class BugSlyceProject:
     created_by: str
     default_profiles: dict[str, str]
     created_at: str | None
+    engagement_context: str = UNKNOWN_CONTEXT
     notes: list[str] = field(default_factory=list)
 
 
@@ -132,6 +138,7 @@ def initialize_project(
     output_dir: Path,
     force: bool = False,
     clock: Clock | None = None,
+    engagement_context: str | None = None,
 ) -> tuple[BugSlyceProject, Path]:
     """Validate and write one local project file."""
 
@@ -141,6 +148,7 @@ def initialize_project(
             "Project name may contain only letters, numbers, dash, and underscore."
         )
     normalized_target = _validate_target(target)
+    normalized_engagement_context = normalise_engagement_context(engagement_context)
     scope_file = scope_file.expanduser().resolve()
     if not scope_file.is_file():
         raise ValueError(f"Scope file does not exist: {scope_file}")
@@ -165,6 +173,7 @@ def initialize_project(
         created_by="bugslyce",
         default_profiles=dict(DEFAULT_PROFILES),
         created_at=utc_now_iso(clock),
+        engagement_context=normalized_engagement_context,
         notes=[],
     )
     project_path.write_text(
@@ -180,6 +189,7 @@ def scaffold_project(
     projects_dir: Path,
     force: bool = False,
     clock: Clock | None = None,
+    engagement_context: str | None = None,
 ) -> ProjectScaffoldResult:
     """Create a conservative scope template and matching project file."""
 
@@ -189,6 +199,7 @@ def scaffold_project(
             "Project name may contain only letters, numbers, dash, and underscore."
         )
     normalized_target = _validate_target(target)
+    normalized_engagement_context = normalise_engagement_context(engagement_context)
     projects_dir = projects_dir.expanduser().resolve()
     if projects_dir.exists() and not projects_dir.is_dir():
         raise ValueError(f"Projects path is not a directory: {projects_dir}")
@@ -230,6 +241,7 @@ def scaffold_project(
         output_dir=project_dir,
         force=force,
         clock=clock,
+        engagement_context=normalized_engagement_context,
     )
     return ProjectScaffoldResult(
         project=project,
@@ -337,6 +349,7 @@ def load_project(project_file: Path) -> BugSlyceProject:
         created_by=_required_text(payload, "created_by"),
         default_profiles=dict(raw_profiles),
         created_at=_optional_text(payload.get("created_at")),
+        engagement_context=normalise_engagement_context(payload.get("engagement_context")),
         notes=list(raw_notes),
     )
 
@@ -605,6 +618,7 @@ def render_project_init_summary(project: BugSlyceProject, project_path: Path) ->
             "BugSlyce project initialized",
             f"Name: {project.name}",
             f"Target: {project.target}",
+            f"Engagement context: {engagement_context_label(project.engagement_context)}",
             f"Scope file: {project.scope_file}",
             f"Output directory: {project.output_dir}",
             f"Project file path: {project_path}",
@@ -627,6 +641,7 @@ def render_project_scaffold_summary(
         "BugSlyce project scaffold created",
         f"Name: {result.project.name}",
         f"Target: {result.project.target}",
+        f"Engagement context: {engagement_context_label(result.project.engagement_context)}",
         f"Project directory: {result.project_directory}",
         f"Scope file: {result.scope_file}",
         f"Project file: {result.project_file}",
@@ -722,6 +737,7 @@ def render_project_runbook_summary(result: ProjectRunbookResult) -> str:
             "BugSlyce project runbook written",
             f"Project name: {result.project.name}",
             f"Target: {result.project.target}",
+            f"Engagement context: {engagement_context_label(result.project.engagement_context)}",
             f"Runbook path: {result.runbook_path}",
             "No commands were executed.",
             "No network requests were made.",
@@ -742,6 +758,7 @@ def render_project_show(project: BugSlyceProject, project_file: Path) -> str:
             f"Schema version: {project.schema_version}",
             f"Name: {project.name}",
             f"Target: {project.target}",
+            f"Engagement context: {engagement_context_label(project.engagement_context)}",
             f"Scope file: {project.scope_file}",
             f"Output directory: {project.output_dir}",
             f"Created by: {project.created_by}",
@@ -761,6 +778,7 @@ def render_project_status(result: ProjectStatusResult) -> str:
         "BugSlyce project status",
         f"Name: {result.project.name}",
         f"Target: {result.project.target}",
+        f"Engagement context: {engagement_context_label(result.project.engagement_context)}",
         f"Project file: {result.project_file}",
         f"Scope file: {result.project.scope_file}",
         f"Output directory: {result.project.output_dir}",
@@ -795,6 +813,7 @@ def render_project_next(result: ProjectNextResult) -> str:
         "BugSlyce guided next step",
         f"Project name: {result.project.name}",
         f"Target: {result.project.target}",
+        f"Engagement context: {engagement_context_label(result.project.engagement_context)}",
         f"Recon pack exists: {str(result.recon_pack_exists).lower()}",
         f"Current status summary: {result.status_summary}",
         "",
@@ -1085,6 +1104,7 @@ def _render_project_runbook(
         "",
         f"* Name: {project.name}",
         f"* Target: {project.target}",
+        f"* Engagement context: {engagement_context_label(project.engagement_context)}",
         f"* Scope file: `{project.scope_file}`",
         f"* Output directory: `{project.output_dir}`",
         f"* Project file: `{project_file}`",

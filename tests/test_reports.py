@@ -33,6 +33,26 @@ def test_markdown_report_renders_for_basic_saas() -> None:
     assert report.startswith("# BugSlyce Recon Pack")
     assert "basic_saas" in report
     assert f"Generated at: `{_state.generated_at}`" in report
+    assert "- Engagement context: Unknown / not specified" in report
+
+
+def test_report_includes_project_engagement_context(tmp_path: Path) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n* 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "bugslyce_project.json").write_text(
+        json.dumps({"engagement_context": "bug_bounty"}),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(input_dir)
+    report = render_markdown_report(state, [])
+
+    assert state.engagement_context == "bug_bounty"
+    assert "- Engagement context: Bug bounty" in report
 
 
 def test_markdown_report_includes_required_sections() -> None:

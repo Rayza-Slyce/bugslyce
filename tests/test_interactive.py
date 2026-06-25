@@ -66,7 +66,7 @@ def test_launcher_auth_abort_creates_nothing(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setattr("bugslyce.interactive.scaffold_project", fail_scaffold)
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "1", "no", ""])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "no", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -94,7 +94,7 @@ def test_launcher_lowercase_yes_retries_and_exact_yes_confirms(
         or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "2", "yes", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "2", "yes", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -119,7 +119,7 @@ def test_launcher_invalid_target_retries_then_accepts_ipv4(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10", "10.10.10.10", "projects", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10", "10.10.10.10", "projects", "", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -185,7 +185,7 @@ def test_launcher_accepts_simple_urls_and_normalises_target(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", target_input, "projects", "2", "YES"])
+    inputs = iter(["1", "demo", target_input, "projects", "", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -242,7 +242,7 @@ def test_deep_recon_retries_until_available_choice(
         lambda **kwargs: _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "4", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "4", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -276,7 +276,7 @@ def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(
         lambda *args, **kwargs: pytest.fail("pipeline must not run"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -315,7 +315,7 @@ def test_start_new_project_default_projects_dir_uses_home_level_output(
     monkeypatch.setattr("bugslyce.interactive.scaffold_project", fake_scaffold)
     output: list[str] = []
     prompts: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "", "", "2", "YES"])
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
@@ -355,7 +355,7 @@ def test_start_new_project_custom_projects_dir_still_resolves_from_cwd(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "custom-output", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "custom-output", "", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -367,6 +367,39 @@ def test_start_new_project_custom_projects_dir_still_resolves_from_cwd(
     assert exit_code == 0
     assert received["projects_dir"] == expected_projects_dir
     assert f"* Projects directory: {expected_projects_dir}" in rendered
+
+
+def test_start_new_project_accepts_engagement_context_choice(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    prompts: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "2", "2", "YES"])
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(inputs)
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    rendered_prompts = "\n".join(prompts)
+    assert exit_code == 0
+    assert received["engagement_context"] == "ctf_lab"
+    assert "Engagement context:" in rendered_prompts
+    assert "CTF / lab / TryHackMe" in rendered_prompts
+    assert "* Engagement context: CTF / lab / TryHackMe" in rendered
 
 
 def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:
@@ -387,7 +420,7 @@ def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None
         lambda result: "PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "1", "YES", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -424,7 +457,7 @@ def test_standard_recon_run_now_calls_standard_pipeline(
         lambda result: "STANDARD PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "YES", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "3", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -464,7 +497,7 @@ def test_quick_recon_run_now_uses_resolved_home_project_file(
         lambda result: "PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "", "1", "YES", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "", "", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -497,7 +530,7 @@ def test_quick_recon_no_run_shows_command_preview(
         lambda *args, **kwargs: pytest.fail("pipeline must not run"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "1", "YES", "no", ""])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "no", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -529,7 +562,7 @@ def test_standard_recon_no_run_shows_standard_command_preview(
         lambda *args, **kwargs: pytest.fail("pipeline must not run"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "3", "YES", ""])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "3", "YES", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -826,7 +859,11 @@ def test_interactive_module_has_no_direct_execution_apis() -> None:
 
 def _scaffold_result(project_file: Path) -> SimpleNamespace:
     return SimpleNamespace(
-        project=SimpleNamespace(name="demo", target="10.10.10.10"),
+        project=SimpleNamespace(
+            name="demo",
+            target="10.10.10.10",
+            engagement_context="unknown",
+        ),
         project_directory=str(project_file.parent),
         scope_file=str(project_file.parent / "scope.md"),
         project_file=str(project_file),

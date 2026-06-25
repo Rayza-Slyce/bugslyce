@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Callable
 
 from bugslyce.branding import get_banner
+from bugslyce.core.engagement_context import (
+    BUG_BOUNTY_CONTEXT,
+    CTF_LAB_CONTEXT,
+    INTERNAL_AUTHORISED_CONTEXT,
+    UNKNOWN_CONTEXT,
+    engagement_context_label,
+)
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
@@ -143,12 +150,22 @@ def _start_new_project(
         print_func("No network requests were made.")
         return 2
     projects_dir = _prompt_projects_dir(input_func, cwd)
+    engagement_context = _prompt_engagement_context(input_func)
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
 
     print_func("")
-    print_func(_render_project_summary(name, target, projects_dir, profile, target_input))
+    print_func(
+        _render_project_summary(
+            name,
+            target,
+            projects_dir,
+            profile,
+            target_input,
+            engagement_context,
+        )
+    )
     print_func("")
     print_func(f"BugSlyce will prepare recon for: {target}")
     print_func(
@@ -168,7 +185,12 @@ def _start_new_project(
         return 2
 
     try:
-        scaffold = scaffold_project(name=name, target=target, projects_dir=projects_dir)
+        scaffold = scaffold_project(
+            name=name,
+            target=target,
+            projects_dir=projects_dir,
+            engagement_context=engagement_context,
+        )
         print_func(
             render_project_scaffold_summary(
                 scaffold,
@@ -358,12 +380,36 @@ def _prompt_projects_dir(input_func: InputFunc, cwd: Path) -> Path:
     return _resolve_prompt_path(value, cwd)
 
 
+def _prompt_engagement_context(input_func: InputFunc) -> str:
+    value = input_func(
+        "\n".join(
+            [
+                "Engagement context:",
+                f"1. {engagement_context_label(UNKNOWN_CONTEXT)}",
+                f"2. {engagement_context_label(CTF_LAB_CONTEXT)}",
+                f"3. {engagement_context_label(BUG_BOUNTY_CONTEXT)}",
+                f"4. {engagement_context_label(INTERNAL_AUTHORISED_CONTEXT)}",
+                "Press Enter to use default: Unknown / not specified",
+                "Choose engagement context: ",
+            ]
+        )
+    ).strip()
+    return {
+        "": UNKNOWN_CONTEXT,
+        "1": UNKNOWN_CONTEXT,
+        "2": CTF_LAB_CONTEXT,
+        "3": BUG_BOUNTY_CONTEXT,
+        "4": INTERNAL_AUTHORISED_CONTEXT,
+    }.get(value, UNKNOWN_CONTEXT)
+
+
 def _render_project_summary(
     name: str,
     target: str,
     projects_dir: Path,
     profile: str | None,
     target_input: str | None = None,
+    engagement_context: str | None = None,
 ) -> str:
     mode = _profile_display_name(profile) if profile is not None else MANUAL_SETUP_LABEL
     lines = [
@@ -375,6 +421,7 @@ def _render_project_summary(
     lines.extend(
         [
             f"* Target: {target}",
+            f"* Engagement context: {engagement_context_label(engagement_context)}",
             f"* Projects directory: {projects_dir}",
             f"* Project directory: {projects_dir / name}",
             f"* Recon mode: {mode}",

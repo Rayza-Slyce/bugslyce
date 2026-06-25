@@ -6,9 +6,11 @@ from collections import defaultdict
 from collections.abc import Callable
 import ipaddress
 from pathlib import Path
+import json
 from urllib.parse import urlparse
 import warnings as warnings_module
 
+from bugslyce.core.engagement_context import normalise_engagement_context
 from bugslyce.core.models import (
     Asset,
     Endpoint,
@@ -41,6 +43,7 @@ def build_project_state(input_dir: Path) -> ProjectState:
 
     warnings: list[str] = []
     processed_files: list[str] = []
+    engagement_context = _load_project_engagement_context(input_dir, processed_files, warnings)
 
     manifest = _load_manifest(input_dir, processed_files, warnings)
     scope_path = input_dir / (manifest.scope_file if manifest and manifest.scope_file else "scope.md")
@@ -242,7 +245,28 @@ def build_project_state(input_dir: Path) -> ProjectState:
         evidence=evidence,
         warnings=warnings,
         generated_at=utc_now_iso(),
+        engagement_context=engagement_context,
     )
+
+
+def _load_project_engagement_context(
+    input_dir: Path,
+    processed_files: list[str],
+    warnings: list[str],
+) -> str:
+    path = input_dir / "bugslyce_project.json"
+    if not path.exists():
+        return normalise_engagement_context(None)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        warnings.append(f"Could not parse project metadata for engagement context: {exc}")
+        return normalise_engagement_context(None)
+    processed_files.append(str(path))
+    if not isinstance(payload, dict):
+        warnings.append("Project metadata was not a JSON object; engagement context set to unknown.")
+        return normalise_engagement_context(None)
+    return normalise_engagement_context(payload.get("engagement_context"))
 
 
 def _load_manifest(

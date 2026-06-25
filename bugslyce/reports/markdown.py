@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from bugslyce.core.engagement_context import engagement_context_label
 from bugslyce.core.models import Candidate, ProjectState
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
@@ -198,6 +199,7 @@ def _scope_summary(lines: list[str], project_state: ProjectState) -> None:
             "## Scope Summary",
             "",
             f"- Project: `{project_state.project_name}`",
+            f"- Engagement context: {engagement_context_label(project_state.engagement_context)}",
             f"- Input directory: `{project_state.input_dir}`",
             f"- Parsed scope summary: {project_state.scope_summary}",
             "- Scope status uses simple exact-host and suffix matching. Review programme scope before manual testing.",
