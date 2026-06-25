@@ -108,7 +108,7 @@ def test_engagement_context_helpers_are_conservative() -> None:
     assert normalise_engagement_context("ctf-lab") == "ctf_lab"
     assert normalise_engagement_context("internal_authorised") == "internal_authorised"
     assert normalise_engagement_context("surprise") == "unknown"
-    assert engagement_context_label("ctf_lab") == "CTF / lab / TryHackMe"
+    assert engagement_context_label("ctf_lab") == "CTF / learning lab"
     assert engagement_context_label("surprise") == "Unknown / not specified"
 
 

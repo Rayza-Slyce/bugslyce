@@ -398,16 +398,16 @@ def test_start_new_project_accepts_engagement_context_choice(
     assert exit_code == 0
     assert received["engagement_context"] == "ctf_lab"
     assert "Engagement context:" in rendered_prompts
-    assert "CTF / lab / TryHackMe" in rendered_prompts
-    assert "* Engagement context: CTF / lab / TryHackMe" in rendered
+    assert "CTF / learning lab" in rendered_prompts
+    assert "* Engagement context: CTF / learning lab" in rendered
 
 
 @pytest.mark.parametrize(
     ("context_input", "expected_context", "expected_label"),
     [
         ("", "unknown", "Unknown / not specified"),
-        ("ctf", "ctf_lab", "CTF / lab / TryHackMe"),
-        ("thm", "ctf_lab", "CTF / lab / TryHackMe"),
+        ("ctf", "ctf_lab", "CTF / learning lab"),
+        ("thm", "ctf_lab", "CTF / learning lab"),
         ("bug bounty", "bug_bounty", "Bug bounty"),
         (
             "internal authorized",
@@ -477,7 +477,7 @@ def test_start_new_project_invalid_engagement_context_reprompts(
         "Please choose 1, 2, 3, 4, or press Enter for Unknown / not specified."
         in output
     )
-    assert "* Engagement context: CTF / lab / TryHackMe" in rendered
+    assert "* Engagement context: CTF / learning lab" in rendered
 
 
 def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:

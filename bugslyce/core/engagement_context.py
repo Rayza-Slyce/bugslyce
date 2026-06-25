@@ -10,7 +10,7 @@ INTERNAL_AUTHORISED_CONTEXT = "internal_authorised"
 
 ENGAGEMENT_CONTEXT_LABELS = {
     UNKNOWN_CONTEXT: "Unknown / not specified",
-    CTF_LAB_CONTEXT: "CTF / lab / TryHackMe",
+    CTF_LAB_CONTEXT: "CTF / learning lab",
     BUG_BOUNTY_CONTEXT: "Bug bounty",
     INTERNAL_AUTHORISED_CONTEXT: "Internal authorised assessment",
 }
