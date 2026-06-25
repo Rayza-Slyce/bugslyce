@@ -9,7 +9,11 @@ import shutil
 
 import pytest
 
-from bugslyce.core.engagement_context import engagement_context_label, normalise_engagement_context
+from bugslyce.core.engagement_context import (
+    engagement_context_label,
+    normalise_engagement_context,
+    parse_engagement_context_choice,
+)
 from bugslyce.cli import main
 from bugslyce.project_session import (
     PROJECT_FILENAME,
@@ -106,6 +110,50 @@ def test_engagement_context_helpers_are_conservative() -> None:
     assert normalise_engagement_context("surprise") == "unknown"
     assert engagement_context_label("ctf_lab") == "CTF / lab / TryHackMe"
     assert engagement_context_label("surprise") == "Unknown / not specified"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", "unknown"),
+        ("1", "unknown"),
+        ("unknown", "unknown"),
+        ("unspecified", "unknown"),
+        ("not specified", "unknown"),
+        ("default", "unknown"),
+        ("2", "ctf_lab"),
+        ("ctf", "ctf_lab"),
+        ("lab", "ctf_lab"),
+        ("ctf_lab", "ctf_lab"),
+        ("ctf-lab", "ctf_lab"),
+        ("tryhackme", "ctf_lab"),
+        ("thm", "ctf_lab"),
+        ("3", "bug_bounty"),
+        ("bug", "bug_bounty"),
+        ("bounty", "bug_bounty"),
+        ("bug bounty", "bug_bounty"),
+        ("bug_bounty", "bug_bounty"),
+        ("bug-bounty", "bug_bounty"),
+        ("bb", "bug_bounty"),
+        ("4", "internal_authorised"),
+        ("internal", "internal_authorised"),
+        ("internal authorised", "internal_authorised"),
+        ("internal authorized", "internal_authorised"),
+        ("internal_authorised", "internal_authorised"),
+        ("internal_authorized", "internal_authorised"),
+        ("authorised", "internal_authorised"),
+        ("authorized", "internal_authorised"),
+    ],
+)
+def test_engagement_context_choice_parser_accepts_aliases(
+    value: str,
+    expected: str,
+) -> None:
+    assert parse_engagement_context_choice(value) == expected
+
+
+def test_engagement_context_choice_parser_rejects_invalid_text() -> None:
+    assert parse_engagement_context_choice("ctf maybe") is None
 
 
 @pytest.mark.parametrize("name", ["../escape", "bad/name", "bad name", "", "."])

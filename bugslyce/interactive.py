@@ -13,6 +13,7 @@ from bugslyce.core.engagement_context import (
     INTERNAL_AUTHORISED_CONTEXT,
     UNKNOWN_CONTEXT,
     engagement_context_label,
+    parse_engagement_context_choice,
 )
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.project_pipeline import (
@@ -150,7 +151,7 @@ def _start_new_project(
         print_func("No network requests were made.")
         return 2
     projects_dir = _prompt_projects_dir(input_func, cwd)
-    engagement_context = _prompt_engagement_context(input_func)
+    engagement_context = _prompt_engagement_context(input_func, print_func)
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
@@ -380,27 +381,25 @@ def _prompt_projects_dir(input_func: InputFunc, cwd: Path) -> Path:
     return _resolve_prompt_path(value, cwd)
 
 
-def _prompt_engagement_context(input_func: InputFunc) -> str:
-    value = input_func(
-        "\n".join(
-            [
-                "Engagement context:",
-                f"1. {engagement_context_label(UNKNOWN_CONTEXT)}",
-                f"2. {engagement_context_label(CTF_LAB_CONTEXT)}",
-                f"3. {engagement_context_label(BUG_BOUNTY_CONTEXT)}",
-                f"4. {engagement_context_label(INTERNAL_AUTHORISED_CONTEXT)}",
-                "Press Enter to use default: Unknown / not specified",
-                "Choose engagement context: ",
-            ]
+def _prompt_engagement_context(input_func: InputFunc, print_func: PrintFunc) -> str:
+    prompt = "\n".join(
+        [
+            "Engagement context:",
+            f"1. {engagement_context_label(UNKNOWN_CONTEXT)}",
+            f"2. {engagement_context_label(CTF_LAB_CONTEXT)}",
+            f"3. {engagement_context_label(BUG_BOUNTY_CONTEXT)}",
+            f"4. {engagement_context_label(INTERNAL_AUTHORISED_CONTEXT)}",
+            "Press Enter to use default: Unknown / not specified",
+            "Choose engagement context [1-4, default 1]: ",
+        ]
+    )
+    while True:
+        context = parse_engagement_context_choice(input_func(prompt))
+        if context is not None:
+            return context
+        print_func(
+            "Please choose 1, 2, 3, 4, or press Enter for Unknown / not specified."
         )
-    ).strip()
-    return {
-        "": UNKNOWN_CONTEXT,
-        "1": UNKNOWN_CONTEXT,
-        "2": CTF_LAB_CONTEXT,
-        "3": BUG_BOUNTY_CONTEXT,
-        "4": INTERNAL_AUTHORISED_CONTEXT,
-    }.get(value, UNKNOWN_CONTEXT)
 
 
 def _render_project_summary(

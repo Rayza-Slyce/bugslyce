@@ -402,6 +402,84 @@ def test_start_new_project_accepts_engagement_context_choice(
     assert "* Engagement context: CTF / lab / TryHackMe" in rendered
 
 
+@pytest.mark.parametrize(
+    ("context_input", "expected_context", "expected_label"),
+    [
+        ("", "unknown", "Unknown / not specified"),
+        ("ctf", "ctf_lab", "CTF / lab / TryHackMe"),
+        ("thm", "ctf_lab", "CTF / lab / TryHackMe"),
+        ("bug bounty", "bug_bounty", "Bug bounty"),
+        (
+            "internal authorized",
+            "internal_authorised",
+            "Internal authorised assessment",
+        ),
+    ],
+)
+def test_start_new_project_accepts_engagement_context_aliases(
+    monkeypatch,
+    tmp_path: Path,
+    context_input: str,
+    expected_context: str,
+    expected_label: str,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    prompts: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", context_input, "2", "YES"])
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(inputs)
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    rendered_prompts = "\n".join(prompts)
+    assert exit_code == 0
+    assert received["engagement_context"] == expected_context
+    assert "Choose engagement context [1-4, default 1]:" in rendered_prompts
+    assert f"* Engagement context: {expected_label}" in rendered
+
+
+def test_start_new_project_invalid_engagement_context_reprompts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    received: dict[str, object] = {}
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    output: list[str] = []
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "ctf maybe", "ctf", "2", "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["engagement_context"] == "ctf_lab"
+    assert (
+        "Please choose 1, 2, 3, 4, or press Enter for Unknown / not specified."
+        in output
+    )
+    assert "* Engagement context: CTF / lab / TryHackMe" in rendered
+
+
 def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
     received: dict[str, object] = {}
