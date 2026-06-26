@@ -252,6 +252,7 @@ def test_runbook_workflow_renderer_preserves_thread_order_and_core_fields() -> N
 
     assert markdown.startswith("## Standard Investigation Workflow")
     assert "manual review prompts, not confirmed findings" in markdown
+    assert "Offline Route/Source Review section" in markdown
     assert markdown.index("### THREAD-0001: High-port HTTP application review") < markdown.index(
         "### THREAD-0002: Discovered hidden-path review"
     )

@@ -160,6 +160,10 @@ def render_standard_investigation_workflow_runbook_section(
             "These steps are derived from offline Investigation Threads and are "
             "manual review prompts, not confirmed findings."
         ),
+        (
+            "Use the report's Offline Route/Source Review section to cross-check "
+            "observed route references before manual testing."
+        ),
         "",
     ]
     if engagement_context is not None:

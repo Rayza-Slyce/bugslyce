@@ -370,7 +370,16 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
         lambda threads, **kwargs: "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_route_source_review",
+        lambda state, sources: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_route_source_review_markdown",
+        lambda leads, **kwargs: "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n",
+    )
     runbook_sections: list[str | None] = []
+    route_sections: list[str | None] = []
 
     def fake_build_project_runbook(
         project_file_arg,
@@ -396,14 +405,17 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         *,
         manual_review_leads_markdown=None,
         investigation_threads_markdown=None,
+        route_source_review_markdown=None,
     ):
         calls.append("standard-report-write")
+        route_sections.append(route_source_review_markdown)
         report_path = output_path / "report.md"
         json_path = output_path / "project_state.json"
         report_path.write_text(
             "# Report\n\n"
             "## Operator Summary\n\n"
             f"{manual_review_leads_markdown}\n\n"
+            f"{route_source_review_markdown}\n\n"
             "## Scope Summary\n",
             encoding="utf-8",
         )
@@ -455,6 +467,9 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     assert "not proof of vulnerability" in report
     assert runbook_sections == [
         "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n"
+    ]
+    assert route_sections == [
+        "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n"
     ]
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     assert payload["profile"] == STANDARD_PIPELINE_PROFILE

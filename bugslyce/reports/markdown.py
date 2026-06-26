@@ -43,6 +43,7 @@ def render_markdown_report(
     *,
     manual_review_leads_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
+    route_source_review_markdown: str | None = None,
 ) -> str:
     """Render a cautious deterministic triage report."""
 
@@ -60,6 +61,7 @@ def render_markdown_report(
     _operator_summary(lines, project_state, candidates)
     _manual_review_leads_section(lines, manual_review_leads_markdown)
     _investigation_threads_section(lines, investigation_threads_markdown)
+    _route_source_review_section(lines, route_source_review_markdown)
     _scope_summary(lines, project_state)
     _recon_manifest(lines, project_state)
     _workflow_provenance(lines, project_state)
@@ -136,6 +138,7 @@ def write_project_outputs(
     *,
     manual_review_leads_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
+    route_source_review_markdown: str | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -149,6 +152,7 @@ def write_project_outputs(
             candidates,
             manual_review_leads_markdown=manual_review_leads_markdown,
             investigation_threads_markdown=investigation_threads_markdown,
+            route_source_review_markdown=route_source_review_markdown,
         ),
         encoding="utf-8",
     )
@@ -177,6 +181,19 @@ def _investigation_threads_section(
     if investigation_threads_markdown is None:
         return
     section = investigation_threads_markdown.strip()
+    if not section:
+        return
+    lines.extend(section.splitlines())
+    lines.append("")
+
+
+def _route_source_review_section(
+    lines: list[str],
+    route_source_review_markdown: str | None,
+) -> None:
+    if route_source_review_markdown is None:
+        return
+    section = route_source_review_markdown.strip()
     if not section:
         return
     lines.extend(section.splitlines())

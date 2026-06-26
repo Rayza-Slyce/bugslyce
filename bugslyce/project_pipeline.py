@@ -62,6 +62,10 @@ from bugslyce.recon.path_followup import (
     run_path_followup_workflow,
     write_path_followup_execution_result,
 )
+from bugslyce.recon.route_source_review import (
+    build_route_source_review,
+    render_route_source_review_markdown,
+)
 from bugslyce.recon.status import build_recon_status, write_recon_status
 from bugslyce.recon.standard_interpretation import (
     assemble_standard_interpretation_from_project_state,
@@ -1016,6 +1020,10 @@ def _write_standard_interpretation_report_if_needed(
         candidates,
         assembly.review_leads,
     )
+    route_source_leads = build_route_source_review(
+        project_state,
+        getattr(assembly, "sources", ()),
+    )
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
@@ -1023,6 +1031,10 @@ def _write_standard_interpretation_report_if_needed(
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
         investigation_threads_markdown=render_investigation_threads_markdown(
             threads,
+            engagement_context=engagement_context,
+        ),
+        route_source_review_markdown=render_route_source_review_markdown(
+            route_source_leads,
             engagement_context=engagement_context,
         ),
     )

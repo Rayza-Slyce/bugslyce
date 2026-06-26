@@ -708,3 +708,8 @@ context changes interpretation language and operator guidance only; it does not
 change Quick collection, increase Standard scan volume, change live recon
 collection, alter candidate generation or Investigation Thread ordering, or
 make Deep Recon available.
+
+Phase 72A adds Standard offline route/source review. It analyses route-shaped
+strings and path/source references already present in local evidence only. It
+does not fetch referenced routes, crawl, increase Standard scan volume, alter
+Quick collection, or make Deep Recon available.

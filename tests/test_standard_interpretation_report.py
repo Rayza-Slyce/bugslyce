@@ -45,6 +45,7 @@ def test_helper_returns_report_dataclass_with_markdown_and_metadata() -> None:
     assert report.interpretation_assembly.sources_analyzed == 1
     assert report.manual_review_leads_markdown is not None
     assert report.investigation_threads_markdown is not None
+    assert report.route_source_review_markdown is not None
 
 
 def test_helper_places_standard_sections_after_operator_summary_before_scope() -> None:
@@ -65,6 +66,7 @@ def test_helper_places_standard_sections_after_operator_summary_before_scope() -
 
     assert "## Manual Review Leads" in report.markdown
     assert "## Investigation Threads" in report.markdown
+    assert "## Offline Route/Source Review" in report.markdown
     assert report.markdown.index("## Operator Summary") < report.markdown.index(
         "## Manual Review Leads"
     )
@@ -72,6 +74,9 @@ def test_helper_places_standard_sections_after_operator_summary_before_scope() -
         "## Investigation Threads"
     )
     assert report.markdown.index("## Investigation Threads") < report.markdown.index(
+        "## Offline Route/Source Review"
+    )
+    assert report.markdown.index("## Offline Route/Source Review") < report.markdown.index(
         "## Scope Summary"
     )
     assert "LEAD-0001" in report.markdown
@@ -122,6 +127,7 @@ def test_standard_report_includes_engagement_aware_wording(
     assert expected in report.markdown
     assert "## Manual Review Leads" in report.markdown
     assert "## Investigation Threads" in report.markdown
+    assert "## Offline Route/Source Review" in report.markdown
     assert "LEAD-0001" in report.markdown
 
 
@@ -355,6 +361,7 @@ def test_default_report_rendering_still_omits_manual_review_leads() -> None:
 
     assert "## Manual Review Leads" not in markdown
     assert "## Investigation Threads" not in markdown
+    assert "## Offline Route/Source Review" not in markdown
 
 
 def test_helper_does_not_mutate_project_state_or_candidates() -> None:
