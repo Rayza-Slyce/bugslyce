@@ -45,7 +45,10 @@ def render_standard_interpretation_report(
         candidates_list,
         assembly.review_leads,
     )
-    threads_markdown = render_investigation_threads_markdown(threads)
+    threads_markdown = render_investigation_threads_markdown(
+        threads,
+        engagement_context=project_state.engagement_context,
+    )
     markdown = render_markdown_report(
         project_state,
         candidates_list,

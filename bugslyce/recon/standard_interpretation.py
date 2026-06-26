@@ -47,6 +47,7 @@ def assemble_standard_interpretation_from_project_state(
     collection = collect_interpretation_from_sources(
         sources,
         render_markdown=render_markdown,
+        engagement_context=project_state.engagement_context,
     )
     return StandardInterpretationAssembly(
         sources=sources,

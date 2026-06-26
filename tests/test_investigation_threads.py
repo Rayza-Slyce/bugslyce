@@ -267,6 +267,70 @@ def test_runbook_workflow_renderer_preserves_thread_order_and_core_fields() -> N
     assert "No Standard Investigation Threads were generated" in empty
 
 
+def test_standard_thread_renderers_include_context_guidance_without_reordering() -> None:
+    threads = build_investigation_threads(
+        _project_state(
+            engagement_context="bug_bounty",
+            http_services=[
+                HTTPService(
+                    url="http://example.test:8080/",
+                    hostname="example.test",
+                    status_code=200,
+                    title=None,
+                    technologies=[],
+                    content_length=None,
+                    evidence_ids=["EVID-SVC"],
+                    tags=[],
+                )
+            ],
+            discovered_paths=[
+                DiscoveredPath(
+                    url="http://example.test/admin",
+                    status_code=200,
+                    content_length=None,
+                    redirect_location=None,
+                    source="gobuster",
+                    evidence_ids=["EVID-PATH"],
+                    tags=[],
+                )
+            ],
+        ),
+        review_leads=[
+            _lead(
+                "LEAD-0001",
+                category="html_source",
+                lead_type="possible_transform",
+                priority="high",
+                related_artefact_types=("possible_base64",),
+            )
+        ],
+    )
+
+    report_markdown = render_investigation_threads_markdown(
+        threads,
+        engagement_context="bug_bounty",
+    )
+    runbook_markdown = render_standard_investigation_workflow_runbook_section(
+        threads,
+        engagement_context="bug_bounty",
+    )
+
+    assert [thread.thread_id for thread in threads] == [
+        "THREAD-0001",
+        "THREAD-0002",
+        "THREAD-0003",
+    ]
+    assert [thread.title for thread in threads] == [
+        "High-port HTTP application review",
+        "Discovered hidden-path review",
+        "Encoded or source artefact review",
+    ]
+    assert "In a bug bounty context, treat this as low-confidence metadata" in report_markdown
+    assert "In a bug bounty context, treat this as low-confidence metadata" in runbook_markdown
+    assert report_markdown.index("THREAD-0001") < report_markdown.index("THREAD-0002")
+    assert runbook_markdown.index("THREAD-0001") < runbook_markdown.index("THREAD-0002")
+
+
 def test_renderer_includes_core_thread_fields_and_empty_state() -> None:
     thread = build_investigation_threads(
         _project_state(
@@ -312,6 +376,7 @@ def _project_state(
     http_services: list[HTTPService] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
     http_artifacts: list[HTTPArtifact] | None = None,
+    engagement_context: str = "unknown",
 ) -> ProjectState:
     return ProjectState(
         project_name="thread-test",
@@ -329,6 +394,7 @@ def _project_state(
         evidence=[],
         warnings=[],
         generated_at="2026-06-22T00:00:00Z",
+        engagement_context=engagement_context,
     )
 
 

@@ -364,11 +364,11 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_investigation_threads_markdown",
-        lambda threads: "",
+        lambda threads, **kwargs: "",
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
-        lambda threads: "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
+        lambda threads, **kwargs: "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
     )
     runbook_sections: list[str | None] = []
 

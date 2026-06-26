@@ -53,6 +53,7 @@ def collect_interpretation_from_sources(
     sources: Sequence[ArtefactSource],
     *,
     render_markdown: bool = True,
+    engagement_context: str | None = None,
 ) -> InterpretationCollection:
     """Run offline interpretation analysers over already-collected source text."""
 
@@ -99,7 +100,14 @@ def collect_interpretation_from_sources(
             for lead in analysis.review_leads
         ),
     )
-    markdown = render_review_leads_markdown(review_leads) if render_markdown else None
+    markdown = (
+        render_review_leads_markdown(
+            review_leads,
+            engagement_context=engagement_context,
+        )
+        if render_markdown
+        else None
+    )
     return InterpretationCollection(
         sources_analyzed=len(sources),
         hash_candidates=tuple(all_hashes),

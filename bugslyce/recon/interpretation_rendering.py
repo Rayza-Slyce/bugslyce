@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.recon.interpretation import ReviewLead
 
 
@@ -15,6 +16,7 @@ def render_review_leads_markdown(
     *,
     heading: str = "Manual Review Leads",
     max_value_chars: int = DEFAULT_MAX_VALUE_CHARS,
+    engagement_context: str | None = None,
 ) -> str:
     """Render interpretation review leads as deterministic Markdown."""
 
@@ -27,6 +29,8 @@ def render_review_leads_markdown(
         ),
         "",
     ]
+    if engagement_context is not None:
+        lines.extend([engagement_context_review_guidance(engagement_context), ""])
 
     if not leads:
         lines.extend(

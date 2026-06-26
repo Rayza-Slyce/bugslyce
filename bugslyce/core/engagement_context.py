@@ -62,6 +62,34 @@ def engagement_context_label(value: str | None) -> str:
     return ENGAGEMENT_CONTEXT_LABELS[normalise_engagement_context(value)]
 
 
+def engagement_context_review_guidance(value: str | None) -> str:
+    """Return context-aware Standard review guidance."""
+
+    context = normalise_engagement_context(value)
+    if context == CTF_LAB_CONTEXT:
+        return (
+            "In a CTF or learning-lab context, this may be part of an intended "
+            "review trail. Correlate it locally with nearby paths, source "
+            "artefacts, robots.txt, and service context before drawing conclusions."
+        )
+    if context == BUG_BOUNTY_CONTEXT:
+        return (
+            "In a bug bounty context, treat this as low-confidence metadata unless "
+            "it connects to in-scope sensitive exposure, access control, user or "
+            "tenant boundaries, reproducibility, or realistic impact."
+        )
+    if context == INTERNAL_AUTHORISED_CONTEXT:
+        return (
+            "In an internal authorised assessment, review this against approved "
+            "scope, expected service purpose, ownership, and exposure expectations "
+            "before escalating."
+        )
+    return (
+        "This is a manual review signal only. Do not assume exploitability, "
+        "credentials, sensitive exposure, or business impact without validation."
+    )
+
+
 def parse_engagement_context_choice(value: str | None) -> str | None:
     """Parse an interactive context choice, returning None for invalid input."""
 

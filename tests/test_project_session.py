@@ -11,6 +11,7 @@ import pytest
 
 from bugslyce.core.engagement_context import (
     engagement_context_label,
+    engagement_context_review_guidance,
     normalise_engagement_context,
     parse_engagement_context_choice,
 )
@@ -154,6 +155,46 @@ def test_engagement_context_choice_parser_accepts_aliases(
 
 def test_engagement_context_choice_parser_rejects_invalid_text() -> None:
     assert parse_engagement_context_choice("ctf maybe") is None
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        (
+            "unknown",
+            (
+                "This is a manual review signal only. Do not assume exploitability, "
+                "credentials, sensitive exposure, or business impact without validation."
+            ),
+        ),
+        (
+            "ctf_lab",
+            (
+                "In a CTF or learning-lab context, this may be part of an intended "
+                "review trail. Correlate it locally with nearby paths, source "
+                "artefacts, robots.txt, and service context before drawing conclusions."
+            ),
+        ),
+        (
+            "bug_bounty",
+            (
+                "In a bug bounty context, treat this as low-confidence metadata unless "
+                "it connects to in-scope sensitive exposure, access control, user or "
+                "tenant boundaries, reproducibility, or realistic impact."
+            ),
+        ),
+        (
+            "internal_authorised",
+            (
+                "In an internal authorised assessment, review this against approved "
+                "scope, expected service purpose, ownership, and exposure expectations "
+                "before escalating."
+            ),
+        ),
+    ],
+)
+def test_engagement_context_review_guidance(context: str, expected: str) -> None:
+    assert engagement_context_review_guidance(context) == expected
 
 
 @pytest.mark.parametrize("name", ["../escape", "bad/name", "bad name", "", "."])

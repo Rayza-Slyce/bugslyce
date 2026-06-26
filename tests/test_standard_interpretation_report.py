@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 import inspect
 
+import pytest
+
 from bugslyce.core.models import (
     Candidate,
     DiscoveredPath,
@@ -74,6 +76,53 @@ def test_helper_places_standard_sections_after_operator_summary_before_scope() -
     )
     assert "LEAD-0001" in report.markdown
     assert "not proof of vulnerability" in report.markdown
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        (
+            "unknown",
+            "This is a manual review signal only. Do not assume exploitability",
+        ),
+        (
+            "ctf_lab",
+            "In a CTF or learning-lab context, this may be part of an intended review trail.",
+        ),
+        (
+            "bug_bounty",
+            "In a bug bounty context, treat this as low-confidence metadata",
+        ),
+        (
+            "internal_authorised",
+            "In an internal authorised assessment, review this against approved scope",
+        ),
+    ],
+)
+def test_standard_report_includes_engagement_aware_wording(
+    context: str,
+    expected: str,
+) -> None:
+    state = _project_state(
+        engagement_context=context,
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="disallow_rule",
+                value="/admin",
+                source_file="robots.txt",
+                evidence_ids=["EVID-ART-ROBOTS"],
+                tags=[],
+            )
+        ],
+    )
+
+    report = render_standard_interpretation_report(state, [])
+
+    assert expected in report.markdown
+    assert "## Manual Review Leads" in report.markdown
+    assert "## Investigation Threads" in report.markdown
+    assert "LEAD-0001" in report.markdown
 
 
 def test_robots_artifact_renders_robots_review_lead() -> None:
@@ -364,6 +413,7 @@ def _project_state(
     http_artifacts: list[HTTPArtifact] | None = None,
     evidence: list[Evidence] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
+    engagement_context: str = "unknown",
 ) -> ProjectState:
     return ProjectState(
         project_name="standard-report-test",
@@ -381,4 +431,5 @@ def _project_state(
         evidence=evidence or [],
         warnings=[],
         generated_at="2026-06-21T00:00:00Z",
+        engagement_context=engagement_context,
     )

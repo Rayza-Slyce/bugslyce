@@ -702,3 +702,9 @@ values are `unknown`, `ctf_lab`, `bug_bounty`, and `internal_authorised`.
 This prepares future Standard interpretation for context-aware wording while
 leaving Quick collection, Standard scan volume, live recon collection, and Deep
 availability unchanged.
+
+Phase 71B makes Standard wording engagement-aware. The stored engagement
+context changes interpretation language and operator guidance only; it does not
+change Quick collection, increase Standard scan volume, change live recon
+collection, alter candidate generation or Investigation Thread ordering, or
+make Deep Recon available.

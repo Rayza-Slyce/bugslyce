@@ -1010,6 +1010,7 @@ def _write_standard_interpretation_report_if_needed(
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
+    engagement_context = getattr(project_state, "engagement_context", "unknown")
     threads = build_investigation_threads(
         project_state,
         candidates,
@@ -1020,7 +1021,10 @@ def _write_standard_interpretation_report_if_needed(
         candidates,
         output_dir,
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
-        investigation_threads_markdown=render_investigation_threads_markdown(threads),
+        investigation_threads_markdown=render_investigation_threads_markdown(
+            threads,
+            engagement_context=engagement_context,
+        ),
     )
     return [str(report_path), str(json_path)]
 
@@ -1034,12 +1038,16 @@ def _build_standard_investigation_runbook_section_if_needed(
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
+    engagement_context = getattr(project_state, "engagement_context", "unknown")
     threads = build_investigation_threads(
         project_state,
         candidates,
         assembly.review_leads,
     )
-    return render_standard_investigation_workflow_runbook_section(threads)
+    return render_standard_investigation_workflow_runbook_section(
+        threads,
+        engagement_context=engagement_context,
+    )
 
 
 def _failed_result(

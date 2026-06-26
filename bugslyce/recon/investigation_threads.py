@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import Candidate, ProjectState
 from bugslyce.recon.interpretation import ReviewLead
 
@@ -87,6 +88,8 @@ def build_investigation_threads(
 
 def render_investigation_threads_markdown(
     threads: Sequence[InvestigationThread],
+    *,
+    engagement_context: str | None = None,
 ) -> str:
     """Render investigation threads as concise Markdown."""
 
@@ -99,6 +102,8 @@ def render_investigation_threads_markdown(
         ),
         "",
     ]
+    if engagement_context is not None:
+        lines.extend([engagement_context_review_guidance(engagement_context), ""])
     if not threads:
         lines.extend(["No investigation threads were generated from the provided evidence.", ""])
         return "\n".join(lines).rstrip() + "\n"
@@ -143,6 +148,8 @@ def render_investigation_threads_markdown(
 
 def render_standard_investigation_workflow_runbook_section(
     threads: Sequence[InvestigationThread],
+    *,
+    engagement_context: str | None = None,
 ) -> str:
     """Render a concise Standard-only runbook workflow from investigation threads."""
 
@@ -155,6 +162,8 @@ def render_standard_investigation_workflow_runbook_section(
         ),
         "",
     ]
+    if engagement_context is not None:
+        lines.extend([engagement_context_review_guidance(engagement_context), ""])
     if not threads:
         lines.extend(
             [
