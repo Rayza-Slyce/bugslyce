@@ -158,6 +158,8 @@ bugslyce project run \
 - [ ] Offline Route/Source Review filters default-page noise while preserving
   useful route references.
 - [ ] Deep Recon remains unavailable.
+- [ ] Deep Recon still requires a separate design, implementation, test, and
+  smoke-test gate before any future enablement.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

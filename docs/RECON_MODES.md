@@ -212,35 +212,160 @@ phases.
 
 Proposed internal profile name: `deep-correlation`.
 
-Deep Recon means slower evidence expansion and correlation. It does not mean
-aggressive scanning.
+### Deep Recon v1 Design Contract
 
-Deep Recon may eventually include:
+Deep Recon v1 is a design target, not currently available runtime behaviour.
+Deep Recon remains unavailable until separately implemented, tested, and
+enabled.
 
-- Richer endpoint clustering.
-- Parameter clustering.
-- Technology-aware surface mapping.
-- Static asset review with strict limits.
-- Same-origin JavaScript route extraction with no JavaScript execution.
+Deep Recon means aggressive evidence discovery inside strict authorisation, scope, method, and rate limits.
+
+It is a genuine step up from Standard Recon. It should dig much deeper into
+the explicitly authorised attack surface while staying inside recon and triage
+boundaries. Deep Recon may increase evidence discovery depth, request count,
+correlation quality, and operator guidance. Deep Recon must not increase attack behaviour.
+
+Mode relationship:
+
+- Quick Recon: fast bounded collection.
+- Standard Recon: Quick-style bounded collection plus offline operator
+  workflow.
+- Deep Recon: expanded bounded collection plus deeper source, route, service,
+  parameter, metadata, and evidence correlation.
+
+Deep Recon should be:
+
+- Aggressive but bounded recon.
+- Deeper evidence discovery than Standard.
+- Expanded active collection using controlled GET/HEAD-style recon.
+- Shallow same-origin discovery where explicitly bounded.
+- Deeper offline correlation.
+- Slower than Standard.
+- Manual-review oriented.
+- Suitable only for explicitly authorised targets.
+
+Planned Deep Recon v1 default capabilities include:
+
+- Larger bounded content discovery than Standard.
+- Strict request, timeout, depth, redirect, and response-size limits.
+- Bounded second-pass content discovery around strong-signal directories only.
+- `robots.txt` expansion and safe follow-up.
+- `sitemap.xml` discovery and parsing.
+- `security.txt`, `humans.txt`, favicon, manifest, and common metadata
+  checks.
+- Broader same-origin HTTP review across discovered HTTP services.
+- Shallow same-origin crawl from selected HTML pages.
+- Selected HTML/body fetch with size limits.
+- Same-origin JavaScript file discovery.
+- Same-origin JavaScript/source file collection as text only.
+- Static route extraction from collected JavaScript/source text.
+- Static parameter inventory from URLs, HTML, and JavaScript/source text.
+- HTML form inventory without submitting forms.
 - Source map detection.
-- Stronger correlation between services, endpoints, parameters,
-  technologies, notes, and raw evidence.
-- Evidence graph / derived lead chains.
-- Stronger report/runbook reasoning.
-- Known-vulnerability review queues.
-- Optional local-only transformation analysis.
-- Optional same-origin small asset review where appropriate.
+- Bounded source map collection only when directly referenced and
+  same-origin.
+- Backup/config/source exposure path checks using a tight allowlist and
+  GET/HEAD only.
+- Technology-specific discovery wordlists where conservative and bounded.
+- Service-specific manual review queues.
+- Deeper correlation across ports, services, headers, technologies, paths,
+  routes, parameters, artefacts, candidates, manual leads, and investigation
+  threads.
+- Richer Deep report/runbook sections.
+- Better evidence-pack organisation by service, route, and investigation
+  thread.
 
-Deep Recon must not become:
+Optional future Deep extensions may be designed later as explicit opt-in
+capabilities only. They are not part of the immediate Deep Recon v1 default
+contract unless separately designed, tested, and gated:
 
-- Autopwn.
-- Exploit automation.
-- Recursive crawling by default.
-- Credential testing.
-- CVE validation.
-- Payload submission.
-- Protection bypass.
-- "Run a huge wordlist" mode.
+- Selected nuclei-style checks using a strict allowlist.
+- Selected safe NSE scripts using a strict allowlist.
+- UDP checks for explicitly authorised internal/lab contexts.
+- Larger wordlists for explicitly authorised targets.
+- External lookups when explicitly enabled.
+- Local CTF/lab-only cracking helpers.
+- LLM interpretation and guidance after deterministic Deep evidence exists.
+
+BugSlyce v1 Deep Recon must not include:
+
+- Exploitation.
+- Automatic vulnerability confirmation.
+- Brute forcing live services.
+- Password spraying.
+- Credential stuffing.
+- Login attempts.
+- Authentication testing.
+- Session testing.
+- Form submission.
+- Destructive requests.
+- Write actions.
+- Payload injection.
+- `sqlmap`.
+- `hydra`.
+- `masscan`.
+- Uncontrolled crawling.
+- Browser automation that interacts with applications.
+- JavaScript execution.
+- Arbitrary user-supplied command execution.
+- Automatic reporting to third parties.
+
+Proposed future Deep pipeline shape:
+
+1. Environment and scope validation.
+2. TCP/service discovery.
+3. Service/version enrichment.
+4. HTTP service matrix.
+5. HTTP metadata collection.
+6. Common metadata discovery.
+7. Baseline content discovery.
+8. Discovered-path follow-up.
+9. Strong-signal directory selection.
+10. Bounded second-pass content discovery.
+11. Shallow same-origin crawl.
+12. Selected HTML/body fetch.
+13. Same-origin JavaScript/source discovery.
+14. Same-origin JavaScript/source text collection.
+15. Static route extraction.
+16. Source map detection and bounded same-origin collection.
+17. Parameter inventory.
+18. HTML form inventory without submission.
+19. Backup/config/source exposure checks with a tight allowlist.
+20. Route/source/service correlation.
+21. Deep investigation threads.
+22. Deep manual review queue.
+23. Deep report/runbook generation.
+24. Evidence pack export.
+
+This pipeline shape is a design target only. It is not currently available
+runtime behaviour.
+
+Proposed future Deep output sections include:
+
+- Deep Evidence Expansion Summary.
+- Deep HTTP Service Matrix.
+- Deep Route/Source Correlation.
+- Deep Parameter Inventory.
+- Deep Form Inventory.
+- Deep Service/Technology Correlation.
+- Deep Investigation Threads.
+- Deep Manual Review Queue.
+- Deep Scope and Safety Summary.
+
+Deep Recon must remain unavailable until all of these gates exist:
+
+- Documented Deep profile contract.
+- Explicit Deep bounds for requests, timeouts, depth, redirects, and body
+  size.
+- Tests proving Quick remains unchanged.
+- Tests proving Standard remains unchanged.
+- Tests proving Deep has explicit bounds.
+- Tests proving Deep unavailable state is intentional until enabled.
+- Tests proving no exploit, authentication, or form-submission behaviour is
+  introduced.
+- Safety grep/checklist coverage.
+- Authorised lab smoke checklist.
+- Report/runbook tests for Deep output once implemented.
 
 ## Lessons From Authorised CTF/Lab Use
 
