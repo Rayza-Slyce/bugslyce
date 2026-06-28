@@ -18,7 +18,7 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "Deep Recon",
         "`lab-safe-tiny`",
         "`standard-bounded`",
-        "`deep-correlation`",
+        "`deep-bounded`",
         "authorisation",
         "strict scope",
         "Global Forbidden Behaviours",
@@ -74,6 +74,7 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "Tests proving Standard remains unchanged",
         "Tests proving Deep has explicit bounds",
         "Tests proving Deep unavailable state is intentional until enabled",
+        "Code-level planned profile contract and explicit bounds model",
     ):
         assert expected.lower() in lowered
 

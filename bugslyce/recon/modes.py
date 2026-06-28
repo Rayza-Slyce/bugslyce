@@ -14,7 +14,7 @@ STANDARD_MODE_ID = "standard"
 DEEP_MODE_ID = "deep"
 QUICK_RECON_PROFILE = "lab-safe-tiny"
 STANDARD_RECON_PROFILE = "standard-bounded"
-DEEP_RECON_PROFILE = "deep-correlation"
+DEEP_RECON_PROFILE = "deep-bounded"
 
 
 class ReconModeUnavailable(ValueError):
@@ -44,6 +44,93 @@ class ReconMode:
         return f"{self.display_name} is planned but not implemented yet."
 
 
+@dataclass(frozen=True)
+class DeepReconBounds:
+    """Explicit planned Deep Recon hard limits.
+
+    These values are contract data only. They do not enable runtime behaviour.
+    """
+
+    max_total_requests: int
+    max_requests_per_service: int
+    max_second_pass_directories: int
+    max_second_pass_requests_per_directory: int
+    max_crawl_depth: int
+    max_crawl_pages: int
+    max_js_files: int
+    max_source_files: int
+    max_source_map_files: int
+    max_body_bytes: int
+    max_redirects: int
+    request_timeout_seconds: int
+    rate_limit_delay_seconds: float
+
+
+@dataclass(frozen=True)
+class DeepReconProfileContract:
+    """Planned Deep Recon profile contract without executable behaviour."""
+
+    mode_name: str
+    internal_profile: str
+    availability: str
+    purpose: str
+    bounds: DeepReconBounds
+    allowed_method_class: str
+    default_behaviour_status: str
+    capability_categories: tuple[str, ...]
+
+
+DEEP_RECON_BOUNDS = DeepReconBounds(
+    max_total_requests=1500,
+    max_requests_per_service=400,
+    max_second_pass_directories=8,
+    max_second_pass_requests_per_directory=100,
+    max_crawl_depth=1,
+    max_crawl_pages=50,
+    max_js_files=50,
+    max_source_files=80,
+    max_source_map_files=10,
+    max_body_bytes=1_000_000,
+    max_redirects=5,
+    request_timeout_seconds=10,
+    rate_limit_delay_seconds=0.1,
+)
+
+
+DEEP_RECON_CAPABILITY_CATEGORIES: tuple[str, ...] = (
+    "expanded content discovery",
+    "strong-signal second-pass discovery",
+    "common metadata discovery",
+    "shallow same-origin crawl",
+    "selected body/source fetch",
+    "JavaScript/source text collection",
+    "static route extraction",
+    "parameter inventory",
+    "form inventory without submission",
+    "source map detection",
+    "backup/config/source exposure checks",
+    "service/route/source correlation",
+    "deep investigation threads",
+    "deep manual review queue",
+    "deep report/runbook output",
+)
+
+
+DEEP_RECON_PROFILE_CONTRACT = DeepReconProfileContract(
+    mode_name="Deep Recon",
+    internal_profile=DEEP_RECON_PROFILE,
+    availability="planned/unavailable",
+    purpose=(
+        "aggressive evidence discovery inside strict authorisation, scope, "
+        "method, and rate limits"
+    ),
+    bounds=DEEP_RECON_BOUNDS,
+    allowed_method_class="GET/HEAD-style recon only",
+    default_behaviour_status="planned, not implemented",
+    capability_categories=DEEP_RECON_CAPABILITY_CATEGORIES,
+)
+
+
 RECON_MODES: tuple[ReconMode, ...] = (
     ReconMode(
         mode_id=QUICK_MODE_ID,
@@ -67,7 +154,10 @@ RECON_MODES: tuple[ReconMode, ...] = (
         display_name="Deep Recon",
         internal_profile=DEEP_RECON_PROFILE,
         status="planned",
-        purpose="slower evidence expansion, correlation, and review preparation",
+        purpose=(
+            "aggressive evidence discovery inside strict authorisation, scope, "
+            "method, and rate limits"
+        ),
     ),
 )
 
@@ -102,3 +192,13 @@ def resolve_executable_profile(mode_id: str) -> str:
     if not mode.is_available:
         raise ReconModeUnavailable(mode.unavailable_message)
     return mode.internal_profile
+
+
+def get_deep_recon_profile_contract() -> DeepReconProfileContract:
+    """Return the planned Deep Recon profile contract.
+
+    The contract is descriptive only and must not be treated as an executable
+    profile.
+    """
+
+    return DEEP_RECON_PROFILE_CONTRACT

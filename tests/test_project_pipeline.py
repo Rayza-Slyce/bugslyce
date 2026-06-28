@@ -131,6 +131,8 @@ def test_pipeline_rejects_unsupported_profile_and_invalid_project(
     project_file, _output_dir = _fresh_project(tmp_path)
     with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
         run_project_pipeline(project_file, "other-profile")
+    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
+        run_project_pipeline(project_file, "deep-bounded")
 
     with pytest.raises(ValueError, match="Project file does not exist"):
         run_project_pipeline(tmp_path / "missing.json", PIPELINE_PROFILE)

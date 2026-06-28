@@ -210,7 +210,7 @@ bodies unnecessarily.
 Deep Recon is planned and unavailable until designed and implemented in later
 phases.
 
-Proposed internal profile name: `deep-correlation`.
+Planned internal profile name: `deep-bounded`.
 
 ### Deep Recon v1 Design Contract
 
@@ -355,6 +355,7 @@ Proposed future Deep output sections include:
 Deep Recon must remain unavailable until all of these gates exist:
 
 - Documented Deep profile contract.
+- Code-level planned profile contract and explicit bounds model.
 - Explicit Deep bounds for requests, timeouts, depth, redirects, and body
   size.
 - Tests proving Quick remains unchanged.

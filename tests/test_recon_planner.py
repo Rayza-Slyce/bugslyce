@@ -72,6 +72,15 @@ def test_unsupported_profile_fails_gracefully(tmp_path: Path) -> None:
         build_recon_plan("10.10.10.10", scope, tmp_path / "output", "aggressive")
 
 
+def test_deep_bounded_contract_is_not_an_executable_planner_profile(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, "10.10.10.10")
+
+    with pytest.raises(ValueError, match="Unsupported recon profile"):
+        build_recon_plan("10.10.10.10", scope, tmp_path / "output", "deep-bounded")
+
+
 def test_missing_scope_file_fails_gracefully(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Scope file does not exist"):
         build_recon_plan(
