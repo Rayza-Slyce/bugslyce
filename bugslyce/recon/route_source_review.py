@@ -241,8 +241,10 @@ def _observations_from_source(
     allowed_hosts: set[str],
 ) -> list[_RouteObservation]:
     routes: list[str] = []
-    routes.extend(_extract_absolute_url_routes(source.text, allowed_hosts))
-    routes.extend(_extract_relative_routes(source.text))
+    routes.extend(
+        _extract_absolute_url_routes(source.text, allowed_hosts, filter_source_noise=True)
+    )
+    routes.extend(_extract_relative_routes(source.text, filter_source_noise=True))
     routes = _dedupe_preserve_order(routes)[:MAX_ROUTES_PER_SOURCE]
     return [
         _RouteObservation(
@@ -265,25 +267,43 @@ def _observations_from_route(
     routes = _extract_absolute_url_routes(value, allowed_hosts)
     routes.extend(_extract_relative_routes(value))
     return [
-        _RouteObservation(route=route, source_kind=source_kind, source_id=source_id, source_order=source_order)
+        _RouteObservation(
+            route=route,
+            source_kind=source_kind,
+            source_id=source_id,
+            source_order=source_order,
+        )
         for route in _dedupe_preserve_order(routes)[:MAX_ROUTES_PER_SOURCE]
     ]
 
 
-def _extract_absolute_url_routes(text: str, allowed_hosts: set[str]) -> list[str]:
+def _extract_absolute_url_routes(
+    text: str,
+    allowed_hosts: set[str],
+    *,
+    filter_source_noise: bool = False,
+) -> list[str]:
     routes: list[str] = []
     for match in ABSOLUTE_URL_RE.finditer(text):
         parsed = urlparse(_strip_route_punctuation(match.group(0)))
         host = (parsed.hostname or "").lower()
         if not host or host not in allowed_hosts:
             continue
-        route = _normalise_route(parsed.path or "/", parsed.query)
+        route = _normalise_route(
+            parsed.path or "/",
+            parsed.query,
+            filter_source_noise=filter_source_noise,
+        )
         if route:
             routes.append(route)
     return routes
 
 
-def _extract_relative_routes(text: str) -> list[str]:
+def _extract_relative_routes(
+    text: str,
+    *,
+    filter_source_noise: bool = False,
+) -> list[str]:
     routes: list[str] = []
     relative_text = ABSOLUTE_URL_RE.sub(" ", text)
     for match in ROUTE_RE.finditer(relative_text):
@@ -291,13 +311,22 @@ def _extract_relative_routes(text: str) -> list[str]:
         if raw.startswith("//"):
             continue
         parsed = urlparse(raw)
-        route = _normalise_route(parsed.path or raw, parsed.query)
+        route = _normalise_route(
+            parsed.path or raw,
+            parsed.query,
+            filter_source_noise=filter_source_noise,
+        )
         if route:
             routes.append(route)
     return routes
 
 
-def _normalise_route(path: str, query: str = "") -> str | None:
+def _normalise_route(
+    path: str,
+    query: str = "",
+    *,
+    filter_source_noise: bool = False,
+) -> str | None:
     route = _strip_route_punctuation(path.strip())
     if not route.startswith("/") or route == "/":
         return None
@@ -305,6 +334,8 @@ def _normalise_route(path: str, query: str = "") -> str | None:
         return None
     lowered_path = route.lower()
     if lowered_path.endswith(STATIC_EXTENSIONS):
+        return None
+    if filter_source_noise and _looks_like_source_noise(lowered_path):
         return None
     if query:
         route = f"{route}?{_strip_route_punctuation(query)}"
@@ -319,13 +350,59 @@ def _strip_route_punctuation(value: str) -> str:
 
 def _route_category(route: str) -> str:
     lowered = route.lower()
-    if _has_any(lowered, ("/login", "/logout", "/register", "/signup", "/reset", "/password", "/session", "/auth", "/oauth", "/account", "/profile")):
+    if _has_any(
+        lowered,
+        (
+            "/login",
+            "/logout",
+            "/register",
+            "/signup",
+            "/reset",
+            "/password",
+            "/session",
+            "/auth",
+            "/oauth",
+            "/account",
+            "/profile",
+        ),
+    ):
         return "authentication/account/session"
-    if _has_any(lowered, ("/admin", "/debug", "/dev", "/test", "/status", "/health", "/internal", "/staging", "/console")):
+    if _has_any(
+        lowered,
+        (
+            "/admin",
+            "/debug",
+            "/dev",
+            "/test",
+            "/status",
+            "/health",
+            "/internal",
+            "/staging",
+            "/console",
+            "/server-status",
+            "/server-info",
+        ),
+    ):
         return "admin/debug/status/dev"
-    if _has_any(lowered, ("/api", "/v1", "/v2", "/graphql", "/webhook", "/callback")):
+    if _has_any(
+        lowered,
+        ("/api", "/v1", "/v2", "/graphql", "/webhook", "/callback"),
+    ):
         return "api/graphql/webhook"
-    if _has_any(lowered, ("/upload", "/download", "/import", "/export", "/backup", "/file", "/files", "/attachment", "/attachments")):
+    if _has_any(
+        lowered,
+        (
+            "/upload",
+            "/download",
+            "/import",
+            "/export",
+            "/backup",
+            "/file",
+            "/files",
+            "/attachment",
+            "/attachments",
+        ),
+    ):
         return "file/data transfer"
     if _looks_object_reference(lowered):
         return "object/reference-looking"
@@ -334,6 +411,14 @@ def _route_category(route: str) -> str:
 
 def _has_any(value: str, needles: tuple[str, ...]) -> bool:
     return any(needle in value for needle in needles)
+
+
+def _looks_like_source_noise(lowered_path: str) -> bool:
+    if lowered_path.startswith(("/tr/", "/dtd/")):
+        return True
+    if lowered_path.startswith(("/usr/share/", "/var/www/", "/etc/")):
+        return True
+    return bool(re.match(r"^/photo/\d{4}/\d{2}/\d{2}/", lowered_path))
 
 
 def _looks_object_reference(value: str) -> bool:

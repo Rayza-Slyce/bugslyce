@@ -122,6 +122,72 @@ def test_general_bucket_for_unclassified_route_references() -> None:
     assert leads[0].route_references == ("/docs", "/help")
 
 
+def test_source_text_filters_default_page_noise_and_preserves_useful_routes() -> None:
+    source = _source(
+        (
+            "/robots.txt /manual /index.html /hidden /hidden/ "
+            "/server-status /server-info "
+            "/TR/xhtml1/DTD/xhtml1 /usr/share/doc/apache2/README "
+            "/photo/2016/12/24/11/48/lost"
+        )
+    )
+
+    leads = build_route_source_review(_project_state(), (source,))
+    routes_by_category = {
+        lead.category: set(lead.route_references)
+        for lead in leads
+    }
+    all_routes = {route for lead in leads for route in lead.route_references}
+
+    assert routes_by_category["admin/debug/status/dev"] == {
+        "/server-status",
+        "/server-info",
+    }
+    assert routes_by_category["general route references"] == {
+        "/robots.txt",
+        "/manual",
+        "/index.html",
+        "/hidden",
+        "/hidden/",
+    }
+    assert "/TR/xhtml1/DTD/xhtml1" not in all_routes
+    assert "/usr/share/doc/apache2/README" not in all_routes
+    assert "/photo/2016/12/24/11/48/lost" not in all_routes
+
+
+def test_confirmed_endpoint_and_discovered_paths_preserve_source_noise_patterns() -> None:
+    state = _project_state(
+        http_services=[_service("http://example.test/")],
+        endpoints=[
+            Endpoint(
+                url="http://example.test/usr/share/doc/apache2/README",
+                hostname="example.test",
+                path="/usr/share/doc/apache2/README",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-DOC"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/photo/2016/12/24/11/48/lost",
+                status_code=200,
+                content_length=100,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-PHOTO"],
+                tags=[],
+            )
+        ],
+    )
+
+    leads = build_route_source_review(state, ())
+    all_routes = {route for lead in leads for route in lead.route_references}
+
+    assert "/usr/share/doc/apache2/README" in all_routes
+    assert "/photo/2016/12/24/11/48/lost" in all_routes
+
+
 def _project_state(
     *,
     http_services: list[HTTPService] | None = None,

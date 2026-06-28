@@ -713,3 +713,9 @@ Phase 72A adds Standard offline route/source review. It analyses route-shaped
 strings and path/source references already present in local evidence only. It
 does not fetch referenced routes, crawl, increase Standard scan volume, alter
 Quick collection, or make Deep Recon available.
+
+Phase 72B reduces Offline Route/Source Review noise by filtering common
+HTML/default-page source references such as document type paths, local
+filesystem documentation paths, and stock media attribution paths. It still
+analyses local evidence only, does not fetch routes, and does not increase
+Standard scan volume.
