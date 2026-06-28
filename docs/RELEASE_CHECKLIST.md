@@ -164,6 +164,8 @@ bugslyce project run \
 - [ ] Deep planned output taxonomy remains static, gated, and non-executable.
 - [ ] Deep scope/safety preflight contract remains static, gated, and
   non-executable.
+- [ ] Deep readiness summary renderer remains static, gated, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

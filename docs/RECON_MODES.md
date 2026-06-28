@@ -354,6 +354,14 @@ It does not inspect projects, does not read or write project files, does not
 create outputs, does not make `deep-bounded` executable, and does not make
 Deep Recon available.
 
+Phase 76B adds a static Deep Recon readiness summary renderer. The renderer
+combines the Deep profile contract, explicit bounds, planned pipeline, planned
+outputs, and preflight gates into human-readable Markdown for maintainers. It
+is static contract rendering only. It does not inspect projects, does not read
+or write project files, does not create outputs, does not execute commands,
+does not make `deep-bounded` executable, and does not make Deep Recon
+available.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

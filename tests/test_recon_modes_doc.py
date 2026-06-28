@@ -85,6 +85,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "planned gates for authorisation",
         "does not inspect projects",
         "does not read or write project files",
+        "static Deep Recon readiness summary renderer",
+        "combines the Deep profile contract, explicit bounds, planned pipeline, planned",
+        "static contract rendering only",
     ):
         assert expected.lower() in lowered
 
