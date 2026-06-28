@@ -61,10 +61,12 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
 
     assert "## Current MVP Limitations" in readme
     assert "## Release Checkpoint" in readme
-    assert "Current version: `0.2.0`" in readme
-    assert "Release tag: `v0.2.0`" in readme
+    assert "Current version: `0.3.0`" in readme
+    assert "Release tag: `v0.3.0`" in readme
     assert "Standard Recon v1 profile: `standard-bounded`" in readme
     assert "Standard scan volume: same bounded 12-step collection path as Quick" in readme
+    assert "Investigation Threads" in readme
+    assert "Offline Route/Source Review" in readme
     assert "There is no vulnerability confirmation" in readme
     assert "does not replace human programme-scope review" in readme
 
@@ -100,7 +102,7 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
     assert "docs/DEMO_WALKTHROUGH.md" in readme
 
 
-def test_release_checklist_documents_v020_release_gate() -> None:
+def test_release_checklist_documents_v030_release_gate() -> None:
     root = Path(__file__).resolve().parents[1]
     checklist_path = root / "docs" / "RELEASE_CHECKLIST.md"
     assert checklist_path.is_file()
@@ -108,26 +110,55 @@ def test_release_checklist_documents_v020_release_gate() -> None:
     checklist = checklist_path.read_text(encoding="utf-8")
     lowered = checklist.lower()
     for expected in (
-        "v0.2.0",
+        "v0.3.0",
         ".venv/bin/pytest",
         "bugslyce doctor",
         "lab-safe-tiny",
         "standard-bounded",
         "Manual Review Leads",
+        "Investigation Threads",
+        "Standard Investigation Workflow",
+        "Offline Route/Source Review",
+        "engagement context",
+        "route/source review noise reduction",
         "--resume",
-        "git tag v0.2.0",
+        "git tag v0.3.0",
         "Deep Recon",
     ):
         assert expected in checklist
 
-    assert "context-neutral" in lowered
+    assert "engagement-aware" in lowered
     assert "brute force" in lowered
     assert "exploitation" in lowered
     assert "private evidence" in lowered
     assert "no zip evidence packs are staged" in lowered
 
     readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "docs/RELEASE_NOTES.md" in readme
     assert "docs/RELEASE_CHECKLIST.md" in readme
+
+
+def test_release_notes_document_v030_scope() -> None:
+    root = Path(__file__).resolve().parents[1]
+    notes_path = root / "docs" / "RELEASE_NOTES.md"
+    assert notes_path.is_file()
+
+    notes = notes_path.read_text(encoding="utf-8")
+    for expected in (
+        "v0.3.0 - Standard Operator Workflow",
+        "Standard Investigation Threads",
+        "Standard Investigation Workflow",
+        "Project engagement context",
+        "CTF / learning lab",
+        "Engagement-aware Standard wording",
+        "Standard Offline Route/Source Review",
+        "Route/source review noise reduction",
+        "Quick Recon is unchanged",
+        "Standard visible pipeline remains 12 steps",
+        "Standard scan volume is unchanged",
+        "Deep Recon remains unavailable",
+    ):
+        assert expected in notes
 
 
 def test_public_repo_security_and_ci_docs_exist() -> None:

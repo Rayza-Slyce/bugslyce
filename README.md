@@ -11,7 +11,7 @@ BugSlyce does not claim confirmed vulnerabilities. Its candidates and
 priorities describe where an operator may want to look next, not exploit
 severity or proof of impact.
 
-Current version: `0.2.0`
+Current version: `0.3.0`
 
 ## Why BugSlyce?
 
@@ -145,12 +145,13 @@ The interactive launcher can run doctor/readiness checks, scaffold a project,
 choose **Quick Recon**, **Standard Recon**, or **Manual Setup Only**, confirm
 authorisation, and optionally run the bounded MVP pipeline. Quick Recon maps
 to `lab-safe-tiny`. Standard Recon v1 maps to `standard-bounded`; it reuses
-the same bounded collection path and adds offline interpretation of
-already-collected evidence to the report as Manual Review Leads. **Deep
-Recon** remains a planned future mode and is not available yet. Recon mode
-names do not make activity automatically safe; authorisation and scope still
-matter. Manual Setup Only creates local project files and prints the next safe
-command preview without running recon.
+the same bounded collection path and adds offline operator workflow output:
+Manual Review Leads, Investigation Threads, Standard Investigation Workflow
+in `runbook.md`, engagement-aware wording, and Offline Route/Source Review.
+It does not increase scan volume. **Deep Recon** remains a planned future mode
+and is not available yet. Recon mode names do not make activity automatically
+safe; authorisation and scope still matter. Manual Setup Only creates local
+project files and prints the next safe command preview without running recon.
 
 Interactive mode defaults to `~/bugslyce-output` so project output is
 predictable regardless of the current working directory. Direct CLI commands
@@ -427,18 +428,21 @@ The test suite mocks live process execution and must not contact targets.
 
 ## Release Checkpoint
 
-- Current version: `0.2.0`
+- Current version: `0.3.0`
 - Quick Recon profile: `lab-safe-tiny`
 - Standard Recon v1 profile: `standard-bounded`
-- Standard report addition: offline `## Manual Review Leads`
+- Standard additions: offline `## Manual Review Leads`, `## Investigation
+  Threads`, `## Offline Route/Source Review`, and `## Standard Investigation
+  Workflow` in `runbook.md`
 - Standard scan volume: same bounded 12-step collection path as Quick
 - Deep Recon: planned and unavailable
-- Release tag: `v0.2.0`
+- Release tag: `v0.3.0`
 - Package publishing: not performed
 
 
-See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging
-future releases.
+See [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) and
+[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging future
+releases.
 
 ## Licence
 

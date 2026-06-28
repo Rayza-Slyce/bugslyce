@@ -88,6 +88,11 @@ remaining bounded, deterministic, and non-exploitative. In v1, its runtime
 value-add is offline interpretation of already-collected evidence, not
 increased scan volume.
 
+As of v0.3.0, Standard Recon still reuses the same bounded collection path as
+Quick Recon and adds an offline operator workflow layer: Manual Review Leads,
+Investigation Threads, Standard Investigation Workflow in `runbook.md`,
+engagement-aware wording, and Offline Route/Source Review.
+
 Standard Recon may eventually include modest bounded additions such as:
 
 - Broader handling of discovered HTTP/HTTPS services.

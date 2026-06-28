@@ -53,7 +53,7 @@ def test_cli_version_and_wizard_remain_available(capsys) -> None:
 
     version_output = capsys.readouterr()
     assert exc_info.value.code == 0
-    assert "bugslyce 0.2.0" in version_output.out
+    assert "bugslyce 0.3.0" in version_output.out
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--help"])

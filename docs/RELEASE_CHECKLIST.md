@@ -1,30 +1,50 @@
-# BugSlyce v0.2.0 Release Checklist
+# BugSlyce v0.3.0 Release Checklist
 
 ## Purpose
 
 This checklist is for manually reviewing whether the repository is ready to
-tag as `v0.2.0`.
+tag as `v0.3.0`.
 
 It does not create a release, create a Git tag, publish a package, or upload
 anything. It is an operator checklist only.
 
+Suggested release title:
+
+`BugSlyce v0.3.0 - Standard Operator Workflow`
+
+Release summary:
+
+Adds Standard Recon operator workflow improvements: Investigation Threads,
+Standard Investigation Workflow in `runbook.md`, project engagement context,
+engagement-aware Standard wording, and Offline Route/Source Review. Quick
+Recon remains unchanged. Standard still reuses the bounded 12-step collection
+pipeline and does not increase scan volume. Deep Recon remains unavailable.
+
 ## Current Release Scope
 
-The v0.2.0 checkpoint includes:
+BugSlyce v0.3.0 - Standard Operator Workflow includes:
 
 - Local readiness checks with `bugslyce doctor`.
 - Project scaffolding with a starter scope template.
+- Project engagement context metadata:
+  - Unknown / not specified.
+  - CTF / learning lab.
+  - Bug bounty.
+  - Internal authorised assessment.
 - Project inventory with `bugslyce project list`.
 - Quick Recon with `lab-safe-tiny`.
 - Standard Recon v1 with `standard-bounded`.
 - Standard Recon v1 reusing the same bounded 12-step collection path as Quick.
 - Standard Recon v1 adding offline `## Manual Review Leads` to `report.md`.
+- Standard Investigation Threads.
+- Standard Investigation Workflow in `runbook.md`.
+- Engagement-aware Standard wording.
+- Standard Offline Route/Source Review.
+- route/source review noise reduction for common HTML/default-page paths.
 - Standard Manual Review Lead noise reduction for local robots storage paths
   and synthetic hidden HTML wrappers.
 - Standard robots lead consolidation for unusual User-Agent values with
   hash-shaped or encoded-looking artefacts.
-- Context-neutral Standard review wording suitable for CTF/lab and bug bounty
-  use.
 - Deep Recon remaining planned and unavailable.
 - Conservative pipeline resume with `--resume`.
 - Deterministic Operator Summary and local report generation.
@@ -44,6 +64,12 @@ The v0.2.0 checkpoint includes:
 - [ ] No exploitation.
 - [ ] No recursive discovery.
 - [ ] No larger Standard scan volume compared with Quick.
+- [ ] No route fetching from Offline Route/Source Review.
+- [ ] No crawling.
+- [ ] No browser automation.
+- [ ] No JavaScript execution.
+- [ ] No online decoders.
+- [ ] No hash cracking.
 - [ ] No form submission.
 - [ ] No authentication testing.
 - [ ] No arbitrary user-supplied command flags.
@@ -56,6 +82,8 @@ Run local checks before tagging:
 
 ```bash
 .venv/bin/pytest
+.venv/bin/pytest tests/test_readme.py tests/test_recon_modes_doc.py tests/test_packaging.py tests/test_recon_modes.py
+git diff --check
 .venv/bin/bugslyce doctor
 .venv/bin/bugslyce --version
 .venv/bin/bugslyce wizard
@@ -63,6 +91,9 @@ Run local checks before tagging:
 ```
 
 - [ ] Full test suite passes.
+- [ ] Focused release/documentation tests pass.
+- [ ] `git diff --check` passes.
+- [ ] Safety grep shows no new unsafe runtime behaviour.
 - [ ] Doctor reports ready on Kali or the intended operator environment.
 - [ ] Version output is correct.
 - [ ] Wizard renders correctly.
@@ -75,6 +106,8 @@ Run local checks before tagging:
 - [ ] README explains safety model.
 - [ ] README explains outputs.
 - [ ] README explains limitations.
+- [ ] README release checkpoint references v0.3.0.
+- [ ] Recon modes documentation describes Standard operator workflow.
 - [ ] Demo walkthrough exists.
 - [ ] Demo walkthrough uses example IPs only.
 - [ ] No real THM/VPN IPs are included in public docs.
@@ -114,8 +147,17 @@ bugslyce project run \
 - [ ] Fresh pipeline completes.
 - [ ] Quick report omits `## Manual Review Leads`.
 - [ ] Standard report includes `## Manual Review Leads`.
+- [ ] Standard report includes `## Investigation Threads`.
+- [ ] Standard report includes `## Offline Route/Source Review`.
+- [ ] Standard runbook includes `## Standard Investigation Workflow`.
 - [ ] Standard profile is recorded as `standard-bounded`.
+- [ ] Standard visible pipeline remains 12 steps.
 - [ ] Standard does not increase scan volume over Quick.
+- [ ] Engagement context wizard accepts numeric and common text choices.
+- [ ] Engagement-aware Standard wording appears for the selected context.
+- [ ] Offline Route/Source Review filters default-page noise while preserving
+  useful route references.
+- [ ] Deep Recon remains unavailable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.
@@ -139,19 +181,19 @@ bugslyce project run \
 
 A Git tag marks a specific commit as a named version snapshot.
 
-For `v0.2.0`, after every checklist item passes, the operator may manually
+For `v0.3.0`, after every checklist item passes, the operator may manually
 run:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Do not tag until the checklist is complete. Do not tag a dirty working tree.
 Do not tag if private evidence is committed. Creating a GitHub release is
 optional and should be done manually.
 
-## Not Included In v0.2.0
+## Not Included In v0.3.0
 
 - No authenticated testing.
 - No vulnerability confirmation.
@@ -159,6 +201,9 @@ optional and should be done manually.
 - No Deep Recon.
 - No deep crawling.
 - No recursive discovery or larger Standard scan volume.
+- No route fetching from Offline Route/Source Review.
+- No browser automation or JavaScript execution.
+- No online decoders or hash cracking.
 - No brute force, authentication testing, or form submission.
 - No cloud sync.
 - No automatic reporting to third parties.
