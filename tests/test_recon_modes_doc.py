@@ -75,6 +75,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "Tests proving Deep has explicit bounds",
         "Tests proving Deep unavailable state is intentional until enabled",
         "Code-level planned profile contract and explicit bounds model",
+        "code-level planned-pipeline skeleton",
+        "static contract data only",
+        "does not make `deep-bounded` executable",
     ):
         assert expected.lower() in lowered
 

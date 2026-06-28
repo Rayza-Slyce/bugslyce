@@ -160,6 +160,7 @@ bugslyce project run \
 - [ ] Deep Recon remains unavailable.
 - [ ] Deep Recon still requires separate profile-bounds, implementation, test,
   and smoke-test gates before any future enablement.
+- [ ] Deep planned pipeline skeleton remains static, gated, and non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

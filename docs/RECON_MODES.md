@@ -340,6 +340,9 @@ Proposed future Deep pipeline shape:
 This pipeline shape is a design target only. It is not currently available
 runtime behaviour.
 
+Phase 75A adds a code-level planned-pipeline skeleton for these 24 Deep steps.
+The skeleton is static contract data only. It does not make `deep-bounded` executable, does not add runtime collection, does not add commands, and does not make Deep Recon available.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.
