@@ -81,6 +81,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "code-level planned output and artefact taxonomy",
         "does not create output files",
         "does not create evidence packs",
+        "code-level scope and safety preflight contract",
+        "planned gates for authorisation",
+        "does not inspect projects",
+        "does not read or write project files",
     ):
         assert expected.lower() in lowered
 

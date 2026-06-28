@@ -162,6 +162,8 @@ bugslyce project run \
   and smoke-test gates before any future enablement.
 - [ ] Deep planned pipeline skeleton remains static, gated, and non-executable.
 - [ ] Deep planned output taxonomy remains static, gated, and non-executable.
+- [ ] Deep scope/safety preflight contract remains static, gated, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

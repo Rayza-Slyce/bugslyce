@@ -346,6 +346,14 @@ The skeleton is static contract data only. It does not make `deep-bounded` execu
 Phase 75B adds a code-level planned output and artefact taxonomy for future
 Deep Recon outputs. The taxonomy is static contract data only. It does not create output files, does not write reports, does not create evidence packs, does not make `deep-bounded` executable, and does not make Deep Recon available.
 
+Phase 76A adds a code-level scope and safety preflight contract for future
+Deep Recon. The preflight contract defines planned gates for authorisation,
+explicit scope, engagement context, Deep bounds, supported method classes,
+local retention, and operator confirmation. It is static contract data only.
+It does not inspect projects, does not read or write project files, does not
+create outputs, does not make `deep-bounded` executable, and does not make
+Deep Recon available.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.
