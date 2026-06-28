@@ -77,6 +77,7 @@ from bugslyce.recon.content_followup import (
     run_content_followup_workflow,
     write_content_followup_execution_result,
 )
+from bugslyce.recon.deep_readiness import render_deep_recon_readiness_summary
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -366,6 +367,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Plan, inspect, or run narrowly scoped recon workflows.",
     )
     recon_subparsers = recon_parser.add_subparsers(dest="recon_command")
+    recon_subparsers.add_parser(
+        "deep-readiness",
+        help="Print the static Deep Recon readiness summary without running recon.",
+    )
     plan_parser = recon_subparsers.add_parser(
         "plan",
         help="Create a planning-only recon plan.",
@@ -927,6 +932,10 @@ def _project(args: argparse.Namespace) -> int:
 
 
 def _recon(args: argparse.Namespace) -> int:
+    if args.recon_command == "deep-readiness":
+        print(render_deep_recon_readiness_summary())
+        return 0
+
     if args.recon_command == "plan":
         try:
             plan = build_recon_plan(

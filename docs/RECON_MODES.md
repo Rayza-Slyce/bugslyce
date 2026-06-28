@@ -362,6 +362,12 @@ or write project files, does not create outputs, does not execute commands,
 does not make `deep-bounded` executable, and does not make Deep Recon
 available.
 
+Phase 77A exposes the static Deep Recon readiness summary through the
+informational command `bugslyce recon deep-readiness`. The command prints
+static contract Markdown to stdout only. It does not run Deep Recon, does not
+read or write project files, does not execute commands, does not create output
+files, and does not change mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

@@ -133,6 +133,61 @@ def test_cli_recon_preflight_help_exits_successfully(capsys) -> None:
     assert "--plan" in captured.out
 
 
+def test_cli_recon_deep_readiness_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-readiness", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-readiness" in captured.out
+    assert "--target" not in captured.out
+    assert "--scope" not in captured.out
+    assert "--output" not in captured.out
+    assert "--confirm" not in captured.out
+
+
+def test_cli_recon_deep_readiness_prints_static_summary(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["recon", "deep-readiness"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Deep Recon Readiness Summary")
+    assert "Deep Recon is planned and unavailable." in captured.out
+    assert "`deep-bounded` is a planned profile contract, not an executable profile." in captured.out
+    assert "This summary is static contract rendering only." in captured.out
+    assert "No runtime collection is performed." in captured.out
+    assert "No project files are read or written." in captured.out
+    assert "No commands are executed." in captured.out
+    assert "Quick Recon remains mapped to lab-safe-tiny." in captured.out
+    assert "Standard Recon remains mapped to standard-bounded." in captured.out
+    assert "Total planned steps: 24" in captured.out
+    assert "Active collection steps: 12" in captured.out
+    assert "Offline/correlation/reporting steps: 12" in captured.out
+    assert "Total planned outputs: 25" in captured.out
+    assert "Total preflight requirements: 22" in captured.out
+    assert "Planned pipeline contract: valid" in captured.out
+    assert "Planned output taxonomy: valid" in captured.out
+    assert "Preflight contract: valid" in captured.out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_readiness_rejects_runtime_arguments(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-readiness", "--target", "10.10.10.10"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "unrecognized arguments" in captured.err
+
+
 def test_cli_recon_curl_headers_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["recon", "curl-headers", "--help"])

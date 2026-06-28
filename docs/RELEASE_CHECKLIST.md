@@ -166,6 +166,8 @@ bugslyce project run \
   non-executable.
 - [ ] Deep readiness summary renderer remains static, gated, and
   non-executable.
+- [ ] `bugslyce recon deep-readiness` remains stdout-only, static, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

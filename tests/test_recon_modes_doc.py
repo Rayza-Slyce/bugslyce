@@ -88,6 +88,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "static Deep Recon readiness summary renderer",
         "combines the Deep profile contract, explicit bounds, planned pipeline, planned",
         "static contract rendering only",
+        "`bugslyce recon deep-readiness`",
+        "static contract Markdown to stdout only",
+        "does not run Deep Recon",
+        "does not change mode availability",
     ):
         assert expected.lower() in lowered
 
