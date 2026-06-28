@@ -78,6 +78,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "code-level planned-pipeline skeleton",
         "static contract data only",
         "does not make `deep-bounded` executable",
+        "code-level planned output and artefact taxonomy",
+        "does not create output files",
+        "does not create evidence packs",
     ):
         assert expected.lower() in lowered
 

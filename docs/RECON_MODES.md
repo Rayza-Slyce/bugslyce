@@ -343,6 +343,9 @@ runtime behaviour.
 Phase 75A adds a code-level planned-pipeline skeleton for these 24 Deep steps.
 The skeleton is static contract data only. It does not make `deep-bounded` executable, does not add runtime collection, does not add commands, and does not make Deep Recon available.
 
+Phase 75B adds a code-level planned output and artefact taxonomy for future
+Deep Recon outputs. The taxonomy is static contract data only. It does not create output files, does not write reports, does not create evidence packs, does not make `deep-bounded` executable, and does not make Deep Recon available.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.
