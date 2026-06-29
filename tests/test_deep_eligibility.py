@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+import json
 
 import pytest
 
-from bugslyce.cli import main
 from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_eligibility import (
     SUPPORTED_DEEP_ENGAGEMENT_CONTEXTS,
@@ -14,6 +14,8 @@ from bugslyce.recon.deep_eligibility import (
     build_confirmed_deep_eligibility_input,
     build_default_blocked_deep_eligibility_input,
     evaluate_deep_recon_eligibility,
+    export_deep_recon_eligibility_json,
+    render_deep_recon_eligibility_markdown,
 )
 from bugslyce.recon.deep_preflight import get_deep_recon_preflight_requirements
 from bugslyce.recon.modes import (
@@ -165,6 +167,43 @@ def test_deep_eligibility_decision_is_deterministic_and_non_executable() -> None
     assert "execute" not in keys
 
 
+def test_deep_eligibility_markdown_renders_blocked_and_eligible_decisions() -> None:
+    blocked = evaluate_deep_recon_eligibility(build_default_blocked_deep_eligibility_input())
+    eligible = evaluate_deep_recon_eligibility(build_confirmed_deep_eligibility_input())
+
+    blocked_markdown = render_deep_recon_eligibility_markdown(blocked)
+    eligible_markdown = render_deep_recon_eligibility_markdown(eligible)
+
+    assert blocked_markdown == render_deep_recon_eligibility_markdown(blocked)
+    assert blocked_markdown.startswith("# Deep Recon Eligibility\n")
+    assert "- Status: `blocked`" in blocked_markdown
+    assert "- Eligible: `false`" in blocked_markdown
+    assert "`deep-preflight-authorisation-declared`" in blocked_markdown
+    assert "## Non-Executable Guarantees" in blocked_markdown
+
+    assert eligible_markdown.startswith("# Deep Recon Eligibility\n")
+    assert "- Status: `eligible`" in eligible_markdown
+    assert "- Eligible: `true`" in eligible_markdown
+    assert "## Blocking Reasons\n\n- None." in eligible_markdown
+
+
+def test_deep_eligibility_json_export_is_deterministic_and_serialisable() -> None:
+    decision = evaluate_deep_recon_eligibility(build_default_blocked_deep_eligibility_input())
+    payload = export_deep_recon_eligibility_json(decision)
+
+    assert payload == export_deep_recon_eligibility_json(decision)
+    assert json.loads(json.dumps(payload, sort_keys=True)) == payload
+    assert payload["schema_version"] == 1
+    assert payload["eligible"] is False
+    assert payload["status"] == "blocked"
+    assert payload["warnings"] == []
+    assert payload["blocking_reasons"]
+    keys = set(_walk_keys(payload))
+    assert "argv" not in keys
+    assert "command_preview" not in keys
+    assert "execute" not in keys
+
+
 def test_deep_eligibility_does_not_create_project_files(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -174,15 +213,6 @@ def test_deep_eligibility_does_not_create_project_files(tmp_path, monkeypatch) -
 
     assert decision.eligible is True
     assert list(tmp_path.iterdir()) == []
-
-
-def test_deep_eligibility_has_no_cli_exposure(capsys) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["recon", "deep-eligibility"])
-
-    captured = capsys.readouterr()
-    assert exc_info.value.code == 2
-    assert "invalid choice" in captured.err
 
 
 def test_deep_bounded_remains_non_executable_in_planner_and_pipeline(

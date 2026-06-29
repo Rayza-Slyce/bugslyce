@@ -6,7 +6,7 @@ create outputs, call the runtime planner, or make network requests.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from bugslyce.core.engagement_context import (
     BUG_BOUNTY_CONTEXT,
@@ -209,6 +209,85 @@ def evaluate_deep_recon_eligibility(
         checked_requirements=tuple(requirement.requirement_id for requirement in requirements),
         non_executable_guarantees=DEEP_ELIGIBILITY_GUARANTEES,
     )
+
+
+def render_deep_recon_eligibility_markdown(
+    decision: DeepReconEligibilityDecision,
+) -> str:
+    """Render a deterministic Markdown Deep eligibility decision."""
+
+    lines = [
+        "# Deep Recon Eligibility",
+        "",
+        f"- Status: `{decision.status}`",
+        f"- Eligible: `{str(decision.eligible).lower()}`",
+        f"- Blocking reasons: {len(decision.blocking_reasons)}",
+        f"- Warnings: {len(decision.warnings)}",
+        "",
+        "## Blocking Reasons",
+        "",
+    ]
+    if not decision.blocking_reasons:
+        lines.append("- None.")
+    else:
+        for reason in decision.blocking_reasons:
+            lines.extend(
+                [
+                    f"- `{reason.requirement_id}`: {reason.name}",
+                    f"  - Severity: `{reason.severity}`",
+                    f"  - Message: {reason.message}",
+                ]
+            )
+
+    lines.extend(["", "## Warnings", ""])
+    if not decision.warnings:
+        lines.append("- None.")
+    else:
+        for warning in decision.warnings:
+            lines.extend(
+                [
+                    f"- `{warning.requirement_id}`: {warning.name}",
+                    f"  - Severity: `{warning.severity}`",
+                    f"  - Message: {warning.message}",
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Checked Requirements",
+            "",
+            f"- Count: {len(decision.checked_requirements)}",
+        ]
+    )
+    lines.extend(f"- `{requirement_id}`" for requirement_id in decision.checked_requirements)
+
+    lines.extend(["", "## Non-Executable Guarantees", ""])
+    lines.extend(f"- {guarantee}" for guarantee in decision.non_executable_guarantees)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def export_deep_recon_eligibility_json(
+    decision: DeepReconEligibilityDecision,
+) -> dict[str, object]:
+    """Return a deterministic JSON-serialisable eligibility payload."""
+
+    return {
+        "schema_version": 1,
+        "eligible": decision.eligible,
+        "status": decision.status,
+        "blocking_reasons": [
+            asdict(reason)
+            for reason in decision.blocking_reasons
+        ],
+        "warnings": [
+            asdict(warning)
+            for warning in decision.warnings
+        ],
+        "checked_requirements": list(decision.checked_requirements),
+        "non_executable_guarantees": list(decision.non_executable_guarantees),
+    }
 
 
 def _reason(requirement: DeepReconPreflightRequirement) -> DeepReconEligibilityReason:

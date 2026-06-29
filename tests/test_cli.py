@@ -238,7 +238,153 @@ def test_cli_recon_deep_readiness_rejects_runtime_arguments(
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "unrecognized arguments" in captured.err
+    assert (
+        "unrecognized arguments" in captured.err
+        or "ambiguous option" in captured.err
+    )
+
+
+def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-eligibility", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-eligibility" in captured.out
+    assert "--json" in captured.out
+    assert "--authorisation-declared" in captured.out
+    assert "--engagement-context" in captured.out
+    assert "--target " not in captured.out
+    assert "--scope " not in captured.out
+    assert "--output" not in captured.out
+    assert "--confirm " not in captured.out
+
+
+def test_cli_recon_deep_eligibility_defaults_to_blocked_markdown(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["recon", "deep-eligibility"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Deep Recon Eligibility")
+    assert "- Status: `blocked`" in captured.out
+    assert "- Eligible: `false`" in captured.out
+    assert "`deep-preflight-authorisation-declared`" in captured.out
+    assert "`deep-preflight-engagement-context-explicit`" in captured.out
+    assert "`deep-preflight-no-inferred-scope`" in captured.out
+    assert "`deep-preflight-operator-confirmation`" in captured.out
+    assert "No commands are executed." in captured.out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_eligibility_defaults_to_blocked_json(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["recon", "deep-eligibility", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert payload["eligible"] is False
+    assert payload["status"] == "blocked"
+    assert {
+        reason["requirement_id"]
+        for reason in payload["blocking_reasons"]
+    }.issuperset(
+        {
+            "deep-preflight-authorisation-declared",
+            "deep-preflight-engagement-context-explicit",
+            "deep-preflight-no-inferred-scope",
+            "deep-preflight-operator-confirmation",
+        }
+    )
+    assert payload["non_executable_guarantees"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_eligibility_can_render_explicit_eligible_json(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = [
+        "recon",
+        "deep-eligibility",
+        "--json",
+        "--authorisation-declared",
+        "--engagement-context",
+        "ctf_lab",
+        "--target-in-scope",
+        "--scope-rules-present",
+        "--scope-not-inferred",
+        "--target-control-confirmed",
+        "--bounds-acknowledged",
+        "--no-form-submission-required",
+        "--no-authentication-testing-required",
+        "--no-brute-force-required",
+        "--no-browser-automation-required",
+        "--no-javascript-execution-required",
+        "--no-payload-injection-required",
+        "--no-automatic-external-reporting-required",
+        "--local-retention-acknowledged",
+        "--operator-confirmed-deep-intent",
+    ]
+
+    exit_code = main(args)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["eligible"] is True
+    assert payload["status"] == "eligible"
+    assert payload["blocking_reasons"] == []
+    assert "Deep Recon remains unavailable." in payload["non_executable_guarantees"]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    (
+        ["--target", "10.10.10.10"],
+        ["--scope", "scope.md"],
+        ["--scope-file", "scope.md"],
+        ["--project", "bugslyce_project.json"],
+        ["--input", "input.json"],
+        ["--output", "eligibility.json"],
+        ["--output-dir", "out"],
+        ["--confirm"],
+        ["--run"],
+        ["--execute"],
+    ),
+)
+def test_cli_recon_deep_eligibility_rejects_runtime_arguments(
+    extra_args: list[str],
+    capsys,
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-eligibility", *extra_args])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert (
+        "unrecognized arguments" in captured.err
+        or "ambiguous option" in captured.err
+    )
 
 
 def test_cli_recon_curl_headers_help_exits_successfully(capsys) -> None:

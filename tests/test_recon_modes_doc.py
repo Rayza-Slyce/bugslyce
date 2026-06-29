@@ -100,6 +100,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "explicit operator-provided facts",
         "targets, does not read or write project files",
         "does not expose a CLI command",
+        "`bugslyce recon deep-eligibility`",
+        "fails closed",
+        "explicit operator-provided facts plus static contract",
+        "`bugslyce recon deep-eligibility --json`",
     ):
         assert expected.lower() in lowered
 

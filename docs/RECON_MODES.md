@@ -383,6 +383,14 @@ targets, does not read or write project files, does not execute commands, does
 not create output files, does not expose a CLI command, and does not change
 mode availability.
 
+Phase 78B exposes the eligibility evaluator through the informational command
+`bugslyce recon deep-eligibility`. The command is stdout-only, fails closed by
+default, and uses explicit operator-provided facts plus static contract
+validation. `bugslyce recon deep-eligibility --json` prints the same decision
+as deterministic JSON. The command does not run Deep Recon, does not inspect
+targets, does not read or write project files, does not execute commands, does
+not create output files, and does not change mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

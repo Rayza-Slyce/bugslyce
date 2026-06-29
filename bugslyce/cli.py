@@ -78,6 +78,20 @@ from bugslyce.recon.content_followup import (
     run_content_followup_workflow,
     write_content_followup_execution_result,
 )
+from bugslyce.recon.deep_eligibility import (
+    DeepReconEligibilityInput,
+    evaluate_deep_recon_eligibility,
+    export_deep_recon_eligibility_json,
+    render_deep_recon_eligibility_markdown,
+)
+from bugslyce.recon.deep_outputs import (
+    get_deep_recon_planned_outputs,
+    validate_deep_recon_planned_outputs,
+)
+from bugslyce.recon.deep_plan import (
+    get_deep_recon_planned_pipeline,
+    validate_deep_recon_planned_pipeline,
+)
 from bugslyce.recon.deep_readiness import (
     build_deep_recon_readiness_snapshot,
     render_deep_recon_readiness_summary,
@@ -380,6 +394,76 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the static Deep Recon readiness snapshot as JSON.",
     )
+    deep_eligibility_parser = recon_subparsers.add_parser(
+        "deep-eligibility",
+        help="Evaluate static Deep eligibility from explicit operator-provided facts.",
+    )
+    deep_eligibility_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the static Deep eligibility decision as JSON.",
+    )
+    deep_eligibility_parser.add_argument(
+        "--engagement-context",
+        choices=("ctf_lab", "bug_bounty", "internal_authorised"),
+        default="",
+        help="Explicit engagement context fact for Deep eligibility.",
+    )
+    deep_eligibility_parser.add_argument("--authorisation-declared", action="store_true")
+    deep_eligibility_parser.add_argument("--target-in-scope", action="store_true")
+    deep_eligibility_parser.add_argument("--scope-rules-present", action="store_true")
+    deep_eligibility_parser.add_argument(
+        "--scope-not-inferred",
+        dest="scope_is_inferred",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument("--target-control-confirmed", action="store_true")
+    deep_eligibility_parser.add_argument("--bounds-acknowledged", action="store_true")
+    deep_eligibility_parser.add_argument(
+        "--no-form-submission-required",
+        dest="form_submission_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-authentication-testing-required",
+        dest="authentication_testing_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-brute-force-required",
+        dest="brute_force_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-browser-automation-required",
+        dest="browser_automation_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-javascript-execution-required",
+        dest="javascript_execution_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-payload-injection-required",
+        dest="payload_injection_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument(
+        "--no-automatic-external-reporting-required",
+        dest="automatic_external_reporting_required",
+        action="store_false",
+        default=True,
+    )
+    deep_eligibility_parser.add_argument("--local-retention-acknowledged", action="store_true")
+    deep_eligibility_parser.add_argument("--operator-confirmed-deep-intent", action="store_true")
     plan_parser = recon_subparsers.add_parser(
         "plan",
         help="Create a planning-only recon plan.",
@@ -940,12 +1024,49 @@ def _project(args: argparse.Namespace) -> int:
     return 2
 
 
+def _deep_eligibility_input_from_args(args: argparse.Namespace) -> DeepReconEligibilityInput:
+    planned_pipeline = get_deep_recon_planned_pipeline()
+    planned_outputs = get_deep_recon_planned_outputs()
+    pipeline_valid = not validate_deep_recon_planned_pipeline(planned_pipeline)
+    outputs_valid = not validate_deep_recon_planned_outputs(planned_outputs)
+
+    return DeepReconEligibilityInput(
+        authorisation_declared=args.authorisation_declared,
+        engagement_context=args.engagement_context,
+        target_in_scope=args.target_in_scope,
+        scope_rules_present=args.scope_rules_present,
+        scope_is_inferred=args.scope_is_inferred,
+        target_control_confirmed=args.target_control_confirmed,
+        bounds_acknowledged=args.bounds_acknowledged,
+        planned_pipeline_valid=pipeline_valid,
+        planned_outputs_valid=outputs_valid,
+        method_classes_supported=pipeline_valid,
+        form_submission_required=args.form_submission_required,
+        authentication_testing_required=args.authentication_testing_required,
+        brute_force_required=args.brute_force_required,
+        browser_automation_required=args.browser_automation_required,
+        javascript_execution_required=args.javascript_execution_required,
+        payload_injection_required=args.payload_injection_required,
+        automatic_external_reporting_required=args.automatic_external_reporting_required,
+        local_retention_acknowledged=args.local_retention_acknowledged,
+        operator_confirmed_deep_intent=args.operator_confirmed_deep_intent,
+    )
+
+
 def _recon(args: argparse.Namespace) -> int:
     if args.recon_command == "deep-readiness":
         if args.json:
             print(json.dumps(build_deep_recon_readiness_snapshot(), indent=2, sort_keys=True))
         else:
             print(render_deep_recon_readiness_summary())
+        return 0
+
+    if args.recon_command == "deep-eligibility":
+        decision = evaluate_deep_recon_eligibility(_deep_eligibility_input_from_args(args))
+        if args.json:
+            print(json.dumps(export_deep_recon_eligibility_json(decision), indent=2, sort_keys=True))
+        else:
+            print(render_deep_recon_eligibility_markdown(decision))
         return 0
 
     if args.recon_command == "plan":
