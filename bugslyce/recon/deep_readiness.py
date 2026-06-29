@@ -22,10 +22,115 @@ from bugslyce.recon.deep_preflight import (
     validate_deep_recon_preflight_requirements,
 )
 from bugslyce.recon.modes import (
+    DEEP_RECON_PROFILE,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
+    get_recon_mode,
     get_deep_recon_profile_contract,
 )
+
+
+def build_deep_recon_readiness_snapshot() -> dict[str, object]:
+    """Return a deterministic JSON-serialisable Deep readiness snapshot."""
+
+    contract = get_deep_recon_profile_contract()
+    bounds = contract.bounds
+    steps = get_deep_recon_planned_pipeline()
+    outputs = get_deep_recon_planned_outputs()
+    requirements = get_deep_recon_preflight_requirements()
+    pipeline_errors = validate_deep_recon_planned_pipeline(steps)
+    output_errors = validate_deep_recon_planned_outputs(outputs)
+    preflight_errors = validate_deep_recon_preflight_requirements(requirements)
+
+    active_steps = tuple(step for step in steps if step.active_collection)
+    passive_steps = tuple(step for step in steps if not step.active_collection)
+    blocking_requirements = tuple(requirement for requirement in requirements if requirement.blocking)
+
+    return {
+        "schema_version": 1,
+        "status": {
+            "deep_available": get_recon_mode("deep").is_available,
+            "deep_executable": False,
+            "deep_status": contract.availability,
+            "summary": "Deep Recon is planned and unavailable.",
+        },
+        "mode_mappings": {
+            "quick": QUICK_RECON_PROFILE,
+            "standard": STANDARD_RECON_PROFILE,
+            "deep": DEEP_RECON_PROFILE,
+        },
+        "profile_contract": {
+            "mode_name": contract.mode_name,
+            "internal_profile": contract.internal_profile,
+            "availability": contract.availability,
+            "default_behaviour_status": contract.default_behaviour_status,
+            "allowed_method_class": contract.allowed_method_class,
+            "purpose": contract.purpose,
+        },
+        "bounds": {
+            bound_field.name: getattr(bounds, bound_field.name)
+            for bound_field in fields(bounds)
+        },
+        "counts": {
+            "planned_steps": len(steps),
+            "active_collection_steps": len(active_steps),
+            "offline_correlation_reporting_steps": len(passive_steps),
+            "planned_outputs": len(outputs),
+            "preflight_requirements": len(requirements),
+            "blocking_preflight_requirements": len(blocking_requirements),
+        },
+        "planned_pipeline": [
+            {
+                "step_id": step.step_id,
+                "name": step.name,
+                "active_collection": step.active_collection,
+                "method_class": step.method_class,
+                "uses_bounds": list(step.uses_bounds),
+                "planned_outputs": list(step.planned_outputs),
+            }
+            for step in steps
+        ],
+        "planned_outputs": [
+            {
+                "output_id": output.output_id,
+                "name": output.name,
+                "output_kind": output.output_kind,
+                "sensitivity": output.sensitivity,
+                "producer_step_id": output.producer_step_id,
+                "contains_target_data": output.contains_target_data,
+            }
+            for output in outputs
+        ],
+        "preflight_requirements": [
+            {
+                "requirement_id": requirement.requirement_id,
+                "name": requirement.name,
+                "category": requirement.category,
+                "severity": requirement.severity,
+                "blocking": requirement.blocking,
+                "related_deep_step_ids": list(requirement.related_deep_step_ids),
+                "related_output_ids": list(requirement.related_output_ids),
+            }
+            for requirement in requirements
+        ],
+        "validation": {
+            "planned_pipeline_valid": not pipeline_errors,
+            "planned_pipeline_errors": list(pipeline_errors),
+            "planned_outputs_valid": not output_errors,
+            "planned_outputs_errors": list(output_errors),
+            "preflight_contract_valid": not preflight_errors,
+            "preflight_contract_errors": list(preflight_errors),
+        },
+        "non_executable_guarantees": [
+            "Deep Recon remains unavailable.",
+            "`deep-bounded` is not an executable profile.",
+            "No runtime collection is performed.",
+            "No project files are read or written.",
+            "No commands are executed.",
+            "No output files are created.",
+            "Quick and Standard mappings remain unchanged.",
+        ],
+    }
 
 
 def render_deep_recon_readiness_summary() -> str:

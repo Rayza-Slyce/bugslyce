@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 from typing import Sequence
@@ -77,7 +78,10 @@ from bugslyce.recon.content_followup import (
     run_content_followup_workflow,
     write_content_followup_execution_result,
 )
-from bugslyce.recon.deep_readiness import render_deep_recon_readiness_summary
+from bugslyce.recon.deep_readiness import (
+    build_deep_recon_readiness_snapshot,
+    render_deep_recon_readiness_summary,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -367,9 +371,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Plan, inspect, or run narrowly scoped recon workflows.",
     )
     recon_subparsers = recon_parser.add_subparsers(dest="recon_command")
-    recon_subparsers.add_parser(
+    deep_readiness_parser = recon_subparsers.add_parser(
         "deep-readiness",
         help="Print the static Deep Recon readiness summary without running recon.",
+    )
+    deep_readiness_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the static Deep Recon readiness snapshot as JSON.",
     )
     plan_parser = recon_subparsers.add_parser(
         "plan",
@@ -933,7 +942,10 @@ def _project(args: argparse.Namespace) -> int:
 
 def _recon(args: argparse.Namespace) -> int:
     if args.recon_command == "deep-readiness":
-        print(render_deep_recon_readiness_summary())
+        if args.json:
+            print(json.dumps(build_deep_recon_readiness_snapshot(), indent=2, sort_keys=True))
+        else:
+            print(render_deep_recon_readiness_summary())
         return 0
 
     if args.recon_command == "plan":

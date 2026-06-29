@@ -92,6 +92,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "static contract Markdown to stdout only",
         "does not run Deep Recon",
         "does not change mode availability",
+        "machine-readable Deep Recon readiness snapshot",
+        "`bugslyce recon deep-readiness --json`",
+        "contract snapshot as JSON to stdout only",
+        "validation status as the Markdown renderer",
     ):
         assert expected.lower() in lowered
 

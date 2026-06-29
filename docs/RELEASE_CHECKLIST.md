@@ -168,6 +168,8 @@ bugslyce project run \
   non-executable.
 - [ ] `bugslyce recon deep-readiness` remains stdout-only, static, and
   non-executable.
+- [ ] `bugslyce recon deep-readiness --json` remains stdout-only, static, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

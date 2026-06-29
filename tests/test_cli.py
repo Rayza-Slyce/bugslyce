@@ -141,6 +141,7 @@ def test_cli_recon_deep_readiness_help_exits_successfully(capsys) -> None:
 
     assert exc_info.value.code == 0
     assert "usage: bugslyce recon deep-readiness" in captured.out
+    assert "--json" in captured.out
     assert "--target" not in captured.out
     assert "--scope" not in captured.out
     assert "--output" not in captured.out
@@ -179,9 +180,61 @@ def test_cli_recon_deep_readiness_prints_static_summary(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_cli_recon_deep_readiness_rejects_runtime_arguments(capsys) -> None:
+def test_cli_recon_deep_readiness_prints_static_json_snapshot(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["recon", "deep-readiness", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    snapshot = json.loads(captured.out)
+    assert snapshot["schema_version"] == 1
+    assert snapshot["status"]["deep_available"] is False
+    assert snapshot["status"]["deep_executable"] is False
+    assert snapshot["mode_mappings"] == {
+        "quick": "lab-safe-tiny",
+        "standard": "standard-bounded",
+        "deep": "deep-bounded",
+    }
+    assert snapshot["counts"] == {
+        "planned_steps": 24,
+        "active_collection_steps": 12,
+        "offline_correlation_reporting_steps": 12,
+        "planned_outputs": 25,
+        "preflight_requirements": 22,
+        "blocking_preflight_requirements": 22,
+    }
+    assert snapshot["validation"] == {
+        "planned_pipeline_valid": True,
+        "planned_pipeline_errors": [],
+        "planned_outputs_valid": True,
+        "planned_outputs_errors": [],
+        "preflight_contract_valid": True,
+        "preflight_contract_errors": [],
+    }
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    (
+        ["--target", "10.10.10.10"],
+        ["--scope", "scope.md"],
+        ["--output", "deep-readiness.json"],
+        ["--confirm"],
+    ),
+)
+def test_cli_recon_deep_readiness_rejects_runtime_arguments(
+    extra_args: list[str],
+    capsys,
+) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        main(["recon", "deep-readiness", "--target", "10.10.10.10"])
+        main(["recon", "deep-readiness", *extra_args])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2

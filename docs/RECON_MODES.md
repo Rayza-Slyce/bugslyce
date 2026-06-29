@@ -368,6 +368,14 @@ static contract Markdown to stdout only. It does not run Deep Recon, does not
 read or write project files, does not execute commands, does not create output
 files, and does not change mode availability.
 
+Phase 77B adds a machine-readable Deep Recon readiness snapshot. The
+informational command `bugslyce recon deep-readiness --json` prints the static
+contract snapshot as JSON to stdout only. JSON mode uses the same profile
+contract, bounds, planned pipeline, planned outputs, preflight gates, and
+validation status as the Markdown renderer. It does not run Deep Recon, does
+not read or write project files, does not execute commands, does not create
+output files, and does not change mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

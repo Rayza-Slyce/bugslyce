@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_outputs import get_deep_recon_planned_outputs
 from bugslyce.recon.deep_plan import get_deep_recon_planned_pipeline
 from bugslyce.recon.deep_preflight import get_deep_recon_preflight_requirements
-from bugslyce.recon.deep_readiness import render_deep_recon_readiness_summary
+from bugslyce.recon.deep_readiness import (
+    build_deep_recon_readiness_snapshot,
+    render_deep_recon_readiness_summary,
+)
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -18,6 +23,18 @@ from bugslyce.recon.modes import (
     resolve_executable_profile,
 )
 from bugslyce.recon.planner import build_recon_plan
+
+
+def _walk_keys(value: object) -> tuple[str, ...]:
+    keys: list[str] = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            keys.append(str(key))
+            keys.extend(_walk_keys(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            keys.extend(_walk_keys(nested))
+    return tuple(keys)
 
 
 def test_deep_readiness_summary_is_deterministic_markdown() -> None:
@@ -37,6 +54,126 @@ def test_deep_readiness_summary_is_deterministic_markdown() -> None:
         "## Non-Executable Guarantees",
     ):
         assert heading in first
+
+
+def test_deep_readiness_snapshot_is_deterministic_json_serialisable_data() -> None:
+    first = build_deep_recon_readiness_snapshot()
+    second = build_deep_recon_readiness_snapshot()
+
+    assert first == second
+    assert json.loads(json.dumps(first, sort_keys=True)) == first
+    assert tuple(first) == (
+        "schema_version",
+        "status",
+        "mode_mappings",
+        "profile_contract",
+        "bounds",
+        "counts",
+        "planned_pipeline",
+        "planned_outputs",
+        "preflight_requirements",
+        "validation",
+        "non_executable_guarantees",
+    )
+
+
+def test_deep_readiness_snapshot_status_mappings_counts_and_validation() -> None:
+    snapshot = build_deep_recon_readiness_snapshot()
+
+    assert snapshot["schema_version"] == 1
+    assert snapshot["status"] == {
+        "deep_available": False,
+        "deep_executable": False,
+        "deep_status": "planned/unavailable",
+        "summary": "Deep Recon is planned and unavailable.",
+    }
+    assert snapshot["mode_mappings"] == {
+        "quick": "lab-safe-tiny",
+        "standard": "standard-bounded",
+        "deep": "deep-bounded",
+    }
+    assert snapshot["counts"] == {
+        "planned_steps": 24,
+        "active_collection_steps": 12,
+        "offline_correlation_reporting_steps": 12,
+        "planned_outputs": 25,
+        "preflight_requirements": 22,
+        "blocking_preflight_requirements": 22,
+    }
+    assert snapshot["validation"] == {
+        "planned_pipeline_valid": True,
+        "planned_pipeline_errors": [],
+        "planned_outputs_valid": True,
+        "planned_outputs_errors": [],
+        "preflight_contract_valid": True,
+        "preflight_contract_errors": [],
+    }
+
+
+def test_deep_readiness_snapshot_includes_bounds_pipeline_outputs_and_preflight() -> None:
+    snapshot = build_deep_recon_readiness_snapshot()
+
+    assert snapshot["bounds"] == {
+        "max_total_requests": 1500,
+        "max_requests_per_service": 400,
+        "max_second_pass_directories": 8,
+        "max_second_pass_requests_per_directory": 100,
+        "max_crawl_depth": 1,
+        "max_crawl_pages": 50,
+        "max_js_files": 50,
+        "max_source_files": 80,
+        "max_source_map_files": 10,
+        "max_body_bytes": 1_000_000,
+        "max_redirects": 5,
+        "request_timeout_seconds": 10,
+        "rate_limit_delay_seconds": 0.1,
+    }
+    assert len(snapshot["planned_pipeline"]) == 24
+    assert snapshot["planned_pipeline"][0] == {
+        "step_id": "deep-01-scope-validation",
+        "name": "Environment and scope validation",
+        "active_collection": False,
+        "method_class": "local validation",
+        "uses_bounds": [],
+        "planned_outputs": ["deep-output-scope-safety-summary"],
+    }
+    assert len(snapshot["planned_outputs"]) == 25
+    assert snapshot["planned_outputs"][-1] == {
+        "output_id": "deep-output-evidence-pack-manifest",
+        "name": "Deep Evidence Pack Manifest",
+        "output_kind": "export_manifest",
+        "sensitivity": "high",
+        "producer_step_id": "deep-24-evidence-pack-export",
+        "contains_target_data": True,
+    }
+    assert len(snapshot["preflight_requirements"]) == 22
+    assert snapshot["preflight_requirements"][0] == {
+        "requirement_id": "deep-preflight-authorisation-declared",
+        "name": "Explicit authorisation declared",
+        "category": "authorisation",
+        "severity": "critical",
+        "blocking": True,
+        "related_deep_step_ids": ["deep-01-scope-validation"],
+        "related_output_ids": ["deep-output-scope-safety-summary"],
+    }
+
+
+def test_deep_readiness_snapshot_has_non_executable_guarantees_and_no_command_shape() -> None:
+    snapshot = build_deep_recon_readiness_snapshot()
+
+    assert snapshot["non_executable_guarantees"] == [
+        "Deep Recon remains unavailable.",
+        "`deep-bounded` is not an executable profile.",
+        "No runtime collection is performed.",
+        "No project files are read or written.",
+        "No commands are executed.",
+        "No output files are created.",
+        "Quick and Standard mappings remain unchanged.",
+    ]
+    keys = set(_walk_keys(snapshot))
+    assert "argv" not in keys
+    assert "command_preview" not in keys
+    assert "execute" not in keys
 
 
 def test_deep_readiness_summary_contains_required_status_wording() -> None:
