@@ -376,6 +376,13 @@ validation status as the Markdown renderer. It does not run Deep Recon, does
 not read or write project files, does not execute commands, does not create
 output files, and does not change mode availability.
 
+Phase 78A adds a pure internal Deep Recon eligibility evaluator. The evaluator
+converts explicit operator-provided facts into a deterministic eligibility
+decision for future Deep gating. It does not run Deep Recon, does not inspect
+targets, does not read or write project files, does not execute commands, does
+not create output files, does not expose a CLI command, and does not change
+mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.
