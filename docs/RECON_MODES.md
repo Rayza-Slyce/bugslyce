@@ -391,6 +391,14 @@ as deterministic JSON. The command does not run Deep Recon, does not inspect
 targets, does not read or write project files, does not execute commands, does
 not create output files, and does not change mode availability.
 
+Phase 79A adds a pure internal Deep common metadata request planner. It plans
+a bounded deterministic queue for common metadata files from explicit
+in-scope HTTP service URLs, including `robots.txt`, `sitemap.xml`,
+`security.txt`, `.well-known/security.txt`, `humans.txt`,
+`crossdomain.xml`, `clientaccesspolicy.xml`, and `favicon.ico`. It does not fetch URLs, does not make network requests, does not read or write project
+files, does not execute commands, does not expose a CLI command, and does not
+change mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

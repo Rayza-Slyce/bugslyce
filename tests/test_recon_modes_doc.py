@@ -104,6 +104,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "fails closed",
         "explicit operator-provided facts plus static contract",
         "`bugslyce recon deep-eligibility --json`",
+        "pure internal Deep common metadata request planner",
+        "bounded deterministic queue for common metadata files",
+        "does not fetch URLs",
+        "does not expose a CLI command",
     ):
         assert expected.lower() in lowered
 

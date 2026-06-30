@@ -173,6 +173,8 @@ bugslyce project run \
 - [ ] Deep eligibility evaluator remains pure, internal, and non-executable.
 - [ ] `bugslyce recon deep-eligibility` remains stdout-only, fail-closed, and
   non-executable.
+- [ ] Deep common metadata request planner remains pure, internal, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.
