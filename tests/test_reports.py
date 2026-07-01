@@ -91,6 +91,45 @@ def test_default_report_does_not_include_manual_review_leads_section() -> None:
     report, _state, _candidates = _basic_saas_report()
 
     assert "## Manual Review Leads" not in report
+    assert "## Human Triage Brief" not in report
+    assert "## Readable Evidence Cards" not in report
+
+
+def test_report_can_include_prerendered_human_triage_and_cards_sections() -> None:
+    _report, state, candidates = _basic_saas_report()
+    brief_section = "\n".join(
+        [
+            "## Human Triage Brief",
+            "",
+            "This brief contains manual review prompts, not confirmed findings.",
+        ]
+    )
+    cards_section = "\n".join(
+        [
+            "## Readable Evidence Cards",
+            "",
+            "### HTTP service",
+            "",
+            "- URL: `http://example.test/`",
+            "- Signal: Primary web surface",
+            "- Why it matters: Main HTTP service for manual review.",
+            "- Suggested manual action: Review collected evidence.",
+            "- Evidence: `EVID-HTTP-0001`",
+        ]
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        human_triage_brief_markdown=brief_section,
+        readable_evidence_cards_markdown=cards_section,
+    )
+
+    assert "## Human Triage Brief" in report
+    assert "## Readable Evidence Cards" in report
+    assert report.index("## Operator Summary") < report.index("## Human Triage Brief")
+    assert report.index("## Human Triage Brief") < report.index("## Scope Summary")
+    assert report.index("## Readable Evidence Cards") < report.index("## Scope Summary")
 
 
 def test_report_can_include_prerendered_manual_review_leads_section() -> None:

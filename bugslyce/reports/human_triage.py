@@ -1,0 +1,787 @@
+"""Human-readable Standard report triage brief and evidence cards."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+import re
+from urllib.parse import urlparse
+
+from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
+from bugslyce.reports.artifact_classifier import (
+    LIKELY_NOISE,
+    LIKELY_SIGNAL,
+    classify_encoded_artifact,
+)
+
+
+MAX_BRIEF_ITEMS = 8
+MAX_VALUE_ITEMS = 6
+MAX_IGNORE_ITEMS = 5
+MAX_CARDS = 8
+
+AUTH_PATH_TERMS = {
+    "account",
+    "auth",
+    "login",
+    "logout",
+    "oauth",
+    "password",
+    "profile",
+    "register",
+    "reset",
+    "session",
+    "signin",
+    "signup",
+}
+ADMIN_PATH_TERMS = {
+    "admin",
+    "backup",
+    "console",
+    "debug",
+    "dev",
+    "hidden",
+    "internal",
+    "old",
+    "secret",
+    "server-info",
+    "server-status",
+    "staging",
+    "status",
+    "test",
+}
+STATIC_TERMS = {
+    "bootstrap",
+    "fontawesome",
+    "jquery",
+    "modernizr",
+}
+STATIC_SUFFIXES = {
+    ".css",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".map",
+    ".png",
+    ".svg",
+    ".ttf",
+    ".woff",
+    ".woff2",
+}
+VALUE_SIGNAL_TERMS = {
+    "api_key",
+    "apikey",
+    "auth",
+    "bearer",
+    "credential",
+    "key",
+    "password",
+    "secret",
+    "token",
+    "username",
+}
+SENSITIVE_PREVIEW_TERMS = re.compile(
+    r"\b(flag|exploit|vulnerable|vulnerability)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class HumanTriageItem:
+    """One compact human-facing triage prompt."""
+
+    title: str
+    priority: str
+    category: str
+    source: str
+    value: str
+    why_it_matters: str
+    suggested_manual_action: str
+    evidence_ids: tuple[str, ...] = ()
+    url: str | None = None
+    signal: str = ""
+
+
+@dataclass(frozen=True)
+class ReadableEvidenceCard:
+    """Terminal-friendly evidence card for high-value report context."""
+
+    title: str
+    url: str | None
+    signal: str
+    why_it_matters: str
+    suggested_manual_action: str
+    evidence_ids: tuple[str, ...]
+    value_preview: str | None = None
+    source: str | None = None
+
+
+@dataclass(frozen=True)
+class HumanTriageBrief:
+    """Deterministic front-page triage data for Standard reports."""
+
+    start_here: tuple[HumanTriageItem, ...]
+    evidence_values: tuple[HumanTriageItem, ...]
+    review_next: tuple[str, ...]
+    ignore_for_now: tuple[HumanTriageItem, ...]
+    raw_evidence_pointers: tuple[str, ...]
+    evidence_cards: tuple[ReadableEvidenceCard, ...]
+
+
+def build_human_triage_brief(
+    project_state: ProjectState,
+    candidates: list[Candidate],
+    *,
+    engagement_context: str | None = None,
+) -> HumanTriageBrief:
+    """Build a deterministic Standard human triage brief from local state."""
+
+    del engagement_context
+    start: list[HumanTriageItem] = []
+    values: list[HumanTriageItem] = []
+    ignore: list[HumanTriageItem] = []
+
+    _add_candidate_items(start, ignore, candidates)
+    _add_http_service_items(start, project_state)
+    _add_port_service_items(start, project_state)
+    _add_endpoint_items(start, ignore, project_state)
+    _add_discovered_path_items(start, ignore, project_state)
+    _add_artifact_items(start, values, ignore, project_state)
+
+    start = _rank_items(start)[:MAX_BRIEF_ITEMS]
+    values = _rank_items(values)[:MAX_VALUE_ITEMS]
+    ignore = _rank_items(ignore)[:MAX_IGNORE_ITEMS]
+
+    return HumanTriageBrief(
+        start_here=tuple(start),
+        evidence_values=tuple(values),
+        review_next=tuple(_review_next_lines(start, values)),
+        ignore_for_now=tuple(ignore),
+        raw_evidence_pointers=tuple(_raw_evidence_pointers(project_state, candidates)),
+        evidence_cards=tuple(_build_cards(start, values, project_state)[:MAX_CARDS]),
+    )
+
+
+def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
+    """Render the compact Standard Human Triage Brief section."""
+
+    if not brief.start_here and not brief.evidence_values:
+        return "\n".join(
+            [
+                "## Human Triage Brief",
+                "",
+                "No high-confidence manual triage leads were identified from the collected evidence.",
+                "",
+                (
+                    "Suggested next step: review open services and raw evidence manually, "
+                    "or consider an approved broader follow-up if the engagement allows it."
+                ),
+                "",
+            ]
+        ).rstrip()
+
+    lines = [
+        "## Human Triage Brief",
+        "",
+        (
+            "This brief highlights evidence-backed manual review prompts. "
+            "They require local validation and are not confirmed findings."
+        ),
+        "",
+        "### Start Here",
+        "",
+    ]
+    if brief.start_here:
+        for index, item in enumerate(brief.start_here, start=1):
+            lines.extend(_render_numbered_item(index, item))
+    else:
+        lines.extend(["No high-confidence start-here prompts were identified.", ""])
+
+    lines.extend(["### Evidence Values Worth Noting", ""])
+    if brief.evidence_values:
+        for item in brief.evidence_values:
+            lines.extend(_render_bullet_item(item))
+        lines.append("")
+    else:
+        lines.extend(["- No compact evidence values were promoted into this section.", ""])
+
+    lines.extend(["### Review Next", ""])
+    if brief.review_next:
+        lines.extend(f"- {_md(item)}" for item in brief.review_next)
+    else:
+        lines.append("- Review open services and raw evidence manually.")
+    lines.append("")
+
+    lines.extend(["### Ignore For Now", ""])
+    if brief.ignore_for_now:
+        for item in brief.ignore_for_now:
+            lines.extend(_render_bullet_item(item))
+    else:
+        lines.append("- No low-value static or duplicate evidence was promoted into this section.")
+    lines.append("")
+
+    lines.extend(["### Raw Evidence Pointers", ""])
+    lines.extend(f"- {_md(item)}" for item in brief.raw_evidence_pointers)
+    lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def render_readable_evidence_cards_markdown(brief: HumanTriageBrief) -> str:
+    """Render terminal-friendly evidence cards above raw wide tables."""
+
+    lines = ["## Readable Evidence Cards", ""]
+    if not brief.evidence_cards:
+        lines.extend(
+            [
+                "No high-value evidence cards were generated from the collected evidence.",
+                "",
+            ]
+        )
+        return "\n".join(lines).rstrip()
+
+    lines.extend(
+        [
+            (
+                "These cards summarise high-value evidence in a terminal-friendly format. "
+                "Use the raw tables below for full audit detail."
+            ),
+            "",
+        ]
+    )
+    for card in brief.evidence_cards:
+        lines.extend(
+            [
+                f"### {_md(card.title)}",
+                "",
+                f"- URL: {_code(card.url or 'not recorded')}",
+                f"- Signal: {_md(card.signal)}",
+                f"- Why it matters: {_md(card.why_it_matters)}",
+                f"- Suggested manual action: {_md(card.suggested_manual_action)}",
+                f"- Evidence: {format_evidence_ids(card.evidence_ids)}",
+            ]
+        )
+        if card.value_preview:
+            lines.append(f"- Value preview: {_code(card.value_preview)}")
+        if card.source:
+            lines.append(f"- Source: {_md(card.source)}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _add_candidate_items(
+    start: list[HumanTriageItem],
+    ignore: list[HumanTriageItem],
+    candidates: list[Candidate],
+) -> None:
+    for candidate in candidates:
+        item = HumanTriageItem(
+            title=candidate.title,
+            priority=candidate.priority if candidate.priority in {"high", "medium", "low"} else "low",
+            category=candidate.candidate_type,
+            source="candidate",
+            value=", ".join(candidate.affected_endpoints[:2]) or candidate.id,
+            why_it_matters=_candidate_why(candidate),
+            suggested_manual_action=_candidate_action(candidate),
+            evidence_ids=tuple(candidate.evidence_ids),
+            url=candidate.affected_endpoints[0] if candidate.affected_endpoints else None,
+            signal=_candidate_signal(candidate),
+        )
+        if candidate.candidate_type in {"low_signal_static", "dead_low_signal_path"}:
+            ignore.append(item)
+        elif candidate.priority in {"high", "medium"}:
+            start.append(item)
+
+
+def _add_http_service_items(start: list[HumanTriageItem], project_state: ProjectState) -> None:
+    for service in project_state.http_services:
+        if not service.evidence_ids:
+            continue
+        parsed = urlparse(service.url)
+        port = parsed.port
+        high_port = port is not None and port not in {80, 443}
+        status = service.status_code if service.status_code is not None else "unknown"
+        start.append(
+            HumanTriageItem(
+                title=(
+                    "High-port HTTP service review"
+                    if high_port
+                    else "HTTP application surface review"
+                ),
+                priority="medium",
+                category="http_service",
+                source="http_service",
+                value=service.url,
+                why_it_matters=(
+                    "A non-default HTTP port may indicate a separate application surface."
+                    if high_port
+                    else "An HTTP application surface is available for scoped manual review."
+                ),
+                suggested_manual_action=(
+                    "Compare title, status, technology, and nearby evidence before deeper manual review."
+                ),
+                evidence_ids=tuple(service.evidence_ids),
+                url=service.url,
+                signal=f"HTTP {status}: {service.title or 'untitled'}",
+            )
+        )
+
+
+def _add_port_service_items(start: list[HumanTriageItem], project_state: ProjectState) -> None:
+    for service in project_state.port_services:
+        if service.state != "open" or not service.evidence_ids:
+            continue
+        service_name = (service.service or "unknown").lower()
+        if service_name in {"http", "https", "http-proxy", "ssl/http"}:
+            continue
+        start.append(
+            HumanTriageItem(
+                title=f"{(service.service or 'Service').upper()} service context",
+                priority="low",
+                category="service_context",
+                source="port_service",
+                value=f"{service.host}:{service.port}/{service.protocol}",
+                why_it_matters="Open non-HTTP services can guide authorised manual review and service ownership checks.",
+                suggested_manual_action=(
+                    "Record service purpose and version context; do not attempt login or password testing from this brief."
+                ),
+                evidence_ids=tuple(service.evidence_ids),
+                url=None,
+                signal=f"{service.service or 'unknown'} on {service.port}/{service.protocol}",
+            )
+        )
+
+
+def _add_endpoint_items(
+    start: list[HumanTriageItem],
+    ignore: list[HumanTriageItem],
+    project_state: ProjectState,
+) -> None:
+    for endpoint in project_state.endpoints:
+        terms = _path_terms(endpoint.path)
+        if _is_static_path(endpoint.path):
+            ignore.append(
+                HumanTriageItem(
+                    title="Static or library route",
+                    priority="low",
+                    category="static_noise",
+                    source="endpoint",
+                    value=endpoint.url,
+                    why_it_matters="Static/library paths rarely deserve first-pass manual attention unless linked to stronger evidence.",
+                    suggested_manual_action="Leave this for later unless another lead references it.",
+                    evidence_ids=tuple(endpoint.evidence_ids),
+                    url=endpoint.url,
+                    signal="low-value static/library path",
+                )
+            )
+            continue
+        if terms & AUTH_PATH_TERMS:
+            start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Auth/account route observed", "auth_route"))
+        elif terms & ADMIN_PATH_TERMS:
+            start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Admin/hidden route observed", "admin_route"))
+
+
+def _add_discovered_path_items(
+    start: list[HumanTriageItem],
+    ignore: list[HumanTriageItem],
+    project_state: ProjectState,
+) -> None:
+    for path in project_state.discovered_paths:
+        parsed = urlparse(path.url)
+        terms = _path_terms(parsed.path)
+        tags = {tag.lower() for tag in path.tags}
+        if "directory_listing" in tags or "index_of" in tags:
+            start.append(
+                HumanTriageItem(
+                    title="Directory listing or browsable path observed",
+                    priority="high",
+                    category="directory_listing",
+                    source="discovered_path",
+                    value=path.url,
+                    why_it_matters="Browsable directories may expose files or context useful for scoped manual review.",
+                    suggested_manual_action="Review the collected response and record relevant request/response evidence before escalating.",
+                    evidence_ids=tuple(path.evidence_ids),
+                    url=path.url,
+                    signal="directory listing",
+                )
+            )
+            continue
+        if _is_static_path(parsed.path):
+            ignore.append(
+                HumanTriageItem(
+                    title="Static discovered path",
+                    priority="low",
+                    category="static_noise",
+                    source="discovered_path",
+                    value=path.url,
+                    why_it_matters="Static assets and libraries are usually lower-value than application routes.",
+                    suggested_manual_action="Review only if a stronger lead points back to this path.",
+                    evidence_ids=tuple(path.evidence_ids),
+                    url=path.url,
+                    signal="static/library path",
+                )
+            )
+            continue
+        if terms & AUTH_PATH_TERMS:
+            start.append(_path_item(path.url, path.evidence_ids, "Auth/account path discovered", "auth_route"))
+        elif terms & ADMIN_PATH_TERMS:
+            start.append(_path_item(path.url, path.evidence_ids, "Admin/hidden path discovered", "admin_route"))
+        elif path.status_code in {401, 403} and path.evidence_ids:
+            start.append(
+                HumanTriageItem(
+                    title="Access-control response context",
+                    priority="medium",
+                    category="access_control_context",
+                    source="discovered_path",
+                    value=path.url,
+                    why_it_matters="A 401/403 response can help map scoped access-control boundaries without proving exposure.",
+                    suggested_manual_action="Correlate with scope and nearby evidence; avoid repeated attempts unless explicitly authorised.",
+                    evidence_ids=tuple(path.evidence_ids),
+                    url=path.url,
+                    signal=f"HTTP {path.status_code}",
+                )
+            )
+
+
+def _add_artifact_items(
+    start: list[HumanTriageItem],
+    values: list[HumanTriageItem],
+    ignore: list[HumanTriageItem],
+    project_state: ProjectState,
+) -> None:
+    for artifact in project_state.http_artifacts:
+        artifact_type = artifact.artifact_type
+        if artifact_type in {"encoded_like_artifact", "hidden_element"}:
+            classification = classify_encoded_artifact(artifact)
+            if classification.category == LIKELY_NOISE:
+                ignore.append(_artifact_item(artifact, "Low-signal encoded/source detector match", "static_noise", "low", classification.reason))
+                continue
+            item = _artifact_item(
+                artifact,
+                "Encoded-looking source artefact observed",
+                "encoded_source",
+                "high" if classification.category == LIKELY_SIGNAL else "medium",
+                "Encoded-looking or hidden source text should be reviewed in its surrounding local context.",
+            )
+            start.append(item)
+            values.append(item)
+            continue
+        if artifact_type in {"html_comment", "keyword_hit"}:
+            value_lower = artifact.value.lower()
+            priority = "high" if any(term in value_lower for term in VALUE_SIGNAL_TERMS) else "medium"
+            item = _artifact_item(
+                artifact,
+                "Source comment or keyword context observed",
+                "source_comment",
+                priority,
+                "Source-level text can provide a review signal when correlated with routes and service context.",
+            )
+            start.append(item)
+            values.append(item)
+            continue
+        if artifact_type in {"robots", "user_agent", "unusual_user_agent", "allow_rule", "disallow_rule"}:
+            if artifact_type == "robots" and _looks_like_local_path(artifact.value):
+                continue
+            item = _artifact_item(
+                artifact,
+                "robots.txt or metadata clue observed",
+                "robots_metadata",
+                "medium",
+                "robots.txt and metadata entries can guide manual review when linked to collected service context.",
+            )
+            start.append(item)
+            values.append(item)
+
+
+def _path_item(url: str, evidence_ids: list[str], title: str, category: str) -> HumanTriageItem:
+    return HumanTriageItem(
+        title=title,
+        priority="high" if category == "auth_route" else "medium",
+        category=category,
+        source="path",
+        value=url,
+        why_it_matters="The path name suggests an application workflow that may deserve scoped manual review.",
+        suggested_manual_action="Review the collected response and correlate with source, robots, and service context.",
+        evidence_ids=tuple(evidence_ids),
+        url=url,
+        signal="application route",
+    )
+
+
+def _artifact_item(
+    artifact: HTTPArtifact,
+    title: str,
+    category: str,
+    priority: str,
+    why: str,
+) -> HumanTriageItem:
+    return HumanTriageItem(
+        title=title,
+        priority=priority,
+        category=category,
+        source=f"http_artifact:{artifact.artifact_type}",
+        value=_safe_preview(artifact.value),
+        why_it_matters=why,
+        suggested_manual_action=(
+            "Review the collected source context locally and correlate before treating the value as meaningful."
+        ),
+        evidence_ids=tuple(artifact.evidence_ids),
+        url=artifact.url or None,
+        signal=artifact.artifact_type,
+    )
+
+
+def _rank_items(items: list[HumanTriageItem]) -> list[HumanTriageItem]:
+    deduped: dict[tuple[str, str, str], HumanTriageItem] = {}
+    for item in items:
+        key = (item.category, item.url or "", item.value)
+        existing = deduped.get(key)
+        if existing is None or _priority_rank(item.priority) < _priority_rank(existing.priority):
+            deduped[key] = item
+    return sorted(
+        deduped.values(),
+        key=lambda item: (
+            _priority_rank(item.priority),
+            _category_rank(item.category),
+            item.title,
+            item.url or "",
+            item.value,
+        ),
+    )
+
+
+def _build_cards(
+    start: list[HumanTriageItem],
+    values: list[HumanTriageItem],
+    project_state: ProjectState,
+) -> list[ReadableEvidenceCard]:
+    cards: list[ReadableEvidenceCard] = []
+    seen_card_keys: set[tuple[str, str, str, tuple[str, ...], str, str]] = set()
+    for item in [*start, *values]:
+        if not item.evidence_ids:
+            continue
+        card = ReadableEvidenceCard(
+            title=item.title,
+            url=item.url,
+            signal=item.signal or item.category,
+            why_it_matters=item.why_it_matters,
+            suggested_manual_action=item.suggested_manual_action,
+            evidence_ids=item.evidence_ids,
+            value_preview=item.value if item.source.startswith("http_artifact:") else None,
+            source=item.source,
+        )
+        key = _card_key(card)
+        if key in seen_card_keys:
+            continue
+        seen_card_keys.add(key)
+        cards.append(card)
+    for service in project_state.http_services:
+        if len(cards) >= MAX_CARDS:
+            break
+        service_evidence_ids = tuple(service.evidence_ids)
+        if not service_evidence_ids:
+            continue
+        if _has_http_service_card(cards, service.url, service_evidence_ids):
+            continue
+        card = ReadableEvidenceCard(
+            title="HTTP service",
+            url=service.url,
+            signal=f"HTTP {service.status_code if service.status_code is not None else 'unknown'}",
+            why_it_matters="HTTP service metadata anchors later manual review.",
+            suggested_manual_action="Compare this service with discovered paths, source artefacts, and route hints.",
+            evidence_ids=service_evidence_ids,
+            value_preview=service.title,
+            source="http_service",
+        )
+        key = _card_key(card)
+        if key in seen_card_keys:
+            continue
+        seen_card_keys.add(key)
+        cards.append(card)
+    return cards
+
+
+def _card_key(
+    card: ReadableEvidenceCard,
+) -> tuple[str, str, str, tuple[str, ...], str, str]:
+    return (
+        card.title,
+        card.url or "",
+        card.signal,
+        tuple(card.evidence_ids),
+        card.source or "",
+        card.value_preview or "",
+    )
+
+
+def _has_http_service_card(
+    cards: list[ReadableEvidenceCard],
+    service_url: str,
+    service_evidence_ids: tuple[str, ...],
+) -> bool:
+    service_evidence = set(service_evidence_ids)
+    for card in cards:
+        if card.url != service_url:
+            continue
+        if service_evidence.intersection(card.evidence_ids):
+            return True
+        if card.source == "http_service":
+            return True
+    return False
+
+
+def _review_next_lines(
+    start: list[HumanTriageItem],
+    values: list[HumanTriageItem],
+) -> list[str]:
+    lines: list[str] = []
+    for item in start[:3]:
+        location = item.url or item.value
+        lines.append(f"Review {item.title.lower()} at {location} in collected evidence context.")
+    if values:
+        lines.append("Validate notable source or metadata values locally before escalating.")
+    lines.append("Record request/response evidence and stop if the evidence remains generic or default-page noise.")
+    return _dedupe(lines)
+
+
+def _raw_evidence_pointers(project_state: ProjectState, candidates: list[Candidate]) -> list[str]:
+    return [
+        f"HTTP services: {len(project_state.http_services)}",
+        f"Port services: {len(project_state.port_services)}",
+        f"Endpoints: {len(project_state.endpoints)}",
+        f"Discovered paths: {len(project_state.discovered_paths)}",
+        f"HTTP artefacts: {len(project_state.http_artifacts)}",
+        f"Manual review candidates: {len(candidates)}",
+    ]
+
+
+def _candidate_why(candidate: Candidate) -> str:
+    if candidate.candidate_type == "credential_like_artifact_review":
+        return "A deterministic candidate links source text to credential-shaped or sensitive keyword context."
+    if candidate.candidate_type == "high_port_http_service":
+        return "A non-default HTTP port may represent a separate application surface."
+    if candidate.candidate_type == "multiple_http_services":
+        return "Multiple HTTP services on the same host can indicate distinct application contexts."
+    return candidate.rationale
+
+
+def _candidate_action(candidate: Candidate) -> str:
+    if candidate.suggested_manual_validation:
+        return candidate.suggested_manual_validation[0]
+    return "Review the linked evidence manually and validate locally before escalating."
+
+
+def _candidate_signal(candidate: Candidate) -> str:
+    if candidate.candidate_type == "credential_like_artifact_review":
+        return "credential-shaped/source context"
+    return candidate.candidate_type.replace("_", " ")
+
+
+def _path_terms(path: str) -> set[str]:
+    terms: set[str] = set()
+    for segment in PurePosixPath(path or "/").parts:
+        for token in segment.strip("/").lower().replace("_", "-").split("-"):
+            if token:
+                terms.add(token)
+    stripped = (path or "").strip("/").lower()
+    if stripped:
+        terms.add(stripped)
+    return terms
+
+
+def _is_static_path(path: str) -> bool:
+    lowered = path.lower()
+    return (
+        any(term in lowered for term in STATIC_TERMS)
+        or any(lowered.endswith(suffix) for suffix in STATIC_SUFFIXES)
+        or "/static/" in lowered
+        or "/assets/" in lowered
+    )
+
+
+def _looks_like_local_path(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        lowered.startswith("/")
+        or lowered.startswith("~")
+        or lowered.startswith("./")
+        or lowered.startswith("../")
+        or "bugslyce-output" in lowered
+    )
+
+
+def _priority_rank(priority: str) -> int:
+    return {"high": 0, "medium": 1, "low": 2}.get(priority, 3)
+
+
+def _category_rank(category: str) -> int:
+    order = {
+        "auth_route": 0,
+        "directory_listing": 1,
+        "admin_route": 2,
+        "robots_metadata": 3,
+        "source_comment": 4,
+        "encoded_source": 5,
+        "http_service": 6,
+        "access_control_context": 7,
+        "service_context": 8,
+        "static_noise": 9,
+    }
+    return order.get(category, 20)
+
+
+def _render_numbered_item(index: int, item: HumanTriageItem) -> list[str]:
+    return [
+        f"{index}. **{_md(item.title)}**",
+        f"   - Why it matters: {_md(item.why_it_matters)}",
+        f"   - Evidence: {format_evidence_ids(item.evidence_ids)}",
+        f"   - Suggested manual action: {_md(item.suggested_manual_action)}",
+        f"   - Signal: {_md(item.signal or item.category)}",
+        "",
+    ]
+
+
+def _render_bullet_item(item: HumanTriageItem) -> list[str]:
+    return [
+        f"- **{_md(item.title)}** ({_md(item.source)}): {_code(item.value)}",
+        f"  - Why it matters: {_md(item.why_it_matters)}",
+        f"  - Evidence: {format_evidence_ids(item.evidence_ids)}",
+    ]
+
+
+def format_evidence_ids(values: tuple[str, ...] | list[str]) -> str:
+    """Format evidence IDs for compact Markdown output."""
+
+    if not values:
+        return "`none`"
+    return ", ".join(_code(value) for value in values)
+
+
+def _safe_preview(value: str, *, limit: int = 120) -> str:
+    preview = _compact(value, limit=limit)
+    return SENSITIVE_PREVIEW_TERMS.sub("[review-term]", preview)
+
+
+def _compact(value: str, *, limit: int = 120) -> str:
+    compacted = " ".join(str(value).split())
+    if len(compacted) <= limit:
+        return compacted
+    return compacted[: limit - 3].rstrip() + "..."
+
+
+def _md(value: object) -> str:
+    return str(value).replace("|", "\\|")
+
+
+def _code(value: object) -> str:
+    text = str(value).replace("`", "'")
+    return f"`{text}`"
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result

@@ -380,6 +380,18 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         "bugslyce.project_pipeline.render_route_source_review_markdown",
         lambda leads, **kwargs: "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n",
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_human_triage_brief",
+        lambda state, candidates, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_human_triage_brief_markdown",
+        lambda brief: "## Human Triage Brief\n\nNo high-confidence manual triage leads were identified from the collected evidence.\n",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
+        lambda brief: "## Readable Evidence Cards\n\nNo high-value evidence cards were generated from the collected evidence.\n",
+    )
     runbook_sections: list[str | None] = []
     route_sections: list[str | None] = []
 
@@ -405,9 +417,11 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         candidates,
         output_path,
         *,
+        human_triage_brief_markdown=None,
         manual_review_leads_markdown=None,
         investigation_threads_markdown=None,
         route_source_review_markdown=None,
+        readable_evidence_cards_markdown=None,
     ):
         calls.append("standard-report-write")
         route_sections.append(route_source_review_markdown)
@@ -416,8 +430,10 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         report_path.write_text(
             "# Report\n\n"
             "## Operator Summary\n\n"
+            f"{human_triage_brief_markdown}\n\n"
             f"{manual_review_leads_markdown}\n\n"
             f"{route_source_review_markdown}\n\n"
+            f"{readable_evidence_cards_markdown}\n\n"
             "## Scope Summary\n",
             encoding="utf-8",
         )
@@ -463,7 +479,11 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     assert result.report_path == str(output_dir / "report.md")
     assert [step.status for step in result.steps] == ["completed"] * 12
     report = (output_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Human Triage Brief" in report
     assert "## Manual Review Leads" in report
+    assert "## Readable Evidence Cards" in report
+    assert report.index("## Operator Summary") < report.index("## Human Triage Brief")
+    assert report.index("## Human Triage Brief") < report.index("## Manual Review Leads")
     assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
     assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
     assert "not proof of vulnerability" in report

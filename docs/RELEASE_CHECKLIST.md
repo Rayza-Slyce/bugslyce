@@ -179,6 +179,8 @@ bugslyce project run \
   and non-executable.
 - [ ] Deep metadata project-state adapter remains pure, internal, and
   non-executable.
+- [ ] Standard report includes the Human Triage Brief and readable evidence
+  cards before raw wide evidence tables.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

@@ -12,6 +12,7 @@ from bugslyce.core.models import (
     DiscoveredPath,
     Evidence,
     HTTPArtifact,
+    HTTPService,
     ProjectState,
 )
 from bugslyce.recon.modes import get_recon_mode
@@ -43,9 +44,11 @@ def test_helper_returns_report_dataclass_with_markdown_and_metadata() -> None:
     assert report.sources_analyzed == 1
     assert report.review_lead_count == 1
     assert report.interpretation_assembly.sources_analyzed == 1
+    assert report.human_triage_brief_markdown is not None
     assert report.manual_review_leads_markdown is not None
     assert report.investigation_threads_markdown is not None
     assert report.route_source_review_markdown is not None
+    assert report.readable_evidence_cards_markdown is not None
 
 
 def test_helper_places_standard_sections_after_operator_summary_before_scope() -> None:
@@ -64,10 +67,15 @@ def test_helper_places_standard_sections_after_operator_summary_before_scope() -
 
     report = render_standard_interpretation_report(state, [])
 
+    assert "## Human Triage Brief" in report.markdown
     assert "## Manual Review Leads" in report.markdown
     assert "## Investigation Threads" in report.markdown
     assert "## Offline Route/Source Review" in report.markdown
+    assert "## Readable Evidence Cards" in report.markdown
     assert report.markdown.index("## Operator Summary") < report.markdown.index(
+        "## Human Triage Brief"
+    )
+    assert report.markdown.index("## Human Triage Brief") < report.markdown.index(
         "## Manual Review Leads"
     )
     assert report.markdown.index("## Manual Review Leads") < report.markdown.index(
@@ -77,6 +85,9 @@ def test_helper_places_standard_sections_after_operator_summary_before_scope() -
         "## Offline Route/Source Review"
     )
     assert report.markdown.index("## Offline Route/Source Review") < report.markdown.index(
+        "## Readable Evidence Cards"
+    )
+    assert report.markdown.index("## Readable Evidence Cards") < report.markdown.index(
         "## Scope Summary"
     )
     assert "LEAD-0001" in report.markdown
@@ -362,6 +373,75 @@ def test_default_report_rendering_still_omits_manual_review_leads() -> None:
     assert "## Manual Review Leads" not in markdown
     assert "## Investigation Threads" not in markdown
     assert "## Offline Route/Source Review" not in markdown
+    assert "## Human Triage Brief" not in markdown
+    assert "## Readable Evidence Cards" not in markdown
+
+
+def test_standard_report_includes_human_triage_brief_and_cards_before_raw_tables() -> None:
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="http://example.test:8080/",
+                hostname="example.test",
+                status_code=200,
+                title="Example app",
+                technologies=[],
+                content_length=100,
+                evidence_ids=["EVID-HTTP-8080"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/login",
+                status_code=200,
+                content_length=42,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-LOGIN"],
+                tags=[],
+            )
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Token-like review value: dG9rZW4tdmFsdWU=",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-COMMENT"],
+                tags=[],
+            )
+        ],
+    )
+
+    report = render_standard_interpretation_report(state, [])
+
+    assert "## Human Triage Brief" in report.markdown
+    assert "### Start Here" in report.markdown
+    assert "### Evidence Values Worth Noting" in report.markdown
+    assert "### Review Next" in report.markdown
+    assert "### Ignore For Now" in report.markdown
+    assert "### Raw Evidence Pointers" in report.markdown
+    assert "## Readable Evidence Cards" in report.markdown
+    assert "- URL: `http://example.test/login`" in report.markdown
+    assert "- Signal:" in report.markdown
+    assert "- Why it matters:" in report.markdown
+    assert "- Suggested manual action:" in report.markdown
+    assert "- Evidence: `EVID-PATH-LOGIN`" in report.markdown
+    assert report.markdown.index("## Human Triage Brief") < report.markdown.index(
+        "### Discovered Paths"
+    )
+    assert report.markdown.index("## Readable Evidence Cards") < report.markdown.index(
+        "### Discovered Paths"
+    )
+    human_section = report.markdown.split("## Human Triage Brief", 1)[1].split(
+        "## Manual Review Leads",
+        1,
+    )[0]
+    assert "vulnerable" not in human_section.lower()
+    assert "flag" not in human_section.lower()
+    assert "brute force" not in human_section.lower()
+    assert "payload injection" not in human_section.lower()
 
 
 def test_helper_does_not_mutate_project_state_or_candidates() -> None:
@@ -420,6 +500,7 @@ def _project_state(
     http_artifacts: list[HTTPArtifact] | None = None,
     evidence: list[Evidence] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
+    http_services: list[HTTPService] | None = None,
     engagement_context: str = "unknown",
 ) -> ProjectState:
     return ProjectState(
@@ -428,7 +509,7 @@ def _project_state(
         processed_files=[],
         scope_summary="No scope file parsed.",
         assets=[],
-        http_services=[],
+        http_services=http_services or [],
         endpoints=[],
         port_services=[],
         http_artifacts=http_artifacts or [],

@@ -20,6 +20,12 @@ from bugslyce.recon.standard_interpretation import (
     StandardInterpretationAssembly,
     assemble_standard_interpretation_from_project_state,
 )
+from bugslyce.reports.human_triage import (
+    HumanTriageBrief,
+    build_human_triage_brief,
+    render_human_triage_brief_markdown,
+    render_readable_evidence_cards_markdown,
+)
 from bugslyce.reports.markdown import render_markdown_report
 
 
@@ -29,11 +35,14 @@ class StandardInterpretationReport:
 
     markdown: str
     interpretation_assembly: StandardInterpretationAssembly
+    human_triage_brief: HumanTriageBrief
+    human_triage_brief_markdown: str | None
     manual_review_leads_markdown: str | None
     investigation_threads: tuple[InvestigationThread, ...]
     investigation_threads_markdown: str | None
     route_source_review_leads: tuple[RouteSourceLead, ...]
     route_source_review_markdown: str | None
+    readable_evidence_cards_markdown: str | None
     review_lead_count: int
     investigation_thread_count: int
     route_source_review_count: int
@@ -65,21 +74,33 @@ def render_standard_interpretation_report(
         route_source_leads,
         engagement_context=project_state.engagement_context,
     )
+    human_triage_brief = build_human_triage_brief(
+        project_state,
+        candidates_list,
+        engagement_context=project_state.engagement_context,
+    )
+    human_triage_markdown = render_human_triage_brief_markdown(human_triage_brief)
+    evidence_cards_markdown = render_readable_evidence_cards_markdown(human_triage_brief)
     markdown = render_markdown_report(
         project_state,
         candidates_list,
+        human_triage_brief_markdown=human_triage_markdown,
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
         investigation_threads_markdown=threads_markdown,
         route_source_review_markdown=route_source_markdown,
+        readable_evidence_cards_markdown=evidence_cards_markdown,
     )
     return StandardInterpretationReport(
         markdown=markdown,
         interpretation_assembly=assembly,
+        human_triage_brief=human_triage_brief,
+        human_triage_brief_markdown=human_triage_markdown,
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
         investigation_threads=threads,
         investigation_threads_markdown=threads_markdown,
         route_source_review_leads=route_source_leads,
         route_source_review_markdown=route_source_markdown,
+        readable_evidence_cards_markdown=evidence_cards_markdown,
         review_lead_count=assembly.review_lead_count,
         investigation_thread_count=len(threads),
         route_source_review_count=len(route_source_leads),

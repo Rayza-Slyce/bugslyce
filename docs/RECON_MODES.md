@@ -925,3 +925,23 @@ HTML/default-page source references such as document type paths, local
 filesystem documentation paths, and stock media attribution paths. It still
 analyses local evidence only, does not fetch routes, and does not increase
 Standard scan volume.
+
+## Phase 80A Standard Human Triage Brief Note
+
+Phase 80A adds a Standard Human Triage Brief and readable evidence cards to
+Standard report output. The brief is deterministic, evidence-backed, and
+universal across targets; it is not tailored to a specific CTF room, lab, IP,
+or application. It gives operators a compact start-here view using generic signals such as login/admin/auth surfaces,
+robots and metadata clues, directory listings, unusual source comments, encoded-looking artefacts,
+interesting HTTP status context, notable HTTP services, high-value non-HTTP
+service context, and low-value static/library noise.
+
+Readable evidence cards summarise high-value evidence as terminal-friendly
+bullet blocks before the wider raw evidence tables. The raw evidence tables
+remain available for auditability, and the JSON export remains the structured
+source of truth.
+
+This is report UX only. It does not add recon execution behaviour, does not
+fetch URLs, does not execute commands, does not replace manual validation,
+does not increase Standard scan volume, does not change Quick behaviour, and
+does not make Deep Recon available.

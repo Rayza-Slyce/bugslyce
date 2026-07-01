@@ -115,6 +115,11 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "pure internal adapter from already-loaded BugSlyce",
         "project-state HTTP service, endpoint, HTTP artefact, and discovered-path data",
         "in-memory project state",
+        "Standard Human Triage Brief",
+        "readable evidence cards",
+        "generic signals such as login/admin/auth surfaces",
+        "report UX only",
+        "does not replace manual validation",
     ):
         assert expected.lower() in lowered
 

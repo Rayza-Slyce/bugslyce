@@ -41,9 +41,11 @@ def render_markdown_report(
     project_state: ProjectState,
     candidates: list[Candidate],
     *,
+    human_triage_brief_markdown: str | None = None,
     manual_review_leads_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
+    readable_evidence_cards_markdown: str | None = None,
 ) -> str:
     """Render a cautious deterministic triage report."""
 
@@ -59,9 +61,11 @@ def render_markdown_report(
     ]
 
     _operator_summary(lines, project_state, candidates)
+    _optional_prerendered_section(lines, human_triage_brief_markdown)
     _manual_review_leads_section(lines, manual_review_leads_markdown)
     _investigation_threads_section(lines, investigation_threads_markdown)
     _route_source_review_section(lines, route_source_review_markdown)
+    _optional_prerendered_section(lines, readable_evidence_cards_markdown)
     _scope_summary(lines, project_state)
     _recon_manifest(lines, project_state)
     _workflow_provenance(lines, project_state)
@@ -136,9 +140,11 @@ def write_project_outputs(
     candidates: list[Candidate],
     output_dir: Path,
     *,
+    human_triage_brief_markdown: str | None = None,
     manual_review_leads_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
+    readable_evidence_cards_markdown: str | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -150,15 +156,30 @@ def write_project_outputs(
         render_markdown_report(
             project_state,
             candidates,
+            human_triage_brief_markdown=human_triage_brief_markdown,
             manual_review_leads_markdown=manual_review_leads_markdown,
             investigation_threads_markdown=investigation_threads_markdown,
             route_source_review_markdown=route_source_review_markdown,
+            readable_evidence_cards_markdown=readable_evidence_cards_markdown,
         ),
         encoding="utf-8",
     )
     json_path.write_text(export_project_state_json(project_state, candidates), encoding="utf-8")
 
     return report_path, json_path
+
+
+def _optional_prerendered_section(
+    lines: list[str],
+    markdown: str | None,
+) -> None:
+    if markdown is None:
+        return
+    section = markdown.strip()
+    if not section:
+        return
+    lines.extend(section.splitlines())
+    lines.append("")
 
 
 def _manual_review_leads_section(

@@ -70,6 +70,11 @@ from bugslyce.recon.status import build_recon_status, write_recon_status
 from bugslyce.recon.standard_interpretation import (
     assemble_standard_interpretation_from_project_state,
 )
+from bugslyce.reports.human_triage import (
+    build_human_triage_brief,
+    render_human_triage_brief_markdown,
+    render_readable_evidence_cards_markdown,
+)
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
@@ -1024,10 +1029,18 @@ def _write_standard_interpretation_report_if_needed(
         project_state,
         getattr(assembly, "sources", ()),
     )
+    human_triage_brief = build_human_triage_brief(
+        project_state,
+        candidates,
+        engagement_context=engagement_context,
+    )
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
         output_dir,
+        human_triage_brief_markdown=render_human_triage_brief_markdown(
+            human_triage_brief,
+        ),
         manual_review_leads_markdown=assembly.manual_review_leads_markdown,
         investigation_threads_markdown=render_investigation_threads_markdown(
             threads,
@@ -1036,6 +1049,9 @@ def _write_standard_interpretation_report_if_needed(
         route_source_review_markdown=render_route_source_review_markdown(
             route_source_leads,
             engagement_context=engagement_context,
+        ),
+        readable_evidence_cards_markdown=render_readable_evidence_cards_markdown(
+            human_triage_brief,
         ),
     )
     return [str(report_path), str(json_path)]
