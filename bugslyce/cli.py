@@ -84,6 +84,12 @@ from bugslyce.recon.deep_eligibility import (
     export_deep_recon_eligibility_json,
     render_deep_recon_eligibility_markdown,
 )
+from bugslyce.recon.deep_metadata_plan import (
+    DeepMetadataService,
+    build_deep_metadata_request_plan,
+    export_deep_metadata_plan_json,
+    render_deep_metadata_plan_markdown,
+)
 from bugslyce.recon.deep_outputs import (
     get_deep_recon_planned_outputs,
     validate_deep_recon_planned_outputs,
@@ -464,6 +470,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     deep_eligibility_parser.add_argument("--local-retention-acknowledged", action="store_true")
     deep_eligibility_parser.add_argument("--operator-confirmed-deep-intent", action="store_true")
+    deep_metadata_parser = recon_subparsers.add_parser(
+        "deep-metadata-plan",
+        help="Print a static Deep common metadata request plan without fetching URLs.",
+    )
+    deep_metadata_parser.add_argument(
+        "--service-url",
+        action="append",
+        default=[],
+        help="Explicit in-scope HTTP or HTTPS service URL to include in the static plan.",
+    )
+    deep_metadata_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the static Deep metadata request plan as JSON.",
+    )
+    deep_metadata_parser.add_argument(
+        "--max-services",
+        type=_non_negative_int,
+        default=None,
+        help="Maximum number of unique service origins to plan.",
+    )
     plan_parser = recon_subparsers.add_parser(
         "plan",
         help="Create a planning-only recon plan.",
@@ -824,6 +851,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def _run(input_dir: Path, output_dir: Path) -> int:
     if not input_dir.exists():
         print(f"Error: input directory does not exist: {input_dir}", file=sys.stderr)
@@ -1067,6 +1104,21 @@ def _recon(args: argparse.Namespace) -> int:
             print(json.dumps(export_deep_recon_eligibility_json(decision), indent=2, sort_keys=True))
         else:
             print(render_deep_recon_eligibility_markdown(decision))
+        return 0
+
+    if args.recon_command == "deep-metadata-plan":
+        services = tuple(
+            DeepMetadataService(url=url, source="cli-service-url")
+            for url in args.service_url
+        )
+        plan = build_deep_metadata_request_plan(
+            services,
+            max_services=args.max_services,
+        )
+        if args.json:
+            print(json.dumps(export_deep_metadata_plan_json(plan), indent=2, sort_keys=True))
+        else:
+            print(render_deep_metadata_plan_markdown(plan))
         return 0
 
     if args.recon_command == "plan":

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from bugslyce.cli import main
 from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_metadata_plan import (
     DEEP_METADATA_PATHS,
@@ -194,15 +193,6 @@ def test_planner_export_and_renderer_create_no_files(tmp_path: Path, monkeypatch
     render_deep_metadata_plan_markdown(plan)
 
     assert list(tmp_path.iterdir()) == []
-
-
-def test_no_cli_command_is_exposed_for_deep_metadata_planner(capsys) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["recon", "deep-metadata-plan"])
-
-    captured = capsys.readouterr()
-    assert exc_info.value.code == 2
-    assert "invalid choice" in captured.err
 
 
 def test_deep_bounded_remains_rejected_by_planner_and_project_pipeline(

@@ -244,6 +244,228 @@ def test_cli_recon_deep_readiness_rejects_runtime_arguments(
     )
 
 
+def test_cli_recon_deep_metadata_plan_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-plan", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-metadata-plan" in captured.out
+    assert "--service-url" in captured.out
+    assert "--json" in captured.out
+    assert "--max-services" in captured.out
+    for forbidden in (
+        "--target",
+        "--scope",
+        "--output",
+        "--run",
+        "--execute",
+        "--fetch",
+        "--scan",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_metadata_plan_defaults_to_empty_markdown(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["recon", "deep-metadata-plan"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Deep Common Metadata Request Plan")
+    assert "- Planned requests: 0" in captured.out
+    assert "- Skipped services: 0" in captured.out
+    assert "- None." in captured.out
+    assert "No network requests are performed." in captured.out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_plan_renders_markdown_for_service_url(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(
+        [
+            "recon",
+            "deep-metadata-plan",
+            "--service-url",
+            "https://example.test/app",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Deep Common Metadata Request Plan")
+    assert "- Planned requests: 8" in captured.out
+    assert "`deep-meta-0001` `GET` https://example.test/robots.txt" in captured.out
+    assert "https://example.test/sitemap.xml" in captured.out
+    assert "https://example.test/security.txt" in captured.out
+    assert "https://example.test/.well-known/security.txt" in captured.out
+    assert "https://example.test/humans.txt" in captured.out
+    assert "https://example.test/crossdomain.xml" in captured.out
+    assert "https://example.test/clientaccesspolicy.xml" in captured.out
+    assert "https://example.test/favicon.ico" in captured.out
+    assert "/app/robots.txt" not in captured.out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_plan_renders_json_for_service_url(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(
+        [
+            "recon",
+            "deep-metadata-plan",
+            "--json",
+            "--service-url",
+            "https://example.test/app",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["request_count"] == 8
+    assert payload["skipped_service_count"] == 0
+    assert payload["requests"][0]["request_id"] == "deep-meta-0001"
+    assert payload["requests"][0]["url"] == "https://example.test/robots.txt"
+    assert "No network requests are performed." in payload["non_executable_guarantees"]
+    assert "No output files are created." in payload["non_executable_guarantees"]
+    assert _walk_keys(payload).isdisjoint(
+        {"argv", "command_preview", "execute", "subprocess"}
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_plan_reports_skipped_services(capsys) -> None:
+    exit_code = main(
+        [
+            "recon",
+            "deep-metadata-plan",
+            "--json",
+            "--service-url",
+            "ftp://example.test",
+            "--service-url",
+            "http://",
+            "--service-url",
+            "https://example.test",
+            "--service-url",
+            "https://EXAMPLE.test/app",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["request_count"] == 8
+    assert payload["skipped_services"] == [
+        {
+            "reason": "unsupported_scheme",
+            "source": "cli-service-url",
+            "url": "ftp://example.test",
+        },
+        {
+            "reason": "malformed_url",
+            "source": "cli-service-url",
+            "url": "http://",
+        },
+        {
+            "reason": "duplicate_origin",
+            "source": "cli-service-url",
+            "url": "https://EXAMPLE.test/app",
+        },
+    ]
+
+
+def test_cli_recon_deep_metadata_plan_respects_max_services(capsys) -> None:
+    exit_code = main(
+        [
+            "recon",
+            "deep-metadata-plan",
+            "--json",
+            "--max-services",
+            "1",
+            "--service-url",
+            "https://one.example",
+            "--service-url",
+            "https://two.example",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["request_count"] == 8
+    assert payload["bounds"]["max_services"] == 1
+    assert payload["skipped_services"] == [
+        {
+            "reason": "service_limit_exceeded",
+            "source": "cli-service-url",
+            "url": "https://two.example",
+        }
+    ]
+
+
+def test_cli_recon_deep_metadata_plan_rejects_negative_max_services(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-plan", "--max-services", "-1"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "must be a non-negative integer" in captured.err
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    (
+        ["--target", "10.10.10.10"],
+        ["--scope", "scope.md"],
+        ["--scope-file", "scope.md"],
+        ["--project", "bugslyce_project.json"],
+        ["--input", "input.json"],
+        ["--output", "plan.json"],
+        ["--output-dir", "out"],
+        ["--confirm"],
+        ["--run"],
+        ["--execute"],
+        ["--fetch"],
+        ["--request"],
+        ["--scan"],
+    ),
+)
+def test_cli_recon_deep_metadata_plan_rejects_runtime_arguments(
+    extra_args: list[str],
+    capsys,
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-plan", *extra_args])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert (
+        "unrecognized arguments" in captured.err
+        or "ambiguous option" in captured.err
+    )
+
+
 def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["recon", "deep-eligibility", "--help"])
@@ -2056,3 +2278,17 @@ def test_cli_run_succeeds_against_raw_recon_pack(tmp_path: Path, monkeypatch) ->
     assert exported["project_state"]["port_services"]
     assert exported["project_state"]["http_artifacts"]
     assert exported["project_state"]["discovered_paths"]
+
+
+def _walk_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        keys = set(value)
+        for nested in value.values():
+            keys.update(_walk_keys(nested))
+        return keys
+    if isinstance(value, list):
+        keys: set[str] = set()
+        for nested in value:
+            keys.update(_walk_keys(nested))
+        return keys
+    return set()

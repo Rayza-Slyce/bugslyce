@@ -108,6 +108,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "bounded deterministic queue for common metadata files",
         "does not fetch URLs",
         "does not expose a CLI command",
+        "`bugslyce recon deep-metadata-plan`",
+        "explicit service URLs only",
+        "`bugslyce recon deep-metadata-plan --json`",
+        "does not inspect targets",
     ):
         assert expected.lower() in lowered
 

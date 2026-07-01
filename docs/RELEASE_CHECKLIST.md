@@ -175,6 +175,8 @@ bugslyce project run \
   non-executable.
 - [ ] Deep common metadata request planner remains pure, internal, and
   non-executable.
+- [ ] `bugslyce recon deep-metadata-plan` remains stdout-only, planning-only,
+  and non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

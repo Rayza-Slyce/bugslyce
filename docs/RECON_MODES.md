@@ -399,6 +399,14 @@ in-scope HTTP service URLs, including `robots.txt`, `sitemap.xml`,
 files, does not execute commands, does not expose a CLI command, and does not
 change mode availability.
 
+Phase 79B exposes the metadata planner through the informational command
+`bugslyce recon deep-metadata-plan`. The command is stdout-only, accepts
+explicit service URLs only with repeatable `--service-url`, and prints a
+planned common metadata request queue without fetching it. `bugslyce recon deep-metadata-plan --json` prints the same static plan as deterministic JSON.
+The command does not make network requests, does not inspect targets, does
+not read or write project files, does not execute commands, does not create
+output files, and does not change mode availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.
