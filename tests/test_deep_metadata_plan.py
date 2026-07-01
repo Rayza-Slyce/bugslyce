@@ -7,6 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from bugslyce.core.models import (
+    DiscoveredPath,
+    Endpoint,
+    HTTPArtifact,
+    HTTPService,
+    ProjectState,
+)
 from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_metadata_plan import (
     DEEP_METADATA_PATHS,
@@ -14,6 +21,8 @@ from bugslyce.recon.deep_metadata_plan import (
     DeepMetadataRequest,
     DeepMetadataService,
     build_deep_metadata_request_plan,
+    build_deep_metadata_plan_from_project_state,
+    build_deep_metadata_services_from_project_state,
     export_deep_metadata_plan_json,
     render_deep_metadata_plan_markdown,
 )
@@ -195,6 +204,238 @@ def test_planner_export_and_renderer_create_no_files(tmp_path: Path, monkeypatch
     assert list(tmp_path.iterdir()) == []
 
 
+def test_project_state_without_http_urls_produces_empty_metadata_plan() -> None:
+    state = _project_state()
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_plan_from_project_state(state)
+
+    assert services == ()
+    assert plan.requests == ()
+    assert plan.skipped_services == ()
+
+
+def test_project_state_http_service_produces_metadata_service_and_plan() -> None:
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="http://example.test/",
+                hostname="example.test",
+                status_code=200,
+                title="Example",
+                technologies=[],
+                content_length=123,
+                evidence_ids=["EVID-HTTP-0001"],
+                tags=[],
+            )
+        ]
+    )
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_plan_from_project_state(state)
+
+    assert services == (
+        DeepMetadataService(
+            url="http://example.test/",
+            source="project-state:http-service",
+        ),
+    )
+    assert len(plan.requests) == len(DEEP_METADATA_PATHS)
+    assert plan.requests[0].url == "http://example.test/robots.txt"
+    assert plan.requests[0].source == "project-state:http-service"
+
+
+def test_project_state_https_service_with_path_is_planned_from_origin_root() -> None:
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="https://example.test/app",
+                hostname="example.test",
+                status_code=200,
+                title=None,
+                technologies=[],
+                content_length=None,
+                evidence_ids=["EVID-HTTP-0001"],
+                tags=[],
+            )
+        ]
+    )
+
+    plan = build_deep_metadata_plan_from_project_state(state)
+
+    assert plan.requests[0].service_url == "https://example.test/"
+    assert plan.requests[0].url == "https://example.test/robots.txt"
+    assert all("/app/robots.txt" not in request.url for request in plan.requests)
+
+
+def test_project_state_adapter_preserves_first_seen_source_order_before_planner_dedupe() -> None:
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="https://one.example/",
+                hostname="one.example",
+                status_code=200,
+                title=None,
+                technologies=[],
+                content_length=None,
+                evidence_ids=["EVID-HTTP-0001"],
+                tags=[],
+            )
+        ],
+        endpoints=[
+            Endpoint(
+                url="https://two.example/login",
+                hostname="two.example",
+                path="/login",
+                query_params=[],
+                evidence_ids=["EVID-URL-0001"],
+                tags=[],
+            ),
+            Endpoint(
+                url="https://one.example/admin",
+                hostname="one.example",
+                path="/admin",
+                query_params=[],
+                evidence_ids=["EVID-URL-0002"],
+                tags=[],
+            ),
+        ],
+    )
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_request_plan(services)
+
+    assert services == (
+        DeepMetadataService("https://one.example/", "project-state:http-service"),
+        DeepMetadataService("https://two.example/login", "project-state:endpoint"),
+        DeepMetadataService("https://one.example/admin", "project-state:endpoint"),
+    )
+    assert [request.service_url for request in plan.requests[:16:8]] == [
+        "https://one.example/",
+        "https://two.example/",
+    ]
+    assert [(skip.url, skip.reason) for skip in plan.skipped_services] == [
+        ("https://one.example/admin", "duplicate_origin")
+    ]
+
+
+def test_project_state_adapter_uses_http_artifact_and_discovered_path_labels() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://artifact.example/robots.txt",
+                artifact_type="robots",
+                value="User-agent: *",
+                source_file="robots.txt",
+                evidence_ids=["EVID-HTTP-ARTIFACT-0001"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url="https://path.example/hidden/",
+                status_code=200,
+                content_length=42,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-0001"],
+                tags=[],
+            )
+        ],
+    )
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_request_plan(services)
+
+    assert services == (
+        DeepMetadataService(
+            url="https://artifact.example/robots.txt",
+            source="project-state:http-artifact",
+        ),
+        DeepMetadataService(
+            url="https://path.example/hidden/",
+            source="project-state:discovered-path",
+        ),
+    )
+    assert [request.source for request in plan.requests[:16:8]] == [
+        "project-state:http-artifact",
+        "project-state:discovered-path",
+    ]
+
+
+def test_project_state_adapter_ignores_non_http_and_malformed_values() -> None:
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url="ftp://example.test/path",
+                hostname="example.test",
+                path="/path",
+                query_params=[],
+                evidence_ids=["EVID-URL-0001"],
+                tags=[],
+            ),
+            Endpoint(
+                url="http://",
+                hostname="",
+                path="",
+                query_params=[],
+                evidence_ids=["EVID-URL-0002"],
+                tags=[],
+            ),
+            Endpoint(
+                url="javascript:alert(1)",
+                hostname="",
+                path="",
+                query_params=[],
+                evidence_ids=["EVID-URL-0003"],
+                tags=[],
+            ),
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url="/tmp/robots.txt",
+                artifact_type="robots",
+                value="/tmp/robots.txt",
+                source_file="robots.txt",
+                evidence_ids=["EVID-HTTP-ARTIFACT-0001"],
+                tags=[],
+            )
+        ],
+    )
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_request_plan(services)
+
+    assert services == ()
+    assert plan.requests == ()
+
+
+def test_project_state_adapter_creates_no_files(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="https://example.test/",
+                hostname="example.test",
+                status_code=None,
+                title=None,
+                technologies=[],
+                content_length=None,
+                evidence_ids=[],
+                tags=[],
+            )
+        ]
+    )
+
+    services = build_deep_metadata_services_from_project_state(state)
+    plan = build_deep_metadata_plan_from_project_state(state)
+    export_deep_metadata_plan_json(plan)
+
+    assert services
+    assert plan.requests
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_deep_bounded_remains_rejected_by_planner_and_project_pipeline(
     tmp_path: Path,
 ) -> None:
@@ -227,3 +468,29 @@ def _walk_keys(value: object) -> set[str]:
             keys.update(_walk_keys(nested))
         return keys
     return set()
+
+
+def _project_state(
+    *,
+    http_services: list[HTTPService] | None = None,
+    endpoints: list[Endpoint] | None = None,
+    http_artifacts: list[HTTPArtifact] | None = None,
+    discovered_paths: list[DiscoveredPath] | None = None,
+) -> ProjectState:
+    return ProjectState(
+        project_name="unit",
+        input_dir="",
+        processed_files=[],
+        scope_summary="No scope",
+        assets=[],
+        http_services=http_services or [],
+        endpoints=endpoints or [],
+        port_services=[],
+        http_artifacts=http_artifacts or [],
+        discovered_paths=discovered_paths or [],
+        recon_summary=None,
+        recon_manifest=None,
+        evidence=[],
+        warnings=[],
+        generated_at="2026-07-01T00:00:00Z",
+    )

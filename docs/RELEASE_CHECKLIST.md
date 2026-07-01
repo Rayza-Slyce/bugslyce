@@ -177,6 +177,8 @@ bugslyce project run \
   non-executable.
 - [ ] `bugslyce recon deep-metadata-plan` remains stdout-only, planning-only,
   and non-executable.
+- [ ] Deep metadata project-state adapter remains pure, internal, and
+  non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

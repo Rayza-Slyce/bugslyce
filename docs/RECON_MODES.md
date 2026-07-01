@@ -407,6 +407,14 @@ The command does not make network requests, does not inspect targets, does
 not read or write project files, does not execute commands, does not create
 output files, and does not change mode availability.
 
+Phase 79C adds a pure internal adapter from already-loaded BugSlyce
+project-state HTTP service, endpoint, HTTP artefact, and discovered-path data
+into Deep metadata planning services. It operates on in-memory project state
+only. It does not read project files, does not inspect targets, does not fetch
+URLs, does not make network requests, does not write files, does not execute
+commands, does not expose a CLI command, and does not change mode
+availability.
+
 Proposed future Deep output sections include:
 
 - Deep Evidence Expansion Summary.

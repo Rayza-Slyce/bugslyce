@@ -11,6 +11,8 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from urllib.parse import urlparse, urlunparse
 
+from bugslyce.core.models import ProjectState
+
 
 MAX_DEEP_METADATA_SERVICES = 50
 DEEP_METADATA_PATHS: tuple[tuple[str, str, str], ...] = (
@@ -150,6 +152,52 @@ def build_deep_metadata_request_plan(
     )
 
 
+def build_deep_metadata_services_from_project_state(
+    project_state: ProjectState,
+) -> tuple[DeepMetadataService, ...]:
+    """Build metadata planner service inputs from loaded project state only."""
+
+    services: list[DeepMetadataService] = []
+    for service in project_state.http_services:
+        _append_project_state_service(
+            services,
+            service.url,
+            "project-state:http-service",
+        )
+    for endpoint in project_state.endpoints:
+        _append_project_state_service(
+            services,
+            endpoint.url,
+            "project-state:endpoint",
+        )
+    for artifact in project_state.http_artifacts:
+        _append_project_state_service(
+            services,
+            artifact.url,
+            "project-state:http-artifact",
+        )
+    for path in project_state.discovered_paths:
+        _append_project_state_service(
+            services,
+            path.url,
+            "project-state:discovered-path",
+        )
+    return tuple(services)
+
+
+def build_deep_metadata_plan_from_project_state(
+    project_state: ProjectState,
+    *,
+    max_services: int | None = None,
+) -> DeepMetadataPlan:
+    """Build a metadata plan from loaded project state without execution."""
+
+    return build_deep_metadata_request_plan(
+        build_deep_metadata_services_from_project_state(project_state),
+        max_services=max_services,
+    )
+
+
 def export_deep_metadata_plan_json(plan: DeepMetadataPlan) -> dict[str, object]:
     """Return a deterministic JSON-serialisable metadata plan payload."""
 
@@ -224,3 +272,13 @@ def _normalise_http_origin(raw_url: str) -> tuple[str | None, str]:
 
 def _join_origin_path(origin: str, path: str) -> str:
     return origin.rstrip("/") + path
+
+
+def _append_project_state_service(
+    services: list[DeepMetadataService],
+    url: str,
+    source: str,
+) -> None:
+    if _normalise_http_origin(url)[0] is None:
+        return
+    services.append(DeepMetadataService(url=url, source=source))

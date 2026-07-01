@@ -112,6 +112,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "explicit service URLs only",
         "`bugslyce recon deep-metadata-plan --json`",
         "does not inspect targets",
+        "pure internal adapter from already-loaded BugSlyce",
+        "project-state HTTP service, endpoint, HTTP artefact, and discovered-path data",
+        "in-memory project state",
     ):
         assert expected.lower() in lowered
 
