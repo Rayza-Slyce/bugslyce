@@ -181,6 +181,8 @@ bugslyce project run \
   non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
+- [ ] Standard Human Triage promotes useful local robots metadata body values
+  without claiming credentials or correlating unrelated evidence.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

@@ -177,6 +177,73 @@ def test_project_state_builds_from_raw_recon_fixture() -> None:
     assert all(item.evidence_ids for item in state.http_artifacts)
 
 
+def test_saved_robots_body_value_becomes_http_artifact(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "robots-10.10.10.10-80.txt").write_text(
+        "Wubbalubbadubdub\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    robots_values = [
+        artifact
+        for artifact in state.http_artifacts
+        if artifact.artifact_type == "robots_value"
+    ]
+
+    assert len(robots_values) == 1
+    assert robots_values[0].url == "http://10.10.10.10/robots.txt"
+    assert robots_values[0].value == "Wubbalubbadubdub"
+    assert robots_values[0].source_file.endswith("robots-10.10.10.10-80.txt")
+    assert robots_values[0].evidence_ids == ["EVID-ART-0002"]
+    assert "robots_artifact" in robots_values[0].tags
+
+
+def test_generic_robots_user_agent_does_not_create_body_value(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "robots-10.10.10.10-80.txt").write_text(
+        "User-agent: *\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert any(artifact.artifact_type == "user_agent" for artifact in state.http_artifacts)
+    assert not any(
+        artifact.artifact_type == "robots_value"
+        for artifact in state.http_artifacts
+    )
+
+
+def test_noisy_robots_body_lines_are_not_promoted(tmp_path: Path) -> None:
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "robots-10.10.10.10-80.txt").write_text(
+        "\n".join(
+            [
+                "A" * 200,
+                "<html><title>Not robots</title></html>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert not any(
+        artifact.artifact_type == "robots_value"
+        for artifact in state.http_artifacts
+    )
+
+
 def test_malformed_httpx_lines_do_not_crash_project_assembly(tmp_path: Path) -> None:
     (tmp_path / "httpx.jsonl").write_text(
         "\n".join(

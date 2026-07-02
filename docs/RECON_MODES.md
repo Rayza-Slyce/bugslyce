@@ -953,3 +953,11 @@ preserving combined evidence IDs and compact value previews. The grouping is
 evidence-backed and local-context based; it does not claim unrelated evidence
 is correlated, does not confirm credentials or vulnerabilities, and leaves raw
 evidence available below for auditability.
+
+Phase 80C promotes useful body-derived `robots.txt` metadata values from
+already-collected local evidence into Standard Human Triage and readable
+evidence cards. These metadata values are manual review context only, not
+confirmed credentials or vulnerabilities. BugSlyce does not automatically
+correlate robots values with source comments, usernames, login paths, or other
+separate evidence. Raw robots artefacts remain available below for
+auditability.

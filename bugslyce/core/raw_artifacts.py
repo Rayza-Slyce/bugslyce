@@ -682,7 +682,14 @@ def _service_url(host: str, port: int, service: str | None) -> str:
 
 def _artifact_tags(artifact: HTTPArtifact) -> list[str]:
     tags: list[str] = []
-    if artifact.artifact_type in {"robots", "allow_rule", "disallow_rule", "unusual_user_agent"}:
+    if artifact.artifact_type in {
+        "robots",
+        "allow_rule",
+        "disallow_rule",
+        "robots_value",
+        "sitemap_rule",
+        "unusual_user_agent",
+    }:
         tags.append("robots_artifact")
     if artifact.artifact_type in {"encoded_like_artifact", "hidden_element"}:
         tags.append("encoded_or_hidden_artifact")
@@ -748,8 +755,9 @@ def _infer_artifact_url(path: Path, host: str | None, artifact_kind: str) -> str
 
 
 def _filename_port(stem: str) -> int | None:
+    ports: list[int] = []
     for token in re.findall(r"(?<!\d)(\d{1,5})(?!\d)", stem):
         port = int(token)
         if 1 <= port <= 65535:
-            return port
-    return None
+            ports.append(port)
+    return ports[-1] if ports else None

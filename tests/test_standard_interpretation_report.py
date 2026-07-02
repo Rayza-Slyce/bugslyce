@@ -444,6 +444,40 @@ def test_standard_report_includes_human_triage_brief_and_cards_before_raw_tables
     assert "payload injection" not in human_section.lower()
 
 
+def test_standard_report_promotes_robots_body_value_in_human_triage() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots_value",
+                value="Wubbalubbadubdub",
+                source_file="robots-example.txt",
+                evidence_ids=["EVID-ART-ROBOTS-VALUE"],
+                tags=["robots_artifact"],
+            )
+        ]
+    )
+
+    report = render_standard_interpretation_report(state, [])
+
+    human_section = report.markdown.split("## Human Triage Brief", 1)[1].split(
+        "## Manual Review Leads",
+        1,
+    )[0]
+    cards_section = report.markdown.split("## Readable Evidence Cards", 1)[1].split(
+        "## Scope Summary",
+        1,
+    )[0]
+
+    assert "robots.txt clue-like value observed" in human_section
+    assert "Wubbalubbadubdub" in human_section
+    assert "### robots.txt clue-like value observed" in cards_section
+    assert "- Signal: robots value" in cards_section
+    assert "- Value preview: `Wubbalubbadubdub`" in cards_section
+    assert "valid credential" not in human_section.lower()
+    assert "probably the password" not in human_section.lower()
+
+
 def test_helper_does_not_mutate_project_state_or_candidates() -> None:
     state = _project_state(
         evidence=[

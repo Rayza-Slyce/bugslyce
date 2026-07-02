@@ -16,6 +16,8 @@ ROBOTS_ARTIFACT_TYPES = {
     "unusual_user_agent",
     "allow_rule",
     "disallow_rule",
+    "robots_value",
+    "sitemap_rule",
 }
 HTML_ARTIFACT_TYPES = {
     "page_title",
@@ -145,6 +147,8 @@ def _source_text_for_artifact(artifact: HTTPArtifact) -> str:
         return f"Allow: {value}"
     if artifact.artifact_type == "disallow_rule":
         return f"Disallow: {value}"
+    if artifact.artifact_type == "sitemap_rule":
+        return f"Sitemap: {value}"
     if artifact.artifact_type == "html_comment":
         return f"<!-- {value} -->"
     if artifact.artifact_type == "hidden_element":

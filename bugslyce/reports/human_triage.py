@@ -540,7 +540,30 @@ def _add_artifact_items(
             start.append(item)
             values.append(item)
             continue
-        if artifact_type in {"robots", "user_agent", "unusual_user_agent", "allow_rule", "disallow_rule"}:
+        if artifact_type == "robots_value":
+            item = _artifact_item(
+                artifact,
+                "robots.txt clue-like value observed",
+                "robots_metadata_value",
+                "high",
+                (
+                    "robots.txt and metadata files can contain route hints or unusual "
+                    "operator-provided values that deserve manual context review."
+                ),
+            )
+            start.append(item)
+            values.append(item)
+            continue
+        if artifact_type == "user_agent" and artifact.value.strip() == "*":
+            continue
+        if artifact_type in {
+            "robots",
+            "user_agent",
+            "unusual_user_agent",
+            "allow_rule",
+            "disallow_rule",
+            "sitemap_rule",
+        }:
             if artifact_type == "robots" and _looks_like_local_path(artifact.value):
                 continue
             item = _artifact_item(
@@ -665,6 +688,13 @@ def _artifact_item(
     priority: str,
     why: str,
 ) -> HumanTriageItem:
+    suggested_action = (
+        "Review the saved metadata body locally and correlate manually with route, "
+        "source, and service context before treating the value as meaningful."
+        if category == "robots_metadata_value"
+        else "Review the collected source context locally and correlate before treating the value as meaningful."
+    )
+    signal = "robots value" if category == "robots_metadata_value" else artifact.artifact_type
     return HumanTriageItem(
         title=title,
         priority=priority,
@@ -672,12 +702,10 @@ def _artifact_item(
         source=f"http_artifact:{artifact.artifact_type}",
         value=_safe_preview(artifact.value),
         why_it_matters=why,
-        suggested_manual_action=(
-            "Review the collected source context locally and correlate before treating the value as meaningful."
-        ),
+        suggested_manual_action=suggested_action,
         evidence_ids=tuple(artifact.evidence_ids),
         url=artifact.url or None,
-        signal=artifact.artifact_type,
+        signal=signal,
     )
 
 
@@ -874,13 +902,14 @@ def _category_rank(category: str) -> int:
         "directory_listing": 1,
         "source_context_group": 2,
         "admin_route": 3,
-        "robots_metadata": 4,
-        "source_comment": 5,
-        "encoded_source": 6,
-        "http_service": 7,
-        "access_control_context": 8,
-        "service_context": 9,
-        "static_noise": 10,
+        "robots_metadata_value": 4,
+        "robots_metadata": 5,
+        "source_comment": 6,
+        "encoded_source": 7,
+        "http_service": 8,
+        "access_control_context": 9,
+        "service_context": 10,
+        "static_noise": 11,
     }
     return order.get(category, 20)
 

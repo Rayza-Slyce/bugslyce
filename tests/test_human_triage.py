@@ -395,6 +395,108 @@ def test_readable_cards_group_same_source_clues_once() -> None:
     assert "Note to self, remember username: demo-user; password; secret" in markdown
 
 
+def test_human_triage_promotes_robots_body_value_as_metadata_context() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots_value",
+                value="Wubbalubbadubdub",
+                source_file="robots-example.txt",
+                evidence_ids=["EVID-ART-ROBOTS-VALUE"],
+                tags=["robots_artifact"],
+            )
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    markdown = render_human_triage_brief_markdown(brief)
+    cards = render_readable_evidence_cards_markdown(brief)
+
+    assert "robots.txt clue-like value observed" in markdown
+    assert "Wubbalubbadubdub" in markdown
+    assert "robots value" in markdown
+    assert "Review the saved metadata body locally" in markdown
+    assert "### robots.txt clue-like value observed" in cards
+    assert "- URL: `http://example.test/robots.txt`" in cards
+    assert "- Signal: robots value" in cards
+    assert "- Value preview: `Wubbalubbadubdub`" in cards
+    assert "valid credential" not in markdown.lower()
+    assert "this is the password" not in markdown.lower()
+    assert "probably the password" not in markdown.lower()
+    assert "confirmed" not in cards.lower()
+    assert "vulnerable" not in cards.lower()
+    assert "exploit" not in cards.lower()
+
+
+def test_human_triage_keeps_source_group_and_robots_value_separate() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Note to self, remember username: demo-user",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-SOURCE-1"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-SOURCE-2"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots_value",
+                value="Wubbalubbadubdub",
+                source_file="robots-example.txt",
+                evidence_ids=["EVID-ART-ROBOTS-VALUE"],
+                tags=["robots_artifact"],
+            ),
+        ]
+    )
+
+    markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+    start_here = markdown.split("### Start Here", 1)[1].split(
+        "### Evidence Values Worth Noting",
+        1,
+    )[0]
+
+    assert "Source credential/context clue group observed" in start_here
+    assert "robots.txt clue-like value observed" in start_here
+    assert "username + robots" not in markdown.lower()
+    assert "use this with the username" not in markdown.lower()
+    assert "credentials found" not in markdown.lower()
+    assert "probably the password" not in markdown.lower()
+
+
+def test_human_triage_disallow_rule_is_route_context_not_credentials() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="disallow_rule",
+                value="/admin/",
+                source_file="robots-example.txt",
+                evidence_ids=["EVID-ART-ROBOTS-DISALLOW"],
+                tags=["robots_artifact"],
+            )
+        ]
+    )
+
+    markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    assert "robots.txt or metadata clue observed" in markdown
+    assert "/admin/" in markdown
+    assert "valid credential" not in markdown.lower()
+    assert "credentials found" not in markdown.lower()
+    assert "password" not in markdown.lower()
+    assert "confirmed credential" not in markdown.lower()
+
+
 def test_human_triage_brief_separates_evidence_values_from_review_next() -> None:
     state = _project_state(
         http_artifacts=[
