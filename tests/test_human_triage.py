@@ -125,8 +125,8 @@ def test_human_triage_brief_promotes_universal_manual_review_signals() -> None:
     assert "Auth/account route observed" in markdown
     assert "Directory listing or browsable path observed" in markdown
     assert "robots.txt or metadata clue observed" in markdown
-    assert "Source comment or keyword context observed" in markdown
-    assert "Encoded-looking source artefact observed" in markdown
+    assert "Source credential/context clue group observed" in markdown
+    assert "source credential/context cluster" in markdown
     assert "SSH service context" in markdown
     assert "Static or library route" in markdown
     assert "EVID-ENDPOINT-LOGIN" in markdown
@@ -236,7 +236,7 @@ def test_readable_evidence_cards_preserve_distinct_same_url_signals() -> None:
                 url="http://example.test/",
                 artifact_type="encoded_like_artifact",
                 value="L2FkbWluL3Jldmlldw==",
-                source_file="homepage.html",
+                source_file="followup-body.html",
                 evidence_ids=["EVID-ART-ENCODED"],
                 tags=["encoded_or_hidden_artifact"],
             ),
@@ -249,6 +249,150 @@ def test_readable_evidence_cards_preserve_distinct_same_url_signals() -> None:
     assert "### Encoded-looking source artefact observed" in markdown
     assert "EVID-ART-COMMENT" in markdown
     assert "EVID-ART-ENCODED" in markdown
+
+
+def test_human_triage_groups_same_source_comment_keyword_clues() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Note to self, remember username: demo-user",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0006"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0007"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0008"],
+                tags=[],
+            ),
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    markdown = render_human_triage_brief_markdown(brief)
+
+    start_here = markdown.split("### Start Here", 1)[1].split(
+        "### Evidence Values Worth Noting",
+        1,
+    )[0]
+
+    assert start_here.count("**Source credential/context clue group observed**") == 1
+    assert "source credential/context cluster" in markdown
+    assert "`EVID-ART-0006`, `EVID-ART-0007`, `EVID-ART-0008`" in markdown
+    assert "Note to self, remember username: demo-user; password; secret" in markdown
+    assert "Source comment or keyword context observed" not in start_here
+    assert start_here.count("password") == 0
+    assert start_here.count("secret") == 0
+    assert "confirmed" not in start_here.lower()
+    assert "flag" not in start_here.lower()
+    assert "exploit" not in start_here.lower()
+    assert "vulnerable" not in start_here.lower()
+
+
+def test_human_triage_group_absorbs_matching_credential_like_candidate() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Note to self, remember username: demo-user",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0006"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0007"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0008"],
+                tags=[],
+            ),
+        ]
+    )
+    candidate = Candidate(
+        id="CAND-0001",
+        candidate_type="credential_like_artifact_review",
+        title="Credential-like artefact review in homepage HTML",
+        priority="high",
+        rationale="Source evidence contains credential-like context.",
+        affected_assets=["example.test"],
+        affected_endpoints=["http://example.test/"],
+        evidence_ids=["EVID-ART-0006", "EVID-ART-0007", "EVID-ART-0008"],
+        suggested_manual_validation=["Review source locally."],
+        kill_switch_guidance=None,
+    )
+
+    markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, [candidate]))
+
+    start_here = markdown.split("### Start Here", 1)[1].split(
+        "### Evidence Values Worth Noting",
+        1,
+    )[0]
+    assert start_here.count("Source credential/context clue group observed") == 1
+    assert "Credential-like artefact review in homepage HTML" not in start_here
+    assert "`EVID-ART-0006`, `EVID-ART-0007`, `EVID-ART-0008`" in start_here
+
+
+def test_readable_cards_group_same_source_clues_once() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Note to self, remember username: demo-user",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0006"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0007"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0008"],
+                tags=[],
+            ),
+        ]
+    )
+
+    markdown = render_readable_evidence_cards_markdown(build_human_triage_brief(state, []))
+
+    assert markdown.count("### Source credential/context clue group observed") == 1
+    assert "### Source comment or keyword context observed" not in markdown
+    assert "EVID-ART-0006" in markdown
+    assert "EVID-ART-0007" in markdown
+    assert "EVID-ART-0008" in markdown
+    assert "Note to self, remember username: demo-user; password; secret" in markdown
 
 
 def test_human_triage_brief_separates_evidence_values_from_review_next() -> None:

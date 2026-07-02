@@ -945,3 +945,11 @@ This is report UX only. It does not add recon execution behaviour, does not
 fetch URLs, does not execute commands, does not replace manual validation,
 does not increase Standard scan volume, does not change Quick behaviour, and
 does not make Deep Recon available.
+
+Phase 80B consolidates repeated related source, comment, keyword, encoded, and
+hidden-element clues from the same local URL/source context into grouped
+Human Triage leads. This keeps repeated source-level clues readable while
+preserving combined evidence IDs and compact value previews. The grouping is
+evidence-backed and local-context based; it does not claim unrelated evidence
+is correlated, does not confirm credentials or vulnerabilities, and leaves raw
+evidence available below for auditability.

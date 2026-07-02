@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
@@ -82,6 +83,21 @@ VALUE_SIGNAL_TERMS = {
     "token",
     "username",
 }
+SOURCE_CONTEXT_ARTIFACT_TYPES = {
+    "encoded_like_artifact",
+    "hidden_element",
+    "html_comment",
+    "keyword_hit",
+}
+CLUE_LIKE_TERMS = {
+    "clue",
+    "hint",
+    "key",
+    "note",
+    "remember",
+    "token",
+    "username",
+}
 SENSITIVE_PREVIEW_TERMS = re.compile(
     r"\b(flag|exploit|vulnerable|vulnerability)\b",
     re.IGNORECASE,
@@ -130,6 +146,15 @@ class HumanTriageBrief:
     evidence_cards: tuple[ReadableEvidenceCard, ...]
 
 
+@dataclass(frozen=True)
+class _SourceContextGroup:
+    """Internal grouped source context for Human Triage consolidation."""
+
+    item: HumanTriageItem
+    evidence_ids: tuple[str, ...]
+    url: str | None
+
+
 def build_human_triage_brief(
     project_state: ProjectState,
     candidates: list[Candidate],
@@ -142,13 +167,35 @@ def build_human_triage_brief(
     start: list[HumanTriageItem] = []
     values: list[HumanTriageItem] = []
     ignore: list[HumanTriageItem] = []
+    source_groups = _build_source_context_groups(project_state)
+    grouped_evidence_ids = {
+        evidence_id
+        for group in source_groups
+        for evidence_id in group.evidence_ids
+    }
+    grouped_urls = {group.url for group in source_groups if group.url}
 
-    _add_candidate_items(start, ignore, candidates)
+    _add_candidate_items(
+        start,
+        ignore,
+        candidates,
+        grouped_evidence_ids=grouped_evidence_ids,
+        grouped_urls=grouped_urls,
+    )
     _add_http_service_items(start, project_state)
     _add_port_service_items(start, project_state)
     _add_endpoint_items(start, ignore, project_state)
     _add_discovered_path_items(start, ignore, project_state)
-    _add_artifact_items(start, values, ignore, project_state)
+    _add_artifact_items(
+        start,
+        values,
+        ignore,
+        project_state,
+        grouped_evidence_ids=grouped_evidence_ids,
+    )
+    for group in source_groups:
+        start.append(group.item)
+        values.append(group.item)
 
     start = _rank_items(start)[:MAX_BRIEF_ITEMS]
     values = _rank_items(values)[:MAX_VALUE_ITEMS]
@@ -274,8 +321,17 @@ def _add_candidate_items(
     start: list[HumanTriageItem],
     ignore: list[HumanTriageItem],
     candidates: list[Candidate],
+    *,
+    grouped_evidence_ids: set[str],
+    grouped_urls: set[str],
 ) -> None:
     for candidate in candidates:
+        if _candidate_duplicate_of_source_group(
+            candidate,
+            grouped_evidence_ids=grouped_evidence_ids,
+            grouped_urls=grouped_urls,
+        ):
+            continue
         item = HumanTriageItem(
             title=candidate.title,
             priority=candidate.priority if candidate.priority in {"high", "medium", "low"} else "low",
@@ -449,8 +505,12 @@ def _add_artifact_items(
     values: list[HumanTriageItem],
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
+    *,
+    grouped_evidence_ids: set[str],
 ) -> None:
     for artifact in project_state.http_artifacts:
+        if grouped_evidence_ids.intersection(artifact.evidence_ids):
+            continue
         artifact_type = artifact.artifact_type
         if artifact_type in {"encoded_like_artifact", "hidden_element"}:
             classification = classify_encoded_artifact(artifact)
@@ -492,6 +552,95 @@ def _add_artifact_items(
             )
             start.append(item)
             values.append(item)
+
+
+def _build_source_context_groups(project_state: ProjectState) -> tuple[_SourceContextGroup, ...]:
+    grouped: dict[tuple[str, str], list[HTTPArtifact]] = defaultdict(list)
+    for artifact in project_state.http_artifacts:
+        if artifact.artifact_type not in SOURCE_CONTEXT_ARTIFACT_TYPES:
+            continue
+        if artifact.artifact_type in {"encoded_like_artifact", "hidden_element"}:
+            classification = classify_encoded_artifact(artifact)
+            if classification.category == LIKELY_NOISE:
+                continue
+        grouped[(artifact.url or "", artifact.source_file or "")].append(artifact)
+
+    result: list[_SourceContextGroup] = []
+    for (url, source_file), artifacts in grouped.items():
+        if len(artifacts) < 2 or not _source_group_has_signal(artifacts):
+            continue
+        evidence_ids = tuple(
+            _dedupe(
+                [
+                    evidence_id
+                    for artifact in artifacts
+                    for evidence_id in artifact.evidence_ids
+                ]
+            )
+        )
+        if not evidence_ids:
+            continue
+        preview = _source_group_preview(artifacts)
+        item = HumanTriageItem(
+            title="Source credential/context clue group observed",
+            priority="high",
+            category="source_context_group",
+            source=f"source_context:{source_file or 'unknown'}",
+            value=preview,
+            why_it_matters=(
+                "Multiple source-level clues on the same page can help guide manual review "
+                "when correlated with route and metadata context."
+            ),
+            suggested_manual_action=(
+                "Review the surrounding saved source locally and validate each value in context "
+                "before treating it as meaningful."
+            ),
+            evidence_ids=evidence_ids,
+            url=url or None,
+            signal="source credential/context cluster",
+        )
+        result.append(
+            _SourceContextGroup(
+                item=item,
+                evidence_ids=evidence_ids,
+                url=url or None,
+            )
+        )
+    return tuple(result)
+
+
+def _source_group_has_signal(artifacts: list[HTTPArtifact]) -> bool:
+    artifact_types = {artifact.artifact_type for artifact in artifacts}
+    if artifact_types & {"encoded_like_artifact", "hidden_element"}:
+        return True
+    values = " ".join(artifact.value.lower() for artifact in artifacts)
+    return any(term in values for term in VALUE_SIGNAL_TERMS | CLUE_LIKE_TERMS)
+
+
+def _source_group_preview(artifacts: list[HTTPArtifact]) -> str:
+    previews: list[str] = []
+    for artifact in artifacts:
+        preview = _safe_preview(artifact.value, limit=80)
+        if preview and preview not in previews:
+            previews.append(preview)
+        if len(previews) >= 4:
+            break
+    if len(artifacts) > len(previews):
+        previews.append(f"+{len(artifacts) - len(previews)} more")
+    return "; ".join(previews)
+
+
+def _candidate_duplicate_of_source_group(
+    candidate: Candidate,
+    *,
+    grouped_evidence_ids: set[str],
+    grouped_urls: set[str],
+) -> bool:
+    if candidate.candidate_type != "credential_like_artifact_review":
+        return False
+    if grouped_evidence_ids.intersection(candidate.evidence_ids):
+        return True
+    return any(endpoint in grouped_urls for endpoint in candidate.affected_endpoints)
 
 
 def _path_item(url: str, evidence_ids: list[str], title: str, category: str) -> HumanTriageItem:
@@ -568,7 +717,11 @@ def _build_cards(
             why_it_matters=item.why_it_matters,
             suggested_manual_action=item.suggested_manual_action,
             evidence_ids=item.evidence_ids,
-            value_preview=item.value if item.source.startswith("http_artifact:") else None,
+            value_preview=(
+                item.value
+                if item.source.startswith(("http_artifact:", "source_context:"))
+                else None
+            ),
             source=item.source,
         )
         key = _card_key(card)
@@ -719,14 +872,15 @@ def _category_rank(category: str) -> int:
     order = {
         "auth_route": 0,
         "directory_listing": 1,
-        "admin_route": 2,
-        "robots_metadata": 3,
-        "source_comment": 4,
-        "encoded_source": 5,
-        "http_service": 6,
-        "access_control_context": 7,
-        "service_context": 8,
-        "static_noise": 9,
+        "source_context_group": 2,
+        "admin_route": 3,
+        "robots_metadata": 4,
+        "source_comment": 5,
+        "encoded_source": 6,
+        "http_service": 7,
+        "access_control_context": 8,
+        "service_context": 9,
+        "static_noise": 10,
     }
     return order.get(category, 20)
 
