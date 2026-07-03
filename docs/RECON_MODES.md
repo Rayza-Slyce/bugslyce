@@ -984,3 +984,10 @@ Standard reports treat ordinary login form structure, such as generic
 auth-route context rather than credential discovery. Stronger homepage/source
 comment clue groups remain available when supported by local evidence, and raw
 artefacts remain available below for auditability.
+
+Phase 81A adds an offline Deep metadata review model. It analyses
+already-collected metadata evidence in loaded project state, such as
+`robots.txt` values, robots route hints, sitemap references, and common
+metadata paths. The model is deterministic and produces manual review context
+only. It does not fetch URLs, read project files, execute Deep Recon, create
+outputs, change Quick or Standard behaviour, or make Deep Recon available.

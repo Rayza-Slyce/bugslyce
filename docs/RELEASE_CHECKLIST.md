@@ -179,6 +179,8 @@ bugslyce project run \
   and non-executable.
 - [ ] Deep metadata project-state adapter remains pure, internal, and
   non-executable.
+- [ ] Deep metadata review model remains offline, deterministic, and
+  non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values
