@@ -133,6 +133,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "`bugslyce recon deep-metadata-review --input-dir",
         "renders the offline metadata review to stdout",
         "creates no artefacts",
+        "offline Deep metadata coverage summary model",
+        "planned but uncollected metadata URLs",
+        "does not fetch URLs, create outputs, add CLI",
     ):
         assert expected.lower() in lowered
 

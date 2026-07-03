@@ -997,3 +997,9 @@ Phase 81B exposes the Deep metadata review as a safe preview command:
 command builds project state from existing local BugSlyce evidence and renders the offline metadata review to stdout. It creates no artefacts. It does not
 execute Deep Recon, fetch URLs, run live recon, write files, or change mode
 availability. Deep Recon remains unavailable.
+
+Phase 81C adds an offline Deep metadata coverage summary model. It compares
+planned Deep metadata URLs with already-collected ProjectState evidence and
+reports collected metadata, observed metadata references, and planned but uncollected metadata URLs. It does not fetch URLs, create outputs, add CLI
+exposure, execute Deep Recon, or change mode availability. Deep Recon remains
+unavailable.
