@@ -181,6 +181,8 @@ bugslyce project run \
   non-executable.
 - [ ] Deep metadata review model remains offline, deterministic, and
   non-executable.
+- [ ] `bugslyce recon deep-metadata-review --input-dir` remains read-only,
+  stdout-only, and non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

@@ -1,10 +1,6 @@
 """Tests for offline Deep metadata review leads."""
 
 from __future__ import annotations
-
-import pytest
-
-from bugslyce.cli import main
 from bugslyce.core.models import (
     DiscoveredPath,
     Endpoint,
@@ -320,16 +316,6 @@ def test_no_cli_or_mode_enablement_changes() -> None:
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is False
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
-
-
-def test_no_deep_metadata_review_cli_command_is_exposed(capsys) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["recon", "deep-metadata-review"])
-
-    captured = capsys.readouterr()
-
-    assert exc_info.value.code == 2
-    assert "deep-metadata-review" in captured.err
 
 
 def _project_state(

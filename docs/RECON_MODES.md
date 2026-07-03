@@ -991,3 +991,9 @@ already-collected metadata evidence in loaded project state, such as
 metadata paths. The model is deterministic and produces manual review context
 only. It does not fetch URLs, read project files, execute Deep Recon, create
 outputs, change Quick or Standard behaviour, or make Deep Recon available.
+
+Phase 81B exposes the Deep metadata review as a safe preview command:
+`bugslyce recon deep-metadata-review --input-dir <local-output-dir>`. The
+command builds project state from existing local BugSlyce evidence and renders the offline metadata review to stdout. It creates no artefacts. It does not
+execute Deep Recon, fetch URLs, run live recon, write files, or change mode
+availability. Deep Recon remains unavailable.

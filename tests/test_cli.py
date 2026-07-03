@@ -466,6 +466,120 @@ def test_cli_recon_deep_metadata_plan_rejects_runtime_arguments(
     )
 
 
+def test_cli_recon_deep_metadata_review_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-review", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-metadata-review" in captured.out
+    assert "--input-dir" in captured.out
+    assert "Deep metadata review" in captured.out
+    assert "Deep Recon" in captured.out
+    assert "URL fetching" in captured.out
+    for forbidden in (
+        "--target",
+        "--scope",
+        "--output",
+        "--run",
+        "--execute",
+        "--fetch",
+        "--scan",
+        "--json",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_metadata_review_renders_local_metadata_lead(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "robots-10.10.10.10-80.txt").write_text(
+        "Wubbalubbadubdub\n",
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-metadata-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Metadata Review")
+    assert "robots.txt clue-like value observed" in captured.out
+    assert "Wubbalubbadubdub" in captured.out
+    assert "not confirmed findings" in captured.out
+    assert before == after
+    assert not (input_dir / "deep_metadata_review.md").exists()
+    assert not (input_dir / "deep_metadata_review.json").exists()
+
+
+def test_cli_recon_deep_metadata_review_renders_no_leads_for_minimal_project(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "minimal"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-metadata-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "No Deep metadata review leads were generated" in captured.out
+    assert before == after
+
+
+def test_cli_recon_deep_metadata_review_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(["recon", "deep-metadata-review", "--input-dir", str(missing)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Deep Recon was not executed." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_review_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(["recon", "deep-metadata-review", "--input-dir", str(input_file)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+
+
 def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["recon", "deep-eligibility", "--help"])

@@ -130,6 +130,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "recognise `standard-bounded-core` content discovery artefacts",
         "ordinary login form structure",
         "auth-route context rather than credential discovery",
+        "`bugslyce recon deep-metadata-review --input-dir",
+        "renders the offline metadata review to stdout",
+        "creates no artefacts",
     ):
         assert expected.lower() in lowered
 
