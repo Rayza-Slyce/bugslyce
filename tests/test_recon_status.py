@@ -128,6 +128,35 @@ def test_status_cleans_profile_display_and_reports_raw_unique_duplicate_paths(
     assert "plus-content-discovery-plus-content-discovery" not in workflow_section
 
 
+def test_status_detects_standard_bounded_core_content_profile(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="gobuster")
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if not artifact.get("file", "").startswith("gobuster-")
+    ]
+    bounded_file = input_dir / "gobuster-standard-bounded-core-10.10.10.10-80-root.txt"
+    bounded_file.write_text("login.php (Status: 200) [Size: 456]\n", encoding="utf-8")
+    manifest["artifacts"].append(
+        {
+            "type": "gobuster",
+            "file": bounded_file.name,
+            "base_url": "http://10.10.10.10/",
+            "description": "Bounded Standard content discovery",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.workflow_summary.content_discovery_profiles == ["standard-bounded-core"]
+    assert "standard-bounded-core" in rendered
+    assert "lab-root-light" not in result.workflow_summary.content_discovery_profiles
+
+
 def test_status_detects_content_profile_from_execution_metadata(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, stage="services")
     (input_dir / "recon_execution_content_run.json").write_text(

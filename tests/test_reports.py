@@ -443,6 +443,45 @@ def test_report_workflow_summary_preserves_duplicate_path_evidence(
     assert manifest["profile"] in report
 
 
+def test_report_workflow_summary_detects_standard_bounded_core_profile(
+    tmp_path: Path,
+) -> None:
+    source = FIXTURES_ROOT / "lab_raw_recon_pack"
+    for path in source.iterdir():
+        if path.is_file():
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    manifest_path = tmp_path / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if not artifact.get("file", "").startswith("gobuster-")
+    ]
+    bounded_file = tmp_path / "gobuster-standard-bounded-core-10.10.10.10-80-root.txt"
+    bounded_file.write_text("login.php (Status: 200) [Size: 456]\n", encoding="utf-8")
+    manifest["artifacts"].append(
+        {
+            "type": "gobuster",
+            "file": bounded_file.name,
+            "base_url": "http://10.10.10.10/",
+            "description": "Bounded Standard content discovery",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    state = build_project_state(tmp_path)
+    report = render_markdown_report(state, generate_candidates(state))
+    workflow = report.split("## Workflow / Provenance Summary", 1)[1].split(
+        "## Input Files Processed",
+        1,
+    )[0]
+
+    assert state.recon_manifest is not None
+    assert "standard-bounded-core" in workflow
+    assert "Content discovery profiles detected: `standard-bounded-core`" in workflow
+    assert "lab-root-light" not in workflow
+
+
 def test_operator_summary_prioritises_services_and_separates_noise() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
     candidates = generate_candidates(state)

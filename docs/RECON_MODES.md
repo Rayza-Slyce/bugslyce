@@ -975,3 +975,12 @@ automation, JavaScript execution, form submission, credential use,
 authentication testing, brute force, or exploitation. Quick remains lighter
 and continues to use `lab-root-tiny`. Standard remains selected by `standard-bounded`.
 Deep Recon remains unavailable.
+
+Phase 80E polishes Standard provenance and login-form wording. Workflow
+summaries recognise `standard-bounded-core` content discovery artefacts
+directly instead of labelling them as broader `lab-root-light` discovery.
+Standard reports treat ordinary login form structure, such as generic
+`login`/`password` keyword hits and normal username/password input fields, as
+auth-route context rather than credential discovery. Stronger homepage/source
+comment clue groups remain available when supported by local evidence, and raw
+artefacts remain available below for auditability.

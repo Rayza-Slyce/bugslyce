@@ -83,6 +83,8 @@ VALUE_SIGNAL_TERMS = {
     "token",
     "username",
 }
+GENERIC_LOGIN_FORM_KEYWORDS = {"login", "password"}
+LOGIN_FORM_ARTIFACT_TYPES = {"form", "input"}
 SOURCE_CONTEXT_ARTIFACT_TYPES = {
     "encoded_like_artifact",
     "hidden_element",
@@ -579,6 +581,10 @@ def _add_artifact_items(
 
 def _build_source_context_groups(project_state: ProjectState) -> tuple[_SourceContextGroup, ...]:
     grouped: dict[tuple[str, str], list[HTTPArtifact]] = defaultdict(list)
+    artifacts_by_url: dict[str, list[HTTPArtifact]] = defaultdict(list)
+    for artifact in project_state.http_artifacts:
+        if artifact.url:
+            artifacts_by_url[artifact.url].append(artifact)
     for artifact in project_state.http_artifacts:
         if artifact.artifact_type not in SOURCE_CONTEXT_ARTIFACT_TYPES:
             continue
@@ -590,6 +596,8 @@ def _build_source_context_groups(project_state: ProjectState) -> tuple[_SourceCo
 
     result: list[_SourceContextGroup] = []
     for (url, source_file), artifacts in grouped.items():
+        if _is_generic_login_form_source_group(artifacts, artifacts_by_url.get(url, [])):
+            continue
         if len(artifacts) < 2 or not _source_group_has_signal(artifacts):
             continue
         evidence_ids = tuple(
@@ -638,6 +646,19 @@ def _source_group_has_signal(artifacts: list[HTTPArtifact]) -> bool:
         return True
     values = " ".join(artifact.value.lower() for artifact in artifacts)
     return any(term in values for term in VALUE_SIGNAL_TERMS | CLUE_LIKE_TERMS)
+
+
+def _is_generic_login_form_source_group(
+    grouped_artifacts: list[HTTPArtifact],
+    url_artifacts: list[HTTPArtifact],
+) -> bool:
+    grouped_types = {artifact.artifact_type for artifact in grouped_artifacts}
+    if grouped_types != {"keyword_hit"}:
+        return False
+    values = {artifact.value.strip().lower() for artifact in grouped_artifacts}
+    if not values or not values.issubset(GENERIC_LOGIN_FORM_KEYWORDS):
+        return False
+    return any(artifact.artifact_type in LOGIN_FORM_ARTIFACT_TYPES for artifact in url_artifacts)
 
 
 def _source_group_preview(artifacts: list[HTTPArtifact]) -> str:

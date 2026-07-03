@@ -209,6 +209,76 @@ def test_human_triage_promotes_discovered_login_php_as_manual_auth_route() -> No
     assert "brute force" not in markdown.lower()
 
 
+def test_human_triage_treats_generic_login_form_as_auth_context_not_clue_group() -> None:
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/login.php",
+                status_code=200,
+                content_length=456,
+                redirect_location=None,
+                source="gobuster-standard-bounded-core",
+                evidence_ids=["EVID-PATH-LOGIN-PHP"],
+                tags=[],
+            )
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/login.php",
+                artifact_type="form",
+                value="",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-FORM"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/login.php",
+                artifact_type="input",
+                value="name=username;type=text",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-USER-INPUT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/login.php",
+                artifact_type="input",
+                value="name=password;type=password",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-PASS-INPUT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/login.php",
+                artifact_type="keyword_hit",
+                value="login",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-LOGIN"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/login.php",
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-PASS"],
+                tags=[],
+            ),
+        ],
+    )
+
+    markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+    cards = render_readable_evidence_cards_markdown(build_human_triage_brief(state, []))
+
+    assert "Auth/account path discovered" in markdown
+    assert "Source credential/context clue group observed" not in markdown
+    assert "Credential-like artefact review in HTML for /login.php" not in markdown
+    assert "Source credential/context clue group observed" not in cards
+    assert "credentials found" not in markdown.lower()
+    assert "valid credential" not in markdown.lower()
+    assert "form submission" not in markdown.lower()
+    assert "authentication testing" not in markdown.lower()
+
+
 def test_readable_evidence_cards_deduplicate_start_and_value_items() -> None:
     state = _project_state(
         http_artifacts=[

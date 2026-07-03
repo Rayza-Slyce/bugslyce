@@ -52,8 +52,23 @@ def build_workflow_provenance(project_state: ProjectState) -> WorkflowProvenance
         "lab-root-tiny" in description for description in descriptions
     ) or "lab-root-tiny" in metadata_profiles:
         content_profiles.append("lab-root-tiny")
+    if any(name.startswith("gobuster-standard-bounded-core-") for name in filenames) or any(
+        "standard-bounded-core" in description for description in descriptions
+    ) or "standard-bounded-core" in metadata_profiles:
+        content_profiles.append("standard-bounded-core")
+    if any(name.startswith("gobuster-standard-auth-core-") for name in filenames) or any(
+        "standard-auth-core" in description for description in descriptions
+    ) or "standard-auth-core" in metadata_profiles:
+        content_profiles.append("standard-auth-core")
     if any(
-        name.startswith("gobuster-") and not name.startswith("gobuster-tiny-")
+        name.startswith("gobuster-")
+        and not name.startswith(
+            (
+                "gobuster-tiny-",
+                "gobuster-standard-bounded-core-",
+                "gobuster-standard-auth-core-",
+            )
+        )
         for name in filenames
     ) or any(
         "lab-root-light" in description for description in descriptions

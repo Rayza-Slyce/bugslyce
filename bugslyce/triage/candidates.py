@@ -60,6 +60,8 @@ KEYWORD_SIGNAL_TERMS = {
     "secret",
     "token",
 }
+GENERIC_LOGIN_FORM_KEYWORDS = {"login", "password"}
+LOGIN_FORM_ARTIFACT_TYPES = {"form", "input"}
 
 
 def generate_candidates(project_state: ProjectState) -> list[Candidate]:
@@ -650,12 +652,37 @@ def normalise_artifact_host(url: str) -> str:
 
 def _credential_like_artifact_groups(project_state: ProjectState) -> dict[str, list]:
     groups: dict[str, list] = {}
+    artifacts_by_url: dict[str, list] = {}
+    for artifact in project_state.http_artifacts:
+        if not artifact.url:
+            continue
+        artifacts_by_url.setdefault(artifact.url, []).append(artifact)
+
     for artifact in project_state.http_artifacts:
         if not artifact.url or not artifact.evidence_ids:
             continue
         if _is_sensitive_comment(artifact) or _is_sensitive_keyword_hit(artifact):
             groups.setdefault(artifact.url, []).append(artifact)
-    return groups
+    return {
+        url: artifacts
+        for url, artifacts in groups.items()
+        if not _is_generic_login_form_keyword_group(artifacts, artifacts_by_url.get(url, []))
+    }
+
+
+def _is_generic_login_form_keyword_group(
+    grouped_artifacts: list,
+    url_artifacts: list,
+) -> bool:
+    if any(_is_sensitive_comment(artifact) for artifact in grouped_artifacts):
+        return False
+    grouped_types = {artifact.artifact_type for artifact in grouped_artifacts}
+    if grouped_types != {"keyword_hit"}:
+        return False
+    values = {artifact.value.strip().lower() for artifact in grouped_artifacts}
+    if not values or not values.issubset(GENERIC_LOGIN_FORM_KEYWORDS):
+        return False
+    return any(artifact.artifact_type in LOGIN_FORM_ARTIFACT_TYPES for artifact in url_artifacts)
 
 
 def _is_sensitive_comment(artifact) -> bool:

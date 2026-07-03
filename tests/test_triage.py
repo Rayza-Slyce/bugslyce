@@ -173,6 +173,64 @@ def test_comment_and_keyword_hits_on_same_url_are_grouped() -> None:
     ]
 
 
+def test_generic_login_form_fields_do_not_create_credential_like_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    login_url = "https://app.example-bounty.test/login.php"
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url=login_url,
+                artifact_type="form",
+                value="",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-FORM"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=login_url,
+                artifact_type="input",
+                value="name=username;type=text",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-USER-INPUT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=login_url,
+                artifact_type="input",
+                value="name=password;type=password",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-PASS-INPUT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=login_url,
+                artifact_type="keyword_hit",
+                value="login",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-LOGIN-KEYWORD"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=login_url,
+                artifact_type="keyword_hit",
+                value="password",
+                source_file="login.html",
+                evidence_ids=["EVID-ART-PASS-KEYWORD"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert not any(login_url in candidate.affected_endpoints for candidate in credential_candidates)
+
+
 def test_api_account_resource_path_does_not_create_auth_candidate() -> None:
     state = build_project_state(FIXTURES_ROOT / "basic_saas")
     candidates = generate_candidates(state)

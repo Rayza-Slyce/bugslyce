@@ -127,6 +127,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "small deterministic",
         "Quick remains lighter",
         "Standard remains selected by `standard-bounded`",
+        "recognise `standard-bounded-core` content discovery artefacts",
+        "ordinary login form structure",
+        "auth-route context rather than credential discovery",
     ):
         assert expected.lower() in lowered
 

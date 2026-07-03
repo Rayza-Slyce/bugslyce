@@ -188,6 +188,10 @@ bugslyce project run \
   and performs no form submission, authentication testing, credential use,
   brute force, recursive crawling, or extension fuzzing beyond explicitly
   listed paths.
+- [ ] Workflow provenance reports `standard-bounded-core` accurately when the
+  combined Standard content profile produced the gobuster artefact.
+- [ ] Standard reports treat ordinary login form fields as auth-route context,
+  not confirmed credentials or standalone credential discovery.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.
