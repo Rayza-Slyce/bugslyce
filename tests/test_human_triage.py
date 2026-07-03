@@ -177,6 +177,38 @@ def test_readable_evidence_cards_are_bullet_blocks_not_tables() -> None:
     assert "| URL |" not in markdown
 
 
+def test_human_triage_promotes_discovered_login_php_as_manual_auth_route() -> None:
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/login.php",
+                status_code=200,
+                content_length=456,
+                redirect_location=None,
+                source="gobuster-standard-auth-core",
+                evidence_ids=["EVID-PATH-LOGIN-PHP"],
+                tags=[],
+            )
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    markdown = render_human_triage_brief_markdown(brief)
+    cards = render_readable_evidence_cards_markdown(brief)
+
+    assert "Auth/account path discovered" in markdown
+    assert "http://example.test/login.php" in markdown
+    assert "EVID-PATH-LOGIN-PHP" in markdown
+    assert "local validation" in markdown
+    assert "### Auth/account path discovered" in cards
+    assert "- URL: `http://example.test/login.php`" in cards
+    assert "- Signal: application route" in cards
+    assert "vulnerable" not in markdown.lower()
+    assert "credentials found" not in markdown.lower()
+    assert "login bypass" not in markdown.lower()
+    assert "brute force" not in markdown.lower()
+
+
 def test_readable_evidence_cards_deduplicate_start_and_value_items() -> None:
     state = _project_state(
         http_artifacts=[

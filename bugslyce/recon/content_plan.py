@@ -21,14 +21,39 @@ from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 
 CONTENT_DISCOVERY_PROFILE = "lab-root-light"
 CONTENT_DISCOVERY_TINY_PROFILE = "lab-root-tiny"
+STANDARD_AUTH_CORE_PROFILE = "standard-auth-core"
+STANDARD_BOUNDED_CORE_PROFILE = "standard-bounded-core"
 CONTENT_DISCOVERY_SCHEMA_VERSION = "1.0"
 CONTENT_DISCOVERY_CREATED_BY = "bugslyce-content-planner"
 DEFAULT_WORDLIST = Path("/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt")
 TINY_WORDLIST = Path(__file__).resolve().parent.parent / "wordlists" / "lab-root-tiny.txt"
+STANDARD_AUTH_CORE_WORDLIST = (
+    Path(__file__).resolve().parent.parent / "wordlists" / "standard-auth-core.txt"
+)
+STANDARD_BOUNDED_CORE_WORDLIST = (
+    Path(__file__).resolve().parent.parent / "wordlists" / "standard-bounded-core.txt"
+)
 MAX_CONTENT_PLAN_ORIGINS = 5
 CONTENT_PLAN_THREADS = 10
 SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<")
 NO_EXECUTION_NOTE = "No commands were executed."
+STANDARD_AUTH_SURFACE_ROUTES = (
+    "/login",
+    "/login.php",
+    "/admin",
+    "/admin.php",
+    "/portal",
+    "/portal.php",
+    "/dashboard",
+    "/dashboard.php",
+    "/account",
+    "/account.php",
+    "/auth",
+    "/auth.php",
+    "/signin",
+    "/signin.php",
+    "/wp-login.php",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +79,31 @@ CONTENT_DISCOVERY_PROFILES = {
         threads=5,
         timeout_seconds=120,
         output_prefix="gobuster-tiny",
+    ),
+    STANDARD_AUTH_CORE_PROFILE: ContentDiscoveryProfileDefinition(
+        name=STANDARD_AUTH_CORE_PROFILE,
+        description=(
+            "Standard bounded auth-surface route discovery using a small fixed "
+            "route set. No form submission, authentication testing, brute force, "
+            "credential use, recursion, extensions, or parameter fuzzing is included."
+        ),
+        wordlist=STANDARD_AUTH_CORE_WORDLIST,
+        threads=5,
+        timeout_seconds=120,
+        output_prefix="gobuster-standard-auth-core",
+    ),
+    STANDARD_BOUNDED_CORE_PROFILE: ContentDiscoveryProfileDefinition(
+        name=STANDARD_BOUNDED_CORE_PROFILE,
+        description=(
+            "Standard bounded core route discovery combining lab-root-tiny "
+            "general root coverage with a small fixed auth-surface route set. "
+            "No form submission, authentication testing, brute force, credential "
+            "use, recursion, extensions, or parameter fuzzing is included."
+        ),
+        wordlist=STANDARD_BOUNDED_CORE_WORDLIST,
+        threads=5,
+        timeout_seconds=120,
+        output_prefix="gobuster-standard-bounded-core",
     ),
     CONTENT_DISCOVERY_PROFILE: ContentDiscoveryProfileDefinition(
         name=CONTENT_DISCOVERY_PROFILE,

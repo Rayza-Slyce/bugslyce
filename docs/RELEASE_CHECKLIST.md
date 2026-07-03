@@ -183,6 +183,11 @@ bugslyce project run \
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values
   without claiming credentials or correlating unrelated evidence.
+- [ ] Standard auth-surface discovery uses the small fixed
+  `standard-bounded-core` route set, preserves `lab-root-tiny` general routes,
+  and performs no form submission, authentication testing, credential use,
+  brute force, recursive crawling, or extension fuzzing beyond explicitly
+  listed paths.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

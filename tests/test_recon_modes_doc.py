@@ -120,6 +120,13 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "generic signals such as login/admin/auth surfaces",
         "report UX only",
         "does not replace manual validation",
+        "bounded Standard auth-surface route discovery",
+        "`standard-bounded-core`",
+        "keeps every `lab-root-tiny` general",
+        "preserves existing tiny/root coverage",
+        "small deterministic",
+        "Quick remains lighter",
+        "Standard remains selected by `standard-bounded`",
     ):
         assert expected.lower() in lowered
 

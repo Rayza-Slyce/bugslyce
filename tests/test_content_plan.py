@@ -14,6 +14,11 @@ from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
     DEFAULT_WORDLIST,
     MAX_CONTENT_PLAN_ORIGINS,
+    STANDARD_AUTH_CORE_PROFILE,
+    STANDARD_AUTH_CORE_WORDLIST,
+    STANDARD_AUTH_SURFACE_ROUTES,
+    STANDARD_BOUNDED_CORE_PROFILE,
+    STANDARD_BOUNDED_CORE_WORDLIST,
     TINY_WORDLIST,
     build_content_discovery_plan,
     discover_content_plan_origins,
@@ -137,6 +142,107 @@ def test_content_plan_tiny_profile_uses_bundled_wordlist(tmp_path: Path) -> None
     assert first.expected_artifact.file == "gobuster-tiny-10.10.10.10-80-root.txt"
     assert any("first-live proving profile" in note for note in plan.safety_notes)
     assert not any("wordlist was not found" in warning for warning in plan.warnings)
+
+
+def test_standard_auth_core_profile_uses_small_fixed_route_set(tmp_path: Path) -> None:
+    input_dir, scope = _content_plan_input(tmp_path)
+    output_dir = tmp_path / "bugslyce-output" / "standard-auth-content-plan"
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        STANDARD_AUTH_CORE_PROFILE,
+        output_dir,
+    )
+    first = plan.steps[0]
+    routes = [
+        f"/{line.strip()}"
+        for line in STANDARD_AUTH_CORE_WORDLIST.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert plan.profile == STANDARD_AUTH_CORE_PROFILE
+    assert tuple(routes) == STANDARD_AUTH_SURFACE_ROUTES
+    assert len(STANDARD_AUTH_SURFACE_ROUTES) == 15
+    assert "/login.php" in STANDARD_AUTH_SURFACE_ROUTES
+    assert first.command_preview[5] == str(STANDARD_AUTH_CORE_WORDLIST)
+    assert first.command_preview[7] == "5"
+    assert first.expected_artifact.file == (
+        "gobuster-standard-auth-core-10.10.10.10-80-root.txt"
+    )
+    assert "--recursive" not in first.command_preview
+    assert "-x" not in first.command_preview
+    assert all("?" not in route for route in STANDARD_AUTH_SURFACE_ROUTES)
+    assert any("fixed route set" in note for note in plan.safety_notes)
+    assert any("No form submission" in note for note in plan.safety_notes)
+
+
+def test_standard_bounded_core_profile_preserves_tiny_and_appends_auth_routes(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _content_plan_input(tmp_path)
+    output_dir = tmp_path / "bugslyce-output" / "standard-bounded-content-plan"
+    tiny_routes = _wordlist_routes(TINY_WORDLIST)
+    bounded_routes = _wordlist_routes(STANDARD_BOUNDED_CORE_WORDLIST)
+    expected_auth_additions = [
+        route
+        for route in STANDARD_AUTH_SURFACE_ROUTES
+        if route.lstrip("/") not in tiny_routes
+    ]
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        STANDARD_BOUNDED_CORE_PROFILE,
+        output_dir,
+    )
+    first = plan.steps[0]
+
+    assert plan.profile == STANDARD_BOUNDED_CORE_PROFILE
+    assert bounded_routes[: len(tiny_routes)] == tiny_routes
+    assert bounded_routes[len(tiny_routes) :] == [
+        route.lstrip("/") for route in expected_auth_additions
+    ]
+    assert len(bounded_routes) == len(set(bounded_routes))
+    assert len(bounded_routes) == 37
+    assert "manual" in bounded_routes
+    assert "server-status" in bounded_routes
+    assert "login.php" in bounded_routes
+    assert all(route.lstrip("/") in bounded_routes for route in STANDARD_AUTH_SURFACE_ROUTES)
+    assert first.command_preview[5] == str(STANDARD_BOUNDED_CORE_WORDLIST)
+    assert first.command_preview[7] == "5"
+    assert first.expected_artifact.file == (
+        "gobuster-standard-bounded-core-10.10.10.10-80-root.txt"
+    )
+    assert "--recursive" not in first.command_preview
+    assert "-x" not in first.command_preview
+    assert all("?" not in route for route in bounded_routes)
+    assert any("lab-root-tiny general root coverage" in note for note in plan.safety_notes)
+
+
+def test_quick_tiny_profile_does_not_use_standard_auth_core_wordlist(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _content_plan_input(tmp_path)
+    output_dir = tmp_path / "bugslyce-output" / "tiny-content-plan"
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        CONTENT_DISCOVERY_TINY_PROFILE,
+        output_dir,
+    )
+
+    assert plan.profile == CONTENT_DISCOVERY_TINY_PROFILE
+    assert all(step.command_preview[5] == str(TINY_WORDLIST) for step in plan.steps)
+    assert STANDARD_AUTH_CORE_PROFILE != CONTENT_DISCOVERY_TINY_PROFILE
+    assert STANDARD_BOUNDED_CORE_PROFILE != CONTENT_DISCOVERY_TINY_PROFILE
+    assert str(STANDARD_AUTH_CORE_WORDLIST) not in json.dumps(
+        [step.command_preview for step in plan.steps]
+    )
+    assert str(STANDARD_BOUNDED_CORE_WORDLIST) not in json.dumps(
+        [step.command_preview for step in plan.steps]
+    )
 
 
 def test_content_plan_refuses_missing_input_scope_and_unsupported_profile(
@@ -299,3 +405,11 @@ def _content_plan_input(
         encoding="utf-8",
     )
     return input_dir, scope
+
+
+def _wordlist_routes(path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]

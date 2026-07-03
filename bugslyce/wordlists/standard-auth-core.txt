@@ -1,0 +1,15 @@
+login
+login.php
+admin
+admin.php
+portal
+portal.php
+dashboard
+dashboard.php
+account
+account.php
+auth
+auth.php
+signin
+signin.php
+wp-login.php

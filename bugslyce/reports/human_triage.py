@@ -862,9 +862,13 @@ def _candidate_signal(candidate: Candidate) -> str:
 def _path_terms(path: str) -> set[str]:
     terms: set[str] = set()
     for segment in PurePosixPath(path or "/").parts:
-        for token in segment.strip("/").lower().replace("_", "-").split("-"):
-            if token:
-                terms.add(token)
+        clean_segment = segment.strip("/").lower().replace("_", "-")
+        for chunk in clean_segment.split("-"):
+            for token in chunk.split("."):
+                if token:
+                    terms.add(token)
+        if clean_segment:
+            terms.add(clean_segment)
     stripped = (path or "").strip("/").lower()
     if stripped:
         terms.add(stripped)

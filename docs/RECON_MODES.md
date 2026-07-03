@@ -961,3 +961,17 @@ confirmed credentials or vulnerabilities. BugSlyce does not automatically
 correlate robots values with source comments, usernames, login paths, or other
 separate evidence. Raw robots artefacts remain available below for
 auditability.
+
+Phase 80D adds bounded Standard auth-surface route discovery inside the
+existing content discovery path. Standard uses the small deterministic
+`standard-bounded-core` route set, which keeps every `lab-root-tiny` general
+root-discovery route first and appends only the additional auth-surface routes
+not already present. This preserves existing tiny/root coverage while adding
+common login, admin, portal, dashboard, account, auth, sign-in, and WordPress
+login entry points for manual review. The combined route set is fixed and
+intentionally small; it does not use large wordlists, recursive discovery,
+extension fuzzing beyond explicitly listed paths, parameter fuzzing, browser
+automation, JavaScript execution, form submission, credential use,
+authentication testing, brute force, or exploitation. Quick remains lighter
+and continues to use `lab-root-tiny`. Standard remains selected by `standard-bounded`.
+Deep Recon remains unavailable.

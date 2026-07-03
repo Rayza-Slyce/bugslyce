@@ -22,6 +22,10 @@ from bugslyce.project_pipeline import (
 from bugslyce.project_session import scaffold_project
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
+from bugslyce.recon.content_plan import (
+    CONTENT_DISCOVERY_TINY_PROFILE,
+    STANDARD_BOUNDED_CORE_PROFILE,
+)
 from bugslyce.recon.path_followup import PathFollowupNoWork
 
 
@@ -497,6 +501,94 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     assert payload["profile"] == STANDARD_PIPELINE_PROFILE
 
 
+def test_project_pipeline_selects_standard_bounded_core_content_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    quick_project, quick_output = _fresh_project(tmp_path / "quick")
+    standard_project, standard_output = _fresh_project(tmp_path / "standard")
+    observed: list[tuple[str, str]] = []
+
+    def fake_build_content_plan(*, input_dir, scope_file, profile, output_dir):
+        observed.append((Path(input_dir).name, profile))
+        return SimpleNamespace(profile=profile)
+
+    for project_file, output_dir, profile in (
+        (quick_project, quick_output, PIPELINE_PROFILE),
+        (standard_project, standard_output, STANDARD_PIPELINE_PROFILE),
+    ):
+        calls: list[str] = []
+        _patch_successful_pipeline(monkeypatch, output_dir, calls)
+        monkeypatch.setattr(
+            "bugslyce.project_pipeline.build_content_discovery_plan",
+            fake_build_content_plan,
+        )
+        if profile == STANDARD_PIPELINE_PROFILE:
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.build_project_state",
+                lambda path: SimpleNamespace(project_name="pipeline-test"),
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.generate_candidates",
+                lambda state: [],
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+                lambda state: SimpleNamespace(
+                    manual_review_leads_markdown="## Manual Review Leads\n",
+                    review_leads=(),
+                    sources=(),
+                ),
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.build_investigation_threads",
+                lambda state, candidates, review_leads: (),
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.render_investigation_threads_markdown",
+                lambda threads, **kwargs: "",
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.build_route_source_review",
+                lambda state, sources: (),
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.render_route_source_review_markdown",
+                lambda leads, **kwargs: "",
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.build_human_triage_brief",
+                lambda state, candidates, **kwargs: SimpleNamespace(),
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.render_human_triage_brief_markdown",
+                lambda brief: "",
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
+                lambda brief: "",
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
+                lambda threads, **kwargs: "",
+            )
+            monkeypatch.setattr(
+                "bugslyce.project_pipeline.write_project_outputs",
+                lambda state, candidates, output_path, **kwargs: (
+                    output_path / "report.md",
+                    output_path / "project_state.json",
+                ),
+            )
+
+        run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
+
+    assert observed == [
+        (quick_output.name, CONTENT_DISCOVERY_TINY_PROFILE),
+        (standard_output.name, STANDARD_BOUNDED_CORE_PROFILE),
+    ]
+    assert STANDARD_PIPELINE_PROFILE == "standard-bounded"
+
+
 def test_pipeline_records_noop_followups_and_continues(
     tmp_path: Path,
     monkeypatch,
@@ -877,10 +969,10 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
             "Existing evidence-derived path follow-up artefacts"
     )
     assert result.steps[5].message.startswith(
-        "Existing lab-root-tiny content plan"
+        "Existing bounded content plan"
     )
     assert result.steps[6].message.startswith(
-        "Existing lab-root-tiny content discovery output"
+        "Existing bounded content discovery output"
     )
     assert result.steps[7].message.startswith(
         "Existing content-result follow-up artefacts"

@@ -28,6 +28,8 @@ from bugslyce.recon.content_followup import (
 )
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
+    STANDARD_BOUNDED_CORE_PROFILE,
+    STANDARD_AUTH_CORE_PROFILE,
     build_content_discovery_plan,
     write_content_discovery_plan,
 )
@@ -100,10 +102,10 @@ SKIPPED_STEP_MESSAGES = {
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-006": (
-        "Existing lab-root-tiny content plan detected; phase skipped during resume."
+        "Existing bounded content plan detected; phase skipped during resume."
     ),
     "PIPELINE-STEP-007": (
-        "Existing lab-root-tiny content discovery output detected; "
+        "Existing bounded content discovery output detected; "
         "phase skipped during resume."
     ),
     "PIPELINE-STEP-008": (
@@ -196,7 +198,8 @@ def run_project_pipeline(
     project = load_project(project_file)
     output_dir = Path(project.output_dir).expanduser().resolve()
     scope_file = Path(project.scope_file).expanduser().resolve()
-    plan_dir = Path(f"{output_dir}-content-plan-tiny")
+    content_profile = _content_discovery_profile_for_pipeline(profile)
+    plan_dir = Path(f"{output_dir}-content-plan-{_content_plan_suffix(content_profile)}")
     plan_path = plan_dir / "content_discovery_plan.json"
     export_path = Path(f"{output_dir}-evidence-pack.zip")
     assessment = _validate_pipeline(
@@ -610,9 +613,10 @@ def _assess_resume_state(
     plan_complete = False
     if plan_path.is_file():
         plan = load_content_discovery_plan(plan_path)
+        expected_content_profile = _content_discovery_profile_for_pipeline(profile)
         if (
             plan.target.lower().rstrip(".") != target.lower().rstrip(".")
-            or plan.profile != CONTENT_DISCOVERY_TINY_PROFILE
+            or plan.profile != expected_content_profile
             or Path(plan.input_dir).expanduser().resolve() != output_dir
             or Path(plan.output_dir).expanduser().resolve() != plan_dir
             or Path(plan.scope_file).expanduser().resolve() != scope_file
@@ -809,6 +813,22 @@ def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
     )
 
 
+def _content_discovery_profile_for_pipeline(profile: str) -> str:
+    if profile == STANDARD_PIPELINE_PROFILE:
+        return STANDARD_BOUNDED_CORE_PROFILE
+    return CONTENT_DISCOVERY_TINY_PROFILE
+
+
+def _content_plan_suffix(content_profile: str) -> str:
+    if content_profile == CONTENT_DISCOVERY_TINY_PROFILE:
+        return "tiny"
+    if content_profile == STANDARD_BOUNDED_CORE_PROFILE:
+        return "standard-bounded-core"
+    if content_profile == STANDARD_AUTH_CORE_PROFILE:
+        return "standard-auth-core"
+    return content_profile.replace("/", "-")
+
+
 def _pending_steps() -> list[PipelineStep]:
     definitions = [
         ("PIPELINE-STEP-001", "environment and project validation", "local-validation"),
@@ -816,8 +836,8 @@ def _pending_steps() -> list[PipelineStep]:
         ("PIPELINE-STEP-003", "nmap service/version scan", "nmap-services"),
         ("PIPELINE-STEP-004", "HTTP metadata collection", "http-metadata"),
         ("PIPELINE-STEP-005", "discovered-path follow-up", "path-followup"),
-        ("PIPELINE-STEP-006", "tiny content discovery planning", "content-plan"),
-        ("PIPELINE-STEP-007", "tiny content discovery execution", "content-run"),
+        ("PIPELINE-STEP-006", "bounded content discovery planning", "content-plan"),
+        ("PIPELINE-STEP-007", "bounded content discovery execution", "content-run"),
         ("PIPELINE-STEP-008", "content-result follow-up", "content-followup"),
         ("PIPELINE-STEP-009", "selective body fetch", "body-fetch"),
         ("PIPELINE-STEP-010", "recon status", "status"),
@@ -908,12 +928,13 @@ def _step_runners(
         plan = build_content_discovery_plan(
             input_dir=output_dir,
             scope_file=scope_file,
-            profile=CONTENT_DISCOVERY_TINY_PROFILE,
+            profile=_content_discovery_profile_for_pipeline(profile),
             output_dir=plan_dir,
         )
         json_path, markdown_path = write_content_discovery_plan(plan, plan_dir)
+        plan_profile = getattr(plan, "profile", _content_discovery_profile_for_pipeline(profile))
         return (
-            "Approved lab-root-tiny content plan created.",
+            f"Approved {plan_profile} content plan created.",
             [str(json_path), str(markdown_path)],
             {},
         )
@@ -921,8 +942,9 @@ def _step_runners(
     def content_run():
         result = run_content_discovery_workflow(plan_path, scope_file)
         metadata = write_content_discovery_execution_result(result, plan_dir)
+        result_profile = getattr(result, "profile", _content_discovery_profile_for_pipeline(profile))
         return (
-            "Approved lab-root-tiny content discovery completed.",
+            f"Approved {result_profile} content discovery completed.",
             [*result.artifact_paths, *(str(path) for path in metadata)],
             {"report_path": result.report_path},
         )

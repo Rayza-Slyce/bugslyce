@@ -17,6 +17,8 @@ from bugslyce.recon.content_commands import (
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
     CONTENT_DISCOVERY_TINY_PROFILE,
+    STANDARD_BOUNDED_CORE_PROFILE,
+    STANDARD_AUTH_CORE_PROFILE,
     TINY_WORDLIST,
     build_content_discovery_plan,
     write_content_discovery_plan,
@@ -105,7 +107,12 @@ def test_content_run_refuses_missing_malformed_and_unsupported_plan(
 
 @pytest.mark.parametrize(
     "profile",
-    [CONTENT_DISCOVERY_TINY_PROFILE, CONTENT_DISCOVERY_PROFILE],
+    [
+        CONTENT_DISCOVERY_TINY_PROFILE,
+        STANDARD_AUTH_CORE_PROFILE,
+        STANDARD_BOUNDED_CORE_PROFILE,
+        CONTENT_DISCOVERY_PROFILE,
+    ],
 )
 def test_content_run_accepts_supported_profiles(tmp_path: Path, profile: str) -> None:
     plan_path, scope, _input_dir, _output_dir = _written_plan(tmp_path, profile=profile)
@@ -120,6 +127,16 @@ def test_content_run_accepts_supported_profiles(tmp_path: Path, profile: str) ->
     assert result.profile == profile
     if profile == CONTENT_DISCOVERY_TINY_PROFILE:
         assert all("gobuster-tiny-" in Path(path).name for path in result.artifact_paths)
+    if profile == STANDARD_AUTH_CORE_PROFILE:
+        assert all(
+            "gobuster-standard-auth-core-" in Path(path).name
+            for path in result.artifact_paths
+        )
+    if profile == STANDARD_BOUNDED_CORE_PROFILE:
+        assert all(
+            "gobuster-standard-bounded-core-" in Path(path).name
+            for path in result.artifact_paths
+        )
 
 
 def test_content_run_executes_only_selected_existing_step(tmp_path: Path) -> None:
