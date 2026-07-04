@@ -1009,3 +1009,8 @@ Phase 81D exposes the Deep metadata coverage summary as a safe preview command:
 command builds ProjectState from existing local BugSlyce evidence and renders
 offline coverage/gap analysis to stdout. It is stdout-only, creates no artefacts, does not execute Deep Recon, does not fetch URLs, does not run live
 recon, and does not change mode availability. Deep Recon remains unavailable.
+
+Phase 81E polishes Deep metadata coverage preview output. It suppresses duplicate-origin planner skip noise and summarises it compactly. This keeps
+the collected and planned-but-uncollected metadata sections readable while
+making clear that duplicate-origin skips are planner-origin skips, not missing metadata coverage. It does not change coverage logic, fetch URLs, execute Deep
+Recon, or change mode availability.

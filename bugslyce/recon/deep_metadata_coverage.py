@@ -206,26 +206,48 @@ def render_deep_metadata_coverage_markdown(
         ("collected", "Collected"),
         ("observed", "Observed"),
         ("planned_uncollected", "Planned But Uncollected"),
-        ("skipped", "Skipped"),
     ):
         status_items = tuple(item for item in summary.items if item.status == status)
         if not status_items:
             continue
         lines.extend([f"### {title}", ""])
-        for item in status_items:
-            line = f"- `{item.url}` - {item.category}"
-            if item.evidence_ids:
-                evidence = ", ".join(f"`{evidence_id}`" for evidence_id in item.evidence_ids)
-                line += f" - evidence: {evidence}"
-            if item.reason:
-                line += f" - reason: {item.reason}"
-            lines.append(line)
+        lines.extend(_render_coverage_items(status_items))
+        lines.append("")
+
+    skipped_items = tuple(item for item in summary.items if item.status == "skipped")
+    duplicate_skips = tuple(item for item in skipped_items if item.reason == "duplicate_origin")
+    detailed_skips = tuple(item for item in skipped_items if item.reason != "duplicate_origin")
+    if detailed_skips:
+        lines.extend(["### Skipped", ""])
+        lines.extend(_render_coverage_items(detailed_skips))
+        lines.append("")
+    if duplicate_skips:
+        lines.extend(["### Suppressed Planner Skips", ""])
+        lines.append(
+            f"- `duplicate_origin`: {len(duplicate_skips)} duplicate source URL(s) suppressed from detailed output."
+        )
+        lines.append(
+            "- These are planner-origin skips, not missing metadata coverage."
+        )
         lines.append("")
 
     lines.extend(["### Notes", ""])
     lines.extend(f"- {note}" for note in NOTES)
     lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def _render_coverage_items(items: tuple[DeepMetadataCoverageItem, ...]) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        line = f"- `{item.url}` - {item.category}"
+        if item.evidence_ids:
+            evidence = ", ".join(f"`{evidence_id}`" for evidence_id in item.evidence_ids)
+            line += f" - evidence: {evidence}"
+        if item.reason:
+            line += f" - reason: {item.reason}"
+        lines.append(line)
+    return lines
 
 
 def _metadata_evidence_by_url(

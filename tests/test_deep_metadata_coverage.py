@@ -11,6 +11,7 @@ from bugslyce.core.models import (
 )
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_metadata_coverage import (
+    DeepMetadataCoverageItem,
     DeepMetadataCoverageSummary,
     build_deep_metadata_coverage_from_project_state,
     render_deep_metadata_coverage_markdown,
@@ -296,6 +297,89 @@ def test_renderer_includes_sections_counts_and_safety_wording() -> None:
         "report automatically",
     ):
         assert forbidden not in lowered
+
+
+def test_renderer_suppresses_duplicate_origin_skip_noise() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/robots.txt",
+                artifact_type="robots_value",
+                value="remember-this",
+                source_file="robots-example.txt",
+                evidence_ids=["EVID-ART-0001"],
+                tags=[],
+            ),
+            *[
+                HTTPArtifact(
+                    url=f"http://example.test/assets/{index}.png",
+                    artifact_type="script_or_asset",
+                    value=f"/assets/{index}.png",
+                    source_file="homepage.html",
+                    evidence_ids=[f"EVID-NOISE-{index:04d}"],
+                    tags=["static_asset"],
+                )
+                for index in range(1, 72)
+            ],
+        ]
+    )
+
+    summary = build_deep_metadata_coverage_from_project_state(state)
+    rendered = render_deep_metadata_coverage_markdown(summary)
+
+    assert summary.skipped_count == 71
+    assert "- Skipped: 71" in rendered
+    assert "### Suppressed Planner Skips" in rendered
+    assert "`duplicate_origin`: 71 duplicate source URL(s) suppressed" in rendered
+    assert "planner-origin skips, not missing metadata coverage" in rendered
+    assert "### Planned But Uncollected" in rendered
+    assert "http://example.test/assets/1.png" not in rendered
+    assert "http://example.test/assets/71.png" not in rendered
+    assert rendered.count("duplicate_origin") == 1
+    assert rendered.count("- `http://example.test/assets/") == 0
+
+
+def test_renderer_keeps_non_duplicate_skipped_reasons_visible() -> None:
+    summary = DeepMetadataCoverageSummary(
+        items=(
+            DeepMetadataCoverageItem(
+                url="ftp://example.test/robots.txt",
+                path="/robots.txt",
+                status="skipped",
+                category="robots",
+                source="unit-test",
+                evidence_ids=(),
+                planned=False,
+                collected=False,
+                reason="unsupported_scheme",
+            ),
+            DeepMetadataCoverageItem(
+                url="http://example.test/robots.txt",
+                path="/robots.txt",
+                status="skipped",
+                category="robots",
+                source="unit-test",
+                evidence_ids=(),
+                planned=False,
+                collected=False,
+                reason="duplicate_origin",
+            ),
+        ),
+        planned_count=0,
+        collected_count=0,
+        observed_count=0,
+        planned_uncollected_count=0,
+        skipped_count=2,
+    )
+
+    rendered = render_deep_metadata_coverage_markdown(summary)
+
+    assert "### Skipped" in rendered
+    assert "ftp://example.test/robots.txt" in rendered
+    assert "unsupported_scheme" in rendered
+    assert "### Suppressed Planner Skips" in rendered
+    assert "`duplicate_origin`: 1 duplicate source URL(s) suppressed" in rendered
+    assert "- `http://example.test/robots.txt` - robots - reason: duplicate_origin" not in rendered
 
 
 def test_mode_enablement_remains_unchanged() -> None:

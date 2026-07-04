@@ -643,6 +643,49 @@ def test_cli_recon_deep_metadata_coverage_renders_local_coverage_summary(
     assert not (input_dir / "deep_metadata_coverage.json").exists()
 
 
+def test_cli_recon_deep_metadata_coverage_suppresses_duplicate_origin_skip_noise(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- example.test\n",
+        encoding="utf-8",
+    )
+    (input_dir / "robots-example.test-80.txt").write_text(
+        "remember-this\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            f"http://example.test/assets/{index}.png"
+            for index in range(1, 20)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-metadata-coverage", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "## Deep Metadata Coverage" in captured.out
+    assert "### Suppressed Planner Skips" in captured.out
+    assert "`duplicate_origin`: 21 duplicate source URL(s) suppressed" in captured.out
+    assert "http://example.test/assets/1.png" not in captured.out
+    assert "http://example.test/assets/19.png" not in captured.out
+    assert captured.out.count("duplicate_origin") == 1
+    assert before == after
+    assert not (input_dir / "deep_metadata_coverage.md").exists()
+    assert not (input_dir / "deep_metadata_coverage.json").exists()
+
+
 def test_cli_recon_deep_metadata_coverage_renders_zero_counts_for_minimal_project(
     tmp_path: Path,
     capsys,
