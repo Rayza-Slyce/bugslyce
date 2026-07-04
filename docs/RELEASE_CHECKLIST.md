@@ -191,6 +191,8 @@ bugslyce project run \
   skips without noisy per-URL rows.
 - [ ] Deep source/route coverage summary remains offline, internal, and
   non-executable.
+- [ ] `bugslyce recon deep-source-route-coverage --input-dir` remains
+  read-only, stdout-only, and non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

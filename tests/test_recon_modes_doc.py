@@ -144,6 +144,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "offline Deep source/route coverage model",
         "source, route, body, header, static, and metadata context",
         "no CLI exposure in this phase",
+        "`bugslyce recon deep-source-route-coverage --input-dir",
+        "offline source/route coverage to stdout",
+        "read-only and stdout-only",
     ):
         assert expected.lower() in lowered
 

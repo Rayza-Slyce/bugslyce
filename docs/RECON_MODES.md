@@ -1020,3 +1020,11 @@ already-collected source, route, body, header, static, and metadata context
 from loaded ProjectState evidence. The model is deterministic with no CLI exposure in this phase. It does not fetch URLs, create outputs, read files,
 write files, execute Deep Recon, or change mode availability. Deep Recon
 remains unavailable.
+
+Phase 82B exposes the Deep source/route coverage model as a safe preview
+command: `bugslyce recon deep-source-route-coverage --input-dir
+<local-output-dir>`. The command builds ProjectState from existing local
+BugSlyce evidence and renders offline source/route coverage to stdout. It is
+read-only and stdout-only, creates no artefacts, does not fetch URLs, does not
+run live recon, does not execute Deep Recon, and does not change mode
+availability. Deep Recon remains unavailable.

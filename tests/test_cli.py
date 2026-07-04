@@ -12,6 +12,13 @@ from bugslyce.core.models import ReconContentDiscoveryExecutionResult
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_run import ContentDiscoveryExecutionIncomplete
+from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
+from bugslyce.recon.modes import (
+    QUICK_RECON_PROFILE,
+    STANDARD_RECON_PROFILE,
+    get_recon_mode,
+    is_recon_mode_available,
+)
 from bugslyce.recon.path_followup import PathFollowupNoWork
 
 
@@ -747,6 +754,143 @@ def test_cli_recon_deep_metadata_coverage_file_input_returns_nonzero(
     assert "No network requests were made." in captured.err
     assert "Deep Recon was not executed." in captured.err
     assert input_file.read_text(encoding="utf-8") == "{}"
+
+
+def test_cli_recon_deep_source_route_coverage_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-source-route-coverage", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-source-route-coverage" in captured.out
+    assert "--input-dir" in captured.out
+    assert "Deep source/route coverage" in captured.out
+    assert "Deep Recon" in captured.out
+    assert "URL fetching" in captured.out
+    for forbidden in (
+        "--target",
+        "--scope",
+        "--output",
+        "--run",
+        "--execute",
+        "--fetch",
+        "--scan",
+        "--json",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_source_route_coverage_renders_local_summary(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            (
+                "http://10.10.10.10/",
+                "http://10.10.10.10/login.php",
+                "http://10.10.10.10/assets/app.js",
+                "http://10.10.10.10/robots.txt",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-source-route-coverage", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Source/Route Coverage")
+    assert "- Referenced only:" in captured.out
+    assert "- Static noise:" in captured.out
+    assert "- Metadata context:" in captured.out
+    assert "http://10.10.10.10/login.php" in captured.out
+    assert "does not fetch URLs" in captured.out
+    assert "does not execute Deep Recon" in captured.out
+    assert "coverage view, not a finding list" in captured.out
+    lowered = captured.out.lower()
+    for forbidden in (
+        "vulnerability found",
+        "vulnerable",
+        "exploit",
+        "credentials found",
+        "password found",
+        "login bypass",
+        "report automatically",
+    ):
+        assert forbidden not in lowered
+    assert before == after
+    for forbidden_output in (
+        "deep_source_route_coverage.md",
+        "deep_source_route_coverage.json",
+        "deep_source_route_coverage",
+        "deep-source-route-coverage.md",
+        "deep-source-route-coverage.json",
+    ):
+        assert not (input_dir / forbidden_output).exists()
+
+
+def test_cli_recon_deep_source_route_coverage_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(["recon", "deep-source-route-coverage", "--input-dir", str(missing)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Deep Recon was not executed." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_source_route_coverage_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-source-route-coverage", "--input-dir", str(input_file)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert "No files were written." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Deep Recon was not executed." in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+    assert not (tmp_path / "deep_source_route_coverage.md").exists()
+    assert not (tmp_path / "deep_source_route_coverage.json").exists()
+    assert not (tmp_path / "deep_source_route_coverage").exists()
+    assert not (tmp_path / "deep-source-route-coverage.md").exists()
+    assert not (tmp_path / "deep-source-route-coverage.json").exists()
+
+
+def test_cli_recon_deep_source_route_coverage_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
 def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:
