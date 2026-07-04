@@ -189,6 +189,8 @@ bugslyce project run \
   stdout-only, and non-executable.
 - [ ] Deep metadata coverage preview summarises duplicate-origin planner
   skips without noisy per-URL rows.
+- [ ] Deep source/route coverage summary remains offline, internal, and
+  non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

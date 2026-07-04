@@ -141,6 +141,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "creates no artefacts, does not execute Deep Recon",
         "suppresses duplicate-origin planner skip noise",
         "planner-origin skips, not missing metadata coverage",
+        "offline Deep source/route coverage model",
+        "source, route, body, header, static, and metadata context",
+        "no CLI exposure in this phase",
     ):
         assert expected.lower() in lowered
 

@@ -1014,3 +1014,9 @@ Phase 81E polishes Deep metadata coverage preview output. It suppresses duplicat
 the collected and planned-but-uncollected metadata sections readable while
 making clear that duplicate-origin skips are planner-origin skips, not missing metadata coverage. It does not change coverage logic, fetch URLs, execute Deep
 Recon, or change mode availability.
+
+Phase 82A adds an offline Deep source/route coverage model. It summarises
+already-collected source, route, body, header, static, and metadata context
+from loaded ProjectState evidence. The model is deterministic with no CLI exposure in this phase. It does not fetch URLs, create outputs, read files,
+write files, execute Deep Recon, or change mode availability. Deep Recon
+remains unavailable.
