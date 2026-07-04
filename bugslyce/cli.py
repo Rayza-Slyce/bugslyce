@@ -90,6 +90,10 @@ from bugslyce.recon.deep_metadata_plan import (
     export_deep_metadata_plan_json,
     render_deep_metadata_plan_markdown,
 )
+from bugslyce.recon.deep_metadata_coverage import (
+    build_deep_metadata_coverage_from_project_state,
+    render_deep_metadata_coverage_markdown,
+)
 from bugslyce.recon.deep_metadata_review import (
     build_deep_metadata_review_from_project_state,
     render_deep_metadata_review_markdown,
@@ -507,6 +511,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     deep_metadata_review_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory to parse read-only.",
+    )
+    deep_metadata_coverage_parser = recon_subparsers.add_parser(
+        "deep-metadata-coverage",
+        help=(
+            "Preview offline Deep metadata coverage gaps from existing local "
+            "evidence without running Deep Recon."
+        ),
+        description=(
+            "Preview offline Deep metadata coverage and gaps from existing local "
+            "evidence without running Deep Recon, live recon, URL fetching, or file output."
+        ),
+    )
+    deep_metadata_coverage_parser.add_argument(
         "--input-dir",
         required=True,
         type=Path,
@@ -1159,6 +1180,25 @@ def _recon(args: argparse.Namespace) -> int:
         project_state = build_project_state(args.input_dir)
         summary = build_deep_metadata_review_from_project_state(project_state)
         print(render_deep_metadata_review_markdown(summary))
+        return 0
+
+    if args.recon_command == "deep-metadata-coverage":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            print("Deep Recon was not executed.", file=sys.stderr)
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            print("Deep Recon was not executed.", file=sys.stderr)
+            return 2
+
+        project_state = build_project_state(args.input_dir)
+        summary = build_deep_metadata_coverage_from_project_state(project_state)
+        print(render_deep_metadata_coverage_markdown(summary))
         return 0
 
     if args.recon_command == "plan":

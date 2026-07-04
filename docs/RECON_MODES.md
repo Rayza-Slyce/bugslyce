@@ -1003,3 +1003,9 @@ planned Deep metadata URLs with already-collected ProjectState evidence and
 reports collected metadata, observed metadata references, and planned but uncollected metadata URLs. It does not fetch URLs, create outputs, add CLI
 exposure, execute Deep Recon, or change mode availability. Deep Recon remains
 unavailable.
+
+Phase 81D exposes the Deep metadata coverage summary as a safe preview command:
+`bugslyce recon deep-metadata-coverage --input-dir <local-output-dir>`. The
+command builds ProjectState from existing local BugSlyce evidence and renders
+offline coverage/gap analysis to stdout. It is stdout-only, creates no artefacts, does not execute Deep Recon, does not fetch URLs, does not run live
+recon, and does not change mode availability. Deep Recon remains unavailable.

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-from bugslyce.cli import main
 from bugslyce.core.models import (
     DiscoveredPath,
     Endpoint,
@@ -301,14 +298,7 @@ def test_renderer_includes_sections_counts_and_safety_wording() -> None:
         assert forbidden not in lowered
 
 
-def test_no_cli_command_or_mode_enablement_changes(capsys) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["recon", "deep-metadata-coverage"])
-
-    captured = capsys.readouterr()
-
-    assert exc_info.value.code == 2
-    assert "deep-metadata-coverage" in captured.err
+def test_mode_enablement_remains_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
