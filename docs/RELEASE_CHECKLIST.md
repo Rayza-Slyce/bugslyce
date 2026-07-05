@@ -201,6 +201,8 @@ bugslyce project run \
   stdout-only, and non-executable.
 - [ ] Deep preview groups low-priority metadata coverage gaps without hiding
   coverage counts.
+- [ ] Deep collection policy model remains offline, restrictive, internal, and
+  non-executable.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

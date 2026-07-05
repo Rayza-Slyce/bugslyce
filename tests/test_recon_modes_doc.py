@@ -160,6 +160,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "Low-priority metadata coverage gaps are grouped",
         "route and clue priorities remain prominent",
         "metadata coverage counts are preserved",
+        "offline Deep collection policy model",
+        "restrictive request bounds",
+        "blocks unsafe methods and intents",
     ):
         assert expected.lower() in lowered
 

@@ -1051,3 +1051,8 @@ unavailable.
 Phase 83C polishes Deep preview priority grouping. Low-priority metadata coverage gaps are grouped into compact review priorities so route and clue priorities remain prominent while metadata coverage counts are preserved. This
 is preview model and rendering polish only. It does not fetch URLs, create
 outputs, change CLI arguments, execute Deep Recon, or change mode availability.
+
+Phase 84A adds an offline Deep collection policy model. It validates proposed
+future collection requests against restrictive request bounds and blocks unsafe methods and intents before any future collector can use them. The policy model
+does not fetch URLs, create outputs, add CLI exposure, run live recon, execute
+Deep Recon, or change mode availability. Deep Recon remains unavailable.
