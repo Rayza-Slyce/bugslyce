@@ -193,6 +193,8 @@ bugslyce project run \
   non-executable.
 - [ ] `bugslyce recon deep-source-route-coverage --input-dir` remains
   read-only, stdout-only, and non-executable.
+- [ ] Deep source/route coverage preview keeps bare static directories in
+  static/directory context and compacts long rendered evidence lists.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

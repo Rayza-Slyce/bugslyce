@@ -1028,3 +1028,8 @@ BugSlyce evidence and renders offline source/route coverage to stdout. It is
 read-only and stdout-only, creates no artefacts, does not fetch URLs, does not
 run live recon, does not execute Deep Recon, and does not change mode
 availability. Deep Recon remains unavailable.
+
+Phase 82C polishes Deep source/route coverage preview output. Bare static directories are treated as static/directory context, long evidence lists are compacted in rendered Markdown, and generic auth, admin/internal/status, and
+API/documentation-style route classification is broader. This is
+classification and reporting polish only. It does not fetch URLs, create
+outputs, execute Deep Recon, change CLI arguments, or change mode availability.

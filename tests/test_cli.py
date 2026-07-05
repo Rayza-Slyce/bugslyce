@@ -796,6 +796,7 @@ def test_cli_recon_deep_source_route_coverage_renders_local_summary(
             (
                 "http://10.10.10.10/",
                 "http://10.10.10.10/login.php",
+                "http://10.10.10.10/assets",
                 "http://10.10.10.10/assets/app.js",
                 "http://10.10.10.10/robots.txt",
             )
@@ -818,6 +819,9 @@ def test_cli_recon_deep_source_route_coverage_renders_local_summary(
     assert "- Static noise:" in captured.out
     assert "- Metadata context:" in captured.out
     assert "http://10.10.10.10/login.php" in captured.out
+    assert "http://10.10.10.10/assets" in captured.out
+    reviewable_section = captured.out.split("### Static / Directory Context", 1)[0]
+    assert "http://10.10.10.10/assets` - static_asset" not in reviewable_section
     assert "does not fetch URLs" in captured.out
     assert "does not execute Deep Recon" in captured.out
     assert "coverage view, not a finding list" in captured.out

@@ -169,6 +169,27 @@ def test_static_assets_are_static_noise() -> None:
     assert summary.static_noise_count == 1
 
 
+def test_bare_static_directories_are_static_context_not_reviewable_routes() -> None:
+    static_paths = ("/assets", "/assets/", "/static", "/images", "/icons", "/img", "/css", "/js")
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(
+            http_artifacts=[
+                _artifact(f"http://example.test{path}", "page_title", "Index", f"EVID-ART-{index:04d}")
+                for index, path in enumerate(static_paths, start=1)
+            ]
+        )
+    )
+    rendered = render_deep_source_route_coverage_markdown(summary)
+
+    assert summary.static_noise_count == len({path.rstrip("/") for path in static_paths})
+    assert "### Static / Directory Context" in rendered
+    assert "### Reviewable Application Routes" not in rendered
+    for path in ("/assets", "/static", "/images", "/icons", "/img", "/css", "/js"):
+        item = _item(summary, f"http://example.test{path}")
+        assert item.status == "static_noise"
+        assert item.category == "static_asset"
+
+
 def test_metadata_routes_are_metadata_context() -> None:
     summary = build_deep_source_route_coverage_from_project_state(
         _project_state(
@@ -180,6 +201,37 @@ def test_metadata_routes_are_metadata_context() -> None:
     assert item.status == "metadata_context"
     assert item.category == "metadata_route"
     assert summary.metadata_context_count == 1
+
+
+def test_expanded_auth_admin_and_api_classification_terms() -> None:
+    urls = (
+        ("http://example.test/sso/callback", "auth_route"),
+        ("http://example.test/forgot-password", "auth_route"),
+        ("http://example.test/reset-password", "auth_route"),
+        ("http://example.test/admin", "admin_or_status_route"),
+        ("http://example.test/manage", "admin_or_status_route"),
+        ("http://example.test/console", "admin_or_status_route"),
+        ("http://example.test/backoffice", "admin_or_status_route"),
+        ("http://example.test/internal", "admin_or_status_route"),
+        ("http://example.test/actuator/health", "admin_or_status_route"),
+        ("http://example.test/metrics", "admin_or_status_route"),
+        ("http://example.test/api/v1/users", "api_route"),
+        ("http://example.test/graphql", "api_route"),
+        ("http://example.test/swagger", "api_route"),
+        ("http://example.test/openapi.json", "api_route"),
+        ("http://example.test/api-docs", "api_route"),
+    )
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(
+            discovered_paths=[
+                _path(url, f"EVID-PATH-{index:04d}")
+                for index, (url, _category) in enumerate(urls, start=1)
+            ]
+        )
+    )
+
+    for url, category in urls:
+        assert _item(summary, url).category == category
 
 
 def test_duplicate_url_evidence_merges_stably() -> None:
@@ -204,6 +256,33 @@ def test_duplicate_url_evidence_merges_stably() -> None:
     assert item.category == "auth_route"
     assert item.evidence_ids == ("EVID-ART-0001", "EVID-ART-0002", "EVID-PATH-0001")
     assert item.signals == ("form", "input", "discovered_path")
+
+
+def test_renderer_compacts_long_evidence_lists_but_model_preserves_all() -> None:
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(
+            http_artifacts=[
+                _artifact(
+                    "http://example.test/login.php",
+                    "keyword_hit",
+                    f"value-{index}",
+                    f"EVID-ART-{index:04d}",
+                )
+                for index in range(1, 15)
+            ]
+        )
+    )
+
+    item = _item(summary, "http://example.test/login.php")
+    rendered = render_deep_source_route_coverage_markdown(summary)
+
+    assert len(item.evidence_ids) == 14
+    assert item.evidence_ids[-1] == "EVID-ART-0014"
+    assert "`EVID-ART-0001`" in rendered
+    assert "`EVID-ART-0006`" in rendered
+    assert "`EVID-ART-0007`" not in rendered
+    assert "`EVID-ART-0014`" not in rendered
+    assert "... +8 more" in rendered
 
 
 def test_query_variants_merge_but_http_and_https_remain_distinct() -> None:
@@ -278,7 +357,7 @@ def test_rendering_includes_sections_counts_and_safety_wording() -> None:
     assert "- Static noise: 1" in rendered
     assert "### Reviewable Application Routes" in rendered
     assert "### Discovered But Not Body-Fetched" in rendered
-    assert "### Static / Low-Signal" in rendered
+    assert "### Static / Directory Context" in rendered
     assert "does not fetch URLs" in rendered
     assert "does not execute Deep Recon" in rendered
     assert "coverage view, not a finding list" in rendered

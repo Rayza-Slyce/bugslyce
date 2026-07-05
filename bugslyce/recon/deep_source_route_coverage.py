@@ -7,6 +7,7 @@ files, write files, fetch URLs, execute commands, or make Deep Recon available.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from urllib.parse import urlparse, urlunparse
 
 from bugslyce.core.models import ProjectState
@@ -37,6 +38,7 @@ SOURCE_ROUTE_CATEGORIES = (
     "application_route",
     "source_context",
     "form_context",
+    "api_route",
     "script_or_asset",
     "static_asset",
     "metadata_route",
@@ -66,28 +68,71 @@ STATIC_SUFFIXES = (
     ".woff",
     ".woff2",
 )
-STATIC_SEGMENTS = {"/assets/", "/static/", "/images/", "/icons/"}
+STATIC_SEGMENTS = {"/assets/", "/static/", "/images/", "/icons/", "/img/", "/css/", "/js/"}
+STATIC_DIRECTORIES = {
+    "/assets",
+    "/static",
+    "/images",
+    "/icons",
+    "/img",
+    "/css",
+    "/js",
+}
 AUTH_TERMS = {
     "account",
     "auth",
+    "callback",
     "dashboard",
+    "forgot",
     "login",
     "logout",
+    "mfa",
     "oauth",
+    "password",
     "portal",
+    "register",
+    "reset",
     "session",
     "signin",
     "signup",
+    "sso",
+    "token",
+    "verify",
+    "2fa",
 }
 ADMIN_TERMS = {
+    "actuator",
     "admin",
+    "backoffice",
+    "console",
+    "control",
+    "cpanel",
     "debug",
     "dev",
+    "health",
+    "internal",
+    "manage",
+    "management",
+    "manager",
+    "metrics",
+    "monitor",
+    "ops",
+    "private",
     "server-info",
     "server-status",
+    "staff",
     "status",
     "test",
 }
+API_TERMS = {
+    "api",
+    "api-docs",
+    "docs",
+    "graphql",
+    "openapi",
+    "swagger",
+}
+MAX_RENDERED_VALUES = 6
 INTRO_TEXT = (
     "This summary describes already-collected local source and route evidence. "
     "It does not fetch URLs and does not execute Deep Recon."
@@ -310,7 +355,7 @@ def render_deep_source_route_coverage_markdown(
         ),
         ("Discovered But Not Body-Fetched", lambda item: item.status == "discovered_unfetched"),
         ("Referenced Only", lambda item: item.status == "referenced_only"),
-        ("Static / Low-Signal", lambda item: item.status == "static_noise"),
+        ("Static / Directory Context", lambda item: item.status == "static_noise"),
         ("Metadata Context", lambda item: item.status == "metadata_context"),
     )
     for title, predicate in sections:
@@ -332,11 +377,9 @@ def _render_items(items: tuple[DeepSourceRouteCoverageItem, ...]) -> list[str]:
     for item in items:
         line = f"- `{item.url}` - {item.category} - {item.status}"
         if item.signals:
-            line += " - signals: " + ", ".join(f"`{signal}`" for signal in item.signals)
+            line += " - signals: " + _format_compact_values(item.signals)
         if item.evidence_ids:
-            line += " - evidence: " + ", ".join(
-                f"`{evidence_id}`" for evidence_id in item.evidence_ids
-            )
+            line += " - evidence: " + _format_compact_values(item.evidence_ids)
         lines.append(line)
         lines.append(f"  - Suggested manual review: {item.suggested_manual_review}")
     return lines
@@ -374,13 +417,13 @@ def _status_category_for_path(path: str) -> tuple[str, str]:
 
 def _category_for_path_and_signal(path: str, signal: str) -> str:
     lowered_path = path.lower()
-    segments = [segment for segment in lowered_path.strip("/").split("/") if segment]
-    names = set(segments)
-    names.update(segment.rsplit(".", 1)[0] for segment in segments if "." in segment)
+    names = _path_terms(lowered_path)
     if names & AUTH_TERMS:
         return "auth_route"
     if names & ADMIN_TERMS:
         return "admin_or_status_route"
+    if names & API_TERMS:
+        return "api_route"
     if signal in {"form", "input"}:
         return "form_context"
     if signal in {"html_comment", "keyword_hit", "encoded_like_artifact", "hidden_element"}:
@@ -394,9 +437,19 @@ def _category_for_path_and_signal(path: str, signal: str) -> str:
 
 def _is_static_path(path: str) -> bool:
     lowered = path.lower()
-    return lowered.endswith(STATIC_SUFFIXES) or any(
+    return lowered in STATIC_DIRECTORIES or lowered.endswith(STATIC_SUFFIXES) or any(
         segment in lowered for segment in STATIC_SEGMENTS
     )
+
+
+def _path_terms(lowered_path: str) -> set[str]:
+    segments = [segment for segment in lowered_path.strip("/").split("/") if segment]
+    terms = set(segments)
+    for segment in segments:
+        if "." in segment:
+            terms.add(segment.rsplit(".", 1)[0])
+        terms.update(part for part in re.split(r"[._-]+", segment) if part)
+    return terms
 
 
 def _stronger_status(first: str, second: str) -> str:
@@ -418,10 +471,11 @@ def _stronger_category(first: str, second: str) -> str:
         "application_route": 2,
         "source_context": 3,
         "form_context": 4,
-        "script_or_asset": 5,
-        "other_route": 6,
-        "static_asset": 7,
-        "metadata_route": 8,
+        "api_route": 5,
+        "script_or_asset": 6,
+        "other_route": 7,
+        "static_asset": 8,
+        "metadata_route": 9,
     }
     return first if order[first] <= order[second] else second
 
@@ -433,10 +487,11 @@ def _coverage_sort_key(item: _PendingCoverage) -> tuple[int, int, str]:
         "application_route": 2,
         "source_context": 3,
         "form_context": 4,
-        "script_or_asset": 5,
-        "other_route": 6,
-        "metadata_route": 7,
-        "static_asset": 8,
+        "api_route": 5,
+        "script_or_asset": 6,
+        "other_route": 7,
+        "metadata_route": 8,
+        "static_asset": 9,
     }
     status_order = {
         "body_collected": 0,
@@ -481,6 +536,14 @@ def _suggested_manual_review(status: str, category: str) -> str:
     if status == "metadata_context":
         return "Use metadata route context alongside dedicated metadata coverage and review output."
     return "Review the local source and route evidence in context before escalating."
+
+
+def _format_compact_values(values: tuple[str, ...]) -> str:
+    rendered = ", ".join(f"`{value}`" for value in values[:MAX_RENDERED_VALUES])
+    remaining = len(values) - MAX_RENDERED_VALUES
+    if remaining > 0:
+        rendered += f", ... +{remaining} more"
+    return rendered
 
 
 def _normalise_url(raw_url: str) -> str | None:

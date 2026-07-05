@@ -147,6 +147,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "`bugslyce recon deep-source-route-coverage --input-dir",
         "offline source/route coverage to stdout",
         "read-only and stdout-only",
+        "Bare static directories are treated as static/directory context",
+        "long evidence lists are compacted",
+        "classification and reporting polish only",
     ):
         assert expected.lower() in lowered
 
