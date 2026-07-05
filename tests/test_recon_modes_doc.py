@@ -157,6 +157,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "`bugslyce recon deep-preview --input-dir",
         "combined offline Deep bundle to stdout",
         "read-only and stdout-only",
+        "Low-priority metadata coverage gaps are grouped",
+        "route and clue priorities remain prominent",
+        "metadata coverage counts are preserved",
     ):
         assert expected.lower() in lowered
 

@@ -148,8 +148,82 @@ def test_metadata_gap_priority_is_low_context_only() -> None:
     )
 
     gap = next(priority for priority in bundle.priorities if priority.category == "metadata_gap_review")
-    assert "coverage gap only" in gap.reason
+    assert "coverage gaps only" in gap.reason
     assert gap.source_sections == ("metadata_coverage",)
+
+
+def test_metadata_gaps_are_grouped_into_one_priority_with_stable_urls() -> None:
+    bundle = build_deep_preview_bundle_from_project_state(
+        _project_state(
+            discovered_paths=[
+                _path("http://example.test/login.php", "EVID-PATH-0001"),
+            ]
+        )
+    )
+
+    gaps = [
+        priority for priority in bundle.priorities
+        if priority.category == "metadata_gap_review"
+    ]
+
+    assert len(gaps) == 1
+    assert gaps[0].title == "Metadata coverage gaps observed"
+    assert gaps[0].related_urls == (
+        "http://example.test/robots.txt",
+        "http://example.test/sitemap.xml",
+        "http://example.test/security.txt",
+        "http://example.test/.well-known/security.txt",
+        "http://example.test/humans.txt",
+        "http://example.test/crossdomain.xml",
+        "http://example.test/clientaccesspolicy.xml",
+        "http://example.test/favicon.ico",
+    )
+    assert bundle.summary_counts["metadata_planned_uncollected_urls"] == 8
+
+
+def test_rendered_grouped_metadata_gap_compacts_related_urls() -> None:
+    bundle = build_deep_preview_bundle_from_project_state(
+        _project_state(
+            discovered_paths=[
+                _path("http://example.test/login.php", "EVID-PATH-0001"),
+            ]
+        )
+    )
+
+    rendered = render_deep_preview_bundle_markdown(bundle)
+
+    assert "Metadata coverage gaps observed" in rendered
+    assert "`http://example.test/robots.txt`" in rendered
+    assert "`http://example.test/crossdomain.xml`" in rendered
+    assert "`http://example.test/clientaccesspolicy.xml`" not in rendered
+    assert "`http://example.test/favicon.ico`" not in rendered
+    assert "... +2 more" in rendered
+    assert rendered.count("Metadata coverage gaps observed") == 1
+
+
+def test_priority_order_keeps_metadata_gaps_after_higher_signal_items() -> None:
+    bundle = build_deep_preview_bundle_from_project_state(
+        _project_state(
+            http_artifacts=[
+                _artifact("http://example.test/login.php", "form", "form", "EVID-ART-0001"),
+                _artifact("http://example.test/robots.txt", "robots_value", "remember-this", "EVID-ART-0002"),
+                _artifact("http://example.test/", "html_comment", "note", "EVID-ART-0003"),
+            ],
+            discovered_paths=[
+                _path("http://example.test/portal.php", "EVID-PATH-0001"),
+                _path("http://example.test/server-status", "EVID-PATH-0002"),
+            ],
+        )
+    )
+
+    assert [(priority.priority_id, priority.category) for priority in bundle.priorities[:6]] == [
+        ("DEEP-PREV-0001", "auth_route_review"),
+        ("DEEP-PREV-0002", "auth_route_review"),
+        ("DEEP-PREV-0003", "admin_status_route_review"),
+        ("DEEP-PREV-0004", "metadata_clue_review"),
+        ("DEEP-PREV-0005", "source_context_review"),
+        ("DEEP-PREV-0006", "metadata_gap_review"),
+    ]
 
 
 def test_static_context_is_not_promoted_by_default() -> None:

@@ -199,6 +199,8 @@ bugslyce project run \
   non-executable.
 - [ ] `bugslyce recon deep-preview --input-dir` remains read-only,
   stdout-only, and non-executable.
+- [ ] Deep preview groups low-priority metadata coverage gaps without hiding
+  coverage counts.
 - [ ] Standard report includes the Human Triage Brief and readable evidence
   cards before raw wide evidence tables.
 - [ ] Standard Human Triage promotes useful local robots metadata body values

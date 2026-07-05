@@ -245,11 +245,11 @@ def _build_pending_priorities(
         if item.signals and any(signal in SOURCE_CONTEXT_SIGNALS for signal in item.signals)
         and item.category not in {"auth_route", "admin_or_status_route", "api_route"}
     )
-    pending.extend(
-        _priority_from_metadata_gap(item)
-        for item in metadata_coverage.items
-        if item.status == "planned_uncollected"
+    metadata_gap_priority = _priority_from_metadata_gaps(
+        tuple(item for item in metadata_coverage.items if item.status == "planned_uncollected")
     )
+    if metadata_gap_priority is not None:
+        pending.append(metadata_gap_priority)
     return _dedupe_priorities(pending)
 
 
@@ -299,16 +299,29 @@ def _priority_from_metadata_lead(lead) -> _PendingPriority:
     )
 
 
-def _priority_from_metadata_gap(item) -> _PendingPriority:
+def _priority_from_metadata_gaps(items: tuple[object, ...]) -> _PendingPriority | None:
+    if not items:
+        return None
     return _PendingPriority(
-        title="Metadata coverage gap observed",
+        title="Metadata coverage gaps observed",
         category="metadata_gap_review",
-        reason="A planned Deep metadata URL has no collected local evidence; this is a coverage gap only.",
-        related_urls=(item.url,),
-        related_evidence_ids=item.evidence_ids,
+        reason=(
+            "Planned Deep metadata URLs have no collected local evidence; "
+            "these are coverage gaps only."
+        ),
+        related_urls=tuple(_dedupe([item.url for item in items])),
+        related_evidence_ids=tuple(
+            _dedupe(
+                [
+                    evidence_id
+                    for item in items
+                    for evidence_id in item.evidence_ids
+                ]
+            )
+        ),
         source_sections=("metadata_coverage",),
         suggested_manual_review=(
-            "Treat this as a local evidence gap only; do not fetch missing URLs "
+            "Treat these as local evidence gaps only; do not fetch missing URLs "
             "unless explicitly authorised and in scope."
         ),
         safety_note="Review-only priority; not a confirmed finding.",

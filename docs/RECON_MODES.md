@@ -1047,3 +1047,7 @@ combined offline Deep bundle to stdout. It is read-only and stdout-only,
 creates no artefacts, does not fetch URLs, does not run live recon, does not
 execute Deep Recon, and does not change mode availability. Deep Recon remains
 unavailable.
+
+Phase 83C polishes Deep preview priority grouping. Low-priority metadata coverage gaps are grouped into compact review priorities so route and clue priorities remain prominent while metadata coverage counts are preserved. This
+is preview model and rendering polish only. It does not fetch URLs, create
+outputs, change CLI arguments, execute Deep Recon, or change mode availability.
