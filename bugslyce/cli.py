@@ -106,6 +106,10 @@ from bugslyce.recon.deep_plan import (
     get_deep_recon_planned_pipeline,
     validate_deep_recon_planned_pipeline,
 )
+from bugslyce.recon.deep_preview_bundle import (
+    build_deep_preview_bundle_from_project_state,
+    render_deep_preview_bundle_markdown,
+)
 from bugslyce.recon.deep_readiness import (
     build_deep_recon_readiness_snapshot,
     render_deep_recon_readiness_summary,
@@ -549,6 +553,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     deep_source_route_coverage_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory to parse read-only.",
+    )
+    deep_preview_parser = recon_subparsers.add_parser(
+        "deep-preview",
+        help=(
+            "Preview the combined offline Deep review bundle from existing local "
+            "evidence without running Deep Recon."
+        ),
+        description=(
+            "Preview the combined offline Deep review bundle from existing local "
+            "evidence without running Deep Recon, live recon, URL fetching, or file output."
+        ),
+    )
+    deep_preview_parser.add_argument(
         "--input-dir",
         required=True,
         type=Path,
@@ -1239,6 +1260,25 @@ def _recon(args: argparse.Namespace) -> int:
         project_state = build_project_state(args.input_dir)
         summary = build_deep_source_route_coverage_from_project_state(project_state)
         print(render_deep_source_route_coverage_markdown(summary))
+        return 0
+
+    if args.recon_command == "deep-preview":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            print("Deep Recon was not executed.", file=sys.stderr)
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            print("Deep Recon was not executed.", file=sys.stderr)
+            return 2
+
+        project_state = build_project_state(args.input_dir)
+        bundle = build_deep_preview_bundle_from_project_state(project_state)
+        print(render_deep_preview_bundle_markdown(bundle))
         return 0
 
     if args.recon_command == "plan":

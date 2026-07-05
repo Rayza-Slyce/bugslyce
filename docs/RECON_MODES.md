@@ -1039,3 +1039,11 @@ metadata review, metadata coverage, and source/route coverage summaries into
 bounded manual review priorities. The bundle is internal/model-only in this phase and does not add CLI exposure. It does not fetch URLs, create outputs,
 run live recon, execute Deep Recon, or change mode availability. Deep Recon
 remains unavailable.
+
+Phase 83B exposes the bundle as a safe preview command:
+`bugslyce recon deep-preview --input-dir <local-output-dir>`. The command
+builds ProjectState from existing local BugSlyce evidence and renders the
+combined offline Deep bundle to stdout. It is read-only and stdout-only,
+creates no artefacts, does not fetch URLs, does not run live recon, does not
+execute Deep Recon, and does not change mode availability. Deep Recon remains
+unavailable.

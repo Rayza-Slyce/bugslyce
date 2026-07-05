@@ -897,6 +897,153 @@ def test_cli_recon_deep_source_route_coverage_keeps_modes_unchanged() -> None:
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
+def test_cli_recon_deep_preview_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-preview", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-preview" in captured.out
+    assert "--input-dir" in captured.out
+    assert "Deep review bundle" in captured.out
+    assert "Deep Recon" in captured.out
+    assert "URL fetching" in captured.out
+    for forbidden in (
+        "--target",
+        "--scope",
+        "--output",
+        "--run",
+        "--execute",
+        "--fetch",
+        "--scan",
+        "--json",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_preview_renders_bundle_stdout_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            (
+                "http://10.10.10.10/",
+                "http://10.10.10.10/login.php",
+                "http://10.10.10.10/assets",
+                "http://10.10.10.10/assets/app.js",
+                "http://10.10.10.10/api/v1/users",
+                "http://10.10.10.10/actuator/health",
+                "http://10.10.10.10/robots.txt",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (input_dir / "robots-10.10.10.10-80.txt").write_text(
+        "remember-this\n",
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(["recon", "deep-preview", "--input-dir", str(input_dir)])
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Preview Bundle")
+    assert "### Summary" in captured.out
+    assert "### Manual Review Priorities" in captured.out
+    assert "does not fetch URLs" in captured.out
+    assert "run live recon" in captured.out
+    assert "execute Deep Recon" in captured.out
+    assert "prioritisation view, not a finding list" in captured.out
+    assert "Deep Recon was not executed" in captured.out
+    lowered = captured.out.lower()
+    for forbidden in (
+        "vulnerability found",
+        "vulnerable",
+        "exploit found",
+        "credentials found",
+        "password found",
+        "login bypass",
+        "report automatically",
+        "confirmed exposure",
+    ):
+        assert forbidden not in lowered
+    assert before == after
+    for forbidden_output in (
+        "deep_preview.md",
+        "deep_preview.json",
+        "deep-preview.md",
+        "deep-preview.json",
+        "deep_preview",
+        "deep-preview",
+        "deep_preview_bundle.md",
+        "deep_preview_bundle.json",
+    ):
+        assert not (input_dir / forbidden_output).exists()
+
+
+def test_cli_recon_deep_preview_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(["recon", "deep-preview", "--input-dir", str(missing)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Deep Recon was not executed." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_preview_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(["recon", "deep-preview", "--input-dir", str(input_file)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert "No files were written." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Deep Recon was not executed." in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+    assert not (tmp_path / "deep_preview.md").exists()
+    assert not (tmp_path / "deep_preview.json").exists()
+    assert not (tmp_path / "deep-preview.md").exists()
+    assert not (tmp_path / "deep-preview.json").exists()
+    assert not (tmp_path / "deep_preview").exists()
+    assert not (tmp_path / "deep-preview").exists()
+    assert not (tmp_path / "deep_preview_bundle.md").exists()
+    assert not (tmp_path / "deep_preview_bundle.json").exists()
+
+
+def test_cli_recon_deep_preview_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
 def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["recon", "deep-eligibility", "--help"])
