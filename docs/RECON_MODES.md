@@ -1033,3 +1033,9 @@ Phase 82C polishes Deep source/route coverage preview output. Bare static direct
 API/documentation-style route classification is broader. This is
 classification and reporting polish only. It does not fetch URLs, create
 outputs, execute Deep Recon, change CLI arguments, or change mode availability.
+
+Phase 83A adds an offline Deep preview bundle model. It combines offline
+metadata review, metadata coverage, and source/route coverage summaries into
+bounded manual review priorities. The bundle is internal/model-only in this phase and does not add CLI exposure. It does not fetch URLs, create outputs,
+run live recon, execute Deep Recon, or change mode availability. Deep Recon
+remains unavailable.

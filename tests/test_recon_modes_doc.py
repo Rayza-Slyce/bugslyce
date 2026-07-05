@@ -150,6 +150,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "Bare static directories are treated as static/directory context",
         "long evidence lists are compacted",
         "classification and reporting polish only",
+        "offline Deep preview bundle model",
+        "metadata review, metadata coverage, and source/route coverage",
+        "bounded manual review priorities",
+        "internal/model-only in this phase",
     ):
         assert expected.lower() in lowered
 
