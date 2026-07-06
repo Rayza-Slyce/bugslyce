@@ -216,6 +216,8 @@ bugslyce project run \
   combined Standard content profile produced the gobuster artefact.
 - [ ] Standard reports treat ordinary login form fields as auth-route context,
   not confirmed credentials or standalone credential discovery.
+- [ ] Deep collection request planner remains offline, internal, policy-gated,
+  and non-executable.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

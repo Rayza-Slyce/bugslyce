@@ -1056,3 +1056,9 @@ Phase 84A adds an offline Deep collection policy model. It validates proposed
 future collection requests against restrictive request bounds and blocks unsafe methods and intents before any future collector can use them. The policy model
 does not fetch URLs, create outputs, add CLI exposure, run live recon, execute
 Deep Recon, or change mode availability. Deep Recon remains unavailable.
+
+Phase 84B adds an offline Deep collection request planner. It proposes future collection requests from existing local evidence, derives an explicit origin
+allowlist from loaded project state, and evaluates every proposed request through the restrictive Deep collection policy. The planner is internal and
+model-only in this phase. It does not fetch URLs, create outputs, add CLI
+exposure, run live recon, execute Deep Recon, or change mode availability.
+Deep Recon remains unavailable.

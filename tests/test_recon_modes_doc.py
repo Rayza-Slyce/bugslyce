@@ -163,6 +163,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "offline Deep collection policy model",
         "restrictive request bounds",
         "blocks unsafe methods and intents",
+        "offline Deep collection request planner",
+        "proposes future collection requests from existing local evidence",
+        "evaluates every proposed request through the restrictive Deep collection policy",
     ):
         assert expected.lower() in lowered
 
