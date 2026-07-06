@@ -218,6 +218,8 @@ bugslyce project run \
   not confirmed credentials or standalone credential discovery.
 - [ ] Deep collection request planner remains offline, internal, policy-gated,
   and non-executable.
+- [ ] Deep metadata collector core remains metadata-only, fetcher-injected,
+  non-CLI, and does not write artefacts.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

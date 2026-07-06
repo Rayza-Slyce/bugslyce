@@ -1062,3 +1062,11 @@ allowlist from loaded project state, and evaluates every proposed request throug
 model-only in this phase. It does not fetch URLs, create outputs, add CLI
 exposure, run live recon, execute Deep Recon, or change mode availability.
 Deep Recon remains unavailable.
+
+Phase 85A adds a bounded Deep metadata collector core. It can collect only
+policy-allowed metadata requests through an explicit injected fetcher, and it
+returns in-memory results without writing artefacts. The collector has no CLI
+exposure in this phase. It does not crawl, submit forms, authenticate, brute
+force, inject payloads, execute browser JavaScript, collect non-metadata routes,
+confirm vulnerabilities, create outputs, or enable Deep Recon full mode. Deep
+Recon remains unavailable.
