@@ -1070,3 +1070,12 @@ exposure in this phase. It does not crawl, submit forms, authenticate, brute
 force, inject payloads, execute browser JavaScript, collect non-metadata routes,
 confirm vulnerabilities, create outputs, or enable Deep Recon full mode. Deep
 Recon remains unavailable.
+
+Phase 85B adds a bounded Deep HTTP fetcher transport primitive. It uses
+standard-library HTTP only and can be injected into future Deep metadata
+collection, but it is not exposed through CLI in this phase and does not write
+artefacts. Redirects are not automatically followed, HTTP error responses are returned as bounded responses, and request validation rejects unsafe methods,
+schemes, userinfo, fragments, and disallowed query strings. It does not crawl,
+submit forms, authenticate, brute force, inject payloads, execute browser
+JavaScript, collect non-metadata routes, or enable Deep Recon full mode. Deep
+Recon remains unavailable.

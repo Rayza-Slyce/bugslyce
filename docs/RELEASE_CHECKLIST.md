@@ -220,6 +220,8 @@ bugslyce project run \
   and non-executable.
 - [ ] Deep metadata collector core remains metadata-only, fetcher-injected,
   non-CLI, and does not write artefacts.
+- [ ] Deep HTTP fetcher remains bounded, standard-library only, non-CLI, and
+  does not write artefacts or follow redirects automatically.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

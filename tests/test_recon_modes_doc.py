@@ -169,6 +169,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "bounded Deep metadata collector core",
         "policy-allowed metadata requests through an explicit injected fetcher",
         "does not crawl, submit forms, authenticate, brute",
+        "bounded Deep HTTP fetcher transport primitive",
+        "standard-library HTTP only",
+        "Redirects are not automatically followed",
+        "HTTP error responses are returned as bounded responses",
     ):
         assert expected.lower() in lowered
 
