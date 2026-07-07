@@ -178,6 +178,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "prints the in-memory result to stdout",
         "writes no artefacts, creates no directories",
         "does not collect routes, crawl, submit forms",
+        "`--write-artifacts`",
+        "`deep_metadata_collection.md`",
+        "`deep_metadata_collection.json`",
+        "not full response bodies",
     ):
         assert expected.lower() in lowered
 

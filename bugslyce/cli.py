@@ -98,6 +98,9 @@ from bugslyce.recon.deep_metadata_collector import (
     collect_deep_metadata_from_plan,
     render_deep_metadata_collection_result_markdown,
 )
+from bugslyce.recon.deep_metadata_collection_export import (
+    write_deep_metadata_collection_artifacts,
+)
 from bugslyce.recon.deep_metadata_coverage import (
     build_deep_metadata_coverage_from_project_state,
     render_deep_metadata_coverage_markdown,
@@ -601,6 +604,14 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Existing local BugSlyce project or output directory to parse read-only.",
+    )
+    deep_metadata_collect_parser.add_argument(
+        "--write-artifacts",
+        action="store_true",
+        help=(
+            "Explicitly write deep_metadata_collection.md and "
+            "deep_metadata_collection.json into --input-dir."
+        ),
     )
     plan_parser = recon_subparsers.add_parser(
         "plan",
@@ -1329,6 +1340,15 @@ def _recon(args: argparse.Namespace) -> int:
             fetcher=urllib_deep_http_fetcher,
         )
         print(render_deep_metadata_collection_result_markdown(result))
+        if args.write_artifacts:
+            markdown_path, json_path = write_deep_metadata_collection_artifacts(
+                result,
+                args.input_dir,
+            )
+            print()
+            print("Deep metadata collection artefacts written:")
+            print(f"- Markdown: {markdown_path}")
+            print(f"- JSON: {json_path}")
         return 0
 
     if args.recon_command == "plan":

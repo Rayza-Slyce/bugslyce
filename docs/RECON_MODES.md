@@ -1087,3 +1087,13 @@ it through the restrictive collection policy, fetches only policy-allowed metada
 does not collect routes, crawl, submit forms, authenticate, brute force, inject
 payloads, execute browser JavaScript, confirm vulnerabilities, or enable Deep
 Recon full mode. Deep Recon remains unavailable.
+
+Phase 85D keeps `deep-metadata-collect` stdout-only by default and adds an
+explicit `--write-artifacts` option. When requested, the command writes only
+`deep_metadata_collection.md` and `deep_metadata_collection.json` into the
+input directory. The JSON stores previews, hashes, headers, status, timing,
+reasons, and evidence IDs, but not full response bodies. The command remains
+metadata-only and policy-gated, and it does not collect routes, crawl, submit
+forms, authenticate, brute force, inject payloads, execute browser JavaScript,
+confirm vulnerabilities, or enable Deep Recon full mode. Deep Recon remains
+unavailable.

@@ -224,6 +224,9 @@ bugslyce project run \
   does not write artefacts or follow redirects automatically.
 - [ ] `bugslyce recon deep-metadata-collect --input-dir` remains stdout-only,
   metadata-only, policy-gated, and does not enable Deep Recon full mode.
+- [ ] `bugslyce recon deep-metadata-collect --write-artifacts` writes only
+  `deep_metadata_collection.md` and `deep_metadata_collection.json`, without
+  storing full response bodies.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.
