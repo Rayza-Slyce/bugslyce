@@ -222,6 +222,8 @@ bugslyce project run \
   non-CLI, and does not write artefacts.
 - [ ] Deep HTTP fetcher remains bounded, standard-library only, non-CLI, and
   does not write artefacts or follow redirects automatically.
+- [ ] `bugslyce recon deep-metadata-collect --input-dir` remains stdout-only,
+  metadata-only, policy-gated, and does not enable Deep Recon full mode.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

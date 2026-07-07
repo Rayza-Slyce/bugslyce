@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 
+import bugslyce.cli as cli_module
 from bugslyce.cli import main
 from bugslyce.core.models import ReconContentDiscoveryExecutionResult
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_run import ContentDiscoveryExecutionIncomplete
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
+from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -1037,6 +1039,164 @@ def test_cli_recon_deep_preview_file_input_returns_nonzero(
 
 
 def test_cli_recon_deep_preview_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
+def test_cli_recon_deep_metadata_collect_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-collect", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-metadata-collect" in captured.out
+    assert "--input-dir" in captured.out
+    assert "metadata" in captured.out
+    assert "Deep Recon" in captured.out
+    assert "does not collect routes" in captured.out
+    for forbidden in (
+        "--target",
+        "--scope",
+        "--output",
+        "--output-dir",
+        "--json",
+        "--crawl",
+        "--routes",
+        "--auth",
+        "--forms",
+        "--cookies",
+        "--headers",
+        "--payload",
+        "--execute",
+        "--deep",
+        "--force",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_metadata_collect_renders_stdout_only(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            (
+                "http://10.10.10.10/",
+                "http://10.10.10.10/login.php",
+                "http://10.10.10.10/robots.txt",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_fetcher(request, bounds):
+        calls.append((request.url, request.source))
+        assert bounds.max_response_bytes > 0
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=200,
+            headers=(("content-type", "text/plain"),),
+            body=f"metadata body for {request.url}".encode("utf-8"),
+            elapsed_seconds=0.01,
+        )
+
+    monkeypatch.setattr(cli_module, "urllib_deep_http_fetcher", fake_fetcher)
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(["recon", "deep-metadata-collect", "--input-dir", str(input_dir)])
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Metadata Collection Result")
+    assert "### Summary" in captured.out
+    assert "### Collected Metadata" in captured.out
+    assert "### Skipped Requests" in captured.out
+    assert "### Safety Notes" in captured.out
+    assert "bounded metadata collection result" in captured.out
+    assert "does not collect non-metadata routes" in captured.out
+    assert "Deep Recon full mode was not enabled" in captured.out
+    assert calls
+    assert all(source == "metadata_coverage" for _, source in calls)
+    assert all("/login.php" not in url for url, _ in calls)
+    assert before == after
+    for forbidden_output in (
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
+        "deep-metadata-collection.md",
+        "deep-metadata-collection.json",
+        "deep_metadata_collection",
+        "deep-metadata-collection",
+        "deep_metadata",
+        "deep-metadata",
+        "deep",
+    ):
+        assert not (input_dir / forbidden_output).exists()
+
+
+def test_cli_recon_deep_metadata_collect_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(["recon", "deep-metadata-collect", "--input-dir", str(missing)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_collect_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(["recon", "deep-metadata-collect", "--input-dir", str(input_file)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+    for forbidden_output in (
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
+        "deep-metadata-collection.md",
+        "deep-metadata-collection.json",
+        "deep_metadata_collection",
+        "deep-metadata-collection",
+        "deep_metadata",
+        "deep-metadata",
+        "deep",
+    ):
+        assert not (tmp_path / forbidden_output).exists()
+
+
+def test_cli_recon_deep_metadata_collect_keeps_modes_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"

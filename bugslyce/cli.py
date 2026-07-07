@@ -90,6 +90,14 @@ from bugslyce.recon.deep_metadata_plan import (
     export_deep_metadata_plan_json,
     render_deep_metadata_plan_markdown,
 )
+from bugslyce.recon.deep_collection_request_plan import (
+    build_deep_collection_request_plan_from_project_state,
+)
+from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
+from bugslyce.recon.deep_metadata_collector import (
+    collect_deep_metadata_from_plan,
+    render_deep_metadata_collection_result_markdown,
+)
 from bugslyce.recon.deep_metadata_coverage import (
     build_deep_metadata_coverage_from_project_state,
     render_deep_metadata_coverage_markdown,
@@ -570,6 +578,25 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     deep_preview_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory to parse read-only.",
+    )
+    deep_metadata_collect_parser = recon_subparsers.add_parser(
+        "deep-metadata-collect",
+        help=(
+            "Collect policy-allowed Deep metadata requests from existing local "
+            "evidence without enabling full Deep Recon."
+        ),
+        description=(
+            "Collect bounded Deep metadata responses from existing local evidence. "
+            "This uses the Deep request planner, restrictive policy, and bounded "
+            "HTTP fetcher. It does not collect routes, crawl, submit forms, "
+            "authenticate, write artefacts, or enable full Deep Recon."
+        ),
+    )
+    deep_metadata_collect_parser.add_argument(
         "--input-dir",
         required=True,
         type=Path,
@@ -1279,6 +1306,29 @@ def _recon(args: argparse.Namespace) -> int:
         project_state = build_project_state(args.input_dir)
         bundle = build_deep_preview_bundle_from_project_state(project_state)
         print(render_deep_preview_bundle_markdown(bundle))
+        return 0
+
+    if args.recon_command == "deep-metadata-collect":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No directories were created.", file=sys.stderr)
+            print("Deep Recon full mode was not enabled.", file=sys.stderr)
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            print("No files were written.", file=sys.stderr)
+            print("No directories were created.", file=sys.stderr)
+            print("Deep Recon full mode was not enabled.", file=sys.stderr)
+            return 2
+
+        project_state = build_project_state(args.input_dir)
+        plan = build_deep_collection_request_plan_from_project_state(project_state)
+        result = collect_deep_metadata_from_plan(
+            plan,
+            fetcher=urllib_deep_http_fetcher,
+        )
+        print(render_deep_metadata_collection_result_markdown(result))
         return 0
 
     if args.recon_command == "plan":

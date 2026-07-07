@@ -1079,3 +1079,11 @@ schemes, userinfo, fragments, and disallowed query strings. It does not crawl,
 submit forms, authenticate, brute force, inject payloads, execute browser
 JavaScript, collect non-metadata routes, or enable Deep Recon full mode. Deep
 Recon remains unavailable.
+
+Phase 85C exposes bounded metadata collection as
+`bugslyce recon deep-metadata-collect --input-dir <local-output-dir>`. The
+command loads existing local evidence, builds the Deep request plan, evaluates
+it through the restrictive collection policy, fetches only policy-allowed metadata coverage requests with the bounded HTTP fetcher, and prints the in-memory result to stdout. It writes no artefacts, creates no directories, and
+does not collect routes, crawl, submit forms, authenticate, brute force, inject
+payloads, execute browser JavaScript, confirm vulnerabilities, or enable Deep
+Recon full mode. Deep Recon remains unavailable.

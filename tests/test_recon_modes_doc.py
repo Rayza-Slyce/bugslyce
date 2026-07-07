@@ -173,6 +173,11 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "standard-library HTTP only",
         "Redirects are not automatically followed",
         "HTTP error responses are returned as bounded responses",
+        "`bugslyce recon deep-metadata-collect --input-dir",
+        "fetches only policy-allowed metadata coverage requests",
+        "prints the in-memory result to stdout",
+        "writes no artefacts, creates no directories",
+        "does not collect routes, crawl, submit forms",
     ):
         assert expected.lower() in lowered
 
