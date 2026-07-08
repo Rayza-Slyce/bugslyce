@@ -232,6 +232,8 @@ bugslyce project run \
 - [ ] `bugslyce recon deep-metadata-collection-review --input-dir` reads only
   `deep_metadata_collection.json`, writes no artefacts, and makes no HTTP
   requests.
+- [ ] Deep source/route collector core remains fetcher-injected, non-CLI,
+  policy-gated, skips query-string URLs, and stores no full response bodies.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

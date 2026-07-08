@@ -1115,3 +1115,14 @@ review leads, and skipped request reasons. It does not collect routes, crawl,
 submit forms, authenticate, brute force, inject payloads, execute browser
 JavaScript, confirm vulnerabilities, or enable Deep Recon full mode. Deep
 Recon remains unavailable.
+
+Phase 87A adds a bounded Deep source/route collector core. It collects only
+already-planned, policy-allowed `source_route_coverage` requests through an
+explicit injected fetcher and stores bounded previews, hashes, headers, status,
+timing, source/reason, and evidence IDs without storing full response bodies.
+It skips metadata requests, policy-blocked requests, query-string URLs,
+unsupported methods, fetch errors, and oversized responses. It adds no CLI,
+makes no direct HTTP requests, writes no files, and creates no directories. It
+does not crawl, recursively discover, submit forms, authenticate, brute force,
+inject payloads, execute browser JavaScript, confirm vulnerabilities, or enable
+Deep Recon full mode. Deep Recon remains unavailable.

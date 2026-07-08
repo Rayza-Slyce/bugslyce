@@ -189,6 +189,12 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "reads the existing `deep_metadata_collection.json` artefact",
         "prints the offline review summary to stdout",
         "skipped request reasons",
+        "bounded Deep source/route collector core",
+        "policy-allowed `source_route_coverage` requests",
+        "without storing full response bodies",
+        "skips metadata requests, policy-blocked requests, query-string URLs",
+        "adds no CLI",
+        "makes no direct HTTP requests",
     ):
         assert expected.lower() in lowered
 
