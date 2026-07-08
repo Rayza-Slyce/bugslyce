@@ -234,6 +234,9 @@ bugslyce project run \
   requests.
 - [ ] Deep source/route collector core remains fetcher-injected, non-CLI,
   policy-gated, skips query-string URLs, and stores no full response bodies.
+- [ ] `bugslyce recon deep-source-route-collect --input-dir` remains
+  stdout-only, source/route-only, policy-gated, and does not enable Deep Recon
+  full mode.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

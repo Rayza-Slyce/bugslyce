@@ -1126,3 +1126,13 @@ makes no direct HTTP requests, writes no files, and creates no directories. It
 does not crawl, recursively discover, submit forms, authenticate, brute force,
 inject payloads, execute browser JavaScript, confirm vulnerabilities, or enable
 Deep Recon full mode. Deep Recon remains unavailable.
+
+Phase 87B exposes bounded source/route collection as
+`bugslyce recon deep-source-route-collect --input-dir <local-output-dir>`.
+The command loads local evidence, builds the Deep collection request plan,
+collects only policy-allowed `source_route_coverage` requests through the
+bounded HTTP fetcher, and prints the bounded result to stdout. It writes no
+artefacts and creates no directories. It does not crawl, recursively discover,
+submit forms, authenticate, brute force, inject payloads, execute browser
+JavaScript, collect query-string URLs, confirm vulnerabilities, or enable Deep
+Recon full mode. Deep Recon remains unavailable.

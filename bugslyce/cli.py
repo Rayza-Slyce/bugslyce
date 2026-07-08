@@ -135,6 +135,10 @@ from bugslyce.recon.deep_source_route_coverage import (
     build_deep_source_route_coverage_from_project_state,
     render_deep_source_route_coverage_markdown,
 )
+from bugslyce.recon.deep_source_route_collector import (
+    collect_deep_source_routes_from_plan,
+    render_deep_source_route_collection_result_markdown,
+)
 from bugslyce.recon.executor import (
     build_execution_preview,
     load_recon_plan,
@@ -619,6 +623,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "deep_metadata_collection.json into --input-dir."
         ),
     )
+    deep_source_route_collect_parser = recon_subparsers.add_parser(
+        "deep-source-route-collect",
+        help=(
+            "Collect bounded Deep source/route responses from an existing "
+            "local evidence directory."
+        ),
+        description=(
+            "Collect policy-allowed source_route_coverage requests from an "
+            "existing local BugSlyce output directory. This command uses the "
+            "bounded Deep HTTP fetcher, prints to stdout, writes no files, "
+            "does not crawl, and does not enable full Deep Recon."
+        ),
+    )
+    deep_source_route_collect_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory to parse read-only.",
+    )
     deep_metadata_collection_review_parser = recon_subparsers.add_parser(
         "deep-metadata-collection-review",
         help=(
@@ -1014,6 +1037,15 @@ def _print_deep_metadata_collection_review_guardrails() -> None:
     print("Deep Recon full mode was not enabled.", file=sys.stderr)
 
 
+def _print_deep_source_route_collection_guardrails() -> None:
+    print("No files were written.", file=sys.stderr)
+    print("No directories were created.", file=sys.stderr)
+    print("No crawling was performed.", file=sys.stderr)
+    print("No forms were submitted.", file=sys.stderr)
+    print("No authentication was attempted.", file=sys.stderr)
+    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+
+
 def _run(input_dir: Path, output_dir: Path) -> int:
     if not input_dir.exists():
         print(f"Error: input directory does not exist: {input_dir}", file=sys.stderr)
@@ -1380,6 +1412,33 @@ def _recon(args: argparse.Namespace) -> int:
             print("Deep metadata collection artefacts written:")
             print(f"- Markdown: {markdown_path}")
             print(f"- JSON: {json_path}")
+        return 0
+
+    if args.recon_command == "deep-source-route-collect":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            _print_deep_source_route_collection_guardrails()
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            _print_deep_source_route_collection_guardrails()
+            return 2
+
+        try:
+            project_state = build_project_state(args.input_dir)
+            plan = build_deep_collection_request_plan_from_project_state(project_state)
+        except (OSError, ValueError) as exc:
+            print(
+                f"Error: could not build Deep source/route collection plan: {exc}",
+                file=sys.stderr,
+            )
+            _print_deep_source_route_collection_guardrails()
+            return 2
+        result = collect_deep_source_routes_from_plan(
+            plan,
+            fetcher=urllib_deep_http_fetcher,
+        )
+        print(render_deep_source_route_collection_result_markdown(result))
         return 0
 
     if args.recon_command == "deep-metadata-collection-review":

@@ -195,6 +195,11 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "skips metadata requests, policy-blocked requests, query-string URLs",
         "adds no CLI",
         "makes no direct HTTP requests",
+        "`bugslyce recon deep-source-route-collect --input-dir",
+        "collects only policy-allowed `source_route_coverage` requests",
+        "prints the bounded result to stdout",
+        "artefacts and creates no directories",
+        "collect query-string URLs",
     ):
         assert expected.lower() in lowered
 

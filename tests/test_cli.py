@@ -1352,6 +1352,188 @@ def test_cli_recon_deep_metadata_collect_keeps_modes_unchanged() -> None:
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
+def test_cli_recon_deep_source_route_collect_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-source-route-collect", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-source-route-collect" in captured.out
+    assert "--input-dir" in captured.out
+    assert "source_route_coverage" in captured.out
+    assert "writes no files" in captured.out
+    assert "does not crawl" in captured.out
+    assert "Deep Recon" in captured.out
+    for forbidden in (
+        "--output",
+        "--output-dir",
+        "--write-artifacts",
+        "--json",
+        "--target",
+        "--scope",
+        "--crawl",
+        "--recursive",
+        "--routes",
+        "--auth",
+        "--forms",
+        "--cookies",
+        "--headers",
+        "--payload",
+        "--execute",
+        "--deep",
+        "--force",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_source_route_collect_renders_stdout_only(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            (
+                "http://10.10.10.10/",
+                "http://10.10.10.10/login.php",
+                "http://10.10.10.10/admin?sort=name",
+                "http://10.10.10.10/robots.txt",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_fetcher(request, bounds):
+        calls.append((request.url, request.source))
+        assert bounds.max_response_bytes > 0
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=200,
+            headers=(("content-type", "text/html"),),
+            body=f"source route body for {request.url}".encode("utf-8"),
+            elapsed_seconds=0.01,
+        )
+
+    monkeypatch.setattr(cli_module, "urllib_deep_http_fetcher", fake_fetcher)
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(["recon", "deep-source-route-collect", "--input-dir", str(input_dir)])
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Source/Route Collection Result")
+    assert "### Summary" in captured.out
+    assert "### Collected Source/Route Responses" in captured.out
+    assert "### Skipped Requests" in captured.out
+    assert "### Safety Notes" in captured.out
+    assert "It collects only policy-allowed source_route_coverage requests." in captured.out
+    assert "It does not crawl." in captured.out
+    assert "It does not collect query-string URLs." in captured.out
+    assert "Deep Recon full mode was not enabled." in captured.out
+    assert calls
+    assert all(source == "source_route_coverage" for _, source in calls)
+    assert all("?" not in url for url, _ in calls)
+    assert all("/robots.txt" not in url for url, _ in calls)
+    assert before == after
+    for forbidden_output in (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep-source-route-collection.md",
+        "deep-source-route-collection.json",
+        "deep_source_route_collection",
+        "deep-source-route-collection",
+        "deep_source_route",
+        "deep-source-route",
+        "deep",
+    ):
+        assert not (input_dir / forbidden_output).exists()
+
+
+def test_cli_recon_deep_source_route_collect_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(["recon", "deep-source-route-collect", "--input-dir", str(missing)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    _assert_deep_source_route_collection_guardrails(captured.err)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_source_route_collect_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(["recon", "deep-source-route-collect", "--input-dir", str(input_file)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    _assert_deep_source_route_collection_guardrails(captured.err)
+    assert input_file.read_text(encoding="utf-8") == "{}"
+    assert not (tmp_path / "deep_source_route_collection.md").exists()
+    assert not (tmp_path / "deep_source_route_collection.json").exists()
+
+
+def test_cli_recon_deep_source_route_collect_plan_failure_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+
+    def failing_builder(_project_state):
+        raise ValueError("bad local evidence")
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_deep_collection_request_plan_from_project_state",
+        failing_builder,
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(["recon", "deep-source-route-collect", "--input-dir", str(input_dir)])
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 2
+    assert "could not build Deep source/route collection plan" in captured.err
+    _assert_deep_source_route_collection_guardrails(captured.err)
+    assert before == after
+
+
+def test_cli_recon_deep_source_route_collect_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
 def test_cli_recon_deep_metadata_collection_review_help_exits_successfully(
     capsys,
 ) -> None:
@@ -3381,6 +3563,15 @@ def test_cli_run_succeeds_against_raw_recon_pack(tmp_path: Path, monkeypatch) ->
     assert exported["project_state"]["port_services"]
     assert exported["project_state"]["http_artifacts"]
     assert exported["project_state"]["discovered_paths"]
+
+
+def _assert_deep_source_route_collection_guardrails(stderr: str) -> None:
+    assert "No files were written." in stderr
+    assert "No directories were created." in stderr
+    assert "No crawling was performed." in stderr
+    assert "No forms were submitted." in stderr
+    assert "No authentication was attempted." in stderr
+    assert "Deep Recon full mode was not enabled." in stderr
 
 
 def _walk_keys(value: object) -> set[str]:
