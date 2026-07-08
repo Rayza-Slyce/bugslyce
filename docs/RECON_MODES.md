@@ -1105,3 +1105,13 @@ counts. The review makes no HTTP requests and writes no artefacts. It does not
 collect routes, crawl, submit forms, authenticate, brute force, inject payloads,
 execute browser JavaScript, confirm vulnerabilities, or enable Deep Recon full
 mode. Deep Recon remains unavailable.
+
+Phase 86B exposes the review as
+`bugslyce recon deep-metadata-collection-review --input-dir <local-output-dir>`.
+The command reads the existing `deep_metadata_collection.json` artefact,
+prints the offline review summary to stdout, and writes no artefacts. It makes
+no HTTP requests and summarises status buckets, repeated body signatures,
+review leads, and skipped request reasons. It does not collect routes, crawl,
+submit forms, authenticate, brute force, inject payloads, execute browser
+JavaScript, confirm vulnerabilities, or enable Deep Recon full mode. Deep
+Recon remains unavailable.

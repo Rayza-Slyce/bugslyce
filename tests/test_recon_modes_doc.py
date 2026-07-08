@@ -185,6 +185,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "offline Deep metadata collection review summary",
         "status buckets, repeated body",
         "makes no HTTP requests and writes no artefacts",
+        "`bugslyce recon deep-metadata-collection-review --input-dir",
+        "reads the existing `deep_metadata_collection.json` artefact",
+        "prints the offline review summary to stdout",
+        "skipped request reasons",
     ):
         assert expected.lower() in lowered
 

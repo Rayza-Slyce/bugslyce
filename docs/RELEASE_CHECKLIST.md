@@ -229,6 +229,9 @@ bugslyce project run \
   storing full response bodies.
 - [ ] Deep metadata collection review remains offline, no-file-output, and
   summarises repeated bodies and skipped requests without finding claims.
+- [ ] `bugslyce recon deep-metadata-collection-review --input-dir` reads only
+  `deep_metadata_collection.json`, writes no artefacts, and makes no HTTP
+  requests.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

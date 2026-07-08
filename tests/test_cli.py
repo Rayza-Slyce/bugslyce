@@ -14,7 +14,16 @@ from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_run import ContentDiscoveryExecutionIncomplete
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
-from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
+from bugslyce.recon.deep_metadata_collection_export import (
+    DEEP_METADATA_COLLECTION_JSON,
+    deep_metadata_collection_result_to_dict,
+)
+from bugslyce.recon.deep_metadata_collector import (
+    DeepHTTPResponse,
+    DeepMetadataCollectedItem,
+    DeepMetadataCollectionResult,
+    DeepMetadataSkippedItem,
+)
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -1341,6 +1350,223 @@ def test_cli_recon_deep_metadata_collect_keeps_modes_unchanged() -> None:
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is False
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
+def test_cli_recon_deep_metadata_collection_review_help_exits_successfully(
+    capsys,
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-metadata-collection-review", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-metadata-collection-review" in captured.out
+    assert "--input-dir" in captured.out
+    assert "offline" in captured.out
+    assert "no HTTP requests" in captured.out
+    assert "Deep Recon" in captured.out
+    for forbidden in (
+        "--output",
+        "--output-dir",
+        "--write-artifacts",
+        "--json",
+        "--target",
+        "--scope",
+        "--crawl",
+        "--routes",
+        "--auth",
+        "--forms",
+        "--cookies",
+        "--headers",
+        "--payload",
+        "--execute",
+        "--deep",
+        "--force",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_metadata_collection_review_renders_stdout_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    collection_path = input_dir / DEEP_METADATA_COLLECTION_JSON
+    collection_path.write_text(
+        json.dumps(deep_metadata_collection_result_to_dict(_deep_collection_result())),
+        encoding="utf-8",
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-metadata-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Metadata Collection Review")
+    for expected in (
+        "### Summary",
+        "### Status Buckets",
+        "### Review Leads",
+        "### Duplicate Body Signatures",
+        "### Skip Reasons",
+        "### Safety Notes",
+        "No HTTP requests were made by this review.",
+        "No files were written by this review.",
+        "Deep Recon full mode was not enabled.",
+    ):
+        assert expected in captured.out
+    assert before == after
+    assert after == [DEEP_METADATA_COLLECTION_JSON]
+
+
+def test_cli_recon_deep_metadata_collection_review_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(
+        ["recon", "deep-metadata-collection-review", "--input-dir", str(missing)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_collection_review_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-metadata-collection-review", "--input-dir", str(input_file)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+
+
+def test_cli_recon_deep_metadata_collection_review_missing_json_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+
+    exit_code = main(
+        ["recon", "deep-metadata-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "deep_metadata_collection.json does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert sorted(path.name for path in input_dir.iterdir()) == []
+
+
+def test_cli_recon_deep_metadata_collection_review_invalid_json_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    collection_path = input_dir / DEEP_METADATA_COLLECTION_JSON
+    collection_path.write_text('{"schema_version": 2}', encoding="utf-8")
+    before = collection_path.read_text(encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-metadata-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load deep metadata collection" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert collection_path.read_text(encoding="utf-8") == before
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_METADATA_COLLECTION_JSON
+    ]
+
+
+def test_cli_recon_deep_metadata_collection_review_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
+def _deep_collection_result() -> DeepMetadataCollectionResult:
+    return DeepMetadataCollectionResult(
+        collected=(
+            DeepMetadataCollectedItem(
+                url="http://example.test/robots.txt",
+                method="GET",
+                status_code=200,
+                final_url="http://example.test/robots.txt",
+                headers=(("content-type", "text/plain"),),
+                body_preview="User-agent: *",
+                body_sha256="robots-hash",
+                body_bytes=12,
+                elapsed_seconds=0.01,
+                source="metadata_coverage",
+                reason="planned_uncollected_metadata",
+                evidence_ids=("EVID-META-1",),
+            ),
+            DeepMetadataCollectedItem(
+                url="http://example.test/security.txt",
+                method="GET",
+                status_code=404,
+                final_url="http://example.test/security.txt",
+                headers=(("content-type", "text/plain"),),
+                body_preview="not found",
+                body_sha256="missing-hash",
+                body_bytes=9,
+                elapsed_seconds=0.01,
+                source="metadata_coverage",
+                reason="planned_uncollected_metadata",
+                evidence_ids=("EVID-META-2",),
+            ),
+        ),
+        skipped=(
+            DeepMetadataSkippedItem(
+                url="http://example.test/login.php",
+                method="GET",
+                reason="non_metadata_request",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ROUTE",),
+            ),
+        ),
+        total_considered=3,
+        total_collected=2,
+        total_skipped=1,
+    )
 
 
 def test_cli_recon_deep_eligibility_help_exits_successfully(capsys) -> None:

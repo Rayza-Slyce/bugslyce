@@ -99,7 +99,13 @@ from bugslyce.recon.deep_metadata_collector import (
     render_deep_metadata_collection_result_markdown,
 )
 from bugslyce.recon.deep_metadata_collection_export import (
+    DEEP_METADATA_COLLECTION_JSON,
+    load_deep_metadata_collection_result,
     write_deep_metadata_collection_artifacts,
+)
+from bugslyce.recon.deep_metadata_collection_review import (
+    build_deep_metadata_collection_review,
+    render_deep_metadata_collection_review_markdown,
 )
 from bugslyce.recon.deep_metadata_coverage import (
     build_deep_metadata_coverage_from_project_state,
@@ -613,6 +619,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "deep_metadata_collection.json into --input-dir."
         ),
     )
+    deep_metadata_collection_review_parser = recon_subparsers.add_parser(
+        "deep-metadata-collection-review",
+        help=(
+            "Review an existing Deep metadata collection JSON artefact without "
+            "making HTTP requests."
+        ),
+        description=(
+            "Build an offline review summary from deep_metadata_collection.json. "
+            "This command reads an existing local artefact, makes no HTTP "
+            "requests, writes no files, and does not enable full Deep Recon."
+        ),
+    )
+    deep_metadata_collection_review_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory containing deep_metadata_collection.json.",
+    )
     plan_parser = recon_subparsers.add_parser(
         "plan",
         help="Create a planning-only recon plan.",
@@ -983,6 +1007,13 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
+def _print_deep_metadata_collection_review_guardrails() -> None:
+    print("No files were written.", file=sys.stderr)
+    print("No directories were created.", file=sys.stderr)
+    print("No HTTP requests were made.", file=sys.stderr)
+    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+
+
 def _run(input_dir: Path, output_dir: Path) -> int:
     if not input_dir.exists():
         print(f"Error: input directory does not exist: {input_dir}", file=sys.stderr)
@@ -1349,6 +1380,33 @@ def _recon(args: argparse.Namespace) -> int:
             print("Deep metadata collection artefacts written:")
             print(f"- Markdown: {markdown_path}")
             print(f"- JSON: {json_path}")
+        return 0
+
+    if args.recon_command == "deep-metadata-collection-review":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        collection_path = args.input_dir / DEEP_METADATA_COLLECTION_JSON
+        if not collection_path.exists():
+            print(
+                f"Error: {DEEP_METADATA_COLLECTION_JSON} does not exist: {collection_path}",
+                file=sys.stderr,
+            )
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        try:
+            result = load_deep_metadata_collection_result(collection_path)
+        except (OSError, ValueError) as exc:
+            print(f"Error: could not load deep metadata collection: {exc}", file=sys.stderr)
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        summary = build_deep_metadata_collection_review(result)
+        print(render_deep_metadata_collection_review_markdown(summary))
         return 0
 
     if args.recon_command == "plan":

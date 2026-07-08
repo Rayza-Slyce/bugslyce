@@ -10,7 +10,9 @@ import pytest
 from bugslyce.recon.deep_metadata_collection_export import (
     DEEP_METADATA_COLLECTION_JSON,
     DEEP_METADATA_COLLECTION_MARKDOWN,
+    deep_metadata_collection_result_from_dict,
     deep_metadata_collection_result_to_dict,
+    load_deep_metadata_collection_result,
     write_deep_metadata_collection_artifacts,
 )
 from bugslyce.recon.deep_metadata_collector import (
@@ -101,6 +103,71 @@ def test_write_artifacts_rejects_missing_or_file_output_dir(tmp_path: Path) -> N
     assert output_file.read_text(encoding="utf-8") == "existing"
     assert not (tmp_path / DEEP_METADATA_COLLECTION_MARKDOWN).exists()
     assert not (tmp_path / DEEP_METADATA_COLLECTION_JSON).exists()
+
+
+def test_result_round_trips_from_dict_and_loader(tmp_path: Path) -> None:
+    result = _result()
+    payload = deep_metadata_collection_result_to_dict(result)
+    path = tmp_path / DEEP_METADATA_COLLECTION_JSON
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rebuilt = deep_metadata_collection_result_from_dict(payload)
+    loaded = load_deep_metadata_collection_result(path)
+
+    for candidate in (rebuilt, loaded):
+        assert candidate.total_considered == result.total_considered
+        assert candidate.total_collected == result.total_collected
+        assert candidate.total_skipped == result.total_skipped
+        assert candidate.collected[0].headers == (("content-type", "text/plain"),)
+        assert candidate.collected[0].evidence_ids == ("EVID-1", "EVID-2")
+        assert candidate.skipped[0].evidence_ids == ("EVID-ROUTE",)
+        assert not hasattr(candidate.collected[0], "body")
+
+
+def test_result_from_dict_rejects_missing_or_unsupported_schema() -> None:
+    payload = deep_metadata_collection_result_to_dict(_result())
+    missing = dict(payload)
+    missing.pop("schema_version")
+    unsupported = dict(payload)
+    unsupported["schema_version"] = 2
+    boolean_schema = dict(payload)
+    boolean_schema["schema_version"] = True
+
+    with pytest.raises(ValueError, match="schema_version"):
+        deep_metadata_collection_result_from_dict(missing)
+    with pytest.raises(ValueError, match="schema_version"):
+        deep_metadata_collection_result_from_dict(unsupported)
+    with pytest.raises(ValueError, match="schema_version"):
+        deep_metadata_collection_result_from_dict(boolean_schema)
+
+
+def test_result_from_dict_rejects_boolean_numeric_fields() -> None:
+    boolean_total = deep_metadata_collection_result_to_dict(_result())
+    boolean_total["total_collected"] = True
+    boolean_elapsed = deep_metadata_collection_result_to_dict(_result())
+    boolean_elapsed["collected"][0]["elapsed_seconds"] = False
+
+    with pytest.raises(ValueError, match="total_collected.*integer"):
+        deep_metadata_collection_result_from_dict(boolean_total)
+    with pytest.raises(ValueError, match="elapsed_seconds.*number"):
+        deep_metadata_collection_result_from_dict(boolean_elapsed)
+
+
+def test_result_from_dict_rejects_malformed_collected_and_skipped() -> None:
+    payload = deep_metadata_collection_result_to_dict(_result())
+    malformed_collected = dict(payload)
+    malformed_collected["collected"] = ["not-an-object"]
+    malformed_skipped = dict(payload)
+    malformed_skipped["skipped"] = [{"url": "http://example.test/"}]
+    with_body = deep_metadata_collection_result_to_dict(_result())
+    with_body["collected"][0]["body"] = "full response body"
+
+    with pytest.raises(ValueError, match="collected item"):
+        deep_metadata_collection_result_from_dict(malformed_collected)
+    with pytest.raises(ValueError, match="method"):
+        deep_metadata_collection_result_from_dict(malformed_skipped)
+    with pytest.raises(ValueError, match="full body"):
+        deep_metadata_collection_result_from_dict(with_body)
 
 
 def _result() -> DeepMetadataCollectionResult:
