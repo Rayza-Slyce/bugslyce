@@ -1097,3 +1097,11 @@ metadata-only and policy-gated, and it does not collect routes, crawl, submit
 forms, authenticate, brute force, inject payloads, execute browser JavaScript,
 confirm vulnerabilities, or enable Deep Recon full mode. Deep Recon remains
 unavailable.
+
+Phase 86A adds an offline Deep metadata collection review summary. It
+summarises existing collection results into status buckets, repeated body
+signatures, review leads, and skipped-policy or skipped-non-metadata request
+counts. The review makes no HTTP requests and writes no artefacts. It does not
+collect routes, crawl, submit forms, authenticate, brute force, inject payloads,
+execute browser JavaScript, confirm vulnerabilities, or enable Deep Recon full
+mode. Deep Recon remains unavailable.

@@ -227,6 +227,8 @@ bugslyce project run \
 - [ ] `bugslyce recon deep-metadata-collect --write-artifacts` writes only
   `deep_metadata_collection.md` and `deep_metadata_collection.json`, without
   storing full response bodies.
+- [ ] Deep metadata collection review remains offline, no-file-output, and
+  summarises repeated bodies and skipped requests without finding claims.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

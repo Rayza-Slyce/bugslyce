@@ -182,6 +182,9 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "`deep_metadata_collection.md`",
         "`deep_metadata_collection.json`",
         "not full response bodies",
+        "offline Deep metadata collection review summary",
+        "status buckets, repeated body",
+        "makes no HTTP requests and writes no artefacts",
     ):
         assert expected.lower() in lowered
 
