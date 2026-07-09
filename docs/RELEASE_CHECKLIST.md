@@ -237,6 +237,8 @@ bugslyce project run \
 - [ ] `bugslyce recon deep-source-route-collect --input-dir` remains
   stdout-only, source/route-only, policy-gated, and does not enable Deep Recon
   full mode.
+- [ ] Deep source/route collection rendering compacts body previews without
+  changing stored previews, hashes, byte counts, or collection decisions.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

@@ -143,6 +143,8 @@ def test_head_response_with_empty_body_is_collected_safely() -> None:
     assert item.body_bytes == 0
     assert item.body_sha256 == sha256(b"").hexdigest()
     assert item.headers == (("server", "unit"),)
+    rendered = render_deep_source_route_collection_result_markdown(result)
+    assert "Body preview:" not in rendered
 
 
 def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> None:
@@ -171,6 +173,52 @@ def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> N
     assert item.headers == (("content-type", "text/html"),)
     assert item.elapsed_seconds == 0.42
     assert item.evidence_ids == ("EVID-1", "EVID-2")
+
+
+def test_renderer_compacts_preview_without_changing_collected_item() -> None:
+    body_text = (
+        "<main>\n"
+        + ("alpha beta " * 25)
+        + "</p>\n\n\n"
+        + ("tailtoken " * 80)
+    )
+    body = body_text.encode("utf-8")
+    request = _request("http://example.test/login.php", source="source_route_coverage")
+
+    result = collect_deep_source_routes_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=_fake_fetcher([], body=body),
+    )
+
+    item = result.collected[0]
+    stored_preview = item.body_preview
+    rendered = render_deep_source_route_collection_result_markdown(result)
+
+    assert item.body_preview == stored_preview
+    assert len(item.body_preview) == 500
+    assert item.body_bytes == len(body)
+    assert item.body_sha256 == sha256(body).hexdigest()
+    assert "[preview truncated]" in rendered
+    assert body_text[:500] not in rendered
+    assert "alpha beta alpha beta" in rendered
+    assert "tailtoken ... [preview truncated]" in rendered
+    rendered_preview_line = next(
+        line for line in rendered.splitlines() if "Body preview:" in line
+    )
+    assert len(rendered_preview_line) < len("  - Body preview: `" + stored_preview + "`")
+
+
+def test_renderer_handles_replacement_characters_safely() -> None:
+    request = _request("http://example.test/login.php", source="source_route_coverage")
+
+    result = collect_deep_source_routes_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=_fake_fetcher([], body=b"\xff\xfeinvalid"),
+    )
+    rendered = render_deep_source_route_collection_result_markdown(result)
+
+    assert "Body preview:" in rendered
+    assert "invalid" in rendered
 
 
 def test_collection_order_is_deterministic_and_plan_is_not_mutated() -> None:

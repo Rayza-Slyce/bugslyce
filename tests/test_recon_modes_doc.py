@@ -200,6 +200,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "prints the bounded result to stdout",
         "artefacts and creates no directories",
         "collect query-string URLs",
+        "renderer-only preview compaction",
+        "readability without changing stored previews",
+        "without changing stored previews, hashes, byte counts",
+        "collection decisions, CLI options, or write artefacts",
     ):
         assert expected.lower() in lowered
 

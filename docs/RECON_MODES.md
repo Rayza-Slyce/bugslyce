@@ -1136,3 +1136,12 @@ artefacts and creates no directories. It does not crawl, recursively discover,
 submit forms, authenticate, brute force, inject payloads, execute browser
 JavaScript, collect query-string URLs, confirm vulnerabilities, or enable Deep
 Recon full mode. Deep Recon remains unavailable.
+
+Phase 87C adds renderer-only preview compaction for Deep source/route
+collection output. It improves stdout readability and future Markdown artefact
+readability without changing stored previews, hashes, byte counts, collection
+bounds, collection decisions, CLI options, or write artefacts. It does not
+crawl, recursively discover, submit forms, authenticate, brute force, inject
+payloads, execute browser JavaScript, collect query-string URLs, confirm
+vulnerabilities, or enable Deep Recon full mode. Deep Recon remains
+unavailable.

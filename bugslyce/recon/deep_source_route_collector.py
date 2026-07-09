@@ -23,6 +23,8 @@ from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 
 
 MAX_BODY_PREVIEW_CHARS = 500
+MAX_RENDERED_BODY_PREVIEW_CHARS = 300
+PREVIEW_TRUNCATED_MARKER = "... [preview truncated]"
 SAFETY_NOTES = (
     "This is a bounded source/route collection result.",
     "It collects only policy-allowed source_route_coverage requests.",
@@ -200,7 +202,7 @@ def _render_collected_item(item: DeepSourceRouteCollectedItem) -> list[str]:
         f"  - Body SHA-256: `{item.body_sha256}`",
     ]
     if item.body_preview:
-        lines.append(f"  - Body preview: `{item.body_preview}`")
+        lines.append(f"  - Body preview: `{_render_body_preview(item.body_preview)}`")
     if item.headers:
         headers = ", ".join(f"`{name}: {value}`" for name, value in item.headers)
         lines.append(f"  - Headers: {headers}")
@@ -246,6 +248,48 @@ def _has_query_string(url: str) -> bool:
 def _body_preview(body: bytes) -> str:
     text = body.decode("utf-8", errors="replace")
     return text[:MAX_BODY_PREVIEW_CHARS]
+
+
+def _render_body_preview(
+    preview: str,
+    *,
+    max_chars: int = MAX_RENDERED_BODY_PREVIEW_CHARS,
+) -> str:
+    if not preview:
+        return ""
+
+    compact_lines: list[str] = []
+    previous_blank = False
+    for raw_line in preview.splitlines():
+        line = " ".join(raw_line.strip().split())
+        if not line:
+            if compact_lines and not previous_blank:
+                compact_lines.append("")
+            previous_blank = True
+            continue
+        compact_lines.append(line)
+        previous_blank = False
+
+    compact = " ".join(line for line in compact_lines if line).strip()
+    if len(compact) <= max_chars:
+        return compact
+
+    cut = _preview_cut_point(compact, max_chars)
+    return f"{compact[:cut].rstrip()} {PREVIEW_TRUNCATED_MARKER}"
+
+
+def _preview_cut_point(value: str, max_chars: int) -> int:
+    segment = value[:max_chars]
+    candidates = [segment.rfind(">")]
+    candidates.extend(segment.rfind(char) for char in (" ", "\t", "\n"))
+    sensible_floor = max(40, max_chars // 2)
+    usable = [index for index in candidates if index >= sensible_floor]
+    if not usable:
+        return max_chars
+    boundary = max(usable)
+    if segment[boundary] == ">":
+        return boundary + 1
+    return boundary
 
 
 def _dedupe(values: list[str]) -> list[str]:
