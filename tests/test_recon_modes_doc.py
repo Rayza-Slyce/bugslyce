@@ -204,6 +204,12 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "readability without changing stored previews",
         "without changing stored previews, hashes, byte counts",
         "collection decisions, CLI options, or write artefacts",
+        "`deep-source-route-collect` stdout-only by default",
+        "`deep_source_route_collection.md`",
+        "`deep_source_route_collection.json`",
+        "JSON stores bounded previews, hashes, byte counts",
+        "not full response bodies",
+        "does not create nested directories",
     ):
         assert expected.lower() in lowered
 

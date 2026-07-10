@@ -239,6 +239,9 @@ bugslyce project run \
   full mode.
 - [ ] Deep source/route collection rendering compacts body previews without
   changing stored previews, hashes, byte counts, or collection decisions.
+- [ ] `bugslyce recon deep-source-route-collect --write-artifacts` writes only
+  `deep_source_route_collection.md` and `deep_source_route_collection.json`,
+  without storing full response bodies.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

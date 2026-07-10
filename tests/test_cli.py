@@ -1361,14 +1361,16 @@ def test_cli_recon_deep_source_route_collect_help_exits_successfully(capsys) -> 
     assert exc_info.value.code == 0
     assert "usage: bugslyce recon deep-source-route-collect" in captured.out
     assert "--input-dir" in captured.out
+    assert "--write-artifacts" in captured.out
     assert "source_route_coverage" in captured.out
-    assert "writes no files" in captured.out
+    assert "stdout-only by default" in captured.out
+    assert "writes artefacts only when" in captured.out
+    assert "explicitly supplied" in captured.out
     assert "does not crawl" in captured.out
     assert "Deep Recon" in captured.out
     for forbidden in (
         "--output",
         "--output-dir",
-        "--write-artifacts",
         "--json",
         "--target",
         "--scope",
@@ -1461,6 +1463,92 @@ def test_cli_recon_deep_source_route_collect_renders_stdout_only(
         assert not (input_dir / forbidden_output).exists()
 
 
+def test_cli_recon_deep_source_route_collect_writes_artifacts_when_requested(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "\n".join(
+            (
+                "http://10.10.10.10/",
+                "http://10.10.10.10/login.php",
+                "http://10.10.10.10/admin?sort=name",
+                "http://10.10.10.10/robots.txt",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+    full_body = ("source route body for export " * 80).encode("utf-8")
+
+    def fake_fetcher(request, bounds):
+        calls.append((request.url, request.source))
+        assert bounds.max_response_bytes > len(full_body)
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=200,
+            headers=(("content-type", "text/html"),),
+            body=full_body,
+            elapsed_seconds=0.01,
+        )
+
+    monkeypatch.setattr(cli_module, "urllib_deep_http_fetcher", fake_fetcher)
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        [
+            "recon",
+            "deep-source-route-collect",
+            "--input-dir",
+            str(input_dir),
+            "--write-artifacts",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    markdown_path = input_dir / "deep_source_route_collection.md"
+    json_path = input_dir / "deep_source_route_collection.json"
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("## Deep Source/Route Collection Result")
+    assert "Deep source/route collection artefacts written:" in captured.out
+    assert str(markdown_path) in captured.out
+    assert str(json_path) in captured.out
+    assert set(after) - set(before) == {
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+    }
+    assert markdown_path.read_text(encoding="utf-8").startswith(
+        "## Deep Source/Route Collection Result"
+    )
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["generated_by"] == "bugslyce.deep_source_route_collection"
+    assert isinstance(payload["collected"], list)
+    assert isinstance(payload["skipped"], list)
+    assert "body" not in _walk_keys(payload)
+    assert full_body.decode("utf-8") not in json_path.read_text(encoding="utf-8")
+    assert calls
+    assert all(source == "source_route_coverage" for _, source in calls)
+    assert all("?" not in url for url, _ in calls)
+    assert all("/robots.txt" not in url for url, _ in calls)
+    assert not (input_dir / "deep_source_route_collection").exists()
+    assert not (input_dir / "deep-source-route-collection").exists()
+    assert not (input_dir / "deep_source_route").exists()
+    assert not (input_dir / "deep-source-route").exists()
+    assert not (input_dir / "deep").exists()
+
+
 def test_cli_recon_deep_source_route_collect_missing_input_returns_nonzero(
     tmp_path: Path,
     capsys,
@@ -1523,6 +1611,66 @@ def test_cli_recon_deep_source_route_collect_plan_failure_returns_nonzero(
     assert exit_code == 2
     assert "could not build Deep source/route collection plan" in captured.err
     _assert_deep_source_route_collection_guardrails(captured.err)
+    assert before == after
+
+
+def test_cli_recon_deep_source_route_collect_write_error_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    (input_dir / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    (input_dir / "urls.txt").write_text(
+        "http://10.10.10.10/\nhttp://10.10.10.10/login.php\n",
+        encoding="utf-8",
+    )
+
+    def fake_fetcher(request, _bounds):
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=200,
+            headers=(),
+            body=b"source route body",
+            elapsed_seconds=0.01,
+        )
+
+    def failing_writer(_result, _output_dir):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli_module, "urllib_deep_http_fetcher", fake_fetcher)
+    monkeypatch.setattr(
+        cli_module,
+        "write_deep_source_route_collection_artifacts",
+        failing_writer,
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        [
+            "recon",
+            "deep-source-route-collect",
+            "--input-dir",
+            str(input_dir),
+            "--write-artifacts",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 2
+    assert captured.out.startswith("## Deep Source/Route Collection Result")
+    assert "could not write Deep source/route collection artefacts" in captured.err
+    assert "No crawling was performed." in captured.err
+    assert "No forms were submitted." in captured.err
+    assert "No authentication was attempted." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "No files were written." not in captured.err
     assert before == after
 
 

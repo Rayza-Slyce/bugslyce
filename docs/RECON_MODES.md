@@ -1145,3 +1145,13 @@ crawl, recursively discover, submit forms, authenticate, brute force, inject
 payloads, execute browser JavaScript, collect query-string URLs, confirm
 vulnerabilities, or enable Deep Recon full mode. Deep Recon remains
 unavailable.
+
+Phase 87D keeps `deep-source-route-collect` stdout-only by default and adds
+explicit `--write-artifacts` support. When requested, the command writes only
+`deep_source_route_collection.md` and `deep_source_route_collection.json` into
+the input directory. The JSON stores bounded previews, hashes, byte counts,
+headers, status, timing, source/reason, and evidence IDs, but not full response
+bodies. It does not create nested directories. It does not crawl, recursively
+discover, submit forms, authenticate, brute force, inject payloads, execute
+browser JavaScript, collect query-string URLs, confirm vulnerabilities, or
+enable Deep Recon full mode. Deep Recon remains unavailable.
