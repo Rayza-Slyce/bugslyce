@@ -1155,3 +1155,10 @@ bodies. It does not create nested directories. It does not crawl, recursively
 discover, submit forms, authenticate, brute force, inject payloads, execute
 browser JavaScript, collect query-string URLs, confirm vulnerabilities, or
 enable Deep Recon full mode. Deep Recon remains unavailable.
+
+Phase 88A adds an offline Deep source/route collection review summary. It
+converts collected and skipped source-route evidence into deterministic manual review leads covering redirects, login redirects, cookie-on-redirect signals,
+forbidden admin/status routes, successful routes, repeated body signatures,
+query-string skips, metadata skips, and skip reason counts. It does not fetch anything, load or write files, add CLI exposure, crawl, submit forms,
+authenticate, inject payloads, confirm vulnerabilities, or enable Deep Recon
+full mode. Deep Recon remains unavailable.

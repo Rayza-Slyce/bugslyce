@@ -210,6 +210,17 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "JSON stores bounded previews, hashes, byte counts",
         "not full response bodies",
         "does not create nested directories",
+        "offline Deep source/route collection review summary",
+        "deterministic manual review leads",
+        "login redirects",
+        "cookie-on-redirect signals",
+        "forbidden admin/status routes",
+        "repeated body signatures",
+        "query-string skips",
+        "metadata skips",
+        "skip reason counts",
+        "does not fetch anything",
+        "load or write files",
     ):
         assert expected.lower() in lowered
 

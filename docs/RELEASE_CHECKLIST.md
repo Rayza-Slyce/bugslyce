@@ -242,6 +242,9 @@ bugslyce project run \
 - [ ] `bugslyce recon deep-source-route-collect --write-artifacts` writes only
   `deep_source_route_collection.md` and `deep_source_route_collection.json`,
   without storing full response bodies.
+- [ ] Deep source/route collection review remains offline, model-only, no-IO,
+  and turns source/route evidence into manual review leads without finding
+  claims.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.
