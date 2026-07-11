@@ -221,6 +221,13 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "skip reason counts",
         "does not fetch anything",
         "load or write files",
+        "`bugslyce recon deep-source-route-collection-review --input-dir",
+        "reads the existing `deep_source_route_collection.json` artefact",
+        "reconstructs the Deep source/route collection result",
+        "prints the offline review summary to stdout",
+        "writes no files",
+        "makes no HTTP requests",
+        "modify collection artefacts",
     ):
         assert expected.lower() in lowered
 

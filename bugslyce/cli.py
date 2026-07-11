@@ -140,7 +140,13 @@ from bugslyce.recon.deep_source_route_collector import (
     render_deep_source_route_collection_result_markdown,
 )
 from bugslyce.recon.deep_source_route_collection_export import (
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    load_deep_source_route_collection_result,
     write_deep_source_route_collection_artifacts,
+)
+from bugslyce.recon.deep_source_route_collection_review import (
+    build_deep_source_route_collection_review,
+    render_deep_source_route_collection_review_markdown,
 )
 from bugslyce.recon.executor import (
     build_execution_preview,
@@ -671,6 +677,24 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Existing local BugSlyce project or output directory containing deep_metadata_collection.json.",
+    )
+    deep_source_route_collection_review_parser = recon_subparsers.add_parser(
+        "deep-source-route-collection-review",
+        help=(
+            "Review an existing Deep source/route collection JSON artefact "
+            "without making HTTP requests."
+        ),
+        description=(
+            "Build an offline review summary from deep_source_route_collection.json. "
+            "This command reads an existing local artefact, makes no HTTP "
+            "requests, writes no files, and does not enable full Deep Recon."
+        ),
+    )
+    deep_source_route_collection_review_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory containing deep_source_route_collection.json.",
     )
     plan_parser = recon_subparsers.add_parser(
         "plan",
@@ -1503,6 +1527,36 @@ def _recon(args: argparse.Namespace) -> int:
             return 2
         summary = build_deep_metadata_collection_review(result)
         print(render_deep_metadata_collection_review_markdown(summary))
+        return 0
+
+    if args.recon_command == "deep-source-route-collection-review":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        collection_path = args.input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+        if not collection_path.exists():
+            print(
+                f"Error: {DEEP_SOURCE_ROUTE_COLLECTION_JSON} does not exist: {collection_path}",
+                file=sys.stderr,
+            )
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        try:
+            result = load_deep_source_route_collection_result(collection_path)
+        except (OSError, ValueError) as exc:
+            print(
+                f"Error: could not load deep source/route collection: {exc}",
+                file=sys.stderr,
+            )
+            _print_deep_metadata_collection_review_guardrails()
+            return 2
+        summary = build_deep_source_route_collection_review(result)
+        print(render_deep_source_route_collection_review_markdown(summary))
         return 0
 
     if args.recon_command == "plan":

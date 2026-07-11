@@ -24,6 +24,19 @@ from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectionResult,
     DeepMetadataSkippedItem,
 )
+from bugslyce.recon.deep_source_route_collection_export import (
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    deep_source_route_collection_result_to_dict,
+)
+from bugslyce.recon.deep_source_route_collection_review import (
+    build_deep_source_route_collection_review,
+    render_deep_source_route_collection_review_markdown,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectedItem,
+    DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
+)
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -1850,6 +1863,297 @@ def test_cli_recon_deep_metadata_collection_review_keeps_modes_unchanged() -> No
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is False
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
+def test_cli_recon_deep_source_route_collection_review_help_exits_successfully(
+    capsys,
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-source-route-collection-review", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-source-route-collection-review" in captured.out
+    assert "--input-dir" in captured.out
+    assert "offline" in captured.out
+    assert "no HTTP requests" in captured.out
+    assert "Deep Recon" in captured.out
+    for forbidden in (
+        "--output",
+        "--output-dir",
+        "--write-artifacts",
+        "--json",
+        "--target",
+        "--scope",
+        "--crawl",
+        "--routes",
+        "--auth",
+        "--forms",
+        "--cookies",
+        "--headers",
+        "--payload",
+        "--execute",
+        "--deep",
+        "--force",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_source_route_collection_review_renders_stdout_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    result = _deep_source_route_collection_result()
+    collection_path = input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    collection_path.write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(result)),
+        encoding="utf-8",
+    )
+    expected = render_deep_source_route_collection_review_markdown(
+        build_deep_source_route_collection_review(result)
+    )
+    before = sorted(path.name for path in input_dir.iterdir())
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    after = sorted(path.name for path in input_dir.iterdir())
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.rstrip() == expected
+    assert captured.out.startswith("## Deep Source/Route Collection Review")
+    assert "redirect_to_login" in captured.out
+    assert "cookie_set_on_redirect" in captured.out
+    assert "403_forbidden" in captured.out
+    assert "query_string_route_skipped" in captured.out
+    assert "metadata_request_skipped" in captured.out
+    assert "EVID-PORTAL" in captured.out
+    assert "EVID-SKIP" in captured.out
+    assert "body-preview-portal" not in captured.out
+    assert before == after
+    assert after == [DEEP_SOURCE_ROUTE_COLLECTION_JSON]
+
+
+def test_cli_recon_deep_source_route_collection_review_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(missing)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_recon_deep_source_route_collection_review_missing_json_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "deep_source_route_collection.json does not exist" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert sorted(path.name for path in input_dir.iterdir()) == []
+
+
+def test_cli_recon_deep_source_route_collection_review_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "recon",
+            "deep-source-route-collection-review",
+            "--input-dir",
+            str(input_file),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert input_file.read_text(encoding="utf-8") == "{}"
+
+
+def test_cli_recon_deep_source_route_collection_review_invalid_json_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    collection_path = input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    collection_path.write_text("{not json", encoding="utf-8")
+    before = collection_path.read_text(encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load deep source/route collection" in captured.err
+    assert "No files were written." in captured.err
+    assert "No directories were created." in captured.err
+    assert "No HTTP requests were made." in captured.err
+    assert "Deep Recon full mode was not enabled." in captured.err
+    assert collection_path.read_text(encoding="utf-8") == before
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    ]
+
+
+def test_cli_recon_deep_source_route_collection_review_bad_schema_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    collection_path = input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    payload = deep_source_route_collection_result_to_dict(
+        _deep_source_route_collection_result()
+    )
+    payload["schema_version"] = 2
+    collection_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load deep source/route collection" in captured.err
+    assert "schema_version" in captured.err
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    ]
+
+
+def test_cli_recon_deep_source_route_collection_review_bad_generated_by_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    collection_path = input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    payload = deep_source_route_collection_result_to_dict(
+        _deep_source_route_collection_result()
+    )
+    payload["generated_by"] = "bugslyce.other"
+    collection_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-source-route-collection-review", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load deep source/route collection" in captured.err
+    assert "generated_by" in captured.err
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    ]
+
+
+def _deep_source_route_collection_result() -> DeepSourceRouteCollectionResult:
+    return DeepSourceRouteCollectionResult(
+        collected=(
+            DeepSourceRouteCollectedItem(
+                url="http://example.test/index.html",
+                method="GET",
+                status_code=200,
+                final_url="http://example.test/index.html",
+                headers=(("content-type", "text/html"),),
+                body_preview="body-preview-index",
+                body_sha256="index-hash",
+                body_bytes=128,
+                elapsed_seconds=0.03,
+                source="source_route_coverage",
+                reason="discovered_unfetched_application_route",
+                evidence_ids=("EVID-INDEX",),
+            ),
+            DeepSourceRouteCollectedItem(
+                url="http://example.test/portal.php",
+                method="GET",
+                status_code=302,
+                final_url="http://example.test/portal.php",
+                headers=(
+                    ("Location", "/login.php"),
+                    ("Set-Cookie", "session=redacted; HttpOnly"),
+                ),
+                body_preview="body-preview-portal",
+                body_sha256="portal-hash",
+                body_bytes=0,
+                elapsed_seconds=0.05,
+                source="source_route_coverage",
+                reason="discovered_unfetched_auth_route",
+                evidence_ids=("EVID-PORTAL",),
+            ),
+            DeepSourceRouteCollectedItem(
+                url="http://example.test/server-status",
+                method="GET",
+                status_code=403,
+                final_url="http://example.test/server-status",
+                headers=(("server", "Apache"),),
+                body_preview="body-preview-status",
+                body_sha256="status-hash",
+                body_bytes=64,
+                elapsed_seconds=0.04,
+                source="source_route_coverage",
+                reason="discovered_unfetched_admin_or_status_route",
+                evidence_ids=("EVID-STATUS",),
+            ),
+        ),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="http://example.test/assets?C=N",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-SKIP",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://example.test/robots.txt",
+                method="GET",
+                reason="metadata_request",
+                source="metadata_coverage",
+                evidence_ids=("EVID-META-SKIP",),
+            ),
+        ),
+        total_considered=5,
+        total_collected=3,
+        total_skipped=2,
+    )
 
 
 def _deep_collection_result() -> DeepMetadataCollectionResult:

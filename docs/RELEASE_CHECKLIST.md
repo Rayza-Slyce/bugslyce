@@ -245,6 +245,9 @@ bugslyce project run \
 - [ ] Deep source/route collection review remains offline, model-only, no-IO,
   and turns source/route evidence into manual review leads without finding
   claims.
+- [ ] `bugslyce recon deep-source-route-collection-review --input-dir` reads
+  only `deep_source_route_collection.json`, writes no files, and makes no HTTP
+  requests.
 - [ ] `report.md` is generated.
 - [ ] `runbook.md` is generated.
 - [ ] `project_pipeline.md` and `project_pipeline.json` are generated.

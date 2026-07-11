@@ -10,7 +10,9 @@ import pytest
 from bugslyce.recon.deep_source_route_collection_export import (
     DEEP_SOURCE_ROUTE_COLLECTION_JSON,
     DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
+    deep_source_route_collection_result_from_dict,
     deep_source_route_collection_result_to_dict,
+    load_deep_source_route_collection_result,
     write_deep_source_route_collection_artifacts,
 )
 from bugslyce.recon.deep_source_route_collector import (
@@ -58,6 +60,60 @@ def test_result_to_dict_includes_expected_keys_without_full_body() -> None:
     ]
     assert not _contains_key(payload, "body")
     assert "full response body" not in json.dumps(payload, sort_keys=True)
+
+
+def test_result_from_dict_round_trips_exported_payload(tmp_path: Path) -> None:
+    result = _result()
+    payload = deep_source_route_collection_result_to_dict(result)
+    path = tmp_path / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rebuilt = deep_source_route_collection_result_from_dict(payload)
+    loaded = load_deep_source_route_collection_result(path)
+
+    assert rebuilt == result
+    assert loaded == result
+    assert rebuilt.collected[0].headers == (("content-type", "text/html"),)
+    assert rebuilt.collected[0].evidence_ids == ("EVID-1", "EVID-2")
+    assert rebuilt.skipped[0].evidence_ids == ("EVID-META",)
+
+
+def test_result_from_dict_rejects_bad_schema_generated_by_and_body() -> None:
+    payload = deep_source_route_collection_result_to_dict(_result())
+
+    bad_schema = dict(payload)
+    bad_schema["schema_version"] = True
+    with pytest.raises(ValueError, match="schema_version"):
+        deep_source_route_collection_result_from_dict(bad_schema)
+
+    bad_generated_by = dict(payload)
+    bad_generated_by["generated_by"] = "bugslyce.other"
+    with pytest.raises(ValueError, match="generated_by"):
+        deep_source_route_collection_result_from_dict(bad_generated_by)
+
+    with_body = deep_source_route_collection_result_to_dict(_result())
+    with_body["collected"][0]["body"] = "full response body"
+    with pytest.raises(ValueError, match="full body"):
+        deep_source_route_collection_result_from_dict(with_body)
+
+
+def test_result_from_dict_rejects_malformed_structures() -> None:
+    payload = deep_source_route_collection_result_to_dict(_result())
+
+    missing_list = dict(payload)
+    missing_list["collected"] = {}
+    with pytest.raises(ValueError, match="collected"):
+        deep_source_route_collection_result_from_dict(missing_list)
+
+    bad_headers = deep_source_route_collection_result_to_dict(_result())
+    bad_headers["collected"][0]["headers"] = [["content-type"]]
+    with pytest.raises(ValueError, match="headers"):
+        deep_source_route_collection_result_from_dict(bad_headers)
+
+    bad_elapsed = deep_source_route_collection_result_to_dict(_result())
+    bad_elapsed["collected"][0]["elapsed_seconds"] = False
+    with pytest.raises(ValueError, match="elapsed_seconds"):
+        deep_source_route_collection_result_from_dict(bad_elapsed)
 
 
 def test_write_artifacts_writes_only_expected_files_with_stable_json(

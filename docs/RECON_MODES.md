@@ -1162,3 +1162,12 @@ forbidden admin/status routes, successful routes, repeated body signatures,
 query-string skips, metadata skips, and skip reason counts. It does not fetch anything, load or write files, add CLI exposure, crawl, submit forms,
 authenticate, inject payloads, confirm vulnerabilities, or enable Deep Recon
 full mode. Deep Recon remains unavailable.
+
+Phase 88B exposes the review as
+`bugslyce recon deep-source-route-collection-review --input-dir <local-output-dir>`.
+The command reads the existing `deep_source_route_collection.json` artefact,
+reconstructs the Deep source/route collection result, prints the offline review
+summary to stdout, and writes no files. It makes no HTTP requests and does not
+crawl, submit forms, authenticate, inject payloads, execute browser JavaScript,
+confirm vulnerabilities, modify collection artefacts, or enable Deep Recon full
+mode. Deep Recon remains unavailable.
