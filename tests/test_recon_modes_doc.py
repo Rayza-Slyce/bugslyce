@@ -247,6 +247,15 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "cookie presence, exact body hashes",
         "cautious header observations",
         "does not perform auth-flow analysis or fuzzy similarity grouping",
+        "offline one-hop redirect/auth-flow review model",
+        "existing redirect fingerprint evidence",
+        "relative and absolute Location forms",
+        "same-origin and cross-origin relationships",
+        "lexical auth-looking path transitions",
+        "cookie presence on redirects without retaining cookie values",
+        "strips query values, fragment contents, and URL userinfo",
+        "follows no redirects",
+        "does not attempt authentication",
     ):
         assert expected.lower() in lowered
 

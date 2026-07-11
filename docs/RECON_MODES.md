@@ -1187,3 +1187,5 @@ summarising status, titles observed in bounded previews, content types, servers,
 redirects, cookie presence, exact body hashes, and cautious header observations.
 This phase is model and renderer only: it performs no file or network IO, does not perform auth-flow analysis or fuzzy similarity grouping, and does not enable
 Deep Recon. Deep Recon remains unavailable.
+
+Phase 90B adds an offline one-hop redirect/auth-flow review model and renderer. It reviews existing redirect fingerprint evidence, classifies relative and absolute Location forms, same-origin and cross-origin relationships, lexical auth-looking path transitions, and cookie presence on redirects without retaining cookie values. It strips query values, fragment contents, and URL userinfo from its public model. It follows no redirects, makes no network requests, does not attempt authentication, is model and renderer only, and does not enable Deep Recon. Deep Recon remains unavailable.
