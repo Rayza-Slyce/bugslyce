@@ -72,6 +72,9 @@ def deep_metadata_collection_result_from_dict(
         raise ValueError("schema_version must be integer 1.")
     if schema_version != 1:
         raise ValueError("unsupported deep metadata collection schema_version.")
+    generated_by = payload.get("generated_by")
+    if generated_by != "bugslyce.deep_metadata_collection":
+        raise ValueError("generated_by must be bugslyce.deep_metadata_collection.")
 
     collected_payload = _require_list(payload, "collected")
     skipped_payload = _require_list(payload, "skipped")

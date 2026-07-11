@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 from pathlib import Path
 
@@ -23,6 +24,15 @@ from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectedItem,
     DeepMetadataCollectionResult,
     DeepMetadataSkippedItem,
+)
+from bugslyce.recon.deep_collection_review_bundle import (
+    build_deep_collection_review_bundle,
+    empty_deep_metadata_collection_review_summary,
+    empty_deep_source_route_collection_review_summary,
+    render_deep_collection_review_bundle_markdown,
+)
+from bugslyce.recon.deep_metadata_collection_review import (
+    build_deep_metadata_collection_review,
 )
 from bugslyce.recon.deep_source_route_collection_export import (
     DEEP_SOURCE_ROUTE_COLLECTION_JSON,
@@ -124,6 +134,17 @@ def test_cli_run_help_exits_successfully(capsys) -> None:
     assert exc_info.value.code == 0
     assert "usage: bugslyce run" in captured.out
     assert "--output" in captured.out
+
+
+def test_cli_recon_help_lists_deep_collection_review_bundle(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon" in captured.out
+    assert "deep-collection-review-bundle" in captured.out
 
 
 def test_cli_recon_plan_help_exits_successfully(capsys) -> None:
@@ -2083,6 +2104,354 @@ def test_cli_recon_deep_source_route_collection_review_bad_generated_by_returns_
     assert sorted(path.name for path in input_dir.iterdir()) == [
         DEEP_SOURCE_ROUTE_COLLECTION_JSON
     ]
+
+
+def test_cli_recon_deep_collection_review_bundle_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["recon", "deep-collection-review-bundle", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce recon deep-collection-review-bundle" in captured.out
+    assert "--input-dir" in captured.out
+    assert "unified offline review bundle" in captured.out
+    assert "collection JSON artefacts" in captured.out
+    assert "no HTTP requests" in captured.out
+    assert "Deep Recon" in captured.out
+    for forbidden in (
+        "--output",
+        "--output-dir",
+        "--write-artifacts",
+        "--json",
+        "--target",
+        "--scope",
+        "--crawl",
+        "--routes",
+        "--auth",
+        "--forms",
+        "--cookies",
+        "--headers",
+        "--payload",
+        "--execute",
+        "--deep",
+        "--force",
+    ):
+        assert forbidden not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_loads_both_artifacts_stdout_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    metadata_result = _deep_collection_result()
+    source_result = _deep_source_route_collection_result()
+    _write_collection_payloads(
+        input_dir,
+        metadata_result=metadata_result,
+        source_result=source_result,
+    )
+    expected = _expected_collection_review_bundle_markdown(
+        metadata_result=metadata_result,
+        source_result=source_result,
+    )
+    before_listing = sorted(path.name for path in input_dir.iterdir())
+    before_hashes = _file_hashes(input_dir)
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.rstrip() == expected
+    assert captured.out.startswith("## Deep Collection Review Bundle")
+    assert "Metadata responses collected: 2" in captured.out
+    assert "Source/route responses collected: 3" in captured.out
+    assert "redirect_to_login" in captured.out
+    assert "metadata_found" in captured.out
+    assert sorted(path.name for path in input_dir.iterdir()) == before_listing
+    assert _file_hashes(input_dir) == before_hashes
+
+
+def test_cli_recon_deep_collection_review_bundle_metadata_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    metadata_result = _deep_collection_result()
+    _write_collection_payloads(input_dir, metadata_result=metadata_result)
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "Metadata responses collected: 2" in captured.out
+    assert "Source/route responses collected: 0" in captured.out
+    assert "metadata_found" in captured.out
+    assert "source_route_collection_review" not in captured.out
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_METADATA_COLLECTION_JSON
+    ]
+
+
+def test_cli_recon_deep_collection_review_bundle_source_route_only(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    source_result = _deep_source_route_collection_result()
+    _write_collection_payloads(input_dir, source_result=source_result)
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "Metadata responses collected: 0" in captured.out
+    assert "Source/route responses collected: 3" in captured.out
+    assert "redirect_to_login" in captured.out
+    assert "metadata_collection_review" not in captured.out
+    assert sorted(path.name for path in input_dir.iterdir()) == [
+        DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    ]
+
+
+def test_cli_recon_deep_collection_review_bundle_missing_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(missing)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input directory does not exist" in captured.err
+    _assert_deep_collection_review_bundle_guardrails(captured.err)
+    assert list(tmp_path.iterdir()) == []
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_file_input_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_file = tmp_path / "project_state.json"
+    input_file.write_text("{}", encoding="utf-8")
+    before = input_file.read_text(encoding="utf-8")
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_file)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "input path is not a directory" in captured.err
+    _assert_deep_collection_review_bundle_guardrails(captured.err)
+    assert input_file.read_text(encoding="utf-8") == before
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_no_artifacts_returns_nonzero(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "no supported Deep collection JSON artefacts found" in captured.err
+    _assert_deep_collection_review_bundle_guardrails(captured.err)
+    assert sorted(path.name for path in input_dir.iterdir()) == []
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_malformed_metadata_fails(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    _write_collection_payloads(
+        input_dir,
+        metadata_text="{not json",
+        source_result=_deep_source_route_collection_result(),
+    )
+    before_hashes = _file_hashes(input_dir)
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load Deep collection review bundle inputs" in captured.err
+    _assert_deep_collection_review_bundle_guardrails(captured.err)
+    assert _file_hashes(input_dir) == before_hashes
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_malformed_source_route_fails(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    _write_collection_payloads(
+        input_dir,
+        metadata_result=_deep_collection_result(),
+        source_text="{not json",
+    )
+    before_hashes = _file_hashes(input_dir)
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load Deep collection review bundle inputs" in captured.err
+    _assert_deep_collection_review_bundle_guardrails(captured.err)
+    assert _file_hashes(input_dir) == before_hashes
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_invalid_metadata_schema_fails(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    payload = deep_metadata_collection_result_to_dict(_deep_collection_result())
+    payload["generated_by"] = "bugslyce.other"
+    _write_collection_payloads(
+        input_dir,
+        metadata_text=json.dumps(payload),
+    )
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load Deep collection review bundle inputs" in captured.err
+    assert "generated_by" in captured.err
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_invalid_source_schema_fails(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = tmp_path / "project"
+    input_dir.mkdir()
+    payload = deep_source_route_collection_result_to_dict(
+        _deep_source_route_collection_result()
+    )
+    payload["schema_version"] = 2
+    _write_collection_payloads(
+        input_dir,
+        source_text=json.dumps(payload),
+    )
+
+    exit_code = main(
+        ["recon", "deep-collection-review-bundle", "--input-dir", str(input_dir)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "could not load Deep collection review bundle inputs" in captured.err
+    assert "schema_version" in captured.err
+    assert "## Deep Collection Review Bundle" not in captured.out
+
+
+def test_cli_recon_deep_collection_review_bundle_keeps_modes_unchanged() -> None:
+    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
+    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
+    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+    assert is_recon_mode_available("deep") is False
+    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+
+
+def _write_collection_payloads(
+    input_dir: Path,
+    *,
+    metadata_result: DeepMetadataCollectionResult | None = None,
+    source_result: DeepSourceRouteCollectionResult | None = None,
+    metadata_text: str | None = None,
+    source_text: str | None = None,
+) -> None:
+    if metadata_result is not None:
+        metadata_text = json.dumps(
+            deep_metadata_collection_result_to_dict(metadata_result)
+        )
+    if source_result is not None:
+        source_text = json.dumps(
+            deep_source_route_collection_result_to_dict(source_result)
+        )
+    if metadata_text is not None:
+        (input_dir / DEEP_METADATA_COLLECTION_JSON).write_text(
+            metadata_text,
+            encoding="utf-8",
+        )
+    if source_text is not None:
+        (input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON).write_text(
+            source_text,
+            encoding="utf-8",
+        )
+
+
+def _expected_collection_review_bundle_markdown(
+    *,
+    metadata_result: DeepMetadataCollectionResult | None = None,
+    source_result: DeepSourceRouteCollectionResult | None = None,
+) -> str:
+    if metadata_result is None:
+        metadata_review = empty_deep_metadata_collection_review_summary()
+    else:
+        metadata_review = build_deep_metadata_collection_review(metadata_result)
+    if source_result is None:
+        source_review = empty_deep_source_route_collection_review_summary()
+    else:
+        source_review = build_deep_source_route_collection_review(source_result)
+    return render_deep_collection_review_bundle_markdown(
+        build_deep_collection_review_bundle(metadata_review, source_review)
+    )
+
+
+def _file_hashes(directory: Path) -> dict[str, str]:
+    return {
+        path.name: sha256(path.read_bytes()).hexdigest()
+        for path in sorted(directory.iterdir())
+        if path.is_file()
+    }
+
+
+def _assert_deep_collection_review_bundle_guardrails(stderr: str) -> None:
+    assert "No files were written." in stderr
+    assert "No directories were created." in stderr
+    assert "No HTTP requests were made." in stderr
+    assert "No collection was performed." in stderr
+    assert "Deep Recon full mode was not enabled." in stderr
 
 
 def _deep_source_route_collection_result() -> DeepSourceRouteCollectionResult:

@@ -1175,3 +1175,8 @@ mode. Deep Recon remains unavailable.
 Phase 89A adds an offline Deep post-collection review bundle model. It combines
 existing metadata and source/route collection review summaries into bounded unified review priorities. This phase is model and renderer only: it performs no file or network IO, does not add CLI exposure, does not call collectors, and
 does not enable Deep Recon. Deep Recon remains unavailable.
+
+Phase 89B exposes the bundle as
+`bugslyce recon deep-collection-review-bundle --input-dir <local-output-dir>`.
+The command reads existing Deep collection JSON artefacts, supports either or both metadata and source/route collection artefacts, prints the unified review bundle to stdout, writes no files, makes no network requests, and does not
+enable Deep Recon. Deep Recon remains unavailable.

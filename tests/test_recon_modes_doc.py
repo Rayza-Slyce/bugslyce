@@ -234,6 +234,12 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "model and renderer only",
         "performs no file or network IO",
         "does not call collectors",
+        "`bugslyce recon deep-collection-review-bundle --input-dir",
+        "reads existing Deep collection JSON artefacts",
+        "supports either or both metadata and source/route collection artefacts",
+        "prints the unified review bundle to stdout",
+        "writes no files",
+        "makes no network requests",
     ):
         assert expected.lower() in lowered
 

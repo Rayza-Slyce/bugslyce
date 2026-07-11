@@ -152,6 +152,33 @@ def build_deep_collection_review_bundle(
     )
 
 
+def empty_deep_metadata_collection_review_summary() -> DeepMetadataCollectionReviewSummary:
+    """Return a valid empty Deep metadata collection review summary."""
+
+    return DeepMetadataCollectionReviewSummary(
+        total_collected=0,
+        total_skipped=0,
+        status_buckets=(),
+        duplicate_body_signatures=(),
+        leads=(),
+        skip_reasons=(),
+    )
+
+
+def empty_deep_source_route_collection_review_summary() -> DeepSourceRouteCollectionReviewSummary:
+    """Return a valid empty Deep source/route collection review summary."""
+
+    return DeepSourceRouteCollectionReviewSummary(
+        total_collected=0,
+        total_skipped=0,
+        status_buckets=(),
+        body_signatures=(),
+        skip_reasons=(),
+        review_leads=(),
+        safety_notes=(),
+    )
+
+
 def render_deep_collection_review_bundle_markdown(
     bundle: DeepCollectionReviewBundle,
 ) -> str:

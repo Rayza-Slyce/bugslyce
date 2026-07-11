@@ -93,6 +93,12 @@ from bugslyce.recon.deep_metadata_plan import (
 from bugslyce.recon.deep_collection_request_plan import (
     build_deep_collection_request_plan_from_project_state,
 )
+from bugslyce.recon.deep_collection_review_bundle import (
+    build_deep_collection_review_bundle,
+    empty_deep_metadata_collection_review_summary,
+    empty_deep_source_route_collection_review_summary,
+    render_deep_collection_review_bundle_markdown,
+)
 from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
 from bugslyce.recon.deep_metadata_collector import (
     collect_deep_metadata_from_plan,
@@ -696,6 +702,25 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Existing local BugSlyce project or output directory containing deep_source_route_collection.json.",
     )
+    deep_collection_review_bundle_parser = recon_subparsers.add_parser(
+        "deep-collection-review-bundle",
+        help=(
+            "Build a unified offline review bundle from existing Deep "
+            "collection JSON artefacts."
+        ),
+        description=(
+            "Build a unified offline review bundle from existing Deep "
+            "collection JSON artefacts. This command reads existing local "
+            "artefacts, supports either or both collection artefacts, makes no "
+            "HTTP requests, writes no files, and does not enable full Deep Recon."
+        ),
+    )
+    deep_collection_review_bundle_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing local BugSlyce project or output directory containing Deep collection JSON artefacts.",
+    )
     plan_parser = recon_subparsers.add_parser(
         "plan",
         help="Create a planning-only recon plan.",
@@ -1070,6 +1095,14 @@ def _print_deep_metadata_collection_review_guardrails() -> None:
     print("No files were written.", file=sys.stderr)
     print("No directories were created.", file=sys.stderr)
     print("No HTTP requests were made.", file=sys.stderr)
+    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+
+
+def _print_deep_collection_review_bundle_guardrails() -> None:
+    print("No files were written.", file=sys.stderr)
+    print("No directories were created.", file=sys.stderr)
+    print("No HTTP requests were made.", file=sys.stderr)
+    print("No collection was performed.", file=sys.stderr)
     print("Deep Recon full mode was not enabled.", file=sys.stderr)
 
 
@@ -1557,6 +1590,61 @@ def _recon(args: argparse.Namespace) -> int:
             return 2
         summary = build_deep_source_route_collection_review(result)
         print(render_deep_source_route_collection_review_markdown(summary))
+        return 0
+
+    if args.recon_command == "deep-collection-review-bundle":
+        if not args.input_dir.exists():
+            print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
+            _print_deep_collection_review_bundle_guardrails()
+            return 2
+        if not args.input_dir.is_dir():
+            print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
+            _print_deep_collection_review_bundle_guardrails()
+            return 2
+
+        metadata_path = args.input_dir / DEEP_METADATA_COLLECTION_JSON
+        source_route_path = args.input_dir / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+        metadata_exists = metadata_path.exists()
+        source_route_exists = source_route_path.exists()
+        if not metadata_exists and not source_route_exists:
+            print(
+                "Error: no supported Deep collection JSON artefacts found in "
+                f"{args.input_dir}. Expected {DEEP_METADATA_COLLECTION_JSON} "
+                f"or {DEEP_SOURCE_ROUTE_COLLECTION_JSON}.",
+                file=sys.stderr,
+            )
+            _print_deep_collection_review_bundle_guardrails()
+            return 2
+
+        try:
+            if metadata_exists:
+                metadata_result = load_deep_metadata_collection_result(metadata_path)
+                metadata_review = build_deep_metadata_collection_review(metadata_result)
+            else:
+                metadata_review = empty_deep_metadata_collection_review_summary()
+
+            if source_route_exists:
+                source_route_result = load_deep_source_route_collection_result(
+                    source_route_path
+                )
+                source_route_review = build_deep_source_route_collection_review(
+                    source_route_result
+                )
+            else:
+                source_route_review = empty_deep_source_route_collection_review_summary()
+        except (OSError, ValueError) as exc:
+            print(
+                f"Error: could not load Deep collection review bundle inputs: {exc}",
+                file=sys.stderr,
+            )
+            _print_deep_collection_review_bundle_guardrails()
+            return 2
+
+        bundle = build_deep_collection_review_bundle(
+            metadata_review,
+            source_route_review,
+        )
+        print(render_deep_collection_review_bundle_markdown(bundle))
         return 0
 
     if args.recon_command == "plan":

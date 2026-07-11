@@ -132,6 +132,8 @@ def test_result_from_dict_rejects_missing_or_unsupported_schema() -> None:
     unsupported["schema_version"] = 2
     boolean_schema = dict(payload)
     boolean_schema["schema_version"] = True
+    wrong_generator = dict(payload)
+    wrong_generator["generated_by"] = "bugslyce.other"
 
     with pytest.raises(ValueError, match="schema_version"):
         deep_metadata_collection_result_from_dict(missing)
@@ -139,6 +141,8 @@ def test_result_from_dict_rejects_missing_or_unsupported_schema() -> None:
         deep_metadata_collection_result_from_dict(unsupported)
     with pytest.raises(ValueError, match="schema_version"):
         deep_metadata_collection_result_from_dict(boolean_schema)
+    with pytest.raises(ValueError, match="generated_by"):
+        deep_metadata_collection_result_from_dict(wrong_generator)
 
 
 def test_result_from_dict_rejects_boolean_numeric_fields() -> None:
