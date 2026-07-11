@@ -228,6 +228,12 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "writes no files",
         "makes no HTTP requests",
         "modify collection artefacts",
+        "offline Deep post-collection review bundle model",
+        "existing metadata and source/route collection review summaries",
+        "bounded unified review priorities",
+        "model and renderer only",
+        "performs no file or network IO",
+        "does not call collectors",
     ):
         assert expected.lower() in lowered
 

@@ -1171,3 +1171,7 @@ summary to stdout, and writes no files. It makes no HTTP requests and does not
 crawl, submit forms, authenticate, inject payloads, execute browser JavaScript,
 confirm vulnerabilities, modify collection artefacts, or enable Deep Recon full
 mode. Deep Recon remains unavailable.
+
+Phase 89A adds an offline Deep post-collection review bundle model. It combines
+existing metadata and source/route collection review summaries into bounded unified review priorities. This phase is model and renderer only: it performs no file or network IO, does not add CLI exposure, does not call collectors, and
+does not enable Deep Recon. Deep Recon remains unavailable.
