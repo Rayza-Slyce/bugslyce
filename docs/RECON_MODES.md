@@ -1180,3 +1180,10 @@ Phase 89B exposes the bundle as
 `bugslyce recon deep-collection-review-bundle --input-dir <local-output-dir>`.
 The command reads existing Deep collection JSON artefacts, supports either or both metadata and source/route collection artefacts, prints the unified review bundle to stdout, writes no files, makes no network requests, and does not
 enable Deep Recon. Deep Recon remains unavailable.
+
+Phase 90A adds an offline Deep HTTP fingerprint summary model and renderer. It
+classifies already-collected metadata and source/route HTTP response evidence,
+summarising status, titles observed in bounded previews, content types, servers,
+redirects, cookie presence, exact body hashes, and cautious header observations.
+This phase is model and renderer only: it performs no file or network IO, does not perform auth-flow analysis or fuzzy similarity grouping, and does not enable
+Deep Recon. Deep Recon remains unavailable.

@@ -240,6 +240,13 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "prints the unified review bundle to stdout",
         "writes no files",
         "makes no network requests",
+        "offline Deep HTTP fingerprint summary model",
+        "already-collected metadata and source/route HTTP response evidence",
+        "titles observed in bounded previews",
+        "content types, servers",
+        "cookie presence, exact body hashes",
+        "cautious header observations",
+        "does not perform auth-flow analysis or fuzzy similarity grouping",
     ):
         assert expected.lower() in lowered
 
