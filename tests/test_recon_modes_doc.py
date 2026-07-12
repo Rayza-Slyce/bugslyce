@@ -295,6 +295,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "does not submit forms or mutate parameters",
         "bounded response summaries and in-memory full bodies",
         "adds no export or CLI seam",
+        "offline Deep form inventory model",
+        "original and shallow-follow-up HTML bodies",
+        "uses full in-memory bodies rather than previews",
+        "sanitised action, method, enctype, target kind",
+        "aggregate control-type/count metadata",
+        "without retaining field names or values",
+        "does not submit forms or fetch actions",
+        "performs no network or file IO",
+        "adds no CLI, export, report, or orchestration seam",
+        "individual parameter-name inventory to Phase 92B",
     ):
         assert expected.lower() in lowered
 

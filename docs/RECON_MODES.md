@@ -1239,3 +1239,12 @@ It does not submit forms or mutate parameters.
 It retains bounded response summaries and in-memory full bodies for later
 offline phases, adds no export or CLI seam, and does not enable Deep Recon.
 Deep Recon remains unavailable.
+
+Phase 92A adds an offline Deep form inventory model and renderer. It
+inventories form structures from original and shallow-follow-up HTML bodies
+already held in memory and uses full in-memory bodies rather than previews. It
+records sanitised action, method, enctype, target kind, and aggregate control-type/count metadata
+without retaining field names or values. It does not submit forms or fetch actions,
+performs no network or file IO, adds no CLI, export, report, or orchestration seam,
+leaves individual parameter-name inventory to Phase 92B, and does not enable Deep Recon. Deep Recon remains
+unavailable.
