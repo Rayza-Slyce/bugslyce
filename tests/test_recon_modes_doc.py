@@ -256,6 +256,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "strips query values, fragment contents, and URL userinfo",
         "follows no redirects",
         "does not attempt authentication",
+        "offline Deep response similarity review model",
+        "groups existing HTTP fingerprints using conservative deterministic",
+        "carries forward exact repeated-body groups",
+        "groups repeated redirect patterns",
+        "groups repeated client-error and response signatures",
+        "candidate default/template patterns",
+        "unique ungrouped 2xx responses for comparison",
+        "does not fetch responses or follow redirects",
+        "does not confirm soft 404s",
+        "default pages, or semantic identity",
     ):
         assert expected.lower() in lowered
 
