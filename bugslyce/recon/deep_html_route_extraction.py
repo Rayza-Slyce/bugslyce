@@ -143,14 +143,14 @@ class _AcceptedOccurrence:
 @dataclass(frozen=True)
 class _ParsedHtml:
     references: tuple[_ParsedReference, ...]
-    base_href: str | None
+    base_hrefs: tuple[str, ...]
 
 
 class _RouteHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.references: list[_ParsedReference] = []
-        self.base_href: str | None = None
+        self.base_hrefs: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._handle_tag(tag, attrs)
@@ -165,10 +165,10 @@ class _RouteHtmlParser(HTMLParser):
             for name, value in attrs
             if name
         }
-        if tag_name == "base" and self.base_href is None:
+        if tag_name == "base":
             value = (attrs_by_name.get("href") or "").strip()
             if value:
-                self.base_href = value
+                self.base_hrefs.append(value)
         for attr_name, value in attrs_by_name.items():
             if (tag_name, attr_name) not in ALLOWED_ROUTE_ATTRIBUTES:
                 continue
@@ -200,7 +200,7 @@ def build_deep_html_route_extraction(
 
     for document in selected:
         parsed = _parse_html(document.body_text)
-        base_url, base_used = _resolution_base(document, parsed.base_href)
+        base_url, base_used = _resolution_base(document, parsed.base_hrefs)
         if base_used:
             base_used_count += 1
         for reference in parsed.references:
@@ -364,20 +364,35 @@ def _parse_html(body_text: str) -> _ParsedHtml:
         parser.feed(body_text)
         parser.close()
     except Exception:
-        return _ParsedHtml(references=(), base_href=None)
+        return _ParsedHtml(references=(), base_hrefs=())
     return _ParsedHtml(
         references=tuple(parser.references),
-        base_href=parser.base_href,
+        base_hrefs=tuple(parser.base_hrefs),
     )
 
 
-def _resolution_base(document: _SourceDocument, base_href: str | None) -> tuple[str, bool]:
-    if base_href:
-        resolved = _resolve_reference(document.item.url, base_href)
-        safe = _safe_url(resolved)
-        if safe != "unresolved":
+def _resolution_base(document: _SourceDocument, base_hrefs: tuple[str, ...]) -> tuple[str, bool]:
+    for base_href in base_hrefs:
+        resolved = _resolved_valid_base(document.item.url, base_href)
+        if resolved is not None:
             return resolved, True
     return document.item.url, False
+
+
+def _resolved_valid_base(document_url: str, base_href: str) -> str | None:
+    try:
+        stripped = base_href.strip()
+        if not stripped or stripped.startswith(":"):
+            return None
+        parsed = urlparse(stripped)
+        if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+            return None
+        resolved = urljoin(document_url, stripped)
+        if _safe_url(resolved) == "unresolved":
+            return None
+        return resolved
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_routes(

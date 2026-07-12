@@ -1212,3 +1212,15 @@ It does not fetch or follow extracted routes.
 It does not inspect JavaScript contents and does not inventory forms. It
 performs no file or network IO, is model and renderer only, and does not enable
 Deep Recon. Deep Recon remains unavailable.
+
+Phase 91B adds an offline Deep JavaScript route extraction model and renderer.
+It lexically inspects full JavaScript response bodies and inline JavaScript
+already retained in memory. It does not use bounded previews as extraction input.
+It extracts complete static route-like string literals.
+It does not execute JavaScript or evaluate expressions.
+It skips dynamic templates and concatenated partial strings.
+It sanitises URL credentials, query values, and fragment contents, and retains
+ambiguous relative strings without assuming browser execution context.
+It aggregates duplicate candidates deterministically, does not fetch or follow
+extracted routes, performs no file or network IO, is model and renderer only,
+and does not enable Deep Recon. Deep Recon remains unavailable.

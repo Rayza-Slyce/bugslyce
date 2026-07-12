@@ -227,6 +227,18 @@ def test_base_href_rules() -> None:
     ignored = build_deep_html_route_extraction(
         _result(_item(body=b"<html><base href='javascript:void(0)'><a href='local'>local</a>"))
     )
+    invalid_then_valid = build_deep_html_route_extraction(
+        _result(_item(body=b"<html><base href='javascript:void(0)'><base href='/valid/'><a href='x'>x</a>"))
+    )
+    malformed_then_valid = build_deep_html_route_extraction(
+        _result(_item(body=b"<html><base href='://malformed'><base href='https://cdn.example.test/assets/'><script src='app.js'></script>"))
+    )
+    invalid_authority_then_valid = build_deep_html_route_extraction(
+        _result(_item(body=b"<html><base href='http://[invalid'><base href='/valid/'><a href='route'>route</a>"))
+    )
+    invalid_authority_fallback = build_deep_html_route_extraction(
+        _result(_item(body=b"<html><base href='https://[2001:db8::1'><a href='route'>route</a>"))
+    )
     first_only = build_deep_html_route_extraction(
         _result(_item(body=b"<html><base href='/first/'><base href='/second/'><a href='x'>x</a>"))
     )
@@ -236,6 +248,12 @@ def test_base_href_rules() -> None:
     assert valid_cross.routes[0].safe_resolved_url == "https://cdn.example.test/assets/app.js"
     assert valid_cross.routes[0].origin_relationship == "cross_origin"
     assert ignored.routes[0].safe_resolved_url == "http://example.test/local"
+    assert invalid_then_valid.routes[0].safe_resolved_url == "http://example.test/valid/x"
+    assert malformed_then_valid.routes[0].safe_resolved_url == "https://cdn.example.test/assets/app.js"
+    assert invalid_authority_then_valid.routes[0].safe_resolved_url == "http://example.test/valid/route"
+    assert invalid_authority_then_valid.summary_counts.responses_using_valid_html_base_url == 1
+    assert invalid_authority_fallback.routes[0].safe_resolved_url == "http://example.test/route"
+    assert invalid_authority_fallback.summary_counts.responses_using_valid_html_base_url == 0
     assert first_only.routes[0].safe_resolved_url == "http://example.test/first/x"
     assert all("base[" not in repr(route) for route in first_only.routes)
 

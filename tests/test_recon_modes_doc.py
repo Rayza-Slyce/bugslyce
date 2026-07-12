@@ -276,6 +276,15 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "does not fetch or follow extracted routes",
         "does not inspect JavaScript contents",
         "does not inventory forms",
+        "offline Deep JavaScript route extraction model",
+        "lexically inspects full JavaScript response bodies and inline JavaScript",
+        "does not use bounded previews as extraction input",
+        "complete static route-like string literals",
+        "does not execute JavaScript or evaluate expressions",
+        "skips dynamic templates and concatenated partial strings",
+        "sanitises URL credentials, query values, and fragment",
+        "ambiguous relative strings without assuming browser",
+        "aggregates duplicate candidates deterministically",
     ):
         assert expected.lower() in lowered
 
