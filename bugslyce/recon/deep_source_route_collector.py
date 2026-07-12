@@ -10,7 +10,7 @@ mode.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from urllib.parse import urlparse
 
@@ -42,7 +42,7 @@ SAFETY_NOTES = (
 
 @dataclass(frozen=True)
 class DeepSourceRouteCollectedItem:
-    """Collected source/route response summary without storing the full body."""
+    """Collected source/route response summary with in-memory full body."""
 
     url: str
     method: str
@@ -56,6 +56,7 @@ class DeepSourceRouteCollectedItem:
     source: str
     reason: str
     evidence_ids: tuple[str, ...]
+    body: bytes = field(default=b"", repr=False)
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def collect_deep_source_routes_from_plan(
                 source=request.source,
                 reason=request.reason,
                 evidence_ids=tuple(_dedupe(list(request.evidence_ids))),
+                body=body,
             )
         )
 

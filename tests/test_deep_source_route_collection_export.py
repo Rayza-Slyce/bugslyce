@@ -145,6 +145,36 @@ def test_write_artifacts_writes_only_expected_files_with_stable_json(
     assert not (tmp_path / "deep").exists()
 
 
+def test_export_omits_in_memory_full_body_and_loader_rebuilds_empty_body(
+    tmp_path: Path,
+) -> None:
+    secret = "FULL_BODY_EXPORT_SECRET_NOT_ALLOWED"
+    result = _result(body=f"<html>{secret}</html>".encode())
+
+    payload = deep_source_route_collection_result_to_dict(result)
+    markdown_path, json_path = write_deep_source_route_collection_artifacts(
+        result,
+        tmp_path,
+    )
+    json_text = json_path.read_text(encoding="utf-8")
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    loaded = load_deep_source_route_collection_result(json_path)
+
+    assert payload["schema_version"] == 1
+    assert payload["generated_by"] == "bugslyce.deep_source_route_collection"
+    assert not _contains_key(payload, "body")
+    assert secret not in repr(payload)
+    assert '"body"' not in json_text
+    assert secret not in json_text
+    assert secret not in markdown_text
+    assert loaded.collected[0].body == b""
+
+    with_body = deep_source_route_collection_result_to_dict(result)
+    with_body["collected"][0]["body"] = secret
+    with pytest.raises(ValueError, match="full body"):
+        deep_source_route_collection_result_from_dict(with_body)
+
+
 def test_write_artifacts_rejects_missing_or_file_output_dir(tmp_path: Path) -> None:
     result = _result()
     missing = tmp_path / "missing"
@@ -162,7 +192,7 @@ def test_write_artifacts_rejects_missing_or_file_output_dir(tmp_path: Path) -> N
     assert not (tmp_path / DEEP_SOURCE_ROUTE_COLLECTION_JSON).exists()
 
 
-def _result() -> DeepSourceRouteCollectionResult:
+def _result(body: bytes = b"") -> DeepSourceRouteCollectionResult:
     return DeepSourceRouteCollectionResult(
         collected=(
             DeepSourceRouteCollectedItem(
@@ -178,6 +208,7 @@ def _result() -> DeepSourceRouteCollectionResult:
                 source="source_route_coverage",
                 reason="discovered_unfetched_auth_route",
                 evidence_ids=("EVID-1", "EVID-2"),
+                body=body,
             ),
         ),
         skipped=(

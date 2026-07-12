@@ -147,7 +147,7 @@ def test_head_response_with_empty_body_is_collected_safely() -> None:
     assert "Body preview:" not in rendered
 
 
-def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> None:
+def test_collected_item_has_bounded_preview_hash_headers_and_in_memory_body() -> None:
     body = ("source-body-" * 80).encode()
     request = _request(
         "http://example.test/login.php",
@@ -166,13 +166,38 @@ def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> N
     )
 
     item = result.collected[0]
-    assert not hasattr(item, "body")
+    assert item.body == body
     assert item.body_bytes == len(body)
     assert len(item.body_preview) == 500
     assert item.body_sha256 == sha256(body).hexdigest()
     assert item.headers == (("content-type", "text/html"),)
     assert item.elapsed_seconds == 0.42
     assert item.evidence_ids == ("EVID-1", "EVID-2")
+
+
+def test_full_body_is_available_but_not_represented_or_rendered() -> None:
+    secret = "FULL_BODY_SECRET_NOT_IN_PREVIEW"
+    body = ("<html>" + ("A" * 600) + secret + "</html>").encode()
+    request = _request("http://example.test/full", source="source_route_coverage")
+
+    result = collect_deep_source_routes_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=_fake_fetcher(
+            [],
+            body=body,
+            headers=(("content-type", "text/html"),),
+        ),
+    )
+
+    item = result.collected[0]
+    rendered = render_deep_source_route_collection_result_markdown(result)
+
+    assert item.body == body
+    assert secret not in item.body_preview
+    assert secret not in repr(item)
+    assert secret not in repr(result)
+    assert secret not in rendered
+    assert "body=" not in repr(item)
 
 
 def test_renderer_compacts_preview_without_changing_collected_item() -> None:

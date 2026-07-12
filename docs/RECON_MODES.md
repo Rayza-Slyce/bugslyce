@@ -1201,3 +1201,14 @@ It does not fetch responses or follow redirects.
 It does not confirm soft 404s, default pages, or semantic identity.
 It is model and renderer only, and does not enable Deep Recon. Deep Recon
 remains unavailable.
+
+Phase 91A adds an offline Deep HTML route extraction model and renderer. It
+parses full HTML bodies already retained by in-memory Deep collection results
+and does not use truncated previews as extraction input. It extracts static
+allowlisted `href`, `src`, and `data` references.
+It resolves and sanitises HTTP/HTTPS routes, strips URL credentials, query values, and fragment contents,
+and groups duplicate references deterministically.
+It does not fetch or follow extracted routes.
+It does not inspect JavaScript contents and does not inventory forms. It
+performs no file or network IO, is model and renderer only, and does not enable
+Deep Recon. Deep Recon remains unavailable.

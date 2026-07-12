@@ -266,6 +266,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "does not fetch responses or follow redirects",
         "does not confirm soft 404s",
         "default pages, or semantic identity",
+        "offline Deep HTML route extraction model",
+        "parses full HTML bodies already retained by in-memory Deep collection results",
+        "does not use truncated previews as extraction input",
+        "allowlisted `href`, `src`, and `data` references",
+        "resolves and sanitises HTTP/HTTPS routes",
+        "strips URL credentials, query values, and fragment contents",
+        "groups duplicate references deterministically",
+        "does not fetch or follow extracted routes",
+        "does not inspect JavaScript contents",
+        "does not inventory forms",
     ):
         assert expected.lower() in lowered
 
