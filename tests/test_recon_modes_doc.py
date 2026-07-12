@@ -285,6 +285,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "sanitises URL credentials, query values, and fragment",
         "ambiguous relative strings without assuming browser",
         "aggregates duplicate candidates deterministically",
+        "bounded Deep shallow route follow-up model",
+        "deterministic bounded plan from same-origin 91A and 91B routes",
+        "removes query strings from actual request URLs",
+        "query parameter names as metadata only",
+        "one shallow `GET` pass through an injected bounded fetcher",
+        "makes no recursive requests",
+        "does not manually follow redirects",
+        "does not submit forms or mutate parameters",
+        "bounded response summaries and in-memory full bodies",
+        "adds no export or CLI seam",
     ):
         assert expected.lower() in lowered
 

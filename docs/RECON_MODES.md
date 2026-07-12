@@ -1224,3 +1224,18 @@ ambiguous relative strings without assuming browser execution context.
 It aggregates duplicate candidates deterministically, does not fetch or follow
 extracted routes, performs no file or network IO, is model and renderer only,
 and does not enable Deep Recon. Deep Recon remains unavailable.
+
+Phase 91C adds a bounded Deep shallow route follow-up model, planner,
+collector, and renderer.
+It builds a deterministic bounded plan from same-origin 91A and 91B routes.
+It removes query strings from actual request URLs because
+query values were deliberately not retained.
+It preserves observed query parameter names as metadata only.
+It performs one shallow `GET` pass through an injected bounded fetcher,
+makes no recursive requests, and does not crawl.
+It does not manually follow redirects.
+It does not execute JavaScript.
+It does not submit forms or mutate parameters.
+It retains bounded response summaries and in-memory full bodies for later
+offline phases, adds no export or CLI seam, and does not enable Deep Recon.
+Deep Recon remains unavailable.
