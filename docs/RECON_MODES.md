@@ -1248,3 +1248,12 @@ without retaining field names or values. It does not submit forms or fetch actio
 performs no network or file IO, adds no CLI, export, report, or orchestration seam,
 leaves individual parameter-name inventory to Phase 92B, and does not enable Deep Recon. Deep Recon remains
 unavailable.
+
+Phase 92B adds an offline Deep parameter-name inventory model and renderer. It
+inventories parameter names from original and shallow HTML form controls,
+form-action queries, route-extraction metadata, and collected URL metadata. It
+uses full in-memory HTML bodies rather than previews, preserves case-sensitive names,
+aggregates contexts and provenance deterministically, and retains names only and never values.
+It performs no replay, guessing, mutation, submission, action fetching, network or file IO,
+adds no CLI, export, report, or orchestration seam, and does not enable Deep Recon. Deep Recon remains
+unavailable.

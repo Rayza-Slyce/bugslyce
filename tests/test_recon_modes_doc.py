@@ -305,6 +305,16 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "performs no network or file IO",
         "adds no CLI, export, report, or orchestration seam",
         "individual parameter-name inventory to Phase 92B",
+        "offline Deep parameter-name inventory model",
+        "original and shallow HTML form controls",
+        "form-action queries, route-extraction metadata",
+        "collected URL metadata",
+        "uses full in-memory HTML bodies rather than previews",
+        "preserves case-sensitive names",
+        "aggregates contexts and provenance deterministically",
+        "retains names only and never values",
+        "performs no replay, guessing, mutation, submission",
+        "action fetching, network or file IO",
     ):
         assert expected.lower() in lowered
 
