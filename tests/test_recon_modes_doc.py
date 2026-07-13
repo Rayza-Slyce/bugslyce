@@ -325,6 +325,11 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "does not discover, build, parse, or render Deep results",
         "pipeline orchestration",
         "adds no CLI option",
+        "deterministic orchestration over already-completed bounded Deep",
+        "composes existing offline Deep review stages",
+        "produces report, runbook, and explicit evidence-pack payloads",
+        "collection or network requests itself",
+        "adds no CLI or automatic pipeline",
     ):
         assert expected.lower() in lowered
 
