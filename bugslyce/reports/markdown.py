@@ -43,6 +43,7 @@ def render_markdown_report(
     *,
     human_triage_brief_markdown: str | None = None,
     manual_review_leads_markdown: str | None = None,
+    deep_recon_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
@@ -63,6 +64,9 @@ def render_markdown_report(
     _operator_summary(lines, project_state, candidates)
     _optional_prerendered_section(lines, human_triage_brief_markdown)
     _manual_review_leads_section(lines, manual_review_leads_markdown)
+    # Phase 93A: already-rendered Deep Markdown belongs at the same report seam
+    # as manual-review content, immediately after Manual Review Leads when present.
+    _optional_prerendered_section(lines, deep_recon_markdown)
     _investigation_threads_section(lines, investigation_threads_markdown)
     _route_source_review_section(lines, route_source_review_markdown)
     _optional_prerendered_section(lines, readable_evidence_cards_markdown)
@@ -142,6 +146,7 @@ def write_project_outputs(
     *,
     human_triage_brief_markdown: str | None = None,
     manual_review_leads_markdown: str | None = None,
+    deep_recon_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
@@ -158,6 +163,7 @@ def write_project_outputs(
             candidates,
             human_triage_brief_markdown=human_triage_brief_markdown,
             manual_review_leads_markdown=manual_review_leads_markdown,
+            deep_recon_markdown=deep_recon_markdown,
             investigation_threads_markdown=investigation_threads_markdown,
             route_source_review_markdown=route_source_review_markdown,
             readable_evidence_cards_markdown=readable_evidence_cards_markdown,

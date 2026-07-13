@@ -315,6 +315,10 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "retains names only and never values",
         "performs no replay, guessing, mutation, submission",
         "action fetching, network or file IO",
+        "optional report-rendering seam for already-rendered Deep",
+        "When the seam is unused, the report is unchanged",
+        "does not build, collect, read, or render Deep results itself",
+        "evidence-pack, runbook, or orchestration integration",
     ):
         assert expected.lower() in lowered
 

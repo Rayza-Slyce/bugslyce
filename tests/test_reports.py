@@ -184,6 +184,106 @@ def test_report_ignores_whitespace_only_manual_review_section() -> None:
     assert report.index("## Operator Summary") < report.index("## Scope Summary")
 
 
+def test_deep_recon_markdown_omission_none_empty_and_whitespace_are_unchanged() -> None:
+    baseline, state, candidates = _basic_saas_report()
+
+    assert render_markdown_report(state, candidates) == baseline
+    assert render_markdown_report(state, candidates, deep_recon_markdown=None) == baseline
+    assert render_markdown_report(state, candidates, deep_recon_markdown="") == baseline
+    assert render_markdown_report(state, candidates, deep_recon_markdown="   \n\t") == baseline
+
+
+def test_report_inserts_deep_recon_markdown_once_as_opaque_block() -> None:
+    _report, state, candidates = _basic_saas_report()
+    deep_markdown = "\n".join(
+        [
+            "## Deep HTML Route Extraction",
+            "",
+            "- Preserved bullet",
+            "",
+            "```text",
+            "literal fenced content",
+            "```",
+        ]
+    )
+    caller_value = f"\n\t{deep_markdown}\n\n"
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        deep_recon_markdown=caller_value,
+    )
+
+    assert caller_value == f"\n\t{deep_markdown}\n\n"
+    assert report.count("## Deep HTML Route Extraction") == 1
+    assert "- Preserved bullet" in report
+    assert "```text\nliteral fenced content\n```" in report
+    assert "## Deep Recon\n" not in report
+    assert report.index("## Operator Summary") < report.index("## Deep HTML Route Extraction")
+    assert report.index("## Deep HTML Route Extraction") < report.index("## Scope Summary")
+
+
+def test_deep_recon_markdown_follows_manual_review_leads_when_both_are_present() -> None:
+    _report, state, candidates = _basic_saas_report()
+    manual_review_section = "\n".join(
+        [
+            "## Manual Review Leads",
+            "",
+            "Manual review prompt.",
+        ]
+    )
+    deep_markdown = "\n".join(
+        [
+            "## Deep Parameter Inventory",
+            "",
+            "Already-rendered Deep block.",
+        ]
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        manual_review_leads_markdown=manual_review_section,
+        deep_recon_markdown=deep_markdown,
+    )
+
+    assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
+    assert report.index("## Manual Review Leads") < report.index("## Deep Parameter Inventory")
+    assert report.index("## Deep Parameter Inventory") < report.index("## Scope Summary")
+    assert report.count("Already-rendered Deep block.") == 1
+
+
+def test_deep_recon_markdown_preserves_existing_trailing_newline_convention() -> None:
+    _report, state, candidates = _basic_saas_report()
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        deep_recon_markdown="## Deep Collection Review\n\nOpaque block.",
+    )
+
+    assert report.endswith("\n")
+    assert not report.endswith("\n\n")
+
+
+def test_report_module_does_not_import_deep_implementation_modules() -> None:
+    source = Path(__file__).resolve().parents[1] / "bugslyce" / "reports" / "markdown.py"
+    content = source.read_text(encoding="utf-8")
+
+    for forbidden in (
+        "deep_collection_review_bundle",
+        "deep_http_fingerprint_summary",
+        "deep_redirect_auth_flow_review",
+        "deep_response_similarity_review",
+        "deep_html_route_extraction",
+        "deep_javascript_route_extraction",
+        "deep_shallow_route_followup",
+        "deep_form_inventory",
+        "deep_parameter_inventory",
+    ):
+        assert forbidden not in content
+
+
 def test_manual_review_section_contract_avoids_confirmed_issue_wording() -> None:
     _report, state, candidates = _basic_saas_report()
     manual_review_section = "\n".join(
