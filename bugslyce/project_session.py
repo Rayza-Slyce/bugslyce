@@ -567,6 +567,7 @@ def build_project_runbook(
     project_file: Path,
     clock: Clock | None = None,
     standard_investigation_workflow_markdown: str | None = None,
+    deep_recon_runbook_markdown: str | None = None,
 ) -> ProjectRunbookResult:
     """Build a local Markdown runbook from project next-step guidance."""
 
@@ -587,6 +588,7 @@ def build_project_runbook(
         project_file=project_file,
         generated_at=generated_at,
         standard_investigation_workflow_markdown=standard_investigation_workflow_markdown,
+        deep_recon_runbook_markdown=deep_recon_runbook_markdown,
     )
     return ProjectRunbookResult(
         project=next_result.project,
@@ -1092,6 +1094,7 @@ def _render_project_runbook(
     project_file: Path,
     generated_at: str,
     standard_investigation_workflow_markdown: str | None = None,
+    deep_recon_runbook_markdown: str | None = None,
 ) -> str:
     project = result.project
     output_dir = Path(project.output_dir)
@@ -1133,6 +1136,12 @@ def _render_project_runbook(
     if standard_investigation_workflow_markdown:
         section = standard_investigation_workflow_markdown.strip()
         if section:
+            lines.extend(["", section])
+    if deep_recon_runbook_markdown:
+        section = deep_recon_runbook_markdown.strip()
+        if section:
+            # Phase 93B: passive Deep runbook Markdown follows existing
+            # investigation guidance and remains before final workflow notes.
             lines.extend(["", section])
     if result.optional_actions:
         lines.extend(["", "## Optional Safe Commands"])

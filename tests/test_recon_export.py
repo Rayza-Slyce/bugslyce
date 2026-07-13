@@ -50,6 +50,32 @@ def test_export_refuses_overwrite_without_force_and_allows_force(tmp_path: Path)
     assert zipfile.is_zipfile(output_path)
 
 
+def test_export_preserves_existing_positional_force_and_clock(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+    output_path.write_bytes(b"existing")
+
+    result = export_recon_evidence_pack(input_dir, output_path, True, lambda: FIXED_TIME)
+
+    assert result.exported_at == "2026-06-14T13:45:12Z"
+    assert zipfile.is_zipfile(output_path)
+
+
+def test_export_rejects_positional_deep_evidence_paths(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    deep_file = input_dir / "deep.md"
+    deep_file.write_text("# deep\n", encoding="utf-8")
+
+    with pytest.raises(TypeError):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "pack.zip",
+            False,
+            lambda: FIXED_TIME,
+            (deep_file,),
+        )
+
+
 def test_export_contains_pack_metadata_scope_and_manifest_artifacts(tmp_path: Path) -> None:
     input_dir = _export_input(tmp_path)
     output_path = tmp_path / "pack.zip"
@@ -192,6 +218,365 @@ def test_export_is_deterministic_for_unchanged_input(tmp_path: Path) -> None:
     assert first.read_bytes() == second.read_bytes()
 
 
+def test_export_deep_evidence_omitted_none_and_empty_are_unchanged(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    baseline = tmp_path / "baseline.zip"
+    explicit_none = tmp_path / "none.zip"
+    explicit_empty = tmp_path / "empty.zip"
+
+    export_recon_evidence_pack(input_dir, baseline, clock=lambda: FIXED_TIME)
+    export_recon_evidence_pack(
+        input_dir,
+        explicit_none,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=None,
+    )
+    export_recon_evidence_pack(
+        input_dir,
+        explicit_empty,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(),
+    )
+
+    assert explicit_none.read_bytes() == baseline.read_bytes()
+    assert explicit_empty.read_bytes() == baseline.read_bytes()
+
+
+def test_export_accepts_tuple_and_list_of_path_deep_evidence(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    first_file = input_dir / "deep-one.md"
+    second_file = input_dir / "deep-two.md"
+    first_file.write_text("one\n", encoding="utf-8")
+    second_file.write_text("two\n", encoding="utf-8")
+    supplied_list = [second_file]
+
+    export_recon_evidence_pack(
+        input_dir,
+        tmp_path / "tuple.zip",
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(first_file,),
+    )
+    export_recon_evidence_pack(
+        input_dir,
+        tmp_path / "list.zip",
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=supplied_list,
+    )
+
+    assert supplied_list == [second_file]
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    [
+        "deep.md",
+        b"deep.md",
+        Path("deep.md"),
+        ("deep.md",),
+        (1,),
+    ],
+)
+def test_export_rejects_invalid_deep_evidence_path_types(
+    tmp_path: Path,
+    invalid_value,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    with pytest.raises(
+        TypeError,
+        match="deep_evidence_paths must be a sequence of pathlib.Path values",
+    ):
+        export_recon_evidence_pack(
+            input_dir,
+            output_path,
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=invalid_value,
+        )
+
+    assert not output_path.exists()
+
+
+def test_export_rejects_object_deep_evidence_without_string_coercion(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    class StringTrap:
+        def __str__(self) -> str:
+            raise AssertionError("__str__ must not be called for invalid Deep evidence paths")
+
+    with pytest.raises(
+        TypeError,
+        match="deep_evidence_paths must be a sequence of pathlib.Path values",
+    ):
+        export_recon_evidence_pack(
+            input_dir,
+            output_path,
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(StringTrap(),),
+        )
+
+    assert not output_path.exists()
+
+
+def test_export_resolves_relative_deep_evidence_against_input_dir(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    deep_dir = input_dir / "deep"
+    deep_dir.mkdir()
+    (deep_dir / "relative.md").write_text("relative\n", encoding="utf-8")
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(Path("deep/relative.md"),),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        assert archive.read("raw/deep/relative.md") == b"relative\n"
+
+
+def test_export_rejects_deep_evidence_path_traversal(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+
+    with pytest.raises(ValueError, match="Unsafe path traversal"):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "pack.zip",
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(Path("../outside.md"),),
+        )
+
+
+def test_export_includes_explicit_deep_evidence_files_deterministically(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    deep_dir = input_dir / "deep"
+    deep_dir.mkdir()
+    alpha = deep_dir / "deep-alpha.md"
+    beta = deep_dir / "deep-beta.json"
+    alpha.write_bytes(b"# alpha\n")
+    beta.write_bytes(b'{"beta": true}\n')
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        first,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(beta, alpha, alpha),
+    )
+    export_recon_evidence_pack(
+        input_dir,
+        second,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(alpha, beta),
+    )
+
+    assert first.read_bytes() == second.read_bytes()
+    with zipfile.ZipFile(first) as archive:
+        names = archive.namelist()
+        manifest = json.loads(archive.read("bugslyce_export_manifest.json").decode("utf-8"))
+        assert archive.read("raw/deep/deep-alpha.md") == b"# alpha\n"
+        assert archive.read("raw/deep/deep-beta.json") == b'{"beta": true}\n'
+    assert names.count("raw/deep/deep-alpha.md") == 1
+    assert names.count("raw/deep/deep-beta.json") == 1
+    assert "raw/nmap-allports.txt" in names
+    assert all(not name.startswith("/") for name in names)
+    assert all(".." not in Path(name).parts for name in names)
+    assert manifest["files_included"] == sorted(manifest["files_included"])
+    assert result.files_included == manifest["files_included"]
+
+
+def test_export_skips_deep_evidence_already_included_as_top_level_file(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(input_dir / "report.md",),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+    assert "report.md" in names
+    assert "raw/report.md" not in names
+    assert "report.md" in result.files_included
+    assert "raw/report.md" not in result.files_included
+    assert result.missing_files == []
+
+
+def test_export_skips_deep_evidence_already_included_as_manifest_artifact(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(input_dir / "nmap-allports.txt",),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+    assert names.count("raw/nmap-allports.txt") == 1
+
+
+def test_export_skips_symlink_alias_to_existing_in_root_source(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    alias = input_dir / "nmap-alias.txt"
+    alias.symlink_to(input_dir / "nmap-allports.txt")
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(alias,),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+    assert names.count("raw/nmap-allports.txt") == 1
+    assert "raw/nmap-alias.txt" not in names
+
+
+def test_export_includes_different_deep_files_with_same_basename_deterministically(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    first_dir = input_dir / "first"
+    second_dir = input_dir / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_file = first_dir / "shared.md"
+    second_file = second_dir / "shared.md"
+    first_file.write_bytes(b"first\n")
+    second_file.write_bytes(b"second\n")
+    first_zip = tmp_path / "first.zip"
+    second_zip = tmp_path / "second.zip"
+
+    export_recon_evidence_pack(
+        input_dir,
+        first_zip,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(second_file, first_file),
+    )
+    export_recon_evidence_pack(
+        input_dir,
+        second_zip,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(first_file, second_file),
+    )
+
+    assert first_zip.read_bytes() == second_zip.read_bytes()
+    with zipfile.ZipFile(first_zip) as archive:
+        assert archive.read("raw/first/shared.md") == b"first\n"
+        assert archive.read("raw/second/shared.md") == b"second\n"
+
+
+def test_export_rejects_deep_evidence_self_inclusion_before_writing(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = input_dir / "pack.zip"
+
+    with pytest.raises(ValueError, match="cannot be the export output path"):
+        export_recon_evidence_pack(
+            input_dir,
+            output_path,
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(output_path,),
+        )
+
+    assert not output_path.exists()
+
+
+def test_export_rejects_existing_output_self_inclusion_without_truncating(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = input_dir / "pack.zip"
+    output_path.write_bytes(b"keep this zip placeholder")
+
+    with pytest.raises(ValueError, match="cannot be the export output path"):
+        export_recon_evidence_pack(
+            input_dir,
+            output_path,
+            force=True,
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(output_path,),
+        )
+
+    assert output_path.read_bytes() == b"keep this zip placeholder"
+
+
+def test_export_deep_evidence_uses_existing_missing_directory_and_outside_policy(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    missing = input_dir / "deep-missing.md"
+    directory = input_dir / "deep-dir"
+    directory.mkdir()
+    output_path = tmp_path / "pack.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=(missing, directory),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+    assert "raw/deep-missing.md" not in names
+    assert "raw/deep-dir" not in names
+    assert result.missing_files == [str(directory), str(missing)]
+
+    outside = tmp_path / "outside-deep.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside input directory"):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "outside.zip",
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(outside,),
+        )
+
+
+def test_export_deep_evidence_symlink_policy_matches_existing_root_policy(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    outside = tmp_path / "outside-secret.md"
+    outside.write_text("secret\n", encoding="utf-8")
+    link = input_dir / "deep-link.md"
+    link.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside input directory"):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "pack.zip",
+            clock=lambda: FIXED_TIME,
+            deep_evidence_paths=(link,),
+        )
+
+
+def test_export_does_not_discover_deep_files_without_explicit_paths(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "deep-unlisted.md").write_text("# deep\n", encoding="utf-8")
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    with zipfile.ZipFile(output_path) as archive:
+        assert "raw/deep-unlisted.md" not in archive.namelist()
+
+
 def test_export_zip_entry_timestamps_remain_fixed(tmp_path: Path) -> None:
     input_dir = _export_input(tmp_path)
     output_path = tmp_path / "pack.zip"
@@ -254,6 +639,28 @@ def test_export_module_has_no_command_or_network_execution_apis() -> None:
     assert "pexpect" not in source
     assert "requests." not in source
     assert "urlopen" not in source
+
+
+def test_export_module_does_not_import_deep_implementation_modules() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "bugslyce"
+        / "recon"
+        / "export.py"
+    ).read_text(encoding="utf-8")
+
+    for forbidden in (
+        "deep_collection_review_bundle",
+        "deep_http_fingerprint_summary",
+        "deep_redirect_auth_flow_review",
+        "deep_response_similarity_review",
+        "deep_html_route_extraction",
+        "deep_javascript_route_extraction",
+        "deep_shallow_route_followup",
+        "deep_form_inventory",
+        "deep_parameter_inventory",
+    ):
+        assert forbidden not in source
 
 
 def _export_input(tmp_path: Path) -> Path:

@@ -1263,3 +1263,10 @@ Markdown. When the seam is unused, the report is unchanged. The report layer
 does not build, collect, read, or render Deep results itself. It adds no CLI,
 export, evidence-pack, runbook, or orchestration integration, performs no file
 or network IO, and does not enable Deep Recon. Deep Recon remains unavailable.
+
+Phase 93B adds passive inclusion seams for already-existing Deep outputs. It
+allows explicitly supplied existing Deep files to be included in the evidence
+pack and adds an optional runbook seam for already-rendered Deep Markdown. It
+does not discover, build, parse, or render Deep results, adds no automatic
+pipeline orchestration, adds no CLI option, performs no network IO, and does
+not enable Deep Recon. Deep Recon remains unavailable.

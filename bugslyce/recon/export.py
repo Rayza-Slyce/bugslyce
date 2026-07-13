@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath
@@ -49,6 +50,8 @@ def export_recon_evidence_pack(
     output_path: Path,
     force: bool = False,
     clock: Clock | None = None,
+    *,
+    deep_evidence_paths: Sequence[Path] | None = None,
 ) -> ReconExportResult:
     """Create a deterministic ZIP containing only approved local evidence files."""
 
@@ -120,6 +123,20 @@ def export_recon_evidence_pack(
             missing_files.append(reference)
             continue
         _add_file(included, source_path, f"raw/{relative_path.as_posix()}")
+
+    represented_source_paths = {source_path.resolve() for source_path in included.values()}
+    for source_path, relative_path, reference in _canonical_deep_evidence_paths(
+        input_dir,
+        output_path,
+        deep_evidence_paths,
+    ):
+        if source_path in represented_source_paths:
+            continue
+        if not source_path.is_file():
+            missing_files.append(reference)
+            continue
+        _add_file(included, source_path, f"raw/{relative_path.as_posix()}")
+        represented_source_paths.add(source_path)
 
     archive_files = sorted(
         [
@@ -228,6 +245,41 @@ def _resolve_reference(
     if not relative.parts:
         raise ValueError(f"Unsafe directory reference in {label}: {reference}")
     return resolved, relative
+
+
+def _canonical_deep_evidence_paths(
+    input_dir: Path,
+    output_path: Path,
+    deep_evidence_paths: Sequence[Path] | None,
+) -> tuple[tuple[Path, PurePosixPath, str], ...]:
+    if deep_evidence_paths is None:
+        return ()
+    if (
+        isinstance(deep_evidence_paths, (str, bytes, Path))
+        or not isinstance(deep_evidence_paths, Sequence)
+    ):
+        raise TypeError("deep_evidence_paths must be a sequence of pathlib.Path values")
+    resolved_entries: dict[str, tuple[Path, PurePosixPath, str]] = {}
+    for raw_path in deep_evidence_paths:
+        if not isinstance(raw_path, Path):
+            raise TypeError("deep_evidence_paths must be a sequence of pathlib.Path values")
+        reference = str(raw_path)
+        source_path, relative_path = _resolve_reference(
+            input_dir,
+            reference,
+            "Deep evidence file",
+        )
+        if source_path == output_path:
+            raise ValueError("Deep evidence file cannot be the export output path")
+        resolved_entries[relative_path.as_posix()] = (
+            source_path,
+            relative_path,
+            reference,
+        )
+    return tuple(
+        resolved_entries[key]
+        for key in sorted(resolved_entries)
+    )
 
 
 def _add_optional_file(

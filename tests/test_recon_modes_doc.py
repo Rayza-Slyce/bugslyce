@@ -319,6 +319,12 @@ def test_recon_modes_design_contract_exists_and_covers_required_terms() -> None:
         "When the seam is unused, the report is unchanged",
         "does not build, collect, read, or render Deep results itself",
         "evidence-pack, runbook, or orchestration integration",
+        "passive inclusion seams for already-existing Deep outputs",
+        "explicitly supplied existing Deep files",
+        "optional runbook seam for already-rendered Deep Markdown",
+        "does not discover, build, parse, or render Deep results",
+        "pipeline orchestration",
+        "adds no CLI option",
     ):
         assert expected.lower() in lowered
 

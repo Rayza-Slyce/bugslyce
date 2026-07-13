@@ -187,6 +187,138 @@ def test_runbook_can_insert_standard_investigation_workflow_after_next_command(
     )
 
 
+def test_deep_runbook_markdown_omitted_none_empty_and_whitespace_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    scaffold = scaffold_project("deep-runbook-noop", "10.10.10.10", tmp_path / "projects")
+    project_file = Path(scaffold.project_file)
+    baseline = build_project_runbook(project_file, clock=lambda: FIXED_TIME).content
+
+    assert build_project_runbook(project_file, clock=lambda: FIXED_TIME).content == baseline
+    assert (
+        build_project_runbook(
+            project_file,
+            clock=lambda: FIXED_TIME,
+            deep_recon_runbook_markdown=None,
+        ).content
+        == baseline
+    )
+    assert (
+        build_project_runbook(
+            project_file,
+            clock=lambda: FIXED_TIME,
+            deep_recon_runbook_markdown="",
+        ).content
+        == baseline
+    )
+    assert (
+        build_project_runbook(
+            project_file,
+            clock=lambda: FIXED_TIME,
+            deep_recon_runbook_markdown=" \n\t ",
+        ).content
+        == baseline
+    )
+
+
+def test_runbook_can_insert_opaque_deep_markdown_after_standard_guidance(
+    tmp_path: Path,
+) -> None:
+    scaffold = scaffold_project("deep-runbook", "10.10.10.10", tmp_path / "projects")
+    project_file = Path(scaffold.project_file)
+    workflow = "\n".join(
+        [
+            "## Standard Investigation Workflow",
+            "",
+            "Manual Standard guidance.",
+        ]
+    )
+    deep_section = "\n".join(
+        [
+            "## Deep Shallow Route Follow-up",
+            "",
+            "- Preserved Deep bullet",
+            "",
+            "```text",
+            "literal deep runbook content",
+            "```",
+        ]
+    )
+    caller_value = f"\n{deep_section}\n\n"
+
+    result = build_project_runbook(
+        project_file,
+        clock=lambda: FIXED_TIME,
+        standard_investigation_workflow_markdown=workflow,
+        deep_recon_runbook_markdown=caller_value,
+    )
+
+    assert caller_value == f"\n{deep_section}\n\n"
+    assert result.content.count("## Deep Shallow Route Follow-up") == 1
+    assert "- Preserved Deep bullet" in result.content
+    assert "```text\nliteral deep runbook content\n```" in result.content
+    assert "## Deep Recon\n" not in result.content
+    assert result.content.index("## Suggested Next Command") < result.content.index(
+        "## Standard Investigation Workflow"
+    )
+    assert result.content.index("## Standard Investigation Workflow") < result.content.index(
+        "## Deep Shallow Route Follow-up"
+    )
+    assert result.content.index("## Deep Shallow Route Follow-up") < result.content.index(
+        "## Typical Safe Workflow"
+    )
+    assert result.content.endswith("\n")
+    assert not result.content.endswith("\n\n")
+
+
+def test_runbook_deep_markdown_has_stable_placement_without_standard_guidance(
+    tmp_path: Path,
+) -> None:
+    scaffold = scaffold_project("deep-runbook-only", "10.10.10.10", tmp_path / "projects")
+    project_file = Path(scaffold.project_file)
+    deep_section = "## Deep Parameter Inventory\n\nOpaque Deep guidance."
+
+    first = build_project_runbook(
+        project_file,
+        clock=lambda: FIXED_TIME,
+        deep_recon_runbook_markdown=deep_section,
+    )
+    second = build_project_runbook(
+        project_file,
+        clock=lambda: FIXED_TIME,
+        deep_recon_runbook_markdown=deep_section,
+    )
+
+    assert first.content == second.content
+    assert first.content.index("## Suggested Next Command") < first.content.index(
+        "## Deep Parameter Inventory"
+    )
+    assert first.content.index("## Deep Parameter Inventory") < first.content.index(
+        "## Typical Safe Workflow"
+    )
+
+
+def test_project_session_does_not_import_deep_implementation_modules() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "bugslyce"
+        / "project_session.py"
+    ).read_text(encoding="utf-8")
+
+    for forbidden in (
+        "deep_collection_review_bundle",
+        "deep_http_fingerprint_summary",
+        "deep_redirect_auth_flow_review",
+        "deep_response_similarity_review",
+        "deep_html_route_extraction",
+        "deep_javascript_route_extraction",
+        "deep_shallow_route_followup",
+        "deep_form_inventory",
+        "deep_parameter_inventory",
+    ):
+        assert forbidden not in source
+
+
 @pytest.mark.parametrize("payload", [None, "{bad"])
 def test_cli_runbook_refuses_missing_or_malformed_project(
     tmp_path: Path,
