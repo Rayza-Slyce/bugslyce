@@ -11,7 +11,6 @@ from bugslyce.recon.modes import (
     DEEP_RECON_CAPABILITY_CATEGORIES,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
-    ReconModeUnavailable,
     get_recon_mode,
     is_recon_mode_available,
     resolve_executable_profile,
@@ -152,15 +151,9 @@ def test_deep_pipeline_validation_reports_contract_errors() -> None:
     assert any("depends on unknown step" in error for error in errors)
 
 
-def test_deep_remains_unavailable_and_quick_standard_mappings_are_unchanged() -> None:
+def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
-
-    try:
-        resolve_executable_profile("deep")
-    except ReconModeUnavailable:
-        pass
-    else:
-        raise AssertionError("Deep Recon must remain unavailable")
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == "deep-bounded"

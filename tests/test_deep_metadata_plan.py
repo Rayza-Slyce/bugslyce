@@ -14,7 +14,6 @@ from bugslyce.core.models import (
     HTTPService,
     ProjectState,
 )
-from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_metadata_plan import (
     DEEP_METADATA_PATHS,
     DeepMetadataPlan,
@@ -31,6 +30,7 @@ from bugslyce.recon.modes import (
     STANDARD_RECON_PROFILE,
     get_recon_mode,
     is_recon_mode_available,
+    resolve_executable_profile,
 )
 from bugslyce.recon.planner import build_recon_plan
 
@@ -46,7 +46,7 @@ def test_empty_input_produces_zero_requests_and_non_executable_guarantees() -> N
         "metadata_paths_per_service": len(DEEP_METADATA_PATHS),
     }
     assert "No network requests are performed." in plan.non_executable_guarantees
-    assert "`deep-bounded` remains non-executable." in plan.non_executable_guarantees
+    assert "`deep-bounded` remains bounded and scope-conscious." in plan.non_executable_guarantees
 
 
 @pytest.mark.parametrize(
@@ -436,7 +436,7 @@ def test_project_state_adapter_creates_no_files(tmp_path: Path, monkeypatch) -> 
     assert list(tmp_path.iterdir()) == []
 
 
-def test_deep_bounded_remains_rejected_by_planner_and_project_pipeline(
+def test_deep_bounded_remains_rejected_by_static_recon_planner(
     tmp_path: Path,
 ) -> None:
     scope = tmp_path / "scope.md"
@@ -445,15 +445,13 @@ def test_deep_bounded_remains_rejected_by_planner_and_project_pipeline(
     with pytest.raises(ValueError, match="Unsupported recon profile"):
         build_recon_plan("10.10.10.10", scope, tmp_path / "output", "deep-bounded")
 
-    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
-        run_project_pipeline(tmp_path / "missing-project.json", "deep-bounded")
 
-
-def test_deep_remains_unavailable_and_quick_standard_mappings_are_unchanged() -> None:
+def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == "deep-bounded"
 
 
 def _walk_keys(value: object) -> set[str]:

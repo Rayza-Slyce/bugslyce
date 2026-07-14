@@ -17,7 +17,6 @@ from bugslyce.recon.deep_readiness import (
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
-    ReconModeUnavailable,
     get_recon_mode,
     is_recon_mode_available,
     resolve_executable_profile,
@@ -82,10 +81,10 @@ def test_deep_readiness_snapshot_status_mappings_counts_and_validation() -> None
 
     assert snapshot["schema_version"] == 1
     assert snapshot["status"] == {
-        "deep_available": False,
-        "deep_executable": False,
-        "deep_status": "planned/unavailable",
-        "summary": "Deep Recon is planned and unavailable.",
+        "deep_available": True,
+        "deep_executable": True,
+        "deep_status": "implemented",
+        "summary": "Deep Recon is available as bounded deep-bounded.",
     }
     assert snapshot["mode_mappings"] == {
         "quick": "lab-safe-tiny",
@@ -162,9 +161,9 @@ def test_deep_readiness_snapshot_has_non_executable_guarantees_and_no_command_sh
     snapshot = build_deep_recon_readiness_snapshot()
 
     assert snapshot["non_executable_guarantees"] == [
-        "Deep Recon remains unavailable.",
-        "`deep-bounded` is not an executable profile.",
-        "No runtime collection is performed.",
+        "Deep Recon is available only through the bounded deep-bounded profile.",
+        "`deep-bounded` remains bounded and scope-conscious.",
+        "This readiness renderer performs no runtime collection.",
         "No project files are read or written.",
         "No commands are executed.",
         "No output files are created.",
@@ -179,8 +178,8 @@ def test_deep_readiness_snapshot_has_non_executable_guarantees_and_no_command_sh
 def test_deep_readiness_summary_contains_required_status_wording() -> None:
     markdown = render_deep_recon_readiness_summary()
 
-    assert "Deep Recon is planned and unavailable." in markdown
-    assert "`deep-bounded` is a planned profile contract, not an executable profile." in markdown
+    assert "Deep Recon is available as bounded deep-bounded." in markdown
+    assert "`deep-bounded` is the bounded executable Deep profile." in markdown
     assert "This summary is static contract rendering only." in markdown
     assert "No runtime collection is performed." in markdown
     assert "No project files are read or written." in markdown
@@ -262,11 +261,11 @@ def test_deep_readiness_summary_reports_validation_statuses_as_valid() -> None:
     assert "- Preflight contract: valid" in markdown
 
 
-def test_deep_readiness_summary_has_non_executable_guarantees() -> None:
+def test_deep_readiness_summary_has_renderer_safety_guarantees() -> None:
     markdown = render_deep_recon_readiness_summary()
 
-    assert "This renderer does not enable Deep Recon." in markdown
-    assert "This renderer does not make `deep-bounded` executable." in markdown
+    assert "This renderer does not run Deep Recon." in markdown
+    assert "`deep-bounded` remains bounded and scope-conscious." in markdown
     assert "This renderer does not perform runtime preflight checks." in markdown
     assert "This renderer does not read or write project files." in markdown
     assert "This renderer does not create reports, evidence packs, or output files." in markdown
@@ -278,7 +277,7 @@ def test_deep_readiness_summary_has_non_executable_guarantees() -> None:
     assert "| execute |" not in markdown
 
 
-def test_deep_bounded_remains_non_executable_in_planner_and_pipeline(
+def test_deep_bounded_remains_unsupported_by_static_recon_planner(
     tmp_path,
 ) -> None:
     scope_file = tmp_path / "scope.txt"
@@ -287,17 +286,10 @@ def test_deep_bounded_remains_non_executable_in_planner_and_pipeline(
     with pytest.raises(ValueError, match="Unsupported recon profile"):
         build_recon_plan("10.10.10.10", scope_file, tmp_path / "output", "deep-bounded")
 
-    project_file = tmp_path / "bugslyce_project.json"
-    project_file.write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
-        run_project_pipeline(project_file, "deep-bounded")
 
-
-def test_deep_remains_unavailable_and_quick_standard_mappings_are_unchanged() -> None:
+def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
-
-    with pytest.raises(ReconModeUnavailable):
-        resolve_executable_profile("deep")
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == "deep-bounded"

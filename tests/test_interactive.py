@@ -56,8 +56,7 @@ def test_recon_mode_menu_uses_user_facing_names() -> None:
     assert map_user_recon_mode_to_internal_profile("1") == PIPELINE_PROFILE
     assert map_user_recon_mode_to_internal_profile("2") is None
     assert map_user_recon_mode_to_internal_profile("3") == STANDARD_PIPELINE_PROFILE
-    with pytest.raises(ValueError, match="Deep Recon is planned but not implemented yet"):
-        map_user_recon_mode_to_internal_profile("4")
+    assert map_user_recon_mode_to_internal_profile("4") == "deep-bounded"
 
 
 def test_launcher_auth_abort_creates_nothing(monkeypatch, tmp_path: Path) -> None:
@@ -232,17 +231,26 @@ def test_launcher_rejects_unsafe_url_targets(
     assert "No project was created." in output
 
 
-def test_deep_recon_retries_until_available_choice(
+def test_deep_recon_selection_runs_deep_bounded_profile(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    calls: list[str] = []
     monkeypatch.setattr(
         "bugslyce.interactive.scaffold_project",
         lambda **kwargs: _scaffold_result(project_file),
     )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda **kwargs: calls.append(kwargs["profile"]) or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.render_project_pipeline_summary",
+        lambda result: "DEEP PIPELINE SUMMARY",
+    )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "4", "2", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "4", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -251,9 +259,8 @@ def test_deep_recon_retries_until_available_choice(
     )
 
     assert exit_code == 0
-    assert output.count("This recon mode is not available yet.") == 1
-    assert output.count("Choose Quick Recon, Standard Recon, or Manual Setup Only.") == 1
-    assert "Project created." in output
+    assert calls == ["deep-bounded"]
+    assert "DEEP PIPELINE SUMMARY" in output
 
 
 def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(

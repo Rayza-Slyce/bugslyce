@@ -11,7 +11,6 @@ from bugslyce.recon.modes import (
     DEEP_RECON_BOUNDS,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
-    ReconModeUnavailable,
     get_deep_recon_profile_contract,
     get_recon_mode,
     is_recon_mode_available,
@@ -58,31 +57,24 @@ def test_standard_recon_is_available_and_maps_to_standard_bounded() -> None:
     assert resolve_executable_profile("standard") == "standard-bounded"
 
 
-def test_deep_recon_is_planned_and_unavailable() -> None:
+def test_deep_recon_is_available_and_maps_to_deep_bounded() -> None:
     deep = get_recon_mode("deep")
 
     assert deep.mode_id == "deep"
     assert deep.display_name == "Deep Recon"
     assert deep.internal_profile == DEEP_RECON_PROFILE
     assert deep.internal_profile == "deep-bounded"
-    assert deep.status == "planned"
-    assert deep.is_available is False
-    assert is_recon_mode_available("deep") is False
+    assert deep.status == "implemented"
+    assert deep.is_available is True
+    assert is_recon_mode_available("deep") is True
     assert "strict authorisation, scope, method, and rate limits" in deep.purpose
-
-    with pytest.raises(
-        ReconModeUnavailable,
-        match="Deep Recon is planned but not implemented yet",
-    ):
-        resolve_executable_profile("deep")
+    assert resolve_executable_profile("deep") == "deep-bounded"
 
 
-def test_planned_modes_do_not_fall_back_to_quick() -> None:
-    for mode_id in ("deep",):
-        mode = get_recon_mode(mode_id)
-        assert mode.internal_profile != QUICK_RECON_PROFILE
-        with pytest.raises(ReconModeUnavailable):
-            resolve_executable_profile(mode_id)
+def test_deep_mode_does_not_fall_back_to_quick() -> None:
+    mode = get_recon_mode("deep")
+    assert mode.internal_profile != QUICK_RECON_PROFILE
+    assert resolve_executable_profile("deep") == DEEP_RECON_PROFILE
 
 
 def test_standard_does_not_fall_back_to_quick() -> None:
@@ -93,14 +85,14 @@ def test_standard_does_not_fall_back_to_quick() -> None:
     assert resolve_executable_profile("standard") == STANDARD_RECON_PROFILE
 
 
-def test_deep_recon_profile_contract_is_bounded_and_non_executable() -> None:
+def test_deep_recon_profile_contract_is_bounded_and_executable() -> None:
     contract = get_deep_recon_profile_contract()
 
     assert contract is DEEP_RECON_PROFILE_CONTRACT
     assert contract.mode_name == "Deep Recon"
     assert contract.internal_profile == "deep-bounded"
-    assert contract.availability == "planned/unavailable"
-    assert contract.default_behaviour_status == "planned, not implemented"
+    assert contract.availability == "implemented"
+    assert contract.default_behaviour_status == "implemented, bounded, non-exploitative"
     assert contract.allowed_method_class == "GET/HEAD-style recon only"
     assert "aggressive evidence discovery" in contract.purpose
     assert contract.bounds is DEEP_RECON_BOUNDS
@@ -133,6 +125,5 @@ def test_deep_recon_profile_contract_is_bounded_and_non_executable() -> None:
     assert "deep investigation threads" in contract.capability_categories
     assert "deep manual review queue" in contract.capability_categories
     assert "deep report/runbook output" in contract.capability_categories
-    assert is_recon_mode_available("deep") is False
-    with pytest.raises(ReconModeUnavailable):
-        resolve_executable_profile("deep")
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == DEEP_RECON_PROFILE

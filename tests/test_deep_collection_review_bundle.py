@@ -371,7 +371,7 @@ def test_mode_enablement_remains_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 

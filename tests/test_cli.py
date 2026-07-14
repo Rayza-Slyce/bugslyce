@@ -213,8 +213,8 @@ def test_cli_recon_deep_readiness_prints_static_summary(
     assert exit_code == 0
     assert captured.err == ""
     assert captured.out.startswith("# Deep Recon Readiness Summary")
-    assert "Deep Recon is planned and unavailable." in captured.out
-    assert "`deep-bounded` is a planned profile contract, not an executable profile." in captured.out
+    assert "Deep Recon is available as bounded deep-bounded." in captured.out
+    assert "`deep-bounded` is the bounded executable Deep profile." in captured.out
     assert "This summary is static contract rendering only." in captured.out
     assert "No runtime collection is performed." in captured.out
     assert "No project files are read or written." in captured.out
@@ -246,8 +246,8 @@ def test_cli_recon_deep_readiness_prints_static_json_snapshot(
     assert captured.err == ""
     snapshot = json.loads(captured.out)
     assert snapshot["schema_version"] == 1
-    assert snapshot["status"]["deep_available"] is False
-    assert snapshot["status"]["deep_executable"] is False
+    assert snapshot["status"]["deep_available"] is True
+    assert snapshot["status"]["deep_executable"] is True
     assert snapshot["mode_mappings"] == {
         "quick": "lab-safe-tiny",
         "standard": "standard-bounded",
@@ -938,7 +938,7 @@ def test_cli_recon_deep_source_route_coverage_keeps_modes_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -1085,7 +1085,7 @@ def test_cli_recon_deep_preview_keeps_modes_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -1382,7 +1382,7 @@ def test_cli_recon_deep_metadata_collect_keeps_modes_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -1712,7 +1712,7 @@ def test_cli_recon_deep_source_route_collect_keeps_modes_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -1882,7 +1882,7 @@ def test_cli_recon_deep_metadata_collection_review_keeps_modes_unchanged() -> No
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -2388,7 +2388,7 @@ def test_cli_recon_deep_collection_review_bundle_keeps_modes_unchanged() -> None
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
+    assert is_recon_mode_available("deep") is True
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
@@ -2681,7 +2681,10 @@ def test_cli_recon_deep_eligibility_can_render_explicit_eligible_json(
     assert payload["eligible"] is True
     assert payload["status"] == "eligible"
     assert payload["blocking_reasons"] == []
-    assert "Deep Recon remains unavailable." in payload["non_executable_guarantees"]
+    assert (
+        "Deep Recon is available only through the bounded deep-bounded profile."
+        in payload["non_executable_guarantees"]
+    )
     assert list(tmp_path.iterdir()) == []
 
 

@@ -21,7 +21,6 @@ from bugslyce.recon.deep_preflight import get_deep_recon_preflight_requirements
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
-    ReconModeUnavailable,
     get_recon_mode,
     is_recon_mode_available,
     resolve_executable_profile,
@@ -153,9 +152,9 @@ def test_deep_eligibility_decision_is_deterministic_and_non_executable() -> None
     assert first == second
     payload = asdict(first)
     assert payload["non_executable_guarantees"] == (
-        "Deep Recon remains unavailable.",
-        "`deep-bounded` is not an executable profile.",
-        "No runtime collection is performed.",
+        "Deep Recon is available only through the bounded deep-bounded profile.",
+        "`deep-bounded` remains bounded and scope-conscious.",
+        "This eligibility renderer performs no runtime collection.",
         "No project files are read or written.",
         "No commands are executed.",
         "No output files are created.",
@@ -226,15 +225,11 @@ def test_deep_bounded_remains_non_executable_in_planner_and_pipeline(
 
     project_file = tmp_path / "bugslyce_project.json"
     project_file.write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
-        run_project_pipeline(project_file, "deep-bounded")
 
 
-def test_deep_remains_unavailable_and_quick_standard_mappings_are_unchanged() -> None:
+def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
-
-    with pytest.raises(ReconModeUnavailable):
-        resolve_executable_profile("deep")
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == "deep-bounded"

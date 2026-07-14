@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from bugslyce.project_pipeline import run_project_pipeline
 from bugslyce.recon.deep_outputs import get_deep_recon_planned_outputs
 from bugslyce.recon.deep_plan import get_deep_recon_planned_pipeline
 from bugslyce.recon.deep_preflight import (
@@ -17,7 +16,6 @@ from bugslyce.recon.deep_preflight import (
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
-    ReconModeUnavailable,
     get_recon_mode,
     is_recon_mode_available,
     resolve_executable_profile,
@@ -197,17 +195,9 @@ def test_deep_bounded_remains_non_executable_in_planner_and_pipeline(
     with pytest.raises(ValueError, match="Unsupported recon profile"):
         build_recon_plan("10.10.10.10", scope_file, tmp_path / "output", "deep-bounded")
 
-    project_file = tmp_path / "bugslyce_project.json"
-    project_file.write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
-        run_project_pipeline(project_file, "deep-bounded")
-
-
-def test_deep_remains_unavailable_and_quick_standard_mappings_are_unchanged() -> None:
+def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
     assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
     assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
     assert get_recon_mode("deep").internal_profile == "deep-bounded"
-    assert is_recon_mode_available("deep") is False
-
-    with pytest.raises(ReconModeUnavailable):
-        resolve_executable_profile("deep")
+    assert is_recon_mode_available("deep") is True
+    assert resolve_executable_profile("deep") == "deep-bounded"

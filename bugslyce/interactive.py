@@ -17,6 +17,7 @@ from bugslyce.core.engagement_context import (
 )
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.project_pipeline import (
+    DEEP_PIPELINE_PROFILE,
     PIPELINE_PROFILE,
     PIPELINE_JSON_FILENAME,
     ProjectPipelineFailed,
@@ -110,7 +111,7 @@ def render_recon_mode_menu() -> str:
             "   Adds Manual Review Leads to the report without increasing scan volume.",
             f"4. {deep.display_name}",
             f"   {deep.purpose.capitalize()}.",
-            "   Coming later; not available yet.",
+            "   Bounded same-origin Deep workflow for manual review evidence.",
         ]
     )
 
@@ -430,6 +431,8 @@ def _render_project_summary(
 
 
 def _profile_display_name(profile: str | None) -> str:
+    if profile == DEEP_PIPELINE_PROFILE:
+        return DEEP_RECON_LABEL
     if profile == STANDARD_PIPELINE_PROFILE:
         return STANDARD_RECON_LABEL
     return QUICK_RECON_LABEL

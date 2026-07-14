@@ -46,10 +46,7 @@ class ReconMode:
 
 @dataclass(frozen=True)
 class DeepReconBounds:
-    """Explicit planned Deep Recon hard limits.
-
-    These values are contract data only. They do not enable runtime behaviour.
-    """
+    """Explicit Deep Recon hard limits for the bounded enabled profile."""
 
     max_total_requests: int
     max_requests_per_service: int
@@ -68,7 +65,7 @@ class DeepReconBounds:
 
 @dataclass(frozen=True)
 class DeepReconProfileContract:
-    """Planned Deep Recon profile contract without executable behaviour."""
+    """Deep Recon profile contract for bounded executable behaviour."""
 
     mode_name: str
     internal_profile: str
@@ -119,14 +116,14 @@ DEEP_RECON_CAPABILITY_CATEGORIES: tuple[str, ...] = (
 DEEP_RECON_PROFILE_CONTRACT = DeepReconProfileContract(
     mode_name="Deep Recon",
     internal_profile=DEEP_RECON_PROFILE,
-    availability="planned/unavailable",
+    availability="implemented",
     purpose=(
         "aggressive evidence discovery inside strict authorisation, scope, "
         "method, and rate limits"
     ),
     bounds=DEEP_RECON_BOUNDS,
     allowed_method_class="GET/HEAD-style recon only",
-    default_behaviour_status="planned, not implemented",
+    default_behaviour_status="implemented, bounded, non-exploitative",
     capability_categories=DEEP_RECON_CAPABILITY_CATEGORIES,
 )
 
@@ -153,7 +150,7 @@ RECON_MODES: tuple[ReconMode, ...] = (
         mode_id=DEEP_MODE_ID,
         display_name="Deep Recon",
         internal_profile=DEEP_RECON_PROFILE,
-        status="planned",
+        status="implemented",
         purpose=(
             "aggressive evidence discovery inside strict authorisation, scope, "
             "method, and rate limits"
@@ -195,10 +192,6 @@ def resolve_executable_profile(mode_id: str) -> str:
 
 
 def get_deep_recon_profile_contract() -> DeepReconProfileContract:
-    """Return the planned Deep Recon profile contract.
-
-    The contract is descriptive only and must not be treated as an executable
-    profile.
-    """
+    """Return the bounded Deep Recon profile contract."""
 
     return DEEP_RECON_PROFILE_CONTRACT

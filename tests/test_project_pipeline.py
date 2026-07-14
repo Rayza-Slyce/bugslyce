@@ -6,14 +6,18 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 
 from bugslyce.cli import main
 from bugslyce.doctor import DoctorReport
 from bugslyce.project_pipeline import (
+    DEEP_PIPELINE_PROFILE,
+    DeepPipelineOutputs,
     PIPELINE_JSON_FILENAME,
     PIPELINE_MARKDOWN_FILENAME,
+    PARTIAL_DEEP_RESUME_MESSAGE,
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
@@ -135,8 +139,6 @@ def test_pipeline_rejects_unsupported_profile_and_invalid_project(
     project_file, _output_dir = _fresh_project(tmp_path)
     with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
         run_project_pipeline(project_file, "other-profile")
-    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
-        run_project_pipeline(project_file, "deep-bounded")
 
     with pytest.raises(ValueError, match="Project file does not exist"):
         run_project_pipeline(tmp_path / "missing.json", PIPELINE_PROFILE)
@@ -587,6 +589,638 @@ def test_project_pipeline_selects_standard_bounded_core_content_profile(
         (standard_output.name, STANDARD_BOUNDED_CORE_PROFILE),
     ]
     assert STANDARD_PIPELINE_PROFILE == "standard-bounded"
+
+
+def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    source_collection = SimpleNamespace(kind="source-collection")
+    shallow_followups = SimpleNamespace(kind="shallow-followups")
+    orchestration = SimpleNamespace(
+        deep_recon_markdown="## Deep Collection Review\n\nDeep report block.\n",
+        deep_recon_runbook_markdown="## Deep Recon Review Guide\n\nDeep runbook block.\n",
+    )
+    identities: dict[str, object] = {}
+    captured_report: list[str | None] = []
+    captured_runbook: list[str | None] = []
+    captured_evidence_paths: list[tuple[Path, ...] | None] = []
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: SimpleNamespace(project_name="pipeline-test"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_collection_request_plan_from_project_state",
+        lambda state: calls.append("deep-plan") or SimpleNamespace(kind="deep-plan"),
+    )
+
+    def fake_collect_source(plan, *, fetcher):
+        calls.append("deep-source-collect")
+        identities["source_fetcher"] = fetcher
+        return source_collection
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
+        fake_collect_source,
+    )
+
+    def fake_write_source(result, output_path):
+        calls.append("deep-source-write")
+        assert result is source_collection
+        markdown_path = output_path / "deep_source_route_collection.md"
+        json_path = output_path / "deep_source_route_collection.json"
+        markdown_path.write_text("# Deep Source\n", encoding="utf-8")
+        json_path.write_text("{}\n", encoding="utf-8")
+        return markdown_path, json_path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        fake_write_source,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_html_route_extraction",
+        lambda result: calls.append("deep-html-routes") or SimpleNamespace(kind="html"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_javascript_route_extraction",
+        lambda result: calls.append("deep-js-routes") or SimpleNamespace(kind="js"),
+    )
+
+    def fake_build_followup_plan(html_routes, javascript_routes):
+        calls.append("deep-shallow-plan")
+        return SimpleNamespace(kind="shallow-plan")
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_shallow_route_followup_plan",
+        fake_build_followup_plan,
+    )
+
+    def fake_collect_shallow(plan, *, fetcher):
+        calls.append("deep-shallow-collect")
+        identities["shallow_fetcher"] = fetcher
+        return shallow_followups
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_shallow_route_followups",
+        fake_collect_shallow,
+    )
+
+    def fake_orchestrate(source_arg, shallow_arg):
+        calls.append("deep-orchestrate")
+        identities["orchestration_source"] = source_arg
+        identities["orchestration_shallow"] = shallow_arg
+        return orchestration
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_recon_orchestration",
+        fake_orchestrate,
+    )
+
+    def fake_write_orchestration(result, output_path, *, force=False):
+        calls.append("deep-orchestration-write")
+        assert result is orchestration
+        paths = (
+            output_path / "deep_recon_review.md",
+            output_path / "deep_recon_runbook.md",
+            output_path / "deep_recon_orchestration.json",
+        )
+        for path in paths:
+            path.write_text(path.name + "\n", encoding="utf-8")
+        return paths
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_recon_orchestration_artifacts",
+        fake_write_orchestration,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+        lambda state: SimpleNamespace(
+            manual_review_leads_markdown="## Manual Review Leads\n\nStandard leads.\n",
+            review_leads=(),
+            sources=(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_investigation_threads",
+        lambda state, candidates, review_leads: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_investigation_threads_markdown",
+        lambda threads, **kwargs: "## Investigation Threads\n\nStandard threads.\n",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_route_source_review",
+        lambda state, sources: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_route_source_review_markdown",
+        lambda leads, **kwargs: "## Offline Route/Source Review\n\nStandard route review.\n",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_human_triage_brief",
+        lambda state, candidates, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_human_triage_brief_markdown",
+        lambda brief: "## Human Triage Brief\n\nStandard triage.\n",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
+        lambda brief: "## Readable Evidence Cards\n\nStandard cards.\n",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
+        lambda threads, **kwargs: "## Standard Investigation Workflow\n\nStandard guidance.\n",
+    )
+    monkeypatch.setattr("bugslyce.project_pipeline.generate_candidates", lambda state: [])
+
+    def fake_write_outputs(
+        state,
+        candidates,
+        output_path,
+        *,
+        deep_recon_markdown=None,
+        **kwargs,
+    ):
+        calls.append("deep-report-write")
+        captured_report.append(deep_recon_markdown)
+        report_path = output_path / "report.md"
+        json_path = output_path / "project_state.json"
+        report_path.write_text(deep_recon_markdown or "", encoding="utf-8")
+        json_path.write_text("{}\n", encoding="utf-8")
+        return report_path, json_path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        fake_write_outputs,
+    )
+
+    def fake_runbook(project_file_arg, **kwargs):
+        calls.append("runbook")
+        captured_runbook.append(kwargs.get("deep_recon_runbook_markdown"))
+        identities["runbook_standard"] = kwargs.get(
+            "standard_investigation_workflow_markdown"
+        )
+        return SimpleNamespace(
+            runbook_path=str(output_dir / "runbook.md"),
+            content=kwargs.get("deep_recon_runbook_markdown") or "",
+        )
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_project_runbook", fake_runbook)
+
+    def fake_export(input_dir, output_path, **kwargs):
+        calls.append("export")
+        captured_evidence_paths.append(kwargs.get("deep_evidence_paths"))
+        return SimpleNamespace(output_path=str(output_path))
+
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fake_export)
+
+    result = run_project_pipeline(
+        project_file,
+        DEEP_PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    step_ids = [step.step_id for step in result.steps]
+    assert step_ids == [
+        "PIPELINE-STEP-001",
+        "PIPELINE-STEP-002",
+        "PIPELINE-STEP-003",
+        "PIPELINE-STEP-004",
+        "PIPELINE-STEP-005",
+        "PIPELINE-STEP-006",
+        "PIPELINE-STEP-007",
+        "PIPELINE-STEP-008",
+        "PIPELINE-STEP-009",
+        "PIPELINE-STEP-010D",
+        "PIPELINE-STEP-011D",
+        "PIPELINE-STEP-010",
+        "PIPELINE-STEP-011",
+        "PIPELINE-STEP-012",
+    ]
+    assert result.profile == "deep-bounded"
+    assert result.final_status == "completed"
+    assert result.completed_steps == 14
+    assert calls.count("deep-source-collect") == 1
+    assert calls.count("deep-shallow-collect") == 1
+    assert calls.count("deep-orchestrate") == 1
+    assert calls.count("deep-orchestration-write") == 1
+    assert identities["orchestration_source"] is source_collection
+    assert identities["orchestration_shallow"] is shallow_followups
+    assert identities["source_fetcher"] is identities["shallow_fetcher"]
+    assert captured_report == [orchestration.deep_recon_markdown]
+    assert captured_runbook == [orchestration.deep_recon_runbook_markdown]
+    assert identities["runbook_standard"] == (
+        "## Standard Investigation Workflow\n\nStandard guidance.\n"
+    )
+    assert captured_evidence_paths == [
+        (
+            output_dir / "deep_source_route_collection.md",
+            output_dir / "deep_source_route_collection.json",
+            output_dir / "deep_recon_review.md",
+            output_dir / "deep_recon_runbook.md",
+            output_dir / "deep_recon_orchestration.json",
+        )
+    ]
+    assert calls.index("body-fetch") < calls.index("deep-source-collect")
+    assert calls.index("deep-shallow-collect") < calls.index("deep-orchestrate")
+    assert calls.index("deep-orchestration-write") < calls.index("deep-report-write")
+    assert calls.index("deep-orchestration-write") < calls.index("export")
+
+
+def test_deep_pipeline_selects_standard_bounded_core_content_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    observed: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_content_discovery_plan",
+        lambda **kwargs: observed.append(kwargs["profile"]) or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: SimpleNamespace(project_name="pipeline-test"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_collection_request_plan_from_project_state",
+        lambda state: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
+        lambda plan, *, fetcher: SimpleNamespace(),
+    )
+
+    def fake_write_source_for_profile(result, output_path):
+        paths = (
+            output_path / "deep_source_route_collection.md",
+            output_path / "deep_source_route_collection.json",
+        )
+        for path in paths:
+            path.write_text(path.name + "\n", encoding="utf-8")
+        return paths
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        fake_write_source_for_profile,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_html_route_extraction",
+        lambda result: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_javascript_route_extraction",
+        lambda result: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_shallow_route_followup_plan",
+        lambda html, js: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_shallow_route_followups",
+        lambda plan, *, fetcher: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_recon_orchestration",
+        lambda source, shallow: SimpleNamespace(
+            deep_recon_markdown="## Deep\n",
+            deep_recon_runbook_markdown="## Guide\n",
+        ),
+    )
+
+    def fake_write_orchestration_for_profile(result, output_path, **kwargs):
+        paths = (
+            output_path / "deep_recon_review.md",
+            output_path / "deep_recon_runbook.md",
+            output_path / "deep_recon_orchestration.json",
+        )
+        for path in paths:
+            path.write_text(path.name + "\n", encoding="utf-8")
+        return paths
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_recon_orchestration_artifacts",
+        fake_write_orchestration_for_profile,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+        lambda state: SimpleNamespace(
+            manual_review_leads_markdown="## Manual Review Leads\n",
+            review_leads=(),
+            sources=(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_investigation_threads",
+        lambda state, candidates, review_leads: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_investigation_threads_markdown",
+        lambda threads, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_route_source_review",
+        lambda state, sources: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_route_source_review_markdown",
+        lambda leads, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_human_triage_brief",
+        lambda state, candidates, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_human_triage_brief_markdown",
+        lambda brief: "",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
+        lambda brief: "",
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
+        lambda threads, **kwargs: "",
+    )
+    monkeypatch.setattr("bugslyce.project_pipeline.generate_candidates", lambda state: [])
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        lambda state, candidates, output_path, **kwargs: (
+            output_path / "report.md",
+            output_path / "project_state.json",
+        ),
+    )
+
+    run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert observed == [STANDARD_BOUNDED_CORE_PROFILE]
+
+
+def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
+    hints = get_type_hints(DeepPipelineOutputs)
+
+    assert "DeepSourceRouteCollectionResult" in str(hints["source_collection"])
+    assert "DeepShallowRouteFollowupResult" in str(hints["shallow_followups"])
+    assert "DeepReconOrchestrationResult" in str(hints["orchestration"])
+
+
+@pytest.mark.parametrize(
+    "deep_statuses",
+    (
+        {"PIPELINE-STEP-010D": "running"},
+        {"PIPELINE-STEP-010D": "completed"},
+        {"PIPELINE-STEP-010D": "completed", "PIPELINE-STEP-011D": "failed"},
+    ),
+)
+def test_deep_partial_resume_rejects_before_live_calls(
+    tmp_path: Path,
+    monkeypatch,
+    deep_statuses: dict[str, str],
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        Path(f"{output_dir}-evidence-pack.zip"),
+        profile=DEEP_PIPELINE_PROFILE,
+        final_status="failed",
+        step_statuses=deep_statuses,
+    )
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+@pytest.mark.parametrize(
+    "artefact_name",
+    (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    ),
+)
+def test_deep_resume_rejects_existing_deep_artefact_without_completed_metadata(
+    tmp_path: Path,
+    monkeypatch,
+    artefact_name: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    (output_dir / artefact_name).write_text("partial\n", encoding="utf-8")
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(project_file, output_dir, export_path)
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        _write_plan_file(output_dir, profile=STANDARD_BOUNDED_CORE_PROFILE),
+        STANDARD_BOUNDED_CORE_PROFILE,
+    )
+    _patch_live_calls_to_fail(monkeypatch)
+
+    result = run_project_pipeline(
+        project_file,
+        DEEP_PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-010D"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-011D"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-010"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-011"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-012"] == "skipped_existing"
+    assert result.report_path == str(output_dir / "report.md")
+    assert result.runbook_path == str(output_dir / "runbook.md")
+    assert result.export_path == str(export_path)
+    markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
+    assert f"- Report: `{output_dir / 'report.md'}`" in markdown
+    assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown
+    assert f"- Runbook: `{output_dir / 'runbook.md'}`" in markdown
+    assert f"- Evidence pack: `{export_path}`" in markdown
+
+
+def test_deep_completed_resume_requires_all_fixed_artefacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(project_file, output_dir, export_path)
+    (output_dir / "deep_recon_orchestration.json").unlink()
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+def test_deep_completed_resume_rejects_mismatched_recorded_export_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(project_file, output_dir, export_path)
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        tmp_path / "other-evidence-pack.zip",
+        profile=DEEP_PIPELINE_PROFILE,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+            "PIPELINE-STEP-010": "completed",
+            "PIPELINE-STEP-011": "completed",
+            "PIPELINE-STEP-012": "completed",
+        },
+    )
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+@pytest.mark.parametrize(
+    "artefact_name",
+    (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    ),
+)
+def test_deep_fresh_run_rejects_existing_fixed_artefact_before_live_calls(
+    tmp_path: Path,
+    monkeypatch,
+    artefact_name: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    (output_dir / artefact_name).write_text("existing\n", encoding="utf-8")
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Existing Deep artefact detected"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
+
+
+def test_deep_report_requires_orchestration(
+    tmp_path: Path,
+) -> None:
+    from bugslyce import project_pipeline
+
+    with pytest.raises(ValueError, match="Deep orchestration is required"):
+        project_pipeline._write_interpretation_report_if_needed(
+            DEEP_PIPELINE_PROFILE,
+            tmp_path,
+            {"deep_outputs": DeepPipelineOutputs()},
+        )
+
+
+def test_deep_export_requires_existing_five_path_tuple(tmp_path: Path) -> None:
+    from bugslyce import project_pipeline
+
+    outputs = DeepPipelineOutputs(
+        deep_artifact_paths=(
+            tmp_path / "deep_source_route_collection.md",
+            tmp_path / "deep_source_route_collection.json",
+        )
+    )
+    with pytest.raises(ValueError, match="Deep evidence artefacts are incomplete"):
+        project_pipeline._deep_evidence_paths_required(
+            DEEP_PIPELINE_PROFILE,
+            {"deep_outputs": outputs},
+        )
+
+
+def test_deep_source_writer_oserror_records_collection_step_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _patch_minimal_deep_collection(monkeypatch, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.export_recon_evidence_pack",
+        lambda *args, **kwargs: pytest.fail("export must not run after Deep failure"),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    assert result.failed_step == "PIPELINE-STEP-010D"
+    assert result.steps[9].status == "failed"
+    assert result.steps[10].status == "pending"
+    assert result.steps[13].status == "pending"
+
+
+def test_deep_orchestration_writer_oserror_records_orchestration_step_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _patch_minimal_deep_collection(monkeypatch, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        lambda result, output_path: _write_named_files(
+            output_path,
+            ("deep_source_route_collection.md", "deep_source_route_collection.json"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_recon_orchestration_artifacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.export_recon_evidence_pack",
+        lambda *args, **kwargs: pytest.fail("export must not run after Deep failure"),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    assert result.failed_step == "PIPELINE-STEP-011D"
+    assert result.steps[9].status == "completed"
+    assert result.steps[10].status == "failed"
+    assert result.steps[13].status == "pending"
 
 
 def test_pipeline_records_noop_followups_and_continues(
@@ -1283,8 +1917,13 @@ def _write_resume_evidence(
     )
 
 
-def _write_plan_file(output_dir: Path) -> Path:
-    plan_dir = Path(f"{output_dir}-content-plan-tiny")
+def _write_plan_file(
+    output_dir: Path,
+    *,
+    profile: str = CONTENT_DISCOVERY_TINY_PROFILE,
+) -> Path:
+    suffix = "tiny" if profile == CONTENT_DISCOVERY_TINY_PROFILE else "standard-bounded-core"
+    plan_dir = Path(f"{output_dir}-content-plan-{suffix}")
     plan_dir.mkdir(parents=True, exist_ok=True)
     plan_path = plan_dir / "content_discovery_plan.json"
     plan_path.write_text("{}\n", encoding="utf-8")
@@ -1297,12 +1936,28 @@ def _patch_plan_loader(
     output_dir: Path,
     plan_path: Path,
 ) -> None:
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        plan_path,
+        CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+
+
+def _patch_plan_loader_for_profile(
+    monkeypatch,
+    project_file: Path,
+    output_dir: Path,
+    plan_path: Path,
+    profile: str,
+) -> None:
     project = json.loads(project_file.read_text(encoding="utf-8"))
     monkeypatch.setattr(
         "bugslyce.project_pipeline.load_content_discovery_plan",
         lambda path: SimpleNamespace(
             target="10.10.10.10",
-            profile="lab-root-tiny",
+            profile=profile,
             input_dir=str(output_dir),
             output_dir=str(plan_path.parent),
             scope_file=project["scope_file"],
@@ -1314,19 +1969,150 @@ def _write_prior_pipeline(
     project_file: Path,
     output_dir: Path,
     export_path: Path,
+    *,
+    profile: str = PIPELINE_PROFILE,
+    final_status: str = "completed",
+    step_statuses: dict[str, str] | None = None,
 ) -> None:
     (output_dir / PIPELINE_JSON_FILENAME).write_text(
         json.dumps(
             {
                 "target": "10.10.10.10",
-                "profile": PIPELINE_PROFILE,
+                "profile": profile,
                 "project_file": str(project_file.resolve()),
                 "output_dir": str(output_dir.resolve()),
-                "final_status": "completed",
+                "final_status": final_status,
                 "export_path": str(export_path.resolve()),
-                "steps": [],
+                "steps": [
+                    {"step_id": step_id, "status": status}
+                    for step_id, status in (step_statuses or {}).items()
+                ],
             }
         )
         + "\n",
         encoding="utf-8",
+    )
+
+
+def _write_named_files(output_dir: Path, names: tuple[str, ...]) -> tuple[Path, ...]:
+    paths = tuple(output_dir / name for name in names)
+    for path in paths:
+        path.write_text(path.name + "\n", encoding="utf-8")
+    return paths
+
+
+def _write_completed_deep_resume_state(
+    project_file: Path,
+    output_dir: Path,
+    export_path: Path,
+) -> None:
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+            "gobuster-tiny-10.10.10.10-80-root.txt",
+            "curl-headers-content-followup-10.10.10.10-80-admin.txt",
+            "body-fetch-10.10.10.10-80-admin.html",
+        ],
+    )
+    _write_named_files(
+        output_dir,
+        (
+            "report.md",
+            "recon_status.md",
+            "recon_status.json",
+            "runbook.md",
+            "deep_source_route_collection.md",
+            "deep_source_route_collection.json",
+            "deep_recon_review.md",
+            "deep_recon_runbook.md",
+            "deep_recon_orchestration.json",
+        ),
+    )
+    export_path.write_bytes(b"zip")
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        export_path,
+        profile=DEEP_PIPELINE_PROFILE,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+            "PIPELINE-STEP-010": "completed",
+            "PIPELINE-STEP-011": "completed",
+            "PIPELINE-STEP-012": "completed",
+        },
+    )
+
+
+def _patch_live_calls_to_fail(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    for dotted_name in (
+        "run_nmap_discovery_workflow",
+        "run_nmap_service_workflow",
+        "run_http_metadata_workflow",
+        "run_path_followup_workflow",
+        "run_content_discovery_workflow",
+        "run_content_followup_workflow",
+        "run_body_fetch_workflow",
+        "collect_deep_source_routes_from_plan",
+        "collect_deep_shallow_route_followups",
+        "build_deep_recon_orchestration",
+        "export_recon_evidence_pack",
+    ):
+        monkeypatch.setattr(
+            f"bugslyce.project_pipeline.{dotted_name}",
+            lambda *args, _name=dotted_name, **kwargs: pytest.fail(
+                f"{_name} must not be called"
+            ),
+        )
+
+
+def _patch_minimal_deep_collection(monkeypatch, calls: list[str]) -> None:
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: SimpleNamespace(
+            project_name="pipeline-test",
+            http_artifacts=(),
+            evidence=(),
+            engagement_context="unknown",
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_collection_request_plan_from_project_state",
+        lambda state: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
+        lambda plan, *, fetcher: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_html_route_extraction",
+        lambda result: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_javascript_route_extraction",
+        lambda result: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_shallow_route_followup_plan",
+        lambda html, js: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_shallow_route_followups",
+        lambda plan, *, fetcher: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_recon_orchestration",
+        lambda source, shallow: SimpleNamespace(
+            deep_recon_markdown="## Deep\n",
+            deep_recon_runbook_markdown="## Guide\n",
+        ),
     )

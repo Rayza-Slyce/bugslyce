@@ -24,7 +24,7 @@ PREFLIGHT_CATEGORIES = (
     "operator_confirmation",
 )
 PREFLIGHT_SEVERITIES = ("critical", "high", "medium")
-CONTRACT_ONLY_NOTE = "Preflight contract only; Deep Recon remains unavailable."
+CONTRACT_ONLY_NOTE = "Preflight contract only; Deep Recon remains bounded."
 
 
 @dataclass(frozen=True)

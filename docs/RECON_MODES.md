@@ -207,16 +207,14 @@ bodies unnecessarily.
 
 ## Deep Recon
 
-Deep Recon is planned and unavailable until designed and implemented in later
-phases.
+Deep Recon is available through the bounded project-pipeline workflow.
 
-Planned internal profile name: `deep-bounded`.
+Internal profile name: `deep-bounded`.
 
 ### Deep Recon v1 Design Contract
 
-Deep Recon v1 is a design target, not currently available runtime behaviour.
-Deep Recon remains unavailable until separately implemented, tested, and
-enabled.
+Deep Recon v1 is bounded runtime behaviour implemented through the canonical
+BugSlyce recon-mode and project-pipeline workflow.
 
 Deep Recon means aggressive evidence discovery inside strict authorisation, scope, method, and rate limits.
 
@@ -231,7 +229,7 @@ Mode relationship:
 - Standard Recon: Quick-style bounded collection plus offline operator
   workflow.
 - Deep Recon: expanded bounded collection plus deeper source, route, service,
-  parameter, metadata, and evidence correlation.
+  parameter, metadata, and evidence correlation through `deep-bounded`.
 
 Deep Recon should be:
 
@@ -1276,3 +1274,18 @@ collection results. It composes existing offline Deep review stages and
 produces report, runbook, and explicit evidence-pack payloads. It performs no
 collection or network requests itself, adds no CLI or automatic pipeline
 wiring, and does not enable Deep Recon. Deep Recon remains unavailable.
+
+Phase 93D enables Deep Recon as `deep-bounded` through the canonical recon-mode
+and project-pipeline workflow. The enabled workflow runs the existing bounded
+base collection stages, invokes the existing bounded Deep source-route and
+shallow same-origin follow-up collectors, composes the existing offline review
+stages, and integrates Deep output into the report, runbook, and evidence pack.
+It remains same-origin, bounded, and non-exploitative; it does not submit
+forms, execute JavaScript, replay, guess, or mutate parameter values, and it
+produces evidence for manual review rather than confirmed findings.
+Resume is fail-closed for interrupted Deep network stages because full
+in-memory response bodies and shallow follow-up results are deliberately not
+persisted, and preview-only JSON cannot reproduce the complete offline
+analysis. A fully completed and verified Deep run may be resumed as a no-op,
+but BugSlyce will not silently repeat Deep network stages during resume;
+operators must use a clean project for an explicit rerun.

@@ -256,6 +256,6 @@ def test_collection_can_skip_markdown_rendering() -> None:
     assert collection.manual_review_leads_markdown is None
 
 
-def test_standard_available_and_deep_remains_unavailable() -> None:
+def test_standard_available_and_deep_available() -> None:
     assert get_recon_mode("standard").is_available
-    assert not get_recon_mode("deep").is_available
+    assert get_recon_mode("deep").is_available

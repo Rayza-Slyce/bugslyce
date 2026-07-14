@@ -31,8 +31,8 @@ DEEP_METADATA_GUARANTEES = (
     "No project files are read or written.",
     "No commands are executed.",
     "No output files are created.",
-    "Deep Recon remains unavailable.",
-    "`deep-bounded` remains non-executable.",
+    "Deep Recon is available only through the bounded deep-bounded profile.",
+    "`deep-bounded` remains bounded and scope-conscious.",
 )
 
 

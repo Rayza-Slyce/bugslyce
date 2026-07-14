@@ -39,6 +39,36 @@ from bugslyce.recon.content_run import (
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
 )
+from bugslyce.recon.deep_collection_request_plan import (
+    build_deep_collection_request_plan_from_project_state,
+)
+from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
+from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
+from bugslyce.recon.deep_javascript_route_extraction import (
+    build_deep_javascript_route_extraction,
+)
+from bugslyce.recon.deep_orchestration import (
+    DEEP_RECON_ORCHESTRATION_JSON,
+    DEEP_RECON_REVIEW_MARKDOWN,
+    DEEP_RECON_RUNBOOK_MARKDOWN,
+    DeepReconOrchestrationResult,
+    build_deep_recon_orchestration,
+    write_deep_recon_orchestration_artifacts,
+)
+from bugslyce.recon.deep_shallow_route_followup import (
+    DeepShallowRouteFollowupResult,
+    build_deep_shallow_route_followup_plan,
+    collect_deep_shallow_route_followups,
+)
+from bugslyce.recon.deep_source_route_collection_export import (
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
+    write_deep_source_route_collection_artifacts,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectionResult,
+    collect_deep_source_routes_from_plan,
+)
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
@@ -49,7 +79,7 @@ from bugslyce.recon.investigation_threads import (
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
 )
-from bugslyce.recon.modes import QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
+from bugslyce.recon.modes import DEEP_RECON_PROFILE, QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
     write_nmap_discovery_execution_result,
@@ -84,9 +114,26 @@ from bugslyce.triage.candidates import generate_candidates
 
 PIPELINE_PROFILE = QUICK_RECON_PROFILE
 STANDARD_PIPELINE_PROFILE = STANDARD_RECON_PROFILE
-SUPPORTED_PIPELINE_PROFILES = (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE)
+DEEP_PIPELINE_PROFILE = DEEP_RECON_PROFILE
+SUPPORTED_PIPELINE_PROFILES = (
+    PIPELINE_PROFILE,
+    STANDARD_PIPELINE_PROFILE,
+    DEEP_PIPELINE_PROFILE,
+)
 PIPELINE_JSON_FILENAME = "project_pipeline.json"
 PIPELINE_MARKDOWN_FILENAME = "project_pipeline.md"
+PARTIAL_DEEP_RESUME_MESSAGE = (
+    "Partial Deep pipeline state cannot be resumed safely because the full "
+    "in-memory collection results are not persisted. Start a clean Deep run "
+    "rather than repeating bounded network collection."
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    DEEP_RECON_REVIEW_MARKDOWN,
+    DEEP_RECON_RUNBOOK_MARKDOWN,
+    DEEP_RECON_ORCHESTRATION_JSON,
+)
 SKIPPED_STEP_MESSAGES = {
     "PIPELINE-STEP-002": (
         "Existing nmap discovery evidence detected; phase skipped during resume."
@@ -116,10 +163,32 @@ SKIPPED_STEP_MESSAGES = {
         "Existing selective body-fetch artefacts detected; "
         "phase skipped during resume."
     ),
+    "PIPELINE-STEP-010D": (
+        "Existing completed Deep collection detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-011D": (
+        "Existing completed Deep orchestration artefacts detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-010": (
+        "Existing completed recon status detected; phase skipped during resume."
+    ),
+    "PIPELINE-STEP-011": (
+        "Existing completed project runbook detected; phase skipped during resume."
+    ),
     "PIPELINE-STEP-012": (
         "Existing completed evidence pack detected; export skipped during resume."
     ),
 }
+
+
+@dataclass(frozen=True)
+class DeepPipelineOutputs:
+    """In-memory Deep pipeline outputs shared between adjacent steps."""
+
+    source_collection: DeepSourceRouteCollectionResult | None = None
+    shallow_followups: DeepShallowRouteFollowupResult | None = None
+    orchestration: DeepReconOrchestrationResult | None = None
+    deep_artifact_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -215,7 +284,7 @@ def run_project_pipeline(
         resume=resume,
     )
 
-    steps = _pending_steps()
+    steps = _pending_steps(profile)
     for index, step in enumerate(steps):
         if step.step_id in assessment.skipped_step_ids:
             steps[index] = replace(
@@ -245,7 +314,12 @@ def run_project_pipeline(
             if (output_dir / "report.md").is_file()
             else None
         ),
-        runbook_path=None,
+        runbook_path=(
+            str(output_dir / "runbook.md")
+            if (output_dir / "runbook.md").is_file()
+            and "PIPELINE-STEP-011" in assessment.skipped_step_ids
+            else None
+        ),
         export_path=(
             str(export_path)
             if "PIPELINE-STEP-012" in assessment.skipped_step_ids
@@ -278,17 +352,19 @@ def run_project_pipeline(
         "target": project.target,
         "resume": resume,
         "profile": profile,
+        "deep_outputs": DeepPipelineOutputs(),
     }
     step_runners = _step_runners(context, clock)
+    total_steps = len(result.steps)
     for index, step in enumerate(result.steps):
         position = index + 1
         if step.status == "skipped_existing":
             _emit(
                 progress_callback,
-                f"[{position}/12] {step.name} skipped.\n{step.message}",
+                f"[{position}/{total_steps}] {step.name} skipped.\n{step.message}",
             )
             continue
-        _emit(progress_callback, f"[{position}/12] {step.name} starting...")
+        _emit(progress_callback, f"[{position}/{total_steps}] {step.name} starting...")
         started_step = replace(step, status="running", started_at=utc_now_iso(clock))
         result = _replace_step(result, index, started_step)
         try:
@@ -303,7 +379,7 @@ def run_project_pipeline(
             )
             result = _replace_step(result, index, completed_step)
             result = _refresh_result_counts(result)
-            _emit(progress_callback, f"[{position}/12] {step.name} no-op")
+            _emit(progress_callback, f"[{position}/{total_steps}] {step.name} no-op")
             continue
         except (
             ContentDiscoveryExecutionIncomplete,
@@ -319,9 +395,9 @@ def run_project_pipeline(
                 clock,
             )
             write_project_pipeline_result(result)
-            _emit(progress_callback, f"[{position}/12] {step.name} failed")
+            _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(str(exc), result) from exc
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             result = _failed_result(
                 result,
                 index,
@@ -330,7 +406,7 @@ def run_project_pipeline(
                 clock,
             )
             write_project_pipeline_result(result)
-            _emit(progress_callback, f"[{position}/12] {step.name} failed")
+            _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(str(exc), result) from exc
 
         completed_step = replace(
@@ -343,7 +419,7 @@ def run_project_pipeline(
         result = _replace_step(result, index, completed_step)
         result = replace(result, **updates)
         result = _refresh_result_counts(result)
-        _emit(progress_callback, f"[{position}/12] {step.name} complete")
+        _emit(progress_callback, f"[{position}/{total_steps}] {step.name} complete")
 
     result = replace(
         _refresh_result_counts(result),
@@ -490,6 +566,11 @@ def _final_output_paths(result: PipelineResult) -> dict[str, str]:
     status_generated = any(
         step.step_id == "PIPELINE-STEP-010" and step.status == "completed"
         for step in result.steps
+    ) or any(
+        step.step_id == "PIPELINE-STEP-010"
+        and step.status == "skipped_existing"
+        and (output_dir / "recon_status.md").is_file()
+        for step in result.steps
     )
     return {
         "report": result.report_path or "not generated",
@@ -528,6 +609,8 @@ def _validate_pipeline(
                 "Existing recon pack detected. Use project status/next or start with "
                 "a clean project directory."
             )
+        if profile == DEEP_PIPELINE_PROFILE:
+            _reject_existing_deep_fixed_artefacts(output_dir)
         if plan_dir.exists():
             raise ValueError(f"Content plan directory already exists: {plan_dir}")
         if export_path.exists():
@@ -628,6 +711,13 @@ def _assess_resume_state(
         plan_complete = True
 
     prior_statuses = _prior_step_statuses(prior_pipeline)
+    if profile == DEEP_PIPELINE_PROFILE:
+        _validate_deep_resume_state(
+            output_dir=output_dir,
+            export_path=export_path,
+            prior_pipeline=prior_pipeline,
+            prior_statuses=prior_statuses,
+        )
     detected = {
         "PIPELINE-STEP-002": "nmap-allports.txt" in artifact_names,
         "PIPELINE-STEP-003": any(
@@ -675,9 +765,98 @@ def _assess_resume_state(
             raise ValueError(
                 "Existing evidence pack path does not match completed pipeline metadata."
             )
+        if profile == DEEP_PIPELINE_PROFILE and _deep_completed_resume_verified(
+            output_dir=output_dir,
+            export_path=export_path,
+            prior_pipeline=prior_pipeline,
+            prior_statuses=prior_statuses,
+        ):
+            skipped.update(
+                {
+                    "PIPELINE-STEP-010D",
+                    "PIPELINE-STEP-011D",
+                    "PIPELINE-STEP-010",
+                    "PIPELINE-STEP-011",
+                }
+            )
         skipped.add("PIPELINE-STEP-012")
 
     return ResumeAssessment(frozenset(skipped), prior_pipeline)
+
+
+def _reject_existing_deep_fixed_artefacts(output_dir: Path) -> None:
+    existing = [name for name in DEEP_FIXED_ARTEFACT_FILENAMES if (output_dir / name).exists()]
+    if existing:
+        raise ValueError(
+            "Existing Deep artefact detected before a fresh Deep run: "
+            + ", ".join(existing)
+            + ". Start with a clean project directory."
+        )
+
+
+def _validate_deep_resume_state(
+    *,
+    output_dir: Path,
+    export_path: Path,
+    prior_pipeline: dict[str, object] | None,
+    prior_statuses: dict[str, str],
+) -> None:
+    if _deep_completed_resume_verified(
+        output_dir=output_dir,
+        export_path=export_path,
+        prior_pipeline=prior_pipeline,
+        prior_statuses=prior_statuses,
+    ):
+        return
+    deep_status_touched = any(
+        prior_statuses.get(step_id) in {"running", "completed", "failed"}
+        for step_id in ("PIPELINE-STEP-010D", "PIPELINE-STEP-011D")
+    )
+    deep_artefact_touched = any(
+        (output_dir / name).exists() for name in DEEP_FIXED_ARTEFACT_FILENAMES
+    )
+    if deep_status_touched or deep_artefact_touched:
+        raise ValueError(PARTIAL_DEEP_RESUME_MESSAGE)
+
+
+def _deep_completed_resume_verified(
+    *,
+    output_dir: Path,
+    export_path: Path,
+    prior_pipeline: dict[str, object] | None,
+    prior_statuses: dict[str, str],
+) -> bool:
+    if prior_pipeline is None:
+        return False
+    if prior_pipeline.get("profile") != DEEP_PIPELINE_PROFILE:
+        return False
+    if prior_pipeline.get("final_status") != "completed":
+        return False
+    if not all(
+        prior_statuses.get(step_id) == "completed"
+        for step_id in (
+            "PIPELINE-STEP-010D",
+            "PIPELINE-STEP-011D",
+            "PIPELINE-STEP-010",
+            "PIPELINE-STEP-011",
+            "PIPELINE-STEP-012",
+        )
+    ):
+        return False
+    recorded_export = prior_pipeline.get("export_path")
+    if not isinstance(recorded_export, str):
+        return False
+    if Path(recorded_export).expanduser().resolve() != export_path:
+        return False
+    required = (
+        output_dir / "report.md",
+        output_dir / "recon_status.md",
+        output_dir / "recon_status.json",
+        output_dir / "runbook.md",
+        *(output_dir / name for name in DEEP_FIXED_ARTEFACT_FILENAMES),
+        export_path,
+    )
+    return all(path.is_file() for path in required)
 
 
 def _load_json_object(path: Path, label: str) -> dict[str, object]:
@@ -814,7 +993,7 @@ def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
 
 
 def _content_discovery_profile_for_pipeline(profile: str) -> str:
-    if profile == STANDARD_PIPELINE_PROFILE:
+    if profile in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
         return STANDARD_BOUNDED_CORE_PROFILE
     return CONTENT_DISCOVERY_TINY_PROFILE
 
@@ -829,7 +1008,7 @@ def _content_plan_suffix(content_profile: str) -> str:
     return content_profile.replace("/", "-")
 
 
-def _pending_steps() -> list[PipelineStep]:
+def _pending_steps(profile: str) -> list[PipelineStep]:
     definitions = [
         ("PIPELINE-STEP-001", "environment and project validation", "local-validation"),
         ("PIPELINE-STEP-002", "nmap full TCP discovery", "nmap-discover"),
@@ -840,10 +1019,29 @@ def _pending_steps() -> list[PipelineStep]:
         ("PIPELINE-STEP-007", "bounded content discovery execution", "content-run"),
         ("PIPELINE-STEP-008", "content-result follow-up", "content-followup"),
         ("PIPELINE-STEP-009", "selective body fetch", "body-fetch"),
-        ("PIPELINE-STEP-010", "recon status", "status"),
-        ("PIPELINE-STEP-011", "project runbook", "runbook"),
-        ("PIPELINE-STEP-012", "evidence pack export", "export"),
     ]
+    if profile == DEEP_PIPELINE_PROFILE:
+        definitions.extend(
+            [
+                (
+                    "PIPELINE-STEP-010D",
+                    "Deep bounded collection",
+                    "deep-collection",
+                ),
+                (
+                    "PIPELINE-STEP-011D",
+                    "Deep offline review orchestration",
+                    "deep-orchestration",
+                ),
+            ]
+        )
+    definitions.extend(
+        [
+            ("PIPELINE-STEP-010", "recon status", "status"),
+            ("PIPELINE-STEP-011", "project runbook", "runbook"),
+            ("PIPELINE-STEP-012", "evidence pack export", "export"),
+        ]
+    )
     return [
         PipelineStep(
             step_id=step_id,
@@ -859,7 +1057,7 @@ def _pending_steps() -> list[PipelineStep]:
 def _step_runners(
     context: dict[str, object],
     clock: Clock | None,
-) -> dict[str, Callable[[], tuple[str, list[str], dict[str, str | None]]]]:
+) -> dict[str, Callable[[], tuple[str, list[str], dict[str, object]]]]:
     output_dir = context["output_dir"]
     scope_file = context["scope_file"]
     plan_dir = context["plan_dir"]
@@ -967,17 +1165,78 @@ def _step_runners(
             {"report_path": result.report_path},
         )
 
+    def deep_collection():
+        project_state = build_project_state(output_dir)
+        plan = build_deep_collection_request_plan_from_project_state(project_state)
+        source_collection = collect_deep_source_routes_from_plan(
+            plan,
+            fetcher=urllib_deep_http_fetcher,
+        )
+        source_paths = write_deep_source_route_collection_artifacts(
+            source_collection,
+            output_dir,
+        )
+        html_routes = build_deep_html_route_extraction(source_collection)
+        javascript_routes = build_deep_javascript_route_extraction(source_collection)
+        followup_plan = build_deep_shallow_route_followup_plan(
+            html_routes,
+            javascript_routes,
+        )
+        shallow_followups = collect_deep_shallow_route_followups(
+            followup_plan,
+            fetcher=urllib_deep_http_fetcher,
+        )
+        current = _deep_outputs_from_context(context)
+        context["deep_outputs"] = replace(
+            current,
+            source_collection=source_collection,
+            shallow_followups=shallow_followups,
+            deep_artifact_paths=_dedupe_paths(tuple(source_paths)),
+        )
+        return (
+            "Deep bounded source-route collection and shallow same-origin follow-up completed.",
+            [str(path) for path in source_paths],
+            {},
+        )
+
+    def deep_orchestration():
+        current = _deep_outputs_from_context(context)
+        if current.source_collection is None or current.shallow_followups is None:
+            raise ValueError("Deep collection results are required before orchestration.")
+        orchestration = build_deep_recon_orchestration(
+            current.source_collection,
+            current.shallow_followups,
+        )
+        artifact_paths = write_deep_recon_orchestration_artifacts(
+            orchestration,
+            output_dir,
+            force=resume,
+        )
+        context["deep_outputs"] = replace(
+            current,
+            orchestration=orchestration,
+            deep_artifact_paths=_dedupe_paths(
+                (*current.deep_artifact_paths, *artifact_paths),
+            ),
+        )
+        return (
+            "Deep offline review orchestration completed.",
+            [str(path) for path in artifact_paths],
+            {},
+        )
+
     def status():
-        standard_paths = _write_standard_interpretation_report_if_needed(
+        report_paths = _write_interpretation_report_if_needed(
             profile,
             output_dir,
+            context,
         )
         result = build_recon_status(output_dir, scope_file, clock=clock)
         json_path, markdown_path = write_recon_status(result, output_dir)
-        output_paths = [*standard_paths, str(json_path), str(markdown_path)]
+        output_paths = [*report_paths, str(json_path), str(markdown_path)]
         updates = (
-            {"report_path": standard_paths[0]}
-            if standard_paths
+            {"report_path": report_paths[0]}
+            if report_paths
             else {}
         )
         return (
@@ -987,15 +1246,21 @@ def _step_runners(
         )
 
     def runbook():
-        result = build_project_runbook(
-            project_file,
-            clock=clock,
-            standard_investigation_workflow_markdown=(
+        runbook_kwargs: dict[str, object] = {
+            "clock": clock,
+            "standard_investigation_workflow_markdown": (
                 _build_standard_investigation_runbook_section_if_needed(
                     profile,
                     output_dir,
                 )
             ),
+        }
+        deep_runbook_markdown = _deep_runbook_markdown_required(profile, context)
+        if deep_runbook_markdown is not None:
+            runbook_kwargs["deep_recon_runbook_markdown"] = deep_runbook_markdown
+        result = build_project_runbook(
+            project_file,
+            **runbook_kwargs,
         )
         runbook_path = write_project_runbook(result)
         return (
@@ -1005,11 +1270,20 @@ def _step_runners(
         )
 
     def export():
-        result = export_recon_evidence_pack(
-            output_dir,
-            export_path,
-            clock=clock,
-        )
+        deep_evidence_paths = _deep_evidence_paths_required(profile, context)
+        if deep_evidence_paths is None:
+            result = export_recon_evidence_pack(
+                output_dir,
+                export_path,
+                clock=clock,
+            )
+        else:
+            result = export_recon_evidence_pack(
+                output_dir,
+                export_path,
+                clock=clock,
+                deep_evidence_paths=deep_evidence_paths,
+            )
         return (
             "Portable evidence pack exported.",
             [result.output_path],
@@ -1026,18 +1300,79 @@ def _step_runners(
         "PIPELINE-STEP-007": content_run,
         "PIPELINE-STEP-008": content_followup,
         "PIPELINE-STEP-009": body_fetch,
+        "PIPELINE-STEP-010D": deep_collection,
+        "PIPELINE-STEP-011D": deep_orchestration,
         "PIPELINE-STEP-010": status,
         "PIPELINE-STEP-011": runbook,
         "PIPELINE-STEP-012": export,
     }
 
 
-def _write_standard_interpretation_report_if_needed(
+def _deep_outputs_from_context(context: dict[str, object]) -> DeepPipelineOutputs:
+    outputs = context.get("deep_outputs")
+    if not isinstance(outputs, DeepPipelineOutputs):
+        raise ValueError("Deep pipeline outputs are not initialised.")
+    return outputs
+
+
+def _deep_runbook_markdown_required(
+    profile: str,
+    context: dict[str, object],
+) -> str | None:
+    if profile != DEEP_PIPELINE_PROFILE:
+        return None
+    orchestration = _deep_outputs_from_context(context).orchestration
+    if orchestration is None:
+        raise ValueError("Deep orchestration is required before runbook generation.")
+    return orchestration.deep_recon_runbook_markdown
+
+
+def _deep_evidence_paths_required(
+    profile: str,
+    context: dict[str, object],
+) -> tuple[Path, ...] | None:
+    if profile != DEEP_PIPELINE_PROFILE:
+        return None
+    paths = _deep_outputs_from_context(context).deep_artifact_paths
+    deduped = _dedupe_paths(paths)
+    expected_names = tuple(path.name for path in deduped)
+    if expected_names != DEEP_FIXED_ARTEFACT_FILENAMES:
+        raise ValueError(
+            "Deep evidence artefacts are incomplete; expected explicit paths for "
+            + ", ".join(DEEP_FIXED_ARTEFACT_FILENAMES)
+            + "."
+        )
+    missing = [str(path) for path in deduped if not path.is_file()]
+    if missing:
+        raise ValueError("Deep evidence artefact is missing: " + ", ".join(missing))
+    return deduped
+
+
+def _dedupe_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    seen: set[Path] = set()
+    deduped: list[Path] = []
+    for path in paths:
+        resolved = path.expanduser().resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(path)
+    return tuple(deduped)
+
+
+def _write_interpretation_report_if_needed(
     profile: str,
     output_dir: Path,
+    context: dict[str, object],
 ) -> list[str]:
-    if profile != STANDARD_PIPELINE_PROFILE:
+    if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
         return []
+    deep_recon_markdown = None
+    if profile == DEEP_PIPELINE_PROFILE:
+        orchestration = _deep_outputs_from_context(context).orchestration
+        if orchestration is None:
+            raise ValueError("Deep orchestration is required before report generation.")
+        deep_recon_markdown = orchestration.deep_recon_markdown
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
@@ -1056,25 +1391,30 @@ def _write_standard_interpretation_report_if_needed(
         candidates,
         engagement_context=engagement_context,
     )
+    report_kwargs: dict[str, str | None] = {
+        "human_triage_brief_markdown": render_human_triage_brief_markdown(
+            human_triage_brief,
+        ),
+        "manual_review_leads_markdown": assembly.manual_review_leads_markdown,
+        "investigation_threads_markdown": render_investigation_threads_markdown(
+            threads,
+            engagement_context=engagement_context,
+        ),
+        "route_source_review_markdown": render_route_source_review_markdown(
+            route_source_leads,
+            engagement_context=engagement_context,
+        ),
+        "readable_evidence_cards_markdown": render_readable_evidence_cards_markdown(
+            human_triage_brief,
+        ),
+    }
+    if deep_recon_markdown is not None:
+        report_kwargs["deep_recon_markdown"] = deep_recon_markdown
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
         output_dir,
-        human_triage_brief_markdown=render_human_triage_brief_markdown(
-            human_triage_brief,
-        ),
-        manual_review_leads_markdown=assembly.manual_review_leads_markdown,
-        investigation_threads_markdown=render_investigation_threads_markdown(
-            threads,
-            engagement_context=engagement_context,
-        ),
-        route_source_review_markdown=render_route_source_review_markdown(
-            route_source_leads,
-            engagement_context=engagement_context,
-        ),
-        readable_evidence_cards_markdown=render_readable_evidence_cards_markdown(
-            human_triage_brief,
-        ),
+        **report_kwargs,
     )
     return [str(report_path), str(json_path)]
 
@@ -1083,7 +1423,7 @@ def _build_standard_investigation_runbook_section_if_needed(
     profile: str,
     output_dir: Path,
 ) -> str | None:
-    if profile != STANDARD_PIPELINE_PROFILE:
+    if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
         return None
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)

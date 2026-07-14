@@ -27,9 +27,9 @@ SUPPORTED_DEEP_ENGAGEMENT_CONTEXTS = (
     INTERNAL_AUTHORISED_CONTEXT,
 )
 DEEP_ELIGIBILITY_GUARANTEES = (
-    "Deep Recon remains unavailable.",
-    "`deep-bounded` is not an executable profile.",
-    "No runtime collection is performed.",
+    "Deep Recon is available only through the bounded deep-bounded profile.",
+    "`deep-bounded` remains bounded and scope-conscious.",
+    "This eligibility renderer performs no runtime collection.",
     "No project files are read or written.",
     "No commands are executed.",
     "No output files are created.",
