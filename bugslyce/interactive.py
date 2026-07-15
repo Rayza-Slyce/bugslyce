@@ -235,7 +235,11 @@ def _resume_existing_project(
         resume_profile = _resume_profile_for_project(project)
         print_func(render_project_show(project, project_file))
         print_func("")
-        print_func(render_project_status(inspect_project_status(project_file)))
+        print_func(
+            render_project_status(
+                inspect_project_status(project_file, write_status=False),
+            )
+        )
     except ValueError as exc:
         print_func(f"Error: {exc}")
         print_func("No commands were executed.")

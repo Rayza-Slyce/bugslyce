@@ -354,7 +354,11 @@ def load_project(project_file: Path) -> BugSlyceProject:
     )
 
 
-def inspect_project_status(project_file: Path) -> ProjectStatusResult:
+def inspect_project_status(
+    project_file: Path,
+    *,
+    write_status: bool = True,
+) -> ProjectStatusResult:
     """Inspect a project's output directory without executing recon."""
 
     project_file = project_file.expanduser().resolve()
@@ -376,14 +380,17 @@ def inspect_project_status(project_file: Path) -> ProjectStatusResult:
         )
 
     status = build_recon_status(output_dir, Path(project.scope_file))
-    json_path, markdown_path = write_recon_status(status, output_dir)
+    json_path: Path | None = None
+    markdown_path: Path | None = None
+    if write_status:
+        json_path, markdown_path = write_recon_status(status, output_dir)
     return ProjectStatusResult(
         project=project,
         project_file=str(project_file),
         recon_pack_exists=True,
         recon_status=status,
-        status_json_path=str(json_path),
-        status_markdown_path=str(markdown_path),
+        status_json_path=str(json_path) if json_path is not None else None,
+        status_markdown_path=str(markdown_path) if markdown_path is not None else None,
         next_action=status.next_actions[0],
     )
 
@@ -793,16 +800,17 @@ def render_project_status(result: ProjectStatusResult) -> str:
         f"Recon pack exists: {str(result.recon_pack_exists).lower()}",
     ]
     if result.recon_status is not None:
-        lines.extend(
-            [
-                "",
+        lines.append("")
+        if result.status_json_path and result.status_markdown_path:
+            lines.append(
                 render_recon_status_summary(
                     result.recon_status,
-                    Path(result.status_json_path or ""),
-                    Path(result.status_markdown_path or ""),
-                ),
-            ]
-        )
+                    Path(result.status_json_path),
+                    Path(result.status_markdown_path),
+                )
+            )
+        else:
+            lines.append(_render_recon_status_read_only_summary(result.recon_status))
     else:
         lines.extend(
             [
@@ -812,6 +820,19 @@ def render_project_status(result: ProjectStatusResult) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def _render_recon_status_read_only_summary(result: ReconStatusResult) -> str:
+    lines = render_recon_status_summary(
+        result,
+        Path("recon_status.json"),
+        Path("recon_status.md"),
+    ).splitlines()
+    return "\n".join(
+        line
+        for line in lines
+        if not line.startswith(("Status JSON path:", "Status Markdown path:"))
+    )
 
 
 def render_project_next(result: ProjectNextResult) -> str:

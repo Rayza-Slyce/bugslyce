@@ -16,6 +16,7 @@ from bugslyce.interactive import (
     run_interactive_launcher,
 )
 from bugslyce.project_pipeline import PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE
+from bugslyce.project_session import PROJECT_SCHEMA_VERSION
 
 
 def test_no_args_non_interactive_prints_help(capsys) -> None:
@@ -676,7 +677,7 @@ def test_resume_yes_calls_pipeline_with_resume(monkeypatch, tmp_path: Path) -> N
     )
     monkeypatch.setattr(
         "bugslyce.interactive.inspect_project_status",
-        lambda path: SimpleNamespace(),
+        lambda path, **kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.render_project_status",
@@ -735,7 +736,7 @@ def test_resume_uses_prior_standard_pipeline_profile(
     )
     monkeypatch.setattr(
         "bugslyce.interactive.inspect_project_status",
-        lambda path: SimpleNamespace(),
+        lambda path, **kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.render_project_status",
@@ -792,7 +793,7 @@ def test_resume_uses_prior_quick_pipeline_profile(
     )
     monkeypatch.setattr(
         "bugslyce.interactive.inspect_project_status",
-        lambda path: SimpleNamespace(),
+        lambda path, **kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.render_project_status",
@@ -835,7 +836,7 @@ def test_resume_no_shows_command_preview(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "bugslyce.interactive.inspect_project_status",
-        lambda path: SimpleNamespace(),
+        lambda path, **kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.render_project_status",
@@ -857,6 +858,93 @@ def test_resume_no_shows_command_preview(monkeypatch, tmp_path: Path) -> None:
     assert exit_code == 0
     assert any("--resume" in line for line in output)
     assert "No commands were executed." in output
+
+
+def test_resume_preview_completed_deep_project_is_read_only_before_confirmation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file, canonical_paths = _completed_deep_project(tmp_path)
+    before = {path: path.read_bytes() for path in canonical_paths}
+    monkeypatch.setattr(
+        "bugslyce.project_session.write_recon_status",
+        lambda *args, **kwargs: pytest.fail("status preview must not write files"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run without YES"),
+    )
+    output: list[str] = []
+    inputs = iter(["2", str(project_file), ""])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert "Name: demo" in rendered
+    assert "Target: 10.10.10.10" in rendered
+    assert "Pipeline profile: deep-bounded" in rendered
+    assert "Deep pipeline phases: 2/2" in rendered
+    assert "Status JSON path:" not in rendered
+    assert "Status Markdown path:" not in rendered
+    assert "--resume" in rendered
+    assert {path: path.read_bytes() for path in canonical_paths} == before
+
+
+def test_resume_confirm_completed_deep_project_keeps_preview_read_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file, canonical_paths = _completed_deep_project(tmp_path)
+    before = {path: path.read_bytes() for path in canonical_paths}
+    monkeypatch.setattr(
+        "bugslyce.project_session.write_recon_status",
+        lambda *args, **kwargs: pytest.fail("status preview must not write files"),
+    )
+    received: dict[str, object] = {}
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        return SimpleNamespace(
+            project_name="demo",
+            target="10.10.10.10",
+            profile="deep-bounded",
+            project_file=str(project_file),
+            output_dir=str(project_file.parent),
+            resume_requested=True,
+            final_status="completed",
+            completed_steps=1,
+            skipped_steps=13,
+            no_op_steps=0,
+            failed_step=None,
+            report_path=str(project_file.parent / "report.md"),
+            runbook_path=str(project_file.parent / "runbook.md"),
+            export_path=str(project_file.parent.parent / "demo-evidence-pack.zip"),
+            steps=[],
+        )
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
+    output: list[str] = []
+    inputs = iter(["2", str(project_file), "YES"])
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda prompt: next(inputs),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 0
+    assert received["resume"] is True
+    assert received["profile"] == "deep-bounded"
+    assert "* Completed: 1" in rendered
+    assert "* Skipped existing: 13" in rendered
+    assert "* Failed: 0" in rendered
+    assert {path: path.read_bytes() for path in canonical_paths} == before
 
 
 def test_list_projects_and_doctor_paths(monkeypatch, tmp_path: Path) -> None:
@@ -952,4 +1040,113 @@ def _scaffold_result(project_file: Path) -> SimpleNamespace:
         project_directory=str(project_file.parent),
         scope_file=str(project_file.parent / "scope.md"),
         project_file=str(project_file),
+    )
+
+
+def _completed_deep_project(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    scope_file = project_dir / "scope.md"
+    scope_file.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
+    project_file = project_dir / "bugslyce_project.json"
+    project_file.write_text(
+        json.dumps(
+            {
+                "schema_version": PROJECT_SCHEMA_VERSION,
+                "name": "demo",
+                "target": "10.10.10.10",
+                "scope_file": str(scope_file),
+                "output_dir": str(project_dir),
+                "created_by": "bugslyce",
+                "default_profiles": {},
+                "created_at": "2026-06-15T12:00:00+00:00",
+                "engagement_context": "unknown",
+                "notes": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_artifacts = [
+        "nmap-allports.txt",
+        "nmap-services-all.txt",
+        "curl-headers-10.10.10.10-80.txt",
+        "curl-headers-followup-10.10.10.10-80-manual.txt",
+        "gobuster-tiny-10.10.10.10-80-root.txt",
+        "curl-headers-content-followup-10.10.10.10-80-admin.txt",
+        "body-fetch-10.10.10.10-80-admin.html",
+    ]
+    for name in manifest_artifacts:
+        (project_dir / name).write_text(f"{name}\n", encoding="utf-8")
+    (project_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "target": "10.10.10.10",
+                "profile": "deep-bounded",
+                "artifacts": [
+                    {
+                        "type": "html" if name.endswith(".html") else "http_headers",
+                        "file": name,
+                    }
+                    for name in manifest_artifacts
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    export_path = tmp_path / "projects" / "demo-evidence-pack.zip"
+    canonical_names = (
+        "report.md",
+        "recon_status.md",
+        "recon_status.json",
+        "runbook.md",
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+        "project_pipeline.json",
+        "project_pipeline.md",
+    )
+    for name in canonical_names:
+        (project_dir / name).write_text(f"{name} original\n", encoding="utf-8")
+    (project_dir / "project_pipeline.json").write_text(
+        json.dumps(
+            {
+                "target": "10.10.10.10",
+                "profile": "deep-bounded",
+                "project_file": str(project_file),
+                "output_dir": str(project_dir),
+                "final_status": "completed",
+                "export_path": str(export_path),
+                "steps": [
+                    {"step_id": "PIPELINE-STEP-002", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-003", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-004", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-005", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-006", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-007", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-008", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-009", "status": "noop"},
+                    {"step_id": "PIPELINE-STEP-010D", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-011D", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-010", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-011", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-012", "status": "completed"},
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    export_path.write_bytes(b"zip original")
+    return project_file, tuple(
+        [project_dir / name for name in canonical_names] + [export_path]
     )
