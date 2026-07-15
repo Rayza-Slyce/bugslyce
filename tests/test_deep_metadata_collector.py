@@ -254,7 +254,7 @@ def test_renderer_includes_sections_safety_wording_and_no_finding_language() -> 
         "It does not crawl.",
         "It does not collect non-metadata routes.",
         "It does not confirm vulnerabilities.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert required in rendered
     for forbidden in (

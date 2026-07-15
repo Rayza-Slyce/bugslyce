@@ -110,17 +110,21 @@ def test_javascript_same_origin_rules_and_no_reresolution() -> None:
             _js_candidate(candidate_id="J3", safe_resolved_url="https://example.test/api", source_urls=("http://example.test/app.js",)),
             _js_candidate(candidate_id="J4", safe_resolved_url="http://example.test:8080/api", source_urls=("http://example.test/app.js",)),
             _js_candidate(candidate_id="J5", safe_resolved_url="http://[2001:db8::1]/v1", source_urls=("http://[2001:db8::1]/app.js",)),
+            _js_candidate(candidate_id="J6", safe_candidate="//example.test/proto", safe_resolved_url="https://example.test/proto", source_urls=("https://example.test/app.js",)),
+            _js_candidate(candidate_id="J7", safe_candidate="//external.test/proto", safe_resolved_url="https://external.test/proto", source_urls=("https://example.test/app.js",)),
         ),
     )
 
     assert {request.request_url for request in plan.requests} == {
         "http://example.test/api",
         "http://[2001:db8::1]/v1",
+        "https://example.test/proto",
     }
     skipped = {(item.source_id, item.reason) for item in plan.skipped}
     assert ("J2", "unresolved_relative") in skipped
     assert ("J3", "cross_origin") in skipped
     assert ("J4", "cross_origin") in skipped
+    assert ("J7", "cross_origin") in skipped
     assert all("../admin" not in request.request_url for request in plan.requests)
 
 
@@ -294,7 +298,7 @@ def test_plan_renderer_sections_safety_and_prohibited_wording() -> None:
         "No JavaScript was executed.",
         "No forms were submitted.",
         "No parameters were mutated.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     _assert_no_prohibited_wording(rendered)
@@ -664,7 +668,7 @@ def test_result_renderer_sections_safety_and_prohibited_wording() -> None:
         "### Safety Notes",
         "Network access was limited to the supplied bounded fetcher and the selected plan requests.",
         "Redirects were not manually followed by this phase.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     _assert_no_prohibited_wording(rendered)
@@ -844,6 +848,35 @@ def _manual_request(request_id: str, request_url: str) -> DeepShallowRouteFollow
         selection_reason="same_origin_static_route",
         interpretation="test",
     )
+
+
+def test_manual_external_shallow_plan_is_rejected_before_fetch() -> None:
+    request = _manual_request("R1", "http://other.test/admin")
+
+    with pytest.raises(ValueError, match="same-origin source provenance"):
+        collect_deep_shallow_route_followups(
+            _manual_plan((request,)),
+            fetcher=_raising_fetcher,
+        )
+
+
+def test_manual_default_port_same_origin_shallow_plan_is_accepted() -> None:
+    request = _manual_request("R1", "http://example.test/admin")
+    request = replace(
+        request,
+        source_request_urls=("http://example.test:80/source",),
+    )
+    calls: list[str] = []
+
+    result = collect_deep_shallow_route_followups(
+        _manual_plan((request,)),
+        fetcher=lambda deep_request, bounds: (
+            calls.append(deep_request.url) or _ok_fetcher(deep_request, bounds)
+        ),
+    )
+
+    assert calls == ["http://example.test/admin"]
+    assert result.summary_counts.responses_collected == 1
 
 
 def _manual_plan(

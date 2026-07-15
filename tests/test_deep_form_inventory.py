@@ -40,7 +40,7 @@ def test_empty_inputs_produce_safe_empty_result_and_renderer_sections() -> None:
         "### Inventory Interpretation Notes",
         "### Safety Notes",
         "No form was submitted.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
 
@@ -724,7 +724,7 @@ def test_renderer_safety_wording_and_prohibited_language() -> None:
         "No JavaScript was executed.",
         "No field value was retained, replayed, or invented.",
         "Individual control names are deliberately deferred to Phase 92B.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     for forbidden in (

@@ -59,9 +59,152 @@ def test_origins_are_derived_deduped_and_normalised_from_local_evidence() -> Non
     assert plan.allowed_origins == (
         "http://example.test",
         "https://example.test",
-        "http://example.test:8080",
-        "http://other.test",
     )
+
+
+def test_external_absolute_references_do_not_become_executable_deep_requests() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[_service("http://target.test/", "EVID-HTTP-0001")],
+            http_artifacts=[
+                _artifact(
+                    "http://httpd.apache.org/docs/2.4/mod/mod_userdir.html",
+                    "link",
+                    "docs",
+                    "EVID-ART-0001",
+                ),
+                _artifact(
+                    "http://manpages.debian.org/cgi-bin/man.cgi",
+                    "link",
+                    "manual",
+                    "EVID-ART-0002",
+                ),
+                _artifact(
+                    "https://bugs.launchpad.net/ubuntu/+source/apache2",
+                    "link",
+                    "bugs",
+                    "EVID-ART-0003",
+                ),
+            ],
+            endpoints=[
+                _endpoint(
+                    "http://httpd.apache.org/docs/2.4/mod/mod_userdir.html",
+                    "EVID-URL-0001",
+                ),
+                _endpoint("http://target.test/admin", "EVID-URL-0002"),
+            ],
+            discovered_paths=[
+                _path("http://target.test/login", "EVID-PATH-0001"),
+            ],
+        )
+    )
+
+    urls = tuple(request.url for request in plan.proposed_requests)
+    assert "http://target.test/login" in urls
+    assert "http://target.test/admin" in urls
+    assert not any("httpd.apache.org" in url for url in urls)
+    assert not any("manpages.debian.org" in url for url in urls)
+    assert not any("bugs.launchpad.net" in url for url in urls)
+    assert plan.allowed_origins == ("http://target.test",)
+
+
+def test_origin_normalisation_rejects_different_scheme_port_and_host() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[_service("HTTP://Example.TEST.:80/", "EVID-HTTP-0001")],
+            endpoints=[
+                _endpoint("http://example.test/admin", "EVID-URL-0001"),
+                _endpoint("http://example.test:80/status", "EVID-URL-0002"),
+                _endpoint("http://example.test:8080/admin", "EVID-URL-0003"),
+                _endpoint("https://example.test/admin", "EVID-URL-0004"),
+                _endpoint("http://other.test/admin", "EVID-URL-0005"),
+            ],
+        )
+    )
+
+    urls = tuple(request.url for request in plan.proposed_requests)
+    assert "http://example.test/admin" in urls
+    assert "http://example.test/status" in urls
+    assert "http://example.test:8080/admin" not in urls
+    assert "https://example.test/admin" not in urls
+    assert "http://other.test/admin" not in urls
+    assert plan.allowed_origins == ("http://example.test",)
+
+
+def test_no_http_services_with_external_endpoint_produces_no_executable_request() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(endpoints=[_endpoint("http://external.test/admin", "EVID-URL-0001")])
+    )
+
+    assert plan.allowed_origins == ()
+    assert plan.proposed_requests == ()
+    assert plan.policy_summary.allowed_count == 0
+
+
+def test_no_http_services_with_external_discovered_path_produces_no_executable_request() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(discovered_paths=[_path("http://external.test/admin", "EVID-PATH-0001")])
+    )
+
+    assert plan.allowed_origins == ()
+    assert plan.proposed_requests == ()
+
+
+def test_no_http_services_with_external_http_artifact_produces_no_executable_request() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_artifacts=[
+                _artifact("http://external.test/admin", "link", "admin", "EVID-ART-0001")
+            ]
+        )
+    )
+
+    assert plan.allowed_origins == ()
+    assert plan.proposed_requests == ()
+
+
+def test_no_http_services_with_local_looking_endpoint_still_fails_closed() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(endpoints=[_endpoint("http://example.test/admin", "EVID-URL-0001")])
+    )
+
+    assert plan.allowed_origins == ()
+    assert plan.proposed_requests == ()
+
+
+def test_invalid_http_service_does_not_fallback_to_evidence_origin() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[_service("ftp://example.test/", "EVID-HTTP-0001")],
+            endpoints=[_endpoint("http://example.test/admin", "EVID-URL-0001")],
+            discovered_paths=[_path("http://example.test/login", "EVID-PATH-0001")],
+        )
+    )
+
+    assert plan.allowed_origins == ()
+    assert plan.proposed_requests == ()
+
+
+def test_multiple_valid_http_services_authorise_only_their_own_origins() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[
+                _service("http://example.test/", "EVID-HTTP-0001"),
+                _service("https://example.test:8443/", "EVID-HTTP-0002"),
+            ],
+            endpoints=[
+                _endpoint("http://example.test/admin", "EVID-URL-0001"),
+                _endpoint("https://example.test:8443/admin", "EVID-URL-0002"),
+                _endpoint("https://example.test/admin", "EVID-URL-0003"),
+            ],
+        )
+    )
+
+    assert plan.allowed_origins == ("http://example.test", "https://example.test:8443")
+    urls = tuple(request.url for request in plan.proposed_requests)
+    assert "http://example.test/admin" in urls
+    assert "https://example.test:8443/admin" in urls
+    assert "https://example.test/admin" not in urls
 
 
 def test_planned_uncollected_metadata_creates_get_requests() -> None:
@@ -132,6 +275,7 @@ def test_discovered_unfetched_routes_create_requests_before_metadata() -> None:
 def test_referenced_only_high_signal_routes_create_requests() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
             endpoints=[
                 _endpoint("http://example.test/account", "EVID-URL-0001"),
                 _endpoint("http://example.test/server-status", "EVID-URL-0002"),
@@ -182,6 +326,7 @@ def test_body_collected_static_noise_and_metadata_context_do_not_create_route_re
 def test_query_string_candidates_are_included_but_blocked_by_policy() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
             endpoints=[
                 Endpoint(
                     url="http://example.test/account?id=1",
@@ -205,6 +350,7 @@ def test_query_string_candidates_are_included_but_blocked_by_policy() -> None:
 def test_url_userinfo_is_not_sanitised_into_proposed_request() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
             endpoints=[
                 Endpoint(
                     url="http://user:pass@example.test/admin",
@@ -221,16 +367,18 @@ def test_url_userinfo_is_not_sanitised_into_proposed_request() -> None:
         )
     )
 
-    assert "http://example.test/admin" not in tuple(
-        request.url for request in plan.proposed_requests
+    route_urls = tuple(
+        request.url for request in plan.proposed_requests if request.source == "source_route_coverage"
     )
-    assert plan.proposed_requests == ()
-    assert plan.allowed_origins == ()
+    assert "http://example.test/admin" not in route_urls
+    assert route_urls == ()
+    assert plan.allowed_origins == ("http://example.test",)
 
 
 def test_url_fragments_are_not_sanitised_into_proposed_requests() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
             endpoints=[
                 Endpoint(
                     url="http://example.test/admin#panel",
@@ -247,16 +395,18 @@ def test_url_fragments_are_not_sanitised_into_proposed_requests() -> None:
         )
     )
 
-    assert "http://example.test/admin" not in tuple(
-        request.url for request in plan.proposed_requests
+    route_urls = tuple(
+        request.url for request in plan.proposed_requests if request.source == "source_route_coverage"
     )
-    assert plan.proposed_requests == ()
-    assert plan.allowed_origins == ()
+    assert "http://example.test/admin" not in route_urls
+    assert route_urls == ()
+    assert plan.allowed_origins == ("http://example.test",)
 
 
 def test_all_generated_methods_are_get_and_duplicates_are_deduped() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
             discovered_paths=[
                 _path("http://example.test/login.php", "EVID-PATH-0001"),
                 _path("HTTP://Example.TEST/login.php/", "EVID-PATH-0002"),

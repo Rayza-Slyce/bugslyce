@@ -11,6 +11,8 @@ from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
+from bugslyce.recon.http_origin import http_origin_from_url
+
 
 DEFAULT_MAX_TOTAL_REQUESTS = 100
 DEFAULT_MAX_REQUESTS_PER_ORIGIN = 25
@@ -317,11 +319,24 @@ def _normalise_url(raw_url: str):
     scheme = parsed.scheme.lower()
     if not scheme:
         return None
-    hostname = parsed.hostname.lower() if parsed.hostname else ""
-    if ":" in hostname and not hostname.startswith("["):
-        hostname = f"[{hostname}]"
-    default_port = 443 if scheme == "https" else 80
-    netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
+    if scheme not in {"http", "https"}:
+        hostname = parsed.hostname.lower().rstrip(".") if parsed.hostname else ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = hostname if port is None else f"{hostname}:{port}"
+        origin = None
+    else:
+        origin = http_origin_from_url(value)
+        if origin is None and not (parsed.username or parsed.password) and parsed.hostname:
+            return None
+        if origin is None:
+            hostname = parsed.hostname.lower().rstrip(".") if parsed.hostname else ""
+            if ":" in hostname and not hostname.startswith("["):
+                hostname = f"[{hostname}]"
+            default_port = 443 if scheme == "https" else 80
+            netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
+        else:
+            netloc = origin.authority
     if parsed.username or parsed.password:
         auth = parsed.username or ""
         if parsed.password:

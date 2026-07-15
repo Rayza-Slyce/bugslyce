@@ -325,6 +325,152 @@ def test_status_writes_only_status_outputs_and_renders_safety_notes(
     assert execution_path.read_text(encoding="utf-8") == "# Existing execution\n"
 
 
+def test_status_reports_completed_deep_pipeline_profile_and_phases(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.latest_execution
+    assert result.latest_execution["pipeline_profile"] == "deep-bounded"
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 2
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+    assert "- Pipeline profile: `deep-bounded`" in rendered
+    assert "- Deep pipeline phases: 2/2" in rendered
+
+
+def test_status_reports_partial_deep_artifacts_without_full_completion(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="failed",
+        step_statuses={
+            "PIPELINE-STEP-010D": "failed",
+            "PIPELINE-STEP-011D": "failed",
+        },
+    )
+    (input_dir / "deep_source_route_collection.md").write_text("source\n", encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+    assert "- Deep pipeline phases: 0/2" in rendered
+
+
+def test_status_reports_one_verified_deep_phase_when_orchestration_pending(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="running",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "pending",
+        },
+    )
+    for name in ("deep_source_route_collection.md", "deep_source_route_collection.json"):
+        (input_dir / name).write_text(f"{name}\n", encoding="utf-8")
+    for name in ("deep_recon_review.md", "deep_recon_runbook.md", "deep_recon_orchestration.json"):
+        (input_dir / name).write_text(f"{name}\n", encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 1
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+    assert "- Pipeline profile: `deep-bounded`" in rendered
+    assert "- Deep pipeline phases: 1/2" in rendered
+
+
+def test_status_does_not_verify_deep_files_without_pipeline_metadata(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+    assert "- Pipeline profile: `deep-bounded`" not in rendered
+    assert "- Deep pipeline phases: 0/2" in rendered
+
+
+def test_status_rejects_mismatched_pipeline_metadata_for_deep_verification(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="completed",
+        target="other.test",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert "- Pipeline profile: `deep-bounded`" not in rendered
+    assert result.latest_execution
+    assert "pipeline_metadata_warning" in result.latest_execution
+
+
+def test_status_rejects_mismatched_pipeline_output_dir_for_deep_verification(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="completed",
+        output_dir=tmp_path / "elsewhere",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert "- Pipeline profile: `deep-bounded`" not in rendered
+
+
+def test_status_ignores_malformed_pipeline_metadata_without_crashing(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+    (input_dir / "project_pipeline.json").write_text("{bad", encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert result.latest_execution
+    assert "pipeline_metadata_warning" in result.latest_execution
+
+
+def test_status_ignores_non_object_pipeline_metadata_without_crashing(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+    (input_dir / "project_pipeline.json").write_text("[]", encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 0
+    assert result.latest_execution
+    assert "pipeline_metadata_warning" in result.latest_execution
+
+
 def test_cli_status_writes_outputs_and_prints_local_only_summary(
     tmp_path: Path,
     capsys,
@@ -486,3 +632,40 @@ def _status_input(
         encoding="utf-8",
     )
     return input_dir, scope
+
+
+def _write_deep_pipeline_metadata(
+    input_dir: Path,
+    *,
+    final_status: str,
+    target: str = "10.10.10.10",
+    output_dir: Path | None = None,
+    step_statuses: dict[str, str] | None = None,
+) -> None:
+    payload = {
+        "schema_version": "1.0",
+        "target": target,
+        "project_file": str(input_dir / "bugslyce_project.json"),
+        "output_dir": str(output_dir or input_dir),
+        "profile": "deep-bounded",
+        "final_status": final_status,
+        "steps": [
+            {"step_id": step_id, "status": status}
+            for step_id, status in (step_statuses or {}).items()
+        ],
+    }
+    (input_dir / "project_pipeline.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _write_deep_artifacts(input_dir: Path) -> None:
+    for name in (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    ):
+        (input_dir / name).write_text(f"{name}\n", encoding="utf-8")

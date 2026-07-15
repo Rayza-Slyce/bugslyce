@@ -38,7 +38,7 @@ def test_empty_collection_result_produces_safe_empty_extraction() -> None:
         "### Extraction Interpretation Notes",
         "### Safety Notes",
         "No route was requested or followed.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
 
@@ -150,6 +150,22 @@ def test_html_entities_and_reference_forms_resolve() -> None:
     assert "http://example.test/source?view" in urls
     forms = {form for route in result.routes for form in route.reference_forms}
     assert {"absolute_https", "scheme_relative", "root_relative", "path_relative", "query_relative"} <= forms
+
+
+def test_protocol_relative_references_resolve_against_trusted_document_scheme() -> None:
+    html = b"""
+    <html>
+      <a href="//example.test/same">same</a>
+      <a href="//external.test/cross">cross</a>
+    </html>
+    """
+    result = build_deep_html_route_extraction(
+        _result(_item(url="https://example.test/source", body=html))
+    )
+
+    by_url = {route.safe_resolved_url: route for route in result.routes}
+    assert by_url["https://example.test/same"].origin_relationship == "same_origin"
+    assert by_url["https://external.test/cross"].origin_relationship == "cross_origin"
 
 
 def test_fragment_unsupported_empty_and_malformed_references_are_skipped() -> None:
@@ -361,7 +377,7 @@ def test_renderer_compacts_safety_wording_and_avoids_prohibited_language() -> No
         "Unsupported schemes are not executed.",
         "Forms are not inventoried in this phase.",
         "Inline JavaScript and JavaScript source contents are not analysed.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     assert "... [truncated]" in rendered

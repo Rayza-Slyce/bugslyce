@@ -425,6 +425,12 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         f"{status.artifact_overview.get('http_services', 0)}; unique discovered paths: "
         f"{status.artifact_overview.get('unique_discovered_paths', 0)}."
     )
+    deep_total = status.artifact_overview.get("deep_pipeline_phases_total", 0)
+    if deep_total:
+        status_summary += (
+            " Deep pipeline phases: "
+            f"{status.artifact_overview.get('deep_pipeline_phases_detected', 0)}/{deep_total}."
+        )
 
     if has_discovery and not detected("nmap_services"):
         recommended = _live_action(

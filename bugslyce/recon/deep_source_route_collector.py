@@ -20,6 +20,7 @@ from bugslyce.recon.deep_collection_policy import (
 )
 from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 MAX_BODY_PREVIEW_CHARS = 500
@@ -36,7 +37,7 @@ SAFETY_NOTES = (
     "It does not crawl.",
     "It does not collect query-string URLs.",
     "It does not confirm vulnerabilities.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 
@@ -109,6 +110,9 @@ def collect_deep_source_routes_from_plan(
             continue
         if not decision.allowed:
             skipped.append(_skip_from_request(request, "policy_blocked"))
+            continue
+        if not _request_matches_allowed_origin(request.url, plan.allowed_origins):
+            skipped.append(_skip_from_request(request, "cross_origin_not_allowed"))
             continue
         if request.source == "metadata_coverage":
             skipped.append(_skip_from_request(request, "metadata_request"))
@@ -245,6 +249,18 @@ def _has_query_string(url: str) -> bool:
         return bool(urlparse(url).query)
     except ValueError:
         return False
+
+
+def _request_matches_allowed_origin(url: str, allowed_origins: tuple[str, ...]) -> bool:
+    request_origin = http_origin_from_url(url)
+    if request_origin is None:
+        return False
+    allowed = {
+        origin
+        for raw in allowed_origins
+        if (origin := http_origin_from_url(raw)) is not None
+    }
+    return request_origin in allowed
 
 
 def _body_preview(body: bytes) -> str:

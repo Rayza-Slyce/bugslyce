@@ -23,7 +23,7 @@ SAFETY_NOTES = (
     "Offline review of existing Deep metadata collection results.",
     "No HTTP requests were made by this review.",
     "No files were written by this review.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 

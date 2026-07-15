@@ -48,7 +48,7 @@ SAFETY_NOTES = (
     "Groups represent shared bounded evidence signatures, not confirmed semantic identity.",
     "Candidate default/template groups are review hypotheses only.",
     "Unique 2xx responses are comparison context, not findings.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 

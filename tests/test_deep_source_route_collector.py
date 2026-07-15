@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from hashlib import sha256
 
+import pytest
+
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionDecision,
@@ -89,6 +91,91 @@ def test_skips_query_string_urls_even_if_policy_marked_allowed() -> None:
     assert result.collected == ()
     assert len(result.skipped) == 1
     assert result.skipped[0].reason == "query_string_not_allowed"
+
+
+def test_manual_cross_origin_allowed_decision_is_rejected_before_fetch() -> None:
+    calls: list[str] = []
+    external = _request(
+        "http://other.test/admin",
+        source="source_route_coverage",
+    )
+    decision = DeepCollectionDecision(
+        url=external.url,
+        method=external.method,
+        allowed=True,
+        reason="policy_allowed",
+        policy_notes=("unit_test_allowed",),
+        origin="http://other.test",
+        path="/admin",
+        evidence_ids=external.evidence_ids,
+    )
+
+    result = collect_deep_source_routes_from_plan(
+        _manual_plan((external,), (decision,)),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert calls == []
+    assert result.collected == ()
+    assert len(result.skipped) == 1
+    assert result.skipped[0].reason == "cross_origin_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://user:pass@example.test/admin",
+        "http://example.test:bad/admin",
+        "https://example.test/admin",
+        "http://other.test/admin",
+        "http://example.test:8080/admin",
+    ),
+)
+def test_manual_unsafe_or_different_origin_decision_is_rejected_before_fetch(url: str) -> None:
+    calls: list[str] = []
+    request = _request(url, source="source_route_coverage")
+    decision = DeepCollectionDecision(
+        url=request.url,
+        method=request.method,
+        allowed=True,
+        reason="policy_allowed",
+        policy_notes=("unit_test_allowed",),
+        origin="unit-test",
+        path="/admin",
+        evidence_ids=request.evidence_ids,
+    )
+
+    result = collect_deep_source_routes_from_plan(
+        _manual_plan((request,), (decision,)),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert calls == []
+    assert result.collected == ()
+    assert result.skipped[0].reason == "cross_origin_not_allowed"
+
+
+def test_manual_explicit_default_port_decision_remains_same_origin() -> None:
+    calls: list[str] = []
+    request = _request("http://example.test:80/admin", source="source_route_coverage")
+    decision = DeepCollectionDecision(
+        url=request.url,
+        method=request.method,
+        allowed=True,
+        reason="policy_allowed",
+        policy_notes=("unit_test_allowed",),
+        origin="http://example.test",
+        path="/admin",
+        evidence_ids=request.evidence_ids,
+    )
+
+    result = collect_deep_source_routes_from_plan(
+        _manual_plan((request,), (decision,)),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert calls == ["http://example.test:80/admin"]
+    assert result.total_collected == 1
 
 
 def test_fetcher_exception_and_oversized_response_are_skipped() -> None:
@@ -337,7 +424,7 @@ def test_renderer_includes_sections_safety_wording_and_no_finding_language() -> 
         "It does not crawl.",
         "It does not collect query-string URLs.",
         "It does not confirm vulnerabilities.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert required in rendered
     for forbidden in (

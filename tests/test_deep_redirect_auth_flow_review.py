@@ -394,7 +394,7 @@ def test_renderer_contains_required_cautions_and_no_prohibited_language() -> Non
         "Query values, fragments, and URL userinfo are not retained.",
         "Cookie values are not retained or rendered.",
         "No authentication was attempted.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     for forbidden in (

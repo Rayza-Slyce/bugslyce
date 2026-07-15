@@ -60,7 +60,7 @@ def test_empty_inputs_produce_safe_empty_review() -> None:
     assert "### Grouping Interpretation Notes" in rendered
     assert "### Safety Notes" in rendered
     assert "No network requests were made." in rendered
-    assert "Deep Recon full mode was not enabled." in rendered
+    assert "This stage produces static manual-review context only." in rendered
 
 
 def test_input_models_are_not_mutated() -> None:
@@ -693,7 +693,7 @@ def test_renderer_includes_required_sections_compaction_and_cautionary_wording()
         "shared bounded evidence signatures",
         "review hypotheses only",
         "comparison context",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     assert "... +2 more" in rendered

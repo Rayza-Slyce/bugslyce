@@ -712,6 +712,16 @@ def _assess_resume_state(
 
     prior_statuses = _prior_step_statuses(prior_pipeline)
     if profile == DEEP_PIPELINE_PROFILE:
+        if _deep_completed_resume_verified(
+            output_dir=output_dir,
+            export_path=export_path,
+            prior_pipeline=prior_pipeline,
+            prior_statuses=prior_statuses,
+        ):
+            return ResumeAssessment(
+                frozenset(_completed_deep_resume_skipped_steps(prior_statuses)),
+                prior_pipeline,
+            )
         _validate_deep_resume_state(
             output_dir=output_dir,
             export_path=export_path,
@@ -857,6 +867,31 @@ def _deep_completed_resume_verified(
         export_path,
     )
     return all(path.is_file() for path in required)
+
+
+def _completed_deep_resume_skipped_steps(
+    prior_statuses: dict[str, str],
+) -> tuple[str, ...]:
+    reusable = {"completed", "noop"}
+    return tuple(
+        step_id
+        for step_id in (
+            "PIPELINE-STEP-002",
+            "PIPELINE-STEP-003",
+            "PIPELINE-STEP-004",
+            "PIPELINE-STEP-005",
+            "PIPELINE-STEP-006",
+            "PIPELINE-STEP-007",
+            "PIPELINE-STEP-008",
+            "PIPELINE-STEP-009",
+            "PIPELINE-STEP-010D",
+            "PIPELINE-STEP-011D",
+            "PIPELINE-STEP-010",
+            "PIPELINE-STEP-011",
+            "PIPELINE-STEP-012",
+        )
+        if prior_statuses.get(step_id) in reusable
+    )
 
 
 def _load_json_object(path: Path, label: str) -> dict[str, object]:

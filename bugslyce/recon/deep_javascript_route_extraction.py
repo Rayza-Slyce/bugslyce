@@ -79,7 +79,7 @@ SAFETY_NOTES = (
     "Relative strings from JavaScript responses may lack reliable browser execution context.",
     "Extracted strings are static review context, not confirmed live endpoints.",
     "Forms are not inventoried.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 CANDIDATE_FORM_ORDER = {
     "absolute_http": 0,

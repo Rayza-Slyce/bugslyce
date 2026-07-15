@@ -1095,7 +1095,7 @@ def _print_deep_metadata_collection_review_guardrails() -> None:
     print("No files were written.", file=sys.stderr)
     print("No directories were created.", file=sys.stderr)
     print("No HTTP requests were made.", file=sys.stderr)
-    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+    print("This stage produces static manual-review context only.", file=sys.stderr)
 
 
 def _print_deep_collection_review_bundle_guardrails() -> None:
@@ -1103,7 +1103,7 @@ def _print_deep_collection_review_bundle_guardrails() -> None:
     print("No directories were created.", file=sys.stderr)
     print("No HTTP requests were made.", file=sys.stderr)
     print("No collection was performed.", file=sys.stderr)
-    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+    print("This stage produces static manual-review context only.", file=sys.stderr)
 
 
 def _print_deep_source_route_collection_guardrails() -> None:
@@ -1112,7 +1112,7 @@ def _print_deep_source_route_collection_guardrails() -> None:
     print("No crawling was performed.", file=sys.stderr)
     print("No forms were submitted.", file=sys.stderr)
     print("No authentication was attempted.", file=sys.stderr)
-    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+    print("This stage produces static manual-review context only.", file=sys.stderr)
 
 
 def _print_deep_source_route_collection_write_error_guardrails() -> None:
@@ -1120,7 +1120,7 @@ def _print_deep_source_route_collection_write_error_guardrails() -> None:
     print("No crawling was performed.", file=sys.stderr)
     print("No forms were submitted.", file=sys.stderr)
     print("No authentication was attempted.", file=sys.stderr)
-    print("Deep Recon full mode was not enabled.", file=sys.stderr)
+    print("This stage produces static manual-review context only.", file=sys.stderr)
 
 
 def _run(input_dir: Path, output_dir: Path) -> int:
@@ -1464,13 +1464,13 @@ def _recon(args: argparse.Namespace) -> int:
             print(f"Error: input directory does not exist: {args.input_dir}", file=sys.stderr)
             print("No files were written.", file=sys.stderr)
             print("No directories were created.", file=sys.stderr)
-            print("Deep Recon full mode was not enabled.", file=sys.stderr)
+            print("This stage produces static manual-review context only.", file=sys.stderr)
             return 2
         if not args.input_dir.is_dir():
             print(f"Error: input path is not a directory: {args.input_dir}", file=sys.stderr)
             print("No files were written.", file=sys.stderr)
             print("No directories were created.", file=sys.stderr)
-            print("Deep Recon full mode was not enabled.", file=sys.stderr)
+            print("This stage produces static manual-review context only.", file=sys.stderr)
             return 2
 
         project_state = build_project_state(args.input_dir)

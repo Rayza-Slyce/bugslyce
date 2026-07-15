@@ -43,7 +43,7 @@ def test_empty_result_renders_cleanly() -> None:
     assert rendered.count("- None.") >= 4
     assert "No HTTP requests were made by this review." in rendered
     assert "No files were written by this review." in rendered
-    assert "Deep Recon full mode was not enabled." in rendered
+    assert "This stage produces static manual-review context only." in rendered
 
 
 def test_status_buckets_group_deterministically() -> None:

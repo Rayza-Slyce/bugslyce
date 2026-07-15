@@ -12,6 +12,7 @@ from bugslyce.recon.deep_collection_policy import (
     evaluate_deep_collection_requests,
     render_deep_collection_policy_summary_markdown,
 )
+from bugslyce.recon.http_origin import http_origin_from_url, same_http_origin
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -87,6 +88,25 @@ def test_http_https_and_non_default_ports_are_distinct_origins() -> None:
     assert https.origin == "https://example.test"
     assert port.origin == "http://example.test:8080"
     assert port.path == "/admin"
+
+
+def test_http_origin_helper_normalises_scheme_host_default_ports_and_ipv6() -> None:
+    assert http_origin_from_url("HTTP://Example.TEST.:80/path").origin_url == "http://example.test"
+    assert same_http_origin("HTTP://Example.TEST.:80/path", "http://example.test/other")
+    assert same_http_origin("http://example.test", "http://example.test:80")
+    assert same_http_origin("https://example.test", "https://example.test:443")
+    assert not same_http_origin("http://example.test", "https://example.test")
+    assert not same_http_origin("http://example.test", "http://example.test:8080")
+    assert same_http_origin("http://[2001:db8::1]/", "http://[2001:db8::1]:80/path")
+    assert same_http_origin("https://[2001:db8::1]/", "https://[2001:db8::1]:443/path")
+
+
+def test_http_origin_helper_fails_closed_for_unsafe_or_malformed_urls() -> None:
+    assert http_origin_from_url("http://user:pass@example.test/") is None
+    assert http_origin_from_url("http://example.test:bad/") is None
+    assert http_origin_from_url("//example.test/path") is None
+    assert http_origin_from_url("/relative") is None
+    assert same_http_origin("http://example.test/path?x=1#frag", "http://example.test/other")
 
 
 def test_invalid_missing_hostname_and_unsupported_scheme_are_blocked() -> None:

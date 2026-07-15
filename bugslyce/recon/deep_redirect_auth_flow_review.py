@@ -41,7 +41,7 @@ SAFETY_NOTES = (
     "Query values, fragments, and URL userinfo are not retained.",
     "Cookie values are not retained or rendered.",
     "No authentication was attempted.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 

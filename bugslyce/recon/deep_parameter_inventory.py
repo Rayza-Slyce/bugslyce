@@ -72,7 +72,7 @@ SAFETY_NOTES = (
     "No parameter was mutated.",
     "Parameter names are static review context, not confirmed vulnerabilities.",
     "Names may be case-sensitive and were not case-folded.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 
@@ -800,6 +800,9 @@ def _name_observations(
         if len(canonical) > MAX_PARAMETER_NAME_CHARS:
             rejected.add(("overlong_parameter_name", fingerprint))
             continue
+        if metadata_names and _query_name_looks_like_route_path(canonical):
+            rejected.add(("invalid_parameter_name", fingerprint))
+            continue
         if canonical in accepted:
             continue
         accepted.add(canonical)
@@ -1267,6 +1270,8 @@ def _metadata_name_results(values: tuple[str, ...]) -> tuple[tuple[str, ...], tu
             rejected.add(("empty_parameter_name", fingerprint))
         elif len(canonical) > MAX_PARAMETER_NAME_CHARS:
             rejected.add(("overlong_parameter_name", fingerprint))
+        elif _query_name_looks_like_route_path(canonical):
+            rejected.add(("invalid_parameter_name", fingerprint))
         else:
             accepted.add(canonical)
     return _unique_sorted(tuple(accepted)), tuple(sorted(reason for reason, _fingerprint in rejected))
@@ -1282,9 +1287,18 @@ def _query_name_results_from_raw_query(query: str) -> tuple[tuple[str, ...], tup
             rejected.add(("empty_parameter_name", fingerprint))
         elif len(canonical) > MAX_PARAMETER_NAME_CHARS:
             rejected.add(("overlong_parameter_name", fingerprint))
+        elif _query_name_looks_like_route_path(canonical):
+            rejected.add(("invalid_parameter_name", fingerprint))
         else:
             names.append(canonical)
     return _unique_sorted(tuple(names)), tuple(sorted(reason for reason, _fingerprint in rejected))
+
+
+def _query_name_looks_like_route_path(name: str) -> bool:
+    lowered = name.lower()
+    if "/" in name:
+        return True
+    return lowered.endswith((".js", ".mjs", ".cjs"))
 
 
 def _valid_safe_urls(urls: tuple[str, ...]) -> tuple[str, ...]:

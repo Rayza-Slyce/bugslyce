@@ -57,7 +57,7 @@ def test_empty_inputs_produce_safe_empty_summary() -> None:
     assert "### Header Interpretation Notes" in rendered
     assert "### Safety Notes" in rendered
     assert "No collection or network activity is performed by this summary." in rendered
-    assert "Deep Recon full mode was not enabled." in rendered
+    assert "This stage produces static manual-review context only." in rendered
 
 
 def test_input_results_are_not_mutated() -> None:

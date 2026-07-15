@@ -76,6 +76,11 @@ def build_recon_status(
     candidates = generate_candidates(project_state)
     report_text = _read_optional_text(input_dir / "report.md")
     latest_execution = _load_latest_execution(input_dir)
+    pipeline_metadata, pipeline_warning = _load_pipeline_metadata(input_dir, target)
+    if pipeline_metadata is not None:
+        latest_execution = _merge_pipeline_metadata(latest_execution, pipeline_metadata)
+    elif pipeline_warning:
+        latest_execution = _merge_pipeline_warning(latest_execution, pipeline_warning)
     phase_specific_metadata = _phase_specific_metadata(input_dir)
     artifact_files = [str(item.get("file", "")) for item in artifacts]
 
@@ -95,6 +100,7 @@ def build_recon_status(
         candidates_count=len(candidates),
         artifact_files=artifact_files,
         input_dir=input_dir,
+        pipeline_metadata=pipeline_metadata,
     )
     next_actions = _next_actions(
         project_state=project_state,
@@ -161,6 +167,15 @@ def render_recon_status_markdown(result: ReconStatusResult) -> str:
         f"- Manifest profile (raw): `{result.manifest_profile or 'not recorded'}`",
         f"- Scope status: {result.scope_status}",
     ]
+    pipeline_profile = _deep_pipeline_profile(result)
+    if pipeline_profile:
+        lines.append(f"- Pipeline profile: `{pipeline_profile}`")
+    deep_total = result.artifact_overview.get("deep_pipeline_phases_total", 0)
+    if deep_total:
+        lines.append(
+            "- Deep pipeline phases: "
+            f"{result.artifact_overview.get('deep_pipeline_phases_detected', 0)}/{deep_total}"
+        )
     if result.scope_file:
         lines.append(f"- Scope file: `{result.scope_file}`")
 
@@ -246,9 +261,22 @@ def render_recon_status_summary(
         ),
         f"Scope status: {result.scope_status}",
         f"Detected phases: {detected_count}/{len(result.phases)}",
-        "Recommended next safe action:",
-        f"- {result.next_actions[0]}",
     ]
+    pipeline_profile = _deep_pipeline_profile(result)
+    if pipeline_profile:
+        lines.append(f"Pipeline profile: {pipeline_profile}")
+    deep_total = result.artifact_overview.get("deep_pipeline_phases_total", 0)
+    if deep_total:
+        lines.append(
+            "Deep pipeline phases: "
+            f"{result.artifact_overview.get('deep_pipeline_phases_detected', 0)}/{deep_total}"
+        )
+    lines.extend(
+        [
+            "Recommended next safe action:",
+            f"- {result.next_actions[0]}",
+        ]
+    )
     for action in result.next_actions[1:]:
         lines.append(f"- {action}")
     lines.extend(
@@ -411,6 +439,7 @@ def _artifact_overview(
     candidates_count: int,
     artifact_files: list[str],
     input_dir: Path,
+    pipeline_metadata: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     open_ports = {
         (record.host, record.port, record.protocol)
@@ -421,7 +450,7 @@ def _artifact_overview(
     unique_path_count = len(
         {record.url.strip() for record in project_state.discovered_paths if record.url.strip()}
     )
-    return {
+    overview = {
         "open_ports": len(open_ports),
         "http_services": len(project_state.http_services),
         "raw_discovered_path_evidence_rows": raw_path_count,
@@ -434,6 +463,12 @@ def _artifact_overview(
         "execution_metadata_files": len(list(input_dir.glob("recon_execution*.json")))
         + len(list(input_dir.glob("recon_execution*.md"))),
     }
+    deep_counts = _deep_pipeline_phase_counts(input_dir, pipeline_metadata)
+    if deep_counts is not None:
+        detected, total = deep_counts
+        overview["deep_pipeline_phases_detected"] = detected
+        overview["deep_pipeline_phases_total"] = total
+    return overview
 
 
 def _load_latest_execution(input_dir: Path) -> dict[str, Any] | None:
@@ -475,6 +510,122 @@ def _load_latest_execution(input_dir: Path) -> dict[str, Any] | None:
         if heading:
             payload["heading"] = heading
     return payload or None
+
+
+def _load_pipeline_metadata(input_dir: Path, target: str) -> tuple[dict[str, Any] | None, str | None]:
+    path = input_dir / "project_pipeline.json"
+    if not path.is_file():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None, "project_pipeline.json could not be parsed"
+    if not isinstance(payload, dict):
+        return None, "project_pipeline.json was not an object"
+    pipeline_target = _optional_text(payload.get("target"))
+    if pipeline_target is None or pipeline_target.lower().rstrip(".") != target:
+        return None, "project_pipeline.json target did not match"
+    output_dir = payload.get("output_dir")
+    if not isinstance(output_dir, str):
+        return None, "project_pipeline.json output_dir was invalid"
+    try:
+        if Path(output_dir).expanduser().resolve() != input_dir:
+            return None, "project_pipeline.json output_dir did not match"
+    except (OSError, RuntimeError):
+        return None, "project_pipeline.json output_dir was invalid"
+    if payload.get("profile") not in {"lab-safe-tiny", "standard-bounded", "deep-bounded"}:
+        return None, "project_pipeline.json profile was invalid"
+    if payload.get("final_status") not in {"pending", "running", "completed", "failed"}:
+        return None, "project_pipeline.json final_status was invalid"
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return None, "project_pipeline.json steps were invalid"
+    valid_step_statuses = {"pending", "running", "completed", "failed", "skipped_existing", "noop"}
+    for step in steps:
+        if not isinstance(step, dict):
+            return None, "project_pipeline.json step was invalid"
+        if not isinstance(step.get("step_id"), str) or not isinstance(step.get("status"), str):
+            return None, "project_pipeline.json step fields were invalid"
+        if step["status"] not in valid_step_statuses:
+            return None, "project_pipeline.json step status was invalid"
+    return payload, None
+
+
+def _merge_pipeline_metadata(
+    latest_execution: dict[str, Any] | None,
+    pipeline_metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    merged = dict(latest_execution or {})
+    profile = pipeline_metadata.get("profile")
+    final_status = pipeline_metadata.get("final_status")
+    if isinstance(profile, str) and profile:
+        merged["pipeline_profile"] = profile
+    if isinstance(final_status, str) and final_status:
+        merged["pipeline_final_status"] = final_status
+    return merged or None
+
+
+def _merge_pipeline_warning(
+    latest_execution: dict[str, Any] | None,
+    warning: str,
+) -> dict[str, Any]:
+    merged = dict(latest_execution or {})
+    merged["pipeline_metadata_warning"] = warning
+    return merged
+
+
+def _deep_pipeline_phase_counts(
+    input_dir: Path,
+    pipeline_metadata: dict[str, Any] | None,
+) -> tuple[int, int] | None:
+    fixed_groups = (
+        (
+            input_dir / "deep_source_route_collection.md",
+            input_dir / "deep_source_route_collection.json",
+        ),
+        (
+            input_dir / "deep_recon_review.md",
+            input_dir / "deep_recon_runbook.md",
+            input_dir / "deep_recon_orchestration.json",
+        ),
+    )
+    has_any_deep_file = any(path.exists() for group in fixed_groups for path in group)
+    profile = (pipeline_metadata or {}).get("profile")
+    if profile != "deep-bounded":
+        if has_any_deep_file:
+            return 0, len(fixed_groups)
+        return None
+    statuses = _pipeline_step_statuses(pipeline_metadata)
+    detected = 0
+    if statuses.get("PIPELINE-STEP-010D") == "completed" and all(
+        path.is_file() for path in fixed_groups[0]
+    ):
+        detected += 1
+    if statuses.get("PIPELINE-STEP-011D") == "completed" and all(
+        path.is_file() for path in fixed_groups[1]
+    ):
+        detected += 1
+    return detected, len(fixed_groups)
+
+
+def _pipeline_step_statuses(pipeline_metadata: dict[str, Any] | None) -> dict[str, str]:
+    steps = (pipeline_metadata or {}).get("steps")
+    if not isinstance(steps, list):
+        return {}
+    statuses: dict[str, str] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        step_id = step.get("step_id")
+        status = step.get("status")
+        if isinstance(step_id, str) and isinstance(status, str):
+            statuses[step_id] = status
+    return statuses
+
+
+def _deep_pipeline_profile(result: ReconStatusResult) -> str | None:
+    profile = (result.latest_execution or {}).get("pipeline_profile")
+    return profile if profile == "deep-bounded" else None
 
 
 def _phase_specific_metadata(input_dir: Path) -> list[str]:

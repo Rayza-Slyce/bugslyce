@@ -28,7 +28,7 @@ SAFETY_NOTES = (
     "No forms were submitted.",
     "No authentication was attempted.",
     "No payloads were injected.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 CATEGORY_PRIORITY = {
     "redirect_to_login": 0,

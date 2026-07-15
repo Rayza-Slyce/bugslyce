@@ -30,7 +30,7 @@ SAFETY_NOTES = (
     "Review-only priority; not a confirmed finding.",
     "No network requests were made by this bundle.",
     "No files were read or written by this bundle.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 CATEGORY_PRIORITY = {
     "redirect_to_login": 0,

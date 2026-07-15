@@ -1046,6 +1046,7 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     )
 
     statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-009"] == "skipped_existing"
     assert statuses["PIPELINE-STEP-010D"] == "skipped_existing"
     assert statuses["PIPELINE-STEP-011D"] == "skipped_existing"
     assert statuses["PIPELINE-STEP-010"] == "skipped_existing"
@@ -1089,6 +1090,14 @@ def test_deep_completed_resume_rejects_mismatched_recorded_export_path(
         profile=DEEP_PIPELINE_PROFILE,
         final_status="completed",
         step_statuses={
+            "PIPELINE-STEP-002": "completed",
+            "PIPELINE-STEP-003": "completed",
+            "PIPELINE-STEP-004": "completed",
+            "PIPELINE-STEP-005": "completed",
+            "PIPELINE-STEP-006": "completed",
+            "PIPELINE-STEP-007": "completed",
+            "PIPELINE-STEP-008": "completed",
+            "PIPELINE-STEP-009": "noop",
             "PIPELINE-STEP-010D": "completed",
             "PIPELINE-STEP-011D": "completed",
             "PIPELINE-STEP-010": "completed",
@@ -2040,6 +2049,14 @@ def _write_completed_deep_resume_state(
         profile=DEEP_PIPELINE_PROFILE,
         final_status="completed",
         step_statuses={
+            "PIPELINE-STEP-002": "completed",
+            "PIPELINE-STEP-003": "completed",
+            "PIPELINE-STEP-004": "completed",
+            "PIPELINE-STEP-005": "completed",
+            "PIPELINE-STEP-006": "completed",
+            "PIPELINE-STEP-007": "completed",
+            "PIPELINE-STEP-008": "completed",
+            "PIPELINE-STEP-009": "noop",
             "PIPELINE-STEP-010D": "completed",
             "PIPELINE-STEP-011D": "completed",
             "PIPELINE-STEP-010": "completed",

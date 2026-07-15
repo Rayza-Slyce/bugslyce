@@ -36,7 +36,7 @@ def test_empty_collection_result_produces_safe_empty_extraction() -> None:
         "### Extraction Interpretation Notes",
         "### Safety Notes",
         "No JavaScript was executed.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
 
@@ -377,6 +377,18 @@ def test_inline_relative_resolution_and_base_href_rules() -> None:
     assert first_only.summary_counts.html_responses_using_valid_base_url == 1
 
 
+def test_protocol_relative_candidates_resolve_with_trusted_source_scheme() -> None:
+    body = b'const same = "//example.test/api"; const cross = "//external.test/api";'
+
+    result = build_deep_javascript_route_extraction(
+        _result(_js_item(url="https://example.test/app.js", body=body))
+    )
+
+    by_candidate = {candidate.safe_candidate: candidate for candidate in result.candidates}
+    assert by_candidate["//example.test/api"].safe_resolved_url == "https://example.test/api"
+    assert by_candidate["//external.test/api"].safe_resolved_url == "https://external.test/api"
+
+
 def test_aggregation_occurrence_counts_and_canonical_fields() -> None:
     result = build_deep_javascript_route_extraction(
         _result(
@@ -491,7 +503,7 @@ def test_renderer_sections_compaction_cautions_and_prohibited_wording() -> None:
         "Query values, URL credentials, and fragment contents are not retained.",
         "Relative strings from JavaScript responses may lack reliable browser execution context.",
         "Forms are not inventoried.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
     assert "... [truncated]" in rendered

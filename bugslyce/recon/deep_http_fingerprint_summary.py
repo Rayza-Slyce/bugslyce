@@ -58,7 +58,7 @@ SAFETY_NOTES = (
     "Titles are extracted only when visible in bounded previews.",
     "Not observed headers are evidence notes, not vulnerability findings.",
     "No cookie values are retained or rendered.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 TITLE_RE = re.compile(r"<title(?:\s[^>]*)?>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 

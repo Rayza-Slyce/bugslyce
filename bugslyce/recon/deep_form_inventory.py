@@ -87,7 +87,7 @@ SAFETY_NOTES = (
     "Individual control names are deliberately deferred to Phase 92B.",
     "Query parameter names from form actions may be retained, but query values are not.",
     "Extracted structures are review context, not confirmed vulnerabilities.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 

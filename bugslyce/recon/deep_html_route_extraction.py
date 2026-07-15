@@ -45,7 +45,7 @@ SAFETY_NOTES = (
     "Extracted references are static review context, not confirmed live endpoints.",
     "Forms are not inventoried in this phase.",
     "Inline JavaScript and JavaScript source contents are not analysed.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 ORIGIN_ORDER = {"same_origin": 0, "cross_origin": 1, "not_comparable": 2}
 REFERENCE_FORM_ORDER = {

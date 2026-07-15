@@ -1144,6 +1144,10 @@ def test_cli_recon_deep_metadata_collect_renders_stdout_only(
         + "\n",
         encoding="utf-8",
     )
+    (input_dir / "httpx.jsonl").write_text(
+        '{"url":"http://10.10.10.10/","host":"10.10.10.10","status_code":200}\n',
+        encoding="utf-8",
+    )
     calls: list[tuple[str, str]] = []
 
     def fake_fetcher(request, bounds):
@@ -1174,7 +1178,7 @@ def test_cli_recon_deep_metadata_collect_renders_stdout_only(
     assert "### Safety Notes" in captured.out
     assert "bounded metadata collection result" in captured.out
     assert "does not collect non-metadata routes" in captured.out
-    assert "Deep Recon full mode was not enabled" in captured.out
+    assert "This stage produces static manual-review context only" in captured.out
     assert calls
     assert all(source == "metadata_coverage" for _, source in calls)
     assert all("/login.php" not in url for url, _ in calls)
@@ -1215,6 +1219,10 @@ def test_cli_recon_deep_metadata_collect_writes_artifacts_when_requested(
             )
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (input_dir / "httpx.jsonl").write_text(
+        '{"url":"http://10.10.10.10/","host":"10.10.10.10","status_code":200}\n',
         encoding="utf-8",
     )
     calls: list[tuple[str, str]] = []
@@ -1291,7 +1299,7 @@ def test_cli_recon_deep_metadata_collect_missing_input_returns_nonzero(
     assert "input directory does not exist" in captured.err
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert list(tmp_path.iterdir()) == []
 
 
@@ -1316,7 +1324,7 @@ def test_cli_recon_deep_metadata_collect_missing_input_with_write_returns_nonzer
     assert "input directory does not exist" in captured.err
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert list(tmp_path.iterdir()) == []
 
 
@@ -1334,7 +1342,7 @@ def test_cli_recon_deep_metadata_collect_file_input_returns_nonzero(
     assert "input path is not a directory" in captured.err
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert input_file.read_text(encoding="utf-8") == "{}"
     for forbidden_output in (
         "deep_metadata_collection.md",
@@ -1372,7 +1380,7 @@ def test_cli_recon_deep_metadata_collect_file_input_with_write_returns_nonzero(
     assert "input path is not a directory" in captured.err
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert input_file.read_text(encoding="utf-8") == "{}"
     assert not (tmp_path / "deep_metadata_collection.md").exists()
     assert not (tmp_path / "deep_metadata_collection.json").exists()
@@ -1446,6 +1454,10 @@ def test_cli_recon_deep_source_route_collect_renders_stdout_only(
         + "\n",
         encoding="utf-8",
     )
+    (input_dir / "httpx.jsonl").write_text(
+        '{"url":"http://10.10.10.10/","host":"10.10.10.10","status_code":200}\n',
+        encoding="utf-8",
+    )
     calls: list[tuple[str, str]] = []
 
     def fake_fetcher(request, bounds):
@@ -1477,7 +1489,7 @@ def test_cli_recon_deep_source_route_collect_renders_stdout_only(
     assert "It collects only policy-allowed source_route_coverage requests." in captured.out
     assert "It does not crawl." in captured.out
     assert "It does not collect query-string URLs." in captured.out
-    assert "Deep Recon full mode was not enabled." in captured.out
+    assert "This stage produces static manual-review context only." in captured.out
     assert calls
     assert all(source == "source_route_coverage" for _, source in calls)
     assert all("?" not in url for url, _ in calls)
@@ -1518,6 +1530,10 @@ def test_cli_recon_deep_source_route_collect_writes_artifacts_when_requested(
             )
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (input_dir / "httpx.jsonl").write_text(
+        '{"url":"http://10.10.10.10/","host":"10.10.10.10","status_code":200}\n',
         encoding="utf-8",
     )
     calls: list[tuple[str, str]] = []
@@ -1703,7 +1719,7 @@ def test_cli_recon_deep_source_route_collect_write_error_returns_nonzero(
     assert "No crawling was performed." in captured.err
     assert "No forms were submitted." in captured.err
     assert "No authentication was attempted." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert "No files were written." not in captured.err
     assert before == after
 
@@ -1782,7 +1798,7 @@ def test_cli_recon_deep_metadata_collection_review_renders_stdout_only(
         "### Safety Notes",
         "No HTTP requests were made by this review.",
         "No files were written by this review.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in captured.out
     assert before == after
@@ -1805,7 +1821,7 @@ def test_cli_recon_deep_metadata_collection_review_missing_input_returns_nonzero
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert list(tmp_path.iterdir()) == []
 
 
@@ -1826,7 +1842,7 @@ def test_cli_recon_deep_metadata_collection_review_file_input_returns_nonzero(
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert input_file.read_text(encoding="utf-8") == "{}"
 
 
@@ -1847,7 +1863,7 @@ def test_cli_recon_deep_metadata_collection_review_missing_json_returns_nonzero(
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert sorted(path.name for path in input_dir.iterdir()) == []
 
 
@@ -1871,7 +1887,7 @@ def test_cli_recon_deep_metadata_collection_review_invalid_json_returns_nonzero(
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert collection_path.read_text(encoding="utf-8") == before
     assert sorted(path.name for path in input_dir.iterdir()) == [
         DEEP_METADATA_COLLECTION_JSON
@@ -1976,7 +1992,7 @@ def test_cli_recon_deep_source_route_collection_review_missing_input_returns_non
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert list(tmp_path.iterdir()) == []
 
 
@@ -1997,7 +2013,7 @@ def test_cli_recon_deep_source_route_collection_review_missing_json_returns_nonz
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert sorted(path.name for path in input_dir.iterdir()) == []
 
 
@@ -2023,7 +2039,7 @@ def test_cli_recon_deep_source_route_collection_review_file_input_returns_nonzer
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert input_file.read_text(encoding="utf-8") == "{}"
 
 
@@ -2047,7 +2063,7 @@ def test_cli_recon_deep_source_route_collection_review_invalid_json_returns_nonz
     assert "No files were written." in captured.err
     assert "No directories were created." in captured.err
     assert "No HTTP requests were made." in captured.err
-    assert "Deep Recon full mode was not enabled." in captured.err
+    assert "This stage produces static manual-review context only." in captured.err
     assert collection_path.read_text(encoding="utf-8") == before
     assert sorted(path.name for path in input_dir.iterdir()) == [
         DEEP_SOURCE_ROUTE_COLLECTION_JSON
@@ -2451,7 +2467,7 @@ def _assert_deep_collection_review_bundle_guardrails(stderr: str) -> None:
     assert "No directories were created." in stderr
     assert "No HTTP requests were made." in stderr
     assert "No collection was performed." in stderr
-    assert "Deep Recon full mode was not enabled." in stderr
+    assert "This stage produces static manual-review context only." in stderr
 
 
 def _deep_source_route_collection_result() -> DeepSourceRouteCollectionResult:
@@ -4395,7 +4411,7 @@ def _assert_deep_source_route_collection_guardrails(stderr: str) -> None:
     assert "No crawling was performed." in stderr
     assert "No forms were submitted." in stderr
     assert "No authentication was attempted." in stderr
-    assert "Deep Recon full mode was not enabled." in stderr
+    assert "This stage produces static manual-review context only." in stderr
 
 
 def _walk_keys(value: object) -> set[str]:

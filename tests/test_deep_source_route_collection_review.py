@@ -277,7 +277,7 @@ def test_renderer_sections_compact_urls_safety_and_no_full_body() -> None:
         "No forms were submitted.",
         "No authentication was attempted.",
         "No payloads were injected.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert required in rendered
     for forbidden in (

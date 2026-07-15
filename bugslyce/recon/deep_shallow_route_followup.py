@@ -25,6 +25,7 @@ from bugslyce.recon.deep_javascript_route_extraction import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_source_route_collector import MAX_BODY_PREVIEW_CHARS
+from bugslyce.recon.http_origin import same_http_origin
 
 
 DEFAULT_MAX_REQUESTS = 12
@@ -80,7 +81,7 @@ PLAN_SAFETY_NOTES = (
     "Redirects were not manually followed by this phase.",
     "No vulnerability was confirmed.",
     "No network request was made by this planning/rendering step.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 RESULT_SAFETY_NOTES = (
     "This is one bounded shallow same-origin follow-up collection pass.",
@@ -94,7 +95,7 @@ RESULT_SAFETY_NOTES = (
     "Redirects were not manually followed by this phase.",
     "No vulnerability was confirmed.",
     "Network access was limited to the supplied bounded fetcher and the selected plan requests.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 
@@ -589,22 +590,8 @@ def _query_names(query: str) -> tuple[str, ...]:
     return tuple(sorted({quote(name, safe="") for name, _value in parse_qsl(query, keep_blank_values=True) if name}))
 
 
-def _origin_tuple(url: str) -> tuple[str, str, int] | None:
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return None
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    port = parsed.port if parsed.port is not None else (443 if scheme == "https" else 80)
-    return (scheme, parsed.hostname.lower(), port)
-
-
 def _same_origin(source_url: str, target_url: str) -> bool:
-    source = _origin_tuple(source_url)
-    target = _origin_tuple(target_url)
-    return source is not None and target is not None and source == target
+    return same_http_origin(source_url, target_url)
 
 
 def _has_low_value_suffix(url: str) -> bool:
@@ -832,6 +819,11 @@ def _validate_plan_for_collection(plan: DeepShallowRouteFollowupPlan) -> None:
             raise ValueError("plan request URL must not contain userinfo, query, or fragment")
         if request.request_url != canonical:
             raise ValueError("plan request URL must equal canonical path-only URL")
+        if not request.source_request_urls or not any(
+            _same_origin(source_url, request.request_url)
+            for source_url in request.source_request_urls
+        ):
+            raise ValueError("plan request URL must have same-origin source provenance")
 
 
 def _collection_bounds(max_requests: int) -> DeepCollectionBounds:

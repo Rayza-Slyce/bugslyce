@@ -30,7 +30,7 @@ SAFETY_NOTES = (
     "It does not crawl.",
     "It does not collect non-metadata routes.",
     "It does not confirm vulnerabilities.",
-    "Deep Recon full mode was not enabled.",
+    "This stage produces static manual-review context only.",
 )
 
 

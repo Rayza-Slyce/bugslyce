@@ -54,7 +54,7 @@ def test_empty_inputs_produce_safe_empty_result_and_renderer_sections() -> None:
         "### Safety Notes",
         "No network request was made.",
         "No parameter value was retained.",
-        "Deep Recon full mode was not enabled.",
+        "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
 
@@ -642,6 +642,49 @@ def test_determinism_with_reversed_inputs_headers_evidence_and_form_order() -> N
 
     assert normal == reversed_result
     assert render_deep_parameter_inventory_markdown(normal) == render_deep_parameter_inventory_markdown(reversed_result)
+
+
+def test_bare_route_and_script_paths_are_not_parameter_names() -> None:
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(
+            _shallow_item(query_names=("lp/", "lp/meta.js", "legitimate"))
+        ),
+        _html_result(
+            _html_route(query_names=("yui/loader/loader-min.js", "routeKey"))
+        ),
+        _js_result(
+            _js_candidate(query_names=("yui/yui/yui-min.js", "scriptKey"))
+        ),
+    )
+
+    names = {parameter.name for parameter in result.parameters}
+    assert names == {"legitimate", "routeKey", "scriptKey"}
+    assert result.summary_counts.invalid_names_skipped == 4
+    rendered = render_deep_parameter_inventory_markdown(result)
+    assert "lp/" not in rendered
+    assert "lp/meta.js" not in rendered
+    assert "yui/loader/loader-min.js" not in rendered
+    assert "yui/yui/yui-min.js" not in rendered
+
+
+def test_legitimate_query_and_form_names_remain_inventoried() -> None:
+    result = build_deep_parameter_inventory(
+        _source_result(
+            _source_item(
+                url="http://example.test/page?filter.name=1&items%5B%5D=2",
+                final_url="http://example.test/page?profile-id=3",
+                headers=(("Content-Type", "text/html"),),
+                body=b'<html><form><input name="user[email]"></form></html>',
+            )
+        ),
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+
+    names = {parameter.name for parameter in result.parameters}
+    assert {"filter.name", "items[]", "profile-id", "user[email]"}.issubset(names)
 
 
 def test_renderer_safety_wording_prohibited_words_and_no_body_or_values() -> None:

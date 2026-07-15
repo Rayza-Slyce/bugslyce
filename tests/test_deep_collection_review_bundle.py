@@ -53,7 +53,7 @@ def test_empty_summaries_produce_safe_empty_bundle() -> None:
     assert "### Safety Notes" in rendered
     assert "No unified review priorities were generated." in rendered
     assert "No network requests were made by this bundle." in rendered
-    assert "Deep Recon full mode was not enabled." in rendered
+    assert "This stage produces static manual-review context only." in rendered
 
 
 def test_bundle_retains_original_summaries_and_counts() -> None:
@@ -313,7 +313,7 @@ def test_renderer_compacts_long_values_and_uses_review_only_language() -> None:
     assert "This bundle combines existing offline Deep collection review summaries." in rendered
     assert "No collection or network activity is performed by the bundle." in rendered
     assert "No network requests were made by this bundle." in rendered
-    assert "Deep Recon full mode was not enabled." in rendered
+    assert "This stage produces static manual-review context only." in rendered
     assert "|" not in rendered
     for forbidden in (
         "confirmed vulnerability",

@@ -25,6 +25,7 @@ from bugslyce.recon.deep_metadata_coverage import (
 from bugslyce.recon.deep_source_route_coverage import (
     build_deep_source_route_coverage_from_project_state,
 )
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 ROUTE_REQUEST_CATEGORIES = {
@@ -88,7 +89,7 @@ def build_deep_collection_request_plan_from_project_state(
     """Build an offline future Deep collection request plan from ProjectState."""
 
     allowed_origins = _derive_allowed_origins(project_state)
-    safe_local_urls = set(_derive_safe_local_urls(project_state))
+    unsafe_normalised_urls = set(_unsafe_normalised_candidate_urls(project_state))
     metadata_coverage = build_deep_metadata_coverage_from_project_state(project_state)
     source_route_coverage = build_deep_source_route_coverage_from_project_state(project_state)
 
@@ -106,11 +107,14 @@ def build_deep_collection_request_plan_from_project_state(
         for item in source_route_coverage.items:
             if item.status != status or item.category not in categories:
                 continue
-            if item.url not in safe_local_urls:
+            item_origin = _origin_for_url(item.url)
+            if item_origin is None or item_origin not in allowed_origins:
+                continue
+            if item.url in unsafe_normalised_urls:
                 continue
             pending.append(_pending_route_request(item.url, item.status, item.category, item.evidence_ids))
 
-    pending.extend(_pending_query_endpoint_requests(project_state))
+    pending.extend(_pending_query_endpoint_requests(project_state, allowed_origins))
 
     for item in metadata_coverage.items:
         if item.status != "planned_uncollected":
@@ -217,11 +221,16 @@ def _pending_route_request(
     )
 
 
-def _pending_query_endpoint_requests(project_state: ProjectState) -> tuple[_PendingRequest, ...]:
+def _pending_query_endpoint_requests(
+    project_state: ProjectState,
+    allowed_origins: tuple[str, ...],
+) -> tuple[_PendingRequest, ...]:
     pending: list[_PendingRequest] = []
     for endpoint in project_state.endpoints:
         normalised = _normalise_url(endpoint.url, keep_query=True)
         if normalised is None or "?" not in normalised[0]:
+            continue
+        if normalised[1] not in allowed_origins:
             continue
         category = _category_for_path(endpoint.path)
         if category not in ROUTE_REQUEST_CATEGORIES:
@@ -268,38 +277,55 @@ def _to_collection_requests(
 
 def _derive_allowed_origins(project_state: ProjectState) -> tuple[str, ...]:
     origins: list[str] = []
-    for url in _project_state_urls(project_state):
-        normalised = _normalise_url(url, keep_query=False)
-        if normalised is None:
+    for service in project_state.http_services:
+        origin = http_origin_from_url(service.url)
+        if origin is None:
             continue
-        origins.append(normalised[1])
+        origins.append(origin.origin_url)
     return tuple(_dedupe(origins))
 
 
-def _derive_safe_local_urls(project_state: ProjectState) -> tuple[str, ...]:
+def _origin_for_url(raw_url: str) -> str | None:
+    return None if (origin := http_origin_from_url(raw_url)) is None else origin.origin_url
+
+
+def _unsafe_normalised_candidate_urls(project_state: ProjectState) -> tuple[str, ...]:
     urls: list[str] = []
-    for url in _project_state_urls(project_state):
-        normalised = _normalise_url(url, keep_query=False)
-        if normalised is None:
+    raw_values: list[str] = []
+    raw_values.extend(endpoint.url for endpoint in project_state.endpoints)
+    raw_values.extend(artifact.url for artifact in project_state.http_artifacts)
+    raw_values.extend(path.url for path in project_state.discovered_paths)
+    for raw_url in raw_values:
+        try:
+            parsed = urlparse(raw_url)
+        except (TypeError, ValueError):
             continue
-        urls.append(normalised[0])
+        if not (parsed.username or parsed.password or parsed.fragment):
+            continue
+        normalised = _normalise_unsafe_reference_for_rejection(raw_url)
+        if normalised is not None:
+            urls.append(normalised)
     return tuple(_dedupe(urls))
 
 
-def _project_state_urls(project_state: ProjectState) -> tuple[str, ...]:
-    urls: list[str] = []
-    urls.extend(service.url for service in project_state.http_services)
-    urls.extend(endpoint.url for endpoint in project_state.endpoints)
-    urls.extend(artifact.url for artifact in project_state.http_artifacts)
-    urls.extend(path.url for path in project_state.discovered_paths)
-    return tuple(urls)
-
-
-def _origin_for_url(raw_url: str) -> str | None:
-    normalised = _normalise_url(raw_url, keep_query=False)
-    if normalised is None:
+def _normalise_unsafe_reference_for_rejection(raw_url: str) -> str | None:
+    try:
+        parsed = urlparse(raw_url)
+        port = parsed.port
+    except (TypeError, ValueError):
         return None
-    return normalised[1]
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    hostname = parsed.hostname.lower().rstrip(".")
+    authority = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if scheme == "https" else 80
+    if port not in (None, default_port):
+        authority = f"{authority}:{port}"
+    path = parsed.path or "/"
+    if len(path) > 1:
+        path = path.rstrip("/")
+    return urlunparse((scheme, authority, path, "", "", ""))
 
 
 def _dedupe_pending_requests(
@@ -342,28 +368,21 @@ def _normalise_url(raw_url: str, *, keep_query: bool) -> tuple[str, str, str] | 
         return None
     try:
         parsed = urlparse(value)
-        port = parsed.port
     except ValueError:
         return None
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"} or not parsed.hostname:
+    origin = http_origin_from_url(value)
+    if origin is None:
         return None
     if parsed.username or parsed.password:
         return None
     if parsed.fragment:
         return None
-    hostname = parsed.hostname.lower()
-    if ":" in hostname and not hostname.startswith("["):
-        hostname = f"[{hostname}]"
-    default_port = 443 if scheme == "https" else 80
-    netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
     path = parsed.path or "/"
     if len(path) > 1:
         path = path.rstrip("/")
     query = parsed.query if keep_query else ""
-    url = urlunparse((scheme, netloc, path, "", query, ""))
-    origin = urlunparse((scheme, netloc, "", "", "", ""))
-    return url, origin, path
+    url = urlunparse((origin.scheme, origin.authority, path, "", query, ""))
+    return url, origin.origin_url, path
 
 
 def _category_for_path(path: str) -> str:
