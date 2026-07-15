@@ -348,6 +348,81 @@ def test_status_reports_completed_deep_pipeline_profile_and_phases(tmp_path: Pat
     assert "- Deep pipeline phases: 2/2" in rendered
 
 
+def test_status_reports_deep_phases_from_running_pipeline_checkpoint(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="running",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.latest_execution
+    assert result.latest_execution["pipeline_profile"] == "deep-bounded"
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 2
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+    assert "- Pipeline profile: `deep-bounded`" in rendered
+    assert "- Deep pipeline phases: 2/2" in rendered
+
+
+@pytest.mark.parametrize(
+    ("step_statuses", "expected_detected"),
+    (
+        (
+            {
+                "PIPELINE-STEP-010D": "running",
+                "PIPELINE-STEP-011D": "completed",
+            },
+            1,
+        ),
+        (
+            {
+                "PIPELINE-STEP-010D": "failed",
+                "PIPELINE-STEP-011D": "completed",
+            },
+            1,
+        ),
+        (
+            {
+                "PIPELINE-STEP-010D": "completed",
+                "PIPELINE-STEP-011D": "running",
+            },
+            1,
+        ),
+        (
+            {
+                "PIPELINE-STEP-010D": "completed",
+                "PIPELINE-STEP-011D": "failed",
+            },
+            1,
+        ),
+    ),
+)
+def test_status_counts_only_completed_deep_pipeline_steps(
+    tmp_path: Path,
+    step_statuses: dict[str, str],
+    expected_detected: int,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="running",
+        step_statuses=step_statuses,
+    )
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == expected_detected
+    assert result.artifact_overview["deep_pipeline_phases_total"] == 2
+
+
 def test_status_reports_partial_deep_artifacts_without_full_completion(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, include_body=True)
     _write_deep_pipeline_metadata(

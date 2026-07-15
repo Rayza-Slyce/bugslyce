@@ -245,6 +245,7 @@ class ResumeAssessment:
 
     skipped_step_ids: frozenset[str]
     prior_pipeline: dict[str, object] | None
+    preserve_canonical_pipeline_metadata: bool = False
 
 
 def run_project_pipeline(
@@ -283,6 +284,7 @@ def run_project_pipeline(
         profile=profile,
         resume=resume,
     )
+    preserve_canonical_pipeline_metadata = assessment.preserve_canonical_pipeline_metadata
 
     steps = _pending_steps(profile)
     for index, step in enumerate(steps):
@@ -367,6 +369,7 @@ def run_project_pipeline(
         _emit(progress_callback, f"[{position}/{total_steps}] {step.name} starting...")
         started_step = replace(step, status="running", started_at=utc_now_iso(clock))
         result = _replace_step(result, index, started_step)
+        _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
         try:
             message, output_paths, updates = step_runners[step.step_id]()
         except (PathFollowupNoWork, ContentFollowupNoWork, BodyFetchNoWork) as outcome:
@@ -379,6 +382,7 @@ def run_project_pipeline(
             )
             result = _replace_step(result, index, completed_step)
             result = _refresh_result_counts(result)
+            _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} no-op")
             continue
         except (
@@ -394,7 +398,7 @@ def run_project_pipeline(
                 str(exc),
                 clock,
             )
-            write_project_pipeline_result(result)
+            _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(str(exc), result) from exc
         except (ValueError, OSError) as exc:
@@ -405,7 +409,7 @@ def run_project_pipeline(
                 str(exc),
                 clock,
             )
-            write_project_pipeline_result(result)
+            _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(str(exc), result) from exc
 
@@ -419,6 +423,7 @@ def run_project_pipeline(
         result = _replace_step(result, index, completed_step)
         result = replace(result, **updates)
         result = _refresh_result_counts(result)
+        _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
         _emit(progress_callback, f"[{position}/{total_steps}] {step.name} complete")
 
     result = replace(
@@ -426,8 +431,17 @@ def run_project_pipeline(
         completed_at=utc_now_iso(clock),
         final_status="completed",
     )
-    write_project_pipeline_result(result)
+    _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
     return result
+
+
+def _write_project_pipeline_checkpoint(
+    result: PipelineResult,
+    preserve_canonical_pipeline_metadata: bool,
+) -> tuple[Path, Path] | None:
+    if preserve_canonical_pipeline_metadata:
+        return None
+    return write_project_pipeline_result(result)
 
 
 def write_project_pipeline_result(result: PipelineResult) -> tuple[Path, Path]:
@@ -721,6 +735,7 @@ def _assess_resume_state(
             return ResumeAssessment(
                 frozenset(_completed_deep_resume_skipped_steps(prior_statuses)),
                 prior_pipeline,
+                preserve_canonical_pipeline_metadata=True,
             )
         _validate_deep_resume_state(
             output_dir=output_dir,

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
+import zipfile
 
 import pytest
 
@@ -31,6 +32,7 @@ from bugslyce.recon.content_plan import (
     STANDARD_BOUNDED_CORE_PROFILE,
 )
 from bugslyce.recon.path_followup import PathFollowupNoWork
+from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
 
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -609,6 +611,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     captured_report: list[str | None] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
+    checkpoint_seen: list[dict[str, str]] = []
 
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_project_state",
@@ -739,6 +742,47 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     )
     monkeypatch.setattr("bugslyce.project_pipeline.generate_candidates", lambda state: [])
 
+    def fake_build_status(input_dir, scope_file=None, clock=None):
+        calls.append("status-build")
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        statuses = {
+            step["step_id"]: step["status"]
+            for step in payload["steps"]
+        }
+        assert payload["profile"] == DEEP_PIPELINE_PROFILE
+        assert payload["final_status"] == "running"
+        assert payload["target"] == "10.10.10.10"
+        assert Path(payload["output_dir"]).resolve() == output_dir
+        assert statuses["PIPELINE-STEP-010D"] == "completed"
+        assert statuses["PIPELINE-STEP-011D"] == "completed"
+        checkpoint_seen.append(statuses)
+        return SimpleNamespace(
+            artifact_overview={
+                "deep_pipeline_phases_detected": 2,
+                "deep_pipeline_phases_total": 2,
+            }
+        )
+
+    def fake_write_status(result, output_path):
+        calls.append("status-write")
+        json_path = output_path / "recon_status.json"
+        markdown_path = output_path / "recon_status.md"
+        json_path.write_text(
+            json.dumps({"artifact_overview": result.artifact_overview}, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        markdown_path.write_text(
+            "# BugSlyce Recon Status\n\n"
+            "- Pipeline profile: `deep-bounded`\n"
+            "- Deep pipeline phases: 2/2\n",
+            encoding="utf-8",
+        )
+        return json_path, markdown_path
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", fake_build_status)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_recon_status", fake_write_status)
+
     def fake_write_outputs(
         state,
         candidates,
@@ -776,6 +820,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     def fake_export(input_dir, output_path, **kwargs):
         calls.append("export")
         captured_evidence_paths.append(kwargs.get("deep_evidence_paths"))
+        with zipfile.ZipFile(output_path, "w") as archive:
+            archive.write(input_dir / "recon_status.md", "recon_status.md")
+            archive.write(input_dir / "recon_status.json", "recon_status.json")
         return SimpleNamespace(output_path=str(output_path))
 
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fake_export)
@@ -815,6 +862,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert identities["source_fetcher"] is identities["shallow_fetcher"]
     assert captured_report == [orchestration.deep_recon_markdown]
     assert captured_runbook == [orchestration.deep_recon_runbook_markdown]
+    assert checkpoint_seen
     assert identities["runbook_standard"] == (
         "## Standard Investigation Workflow\n\nStandard guidance.\n"
     )
@@ -831,6 +879,17 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert calls.index("deep-shallow-collect") < calls.index("deep-orchestrate")
     assert calls.index("deep-orchestration-write") < calls.index("deep-report-write")
     assert calls.index("deep-orchestration-write") < calls.index("export")
+    assert "- Deep pipeline phases: 2/2" in (output_dir / "recon_status.md").read_text(
+        encoding="utf-8"
+    )
+    status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    assert status_payload["artifact_overview"]["deep_pipeline_phases_detected"] == 2
+    with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
+        assert "- Deep pipeline phases: 2/2" in archive.read("recon_status.md").decode(
+            "utf-8"
+        )
+        packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
+    assert packed_status["artifact_overview"]["deep_pipeline_phases_detected"] == 2
 
 
 def test_deep_pipeline_selects_standard_bounded_core_content_profile(
@@ -1037,6 +1096,28 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
         STANDARD_BOUNDED_CORE_PROFILE,
     )
     _patch_live_calls_to_fail(monkeypatch)
+    for dotted_name in (
+        "build_recon_status",
+        "write_recon_status",
+        "build_project_runbook",
+        "write_project_runbook",
+    ):
+        monkeypatch.setattr(
+            f"bugslyce.project_pipeline.{dotted_name}",
+            lambda *args, _name=dotted_name, **kwargs: pytest.fail(
+                f"{_name} must not be called"
+            ),
+        )
+    canonical_paths = (
+        output_dir / PIPELINE_JSON_FILENAME,
+        output_dir / PIPELINE_MARKDOWN_FILENAME,
+        output_dir / "report.md",
+        output_dir / "recon_status.md",
+        output_dir / "recon_status.json",
+        output_dir / "runbook.md",
+        export_path,
+    )
+    before = {path: path.read_bytes() for path in canonical_paths}
 
     result = run_project_pipeline(
         project_file,
@@ -1055,11 +1136,39 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     assert result.report_path == str(output_dir / "report.md")
     assert result.runbook_path == str(output_dir / "runbook.md")
     assert result.export_path == str(export_path)
+    assert result.completed_steps == 1
+    assert result.skipped_steps == 13
     markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
     assert f"- Report: `{output_dir / 'report.md'}`" in markdown
     assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown
     assert f"- Runbook: `{output_dir / 'runbook.md'}`" in markdown
     assert f"- Evidence pack: `{export_path}`" in markdown
+    assert {path: path.read_bytes() for path in canonical_paths} == before
+    prior_payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    prior_statuses = {
+        step["step_id"]: step["status"]
+        for step in prior_payload["steps"]
+    }
+    assert prior_statuses["PIPELINE-STEP-009"] == "noop"
+    assert prior_statuses["PIPELINE-STEP-010D"] == "completed"
+    assert prior_statuses["PIPELINE-STEP-011D"] == "completed"
+    assert prior_statuses["PIPELINE-STEP-010"] == "completed"
+    assert prior_statuses["PIPELINE-STEP-011"] == "completed"
+    assert prior_statuses["PIPELINE-STEP-012"] == "completed"
+    rendered_status = render_recon_status_markdown(build_recon_status(output_dir))
+    assert "- Pipeline profile: `deep-bounded`" in rendered_status
+    assert "- Deep pipeline phases: 2/2" in rendered_status
+
+    second_result = run_project_pipeline(
+        project_file,
+        DEEP_PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert second_result.completed_steps == 1
+    assert second_result.skipped_steps == 13
+    assert {path: path.read_bytes() for path in canonical_paths} == before
 
 
 def test_deep_completed_resume_requires_all_fixed_artefacts(
@@ -1983,22 +2092,30 @@ def _write_prior_pipeline(
     final_status: str = "completed",
     step_statuses: dict[str, str] | None = None,
 ) -> None:
+    payload = {
+        "target": "10.10.10.10",
+        "profile": profile,
+        "project_file": str(project_file.resolve()),
+        "output_dir": str(output_dir.resolve()),
+        "final_status": final_status,
+        "export_path": str(export_path.resolve()),
+        "steps": [
+            {"step_id": step_id, "status": status}
+            for step_id, status in (step_statuses or {}).items()
+        ],
+    }
     (output_dir / PIPELINE_JSON_FILENAME).write_text(
-        json.dumps(
-            {
-                "target": "10.10.10.10",
-                "profile": profile,
-                "project_file": str(project_file.resolve()),
-                "output_dir": str(output_dir.resolve()),
-                "final_status": final_status,
-                "export_path": str(export_path.resolve()),
-                "steps": [
-                    {"step_id": step_id, "status": status}
-                    for step_id, status in (step_statuses or {}).items()
-                ],
-            }
-        )
-        + "\n",
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / PIPELINE_MARKDOWN_FILENAME).write_text(
+        "# Prior Pipeline\n\n"
+        f"- Profile: `{profile}`\n"
+        f"- Final status: `{final_status}`\n"
+        f"- Report: `{output_dir / 'report.md'}`\n"
+        f"- Recon status: `{output_dir / 'recon_status.md'}`\n"
+        f"- Runbook: `{output_dir / 'runbook.md'}`\n"
+        f"- Evidence pack: `{export_path}`\n",
         encoding="utf-8",
     )
 
