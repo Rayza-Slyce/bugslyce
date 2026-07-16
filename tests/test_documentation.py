@@ -42,6 +42,8 @@ def test_readme_links_to_detailed_documentation() -> None:
         "docs/OPERATOR_GUIDE.md",
         "docs/TROUBLESHOOTING.md",
         "docs/RECON_MODES.md",
+        "docs/RELEASE_NOTES.md",
+        "docs/RELEASE_ACCEPTANCE.md",
         "LICENSE",
     ):
         assert f"]({link})" in readme

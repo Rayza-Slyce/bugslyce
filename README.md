@@ -10,8 +10,9 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-Current package version: `0.3.0`. The implemented workflows are v1
-release-candidate functionality; no v1.0.0 release is claimed here.
+Current package version: `1.0.0rc1`. This is the first BugSlyce v1 release
+candidate, not the final `1.0.0` release. It has not been tagged or published
+from this development phase.
 
 ## Authorised Use
 
@@ -136,10 +137,12 @@ project files.
 - [Operator Guide](docs/OPERATOR_GUIDE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Recon mode details](docs/RECON_MODES.md)
+- [Release notes](docs/RELEASE_NOTES.md)
+- [Release acceptance](docs/RELEASE_ACCEPTANCE.md)
 
 ## Development and Testing Status
 
-The package version is `0.3.0`. The deterministic test suite mocks live
+The package version is `1.0.0rc1`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash

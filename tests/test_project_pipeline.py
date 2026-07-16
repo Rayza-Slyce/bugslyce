@@ -12,6 +12,7 @@ import zipfile
 
 import pytest
 
+from bugslyce import __version__
 from bugslyce.cli import main
 from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.project_pipeline import (
@@ -1979,7 +1980,7 @@ def _doctor(
         resource.ready for resource in resources
     )
     return DoctorReport(
-        bugslyce_version="0.3.0",
+        bugslyce_version=__version__,
         python_version="3.12.3",
         python_supported=True,
         virtual_environment=True,
@@ -2038,7 +2039,7 @@ def _structured_doctor(
         )
     )
     return DoctorReport(
-        bugslyce_version="0.3.0",
+        bugslyce_version=__version__,
         python_version="3.12.3",
         python_supported=True,
         virtual_environment=True,

@@ -1,56 +1,139 @@
 # Release Checklist
 
-This checklist is for maintainers preparing a future BugSlyce release. It does
-not create a release, create a Git tag, publish a package or upload artefacts.
+This checklist prepares BugSlyce `1.0.0rc1` for release-candidate acceptance.
+It does not create a Git tag, publish a package or upload artefacts.
 
-The current package version is `0.3.0`. Do not claim a v1.0.0 release until the
-project version, release process and distribution artefacts have been updated
-deliberately.
+Current decision: **NO-GO pending Kali acceptance**.
 
-## Documentation
+## A. Source Integrity
 
-- [ ] README describes the current package version and implemented workflows.
-- [ ] Current profiles are documented: `lab-safe-tiny`, `standard-bounded`,
-      `deep-bounded`.
-- [ ] Current mode names are documented: Quick Recon, Standard Recon and Deep
-      Recon.
-- [ ] [Installation](INSTALLATION.md) matches the current dependencies.
-- [ ] [Operator Guide](OPERATOR_GUIDE.md) matches the current CLI and launcher.
-- [ ] [Troubleshooting](TROUBLESHOOTING.md) covers common readiness and resume
-      failures.
-- [ ] [Recon Modes](RECON_MODES.md) matches the mode registry.
+- [ ] Working tree is clean.
+- [ ] Expected base commit is recorded.
+- [ ] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
+      report `1.0.0rc1`.
+- [ ] No stale current-version references remain.
+- [ ] No generated target evidence is tracked.
+- [ ] No secrets, `.env` files, provider configuration or private project
+      directories are tracked.
+- [ ] No temporary build output is committed.
 
-## Safety Boundaries
+## B. Static Safety
 
-- [ ] Authorised-use wording is present.
-- [ ] Scope review is required before live recon.
-- [ ] `--confirm` is required for project pipeline execution.
-- [ ] No UDP pipeline phase is documented as available.
-- [ ] No NSE scripts are documented as available.
+- [ ] No `shell=True`.
+- [ ] No `os.system`.
+- [ ] No `subprocess.Popen`.
+- [ ] No unsafe deserialisation such as `pickle.loads` or `yaml.load`.
+- [ ] No offensive-tool integration is executable.
 - [ ] No brute force, exploitation, form submission, authentication testing,
-      browser automation or JavaScript execution is documented as available.
-- [ ] Reports are described as manual review context, not confirmed findings.
+      browser automation or JavaScript execution is introduced.
+- [ ] No unexpected HTTP methods are introduced.
+- [ ] Quick remains `lab-safe-tiny`.
+- [ ] Standard remains `standard-bounded`.
+- [ ] Deep remains `deep-bounded`.
+- [ ] Request counts, response-size caps, redirect limits and Deep bounds are
+      unchanged.
 
-## Readiness
+## C. Test Matrix
 
-- [ ] Python minimum version remains documented as `3.11`.
-- [ ] Required external tools are documented: `nmap`, `curl`, `gobuster`.
-- [ ] Bundled resources are documented: `lab-root-tiny`,
-      `standard-bounded-core`.
-- [ ] `bugslyce doctor` is documented as passive and local.
-- [ ] Doctor exit codes are documented.
-
-## Validation
+Run from the repository root:
 
 - [ ] Documentation tests pass.
-- [ ] CLI, interactive and doctor tests pass.
-- [ ] Pipeline and project-session tests pass.
 - [ ] Full suite passes.
-- [ ] `git diff --check` passes.
-- [ ] Local no-network package installation validates bundled resources.
 
-## Release Actions
+```bash
+PYTHON=python3
+[ -x .venv/bin/python ] && PYTHON=.venv/bin/python
+[ -x venv/bin/python ] && PYTHON=venv/bin/python
 
-Release tagging and package publication are intentionally not described here as
-a command recipe. Perform them only through the project's approved release
-process.
+"$PYTHON" -m pytest -q tests/test_release_candidate.py
+"$PYTHON" -m pytest -q tests/test_release_safety.py
+"$PYTHON" -m pytest -q \
+  tests/test_cli.py \
+  tests/test_interactive.py \
+  tests/test_doctor.py \
+  tests/test_project_pipeline.py \
+  tests/test_project_session.py
+"$PYTHON" -m pytest -q \
+  tests/test_deep_collection_policy.py \
+  tests/test_deep_collection_request_plan.py \
+  tests/test_deep_source_route_collector.py \
+  tests/test_deep_http_fetcher.py \
+  tests/test_deep_shallow_route_followup.py
+"$PYTHON" -m pytest -q \
+  tests/test_documentation.py \
+  tests/test_readme.py \
+  tests/test_recon_modes_doc.py
+"$PYTHON" -m pytest -q
+"$PYTHON" -m compileall -q bugslyce
+git diff --check
+```
+
+## D. Packaging
+
+- [ ] Build a local wheel or source distribution where local tooling permits.
+- [ ] Create a clean temporary virtual environment.
+- [ ] Install only the built local artefact, without dependency downloads.
+- [ ] Run `python -m pip check`.
+- [ ] Import `bugslyce`.
+- [ ] Verify `bugslyce --version` prints `bugslyce 1.0.0rc1`.
+- [ ] Run `bugslyce doctor`.
+- [ ] Confirm bundled wordlists are present and non-empty:
+      `lab-root-tiny.txt` and `standard-bounded-core.txt`.
+- [ ] Confirm documentation files are present in the source repository.
+- [ ] Confirm no unrelated files are installed as package data.
+
+## E. Kali Acceptance
+
+- [ ] Clean source pull or clean clone.
+- [ ] Fresh virtual environment.
+- [ ] Local source installation.
+- [ ] `bugslyce doctor` exits `0`.
+- [ ] `bugslyce --help` and `bugslyce --version` work.
+- [ ] Manual Setup Only smoke passes.
+- [ ] Authorised Quick smoke passes with `lab-safe-tiny`.
+- [ ] Authorised Standard smoke passes with `standard-bounded`.
+- [ ] Authorised Deep smoke passes with `deep-bounded`.
+- [ ] Completed Deep resume is a verified no-op.
+- [ ] Canonical Deep artefact hashes remain stable after completed resume.
+- [ ] Evidence ZIP contents are reviewed.
+- [ ] Working tree remains clean after acceptance.
+
+## F. Release Decision
+
+Allowed outcomes:
+
+- **GO**: all local checks and Kali acceptance pass.
+- **GO WITH DOCUMENTED LIMITATION**: all release blockers pass, with an
+  explicitly documented non-blocking limitation.
+- **NO-GO**: any release blocker remains.
+
+Release blockers include:
+
+- Version mismatch.
+- Test-suite failure.
+- Missing required bundled resources.
+- Doctor failure on the Kali acceptance host after dependencies are installed.
+- Live recon outside documented scope or origin policy.
+- Shell execution or arbitrary command-flag injection.
+- Evidence-pack path escape or unrelated local-data inclusion.
+- Partial Deep resume being treated as safe.
+
+## Current Status
+
+### Locally Completed
+
+- Version alignment is expected to be validated by tests.
+- Source audit and static safety checks are expected to run locally.
+- Unit, integration and documentation checks are expected to run locally.
+- Source package-data configuration is expected to be validated locally.
+
+### Pending Kali Acceptance
+
+- Fresh clean installation.
+- Doctor exit `0`.
+- Manual Setup Only smoke.
+- Quick Recon smoke.
+- Standard Recon smoke.
+- Deep Recon smoke.
+- Completed Deep no-op and hash stability.
+- Evidence ZIP content review.

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from bugslyce import __version__
 import bugslyce.cli as cli_module
 from bugslyce.cli import main
 from bugslyce.core.models import ReconContentDiscoveryExecutionResult
@@ -113,7 +114,7 @@ def test_cli_version_exits_successfully(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exc_info.value.code == 0
-    assert "bugslyce 0.3.0" in captured.out
+    assert f"bugslyce {__version__}" in captured.out
 
 
 def test_cli_help_exits_successfully(capsys) -> None:

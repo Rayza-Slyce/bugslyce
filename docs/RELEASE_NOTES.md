@@ -1,33 +1,88 @@
 # Release Notes
 
-BugSlyce currently reports package version `0.3.0`.
+## 1.0.0rc1
 
-These notes describe the current repository state for operators and reviewers.
-They do not create a release, publish a package or claim a v1.0.0 release.
+BugSlyce `1.0.0rc1` is the first v1 release candidate. It is not the final
+`1.0.0` release, and this document does not create a Git tag or publish a
+package.
 
-## Current Implemented Workflows
+### Operator Workflow
 
-- Manual Setup Only.
-- Quick Recon with `lab-safe-tiny`.
-- Standard Recon with `standard-bounded`.
-- Deep Recon with `deep-bounded`.
+- Interactive launcher for new projects, resume, project listing and doctor.
+- Project scaffolding with `bugslyce_project.json` and an operator-reviewed
+  `scope.md`.
+- Manual Setup Only for metadata and scope preparation without recon.
+- Quick Recon using `lab-safe-tiny`.
+- Standard Recon using `standard-bounded`.
+- Deep Recon using `deep-bounded`.
+- Project status, operator runbook, report generation and evidence-pack ZIP
+  export.
+- Conservative resume: completed runs may reuse verified artefacts; ambiguous
+  state fails closed.
 
-The executable recon workflows remain bounded, scope-conscious and
-non-exploitative. They do not submit forms, execute JavaScript, brute force,
-perform authentication testing, mutate parameters or claim confirmed
-vulnerabilities.
+### Readiness
 
-## Operator Documentation
+- Python `3.11` or newer is required.
+- `bugslyce doctor` is passive and local.
+- Executable recon modes require `nmap`, `curl` and `gobuster`.
+- Bundled `lab-root-tiny` gates Quick Recon.
+- Bundled `standard-bounded-core` gates Standard and Deep Recon.
+- Mode readiness is profile-specific.
+- Doctor exit code `0` means all executable recon modes are ready; exit code
+  `2` means one or more requirements are blocked.
 
-Use the current public documentation set:
+### Safety
 
-- [Installation](INSTALLATION.md)
-- [Operator Guide](OPERATOR_GUIDE.md)
-- [Troubleshooting](TROUBLESHOOTING.md)
-- [Recon Modes](RECON_MODES.md)
+- Live project pipelines require explicit confirmation.
+- Project targets must match reviewed scope.
+- External commands use fixed argv construction and reject ASCII control
+  characters.
+- No shell execution, `os.system` or `subprocess.Popen` is used by live recon.
+- Deep collection is same-origin and bounded.
+- Cross-origin references may be retained as offline evidence but are not
+  fetched as executable requests.
+- Project paths, package resources, symlinks and evidence-pack entries are
+  contained by explicit validation.
+- Evidence packs use an allowlist and explicit artefact references.
+- Partial Deep network state is refused on resume because the full in-memory
+  bodies required for offline analysis are deliberately not persisted.
 
-## Version Boundary
+### Outputs
 
-The implemented workflows are v1 release-candidate functionality inside the
-current `0.3.0` package. Do not tag or publish a new release from this file
-alone.
+Completed project workflows may produce:
+
+- `report.md`
+- `recon_status.md`
+- `recon_status.json`
+- `runbook.md`
+- `project_pipeline.md`
+- `project_pipeline.json`
+- raw evidence artefacts referenced by `recon_manifest.json`
+- an adjacent evidence ZIP
+
+Deep Recon also retains:
+
+- `deep_source_route_collection.md`
+- `deep_source_route_collection.json`
+- `deep_recon_review.md`
+- `deep_recon_runbook.md`
+- `deep_recon_orchestration.json`
+
+### Known Limitations
+
+- BugSlyce is Linux-focused.
+- It has been directly validated on Kali Linux and Linux Mint.
+- Ubuntu and other Debian-derived Linux systems are expected to work when the
+  required Python version and external tools are available, but they are not
+  currently part of the directly validated host set.
+- Native Windows and macOS operation is not claimed.
+- Source installation is the documented route for this release candidate; do
+  not assume PyPI publication.
+- BugSlyce does not exploit, authenticate, brute force, submit forms, execute
+  JavaScript, mutate parameters or perform unrestricted recursive crawling.
+- Standard Recon uses bounded collection plus offline interpretation.
+- Deep Recon uses bounded same-origin collection plus offline orchestration.
+- Partial Deep resume is intentionally refused.
+- Local evidence packs are not encrypted and are not automatically redacted.
+- Absence of evidence is not proof of safety.
+- Manual validation remains necessary.

@@ -1,0 +1,278 @@
+# Release Acceptance
+
+This guide is the final acceptance procedure for BugSlyce `1.0.0rc1`.
+
+Do not run live recon against any system unless you own it or are explicitly
+authorised to assess it. A generated `scope.md` is a local safety aid, not
+authorisation.
+
+## Part 1: Local Non-Network Acceptance
+
+Run these checks from a clean source checkout without contacting a target.
+
+### 1. Checkout Verification
+
+```bash
+git status --short
+git log -1 --oneline
+```
+
+The working tree should be clean before release acceptance starts.
+
+### 2. Version Consistency
+
+```bash
+python - <<'PY'
+import bugslyce
+print(bugslyce.__version__)
+PY
+python -m bugslyce.cli --version
+```
+
+Both commands must report `1.0.0rc1`; the CLI form must print
+`bugslyce 1.0.0rc1`.
+
+### 3. Test Groups
+
+```bash
+PYTHON=python3
+[ -x .venv/bin/python ] && PYTHON=.venv/bin/python
+[ -x venv/bin/python ] && PYTHON=venv/bin/python
+
+"$PYTHON" -m pytest -q tests/test_release_candidate.py
+"$PYTHON" -m pytest -q tests/test_release_safety.py
+"$PYTHON" -m pytest -q \
+  tests/test_cli.py \
+  tests/test_interactive.py \
+  tests/test_doctor.py \
+  tests/test_project_pipeline.py \
+  tests/test_project_session.py
+"$PYTHON" -m pytest -q \
+  tests/test_deep_collection_policy.py \
+  tests/test_deep_collection_request_plan.py \
+  tests/test_deep_source_route_collector.py \
+  tests/test_deep_http_fetcher.py \
+  tests/test_deep_shallow_route_followup.py
+"$PYTHON" -m pytest -q \
+  tests/test_documentation.py \
+  tests/test_readme.py \
+  tests/test_recon_modes_doc.py
+"$PYTHON" -m pytest -q
+```
+
+### 4. Static Safety Searches
+
+```bash
+grep -RInE \
+  'shell=True|os\.system|subprocess\.Popen|eval\(|exec\(|pickle\.loads|yaml\.load' \
+  bugslyce tests || true
+
+grep -RInE \
+  'hydra|sqlmap|masscan|nuclei|credential stuffing|password spraying|form submission|JavaScript execution' \
+  bugslyce README.md docs tests || true
+```
+
+Review matches. Deny-list constants, safety prose and tests are not executable
+offensive integrations.
+
+### 5. Package Build Attempt
+
+Use a temporary directory outside the repository:
+
+```bash
+TMP_BUILD=$(mktemp -d)
+python -m build --no-isolation --outdir "$TMP_BUILD"
+```
+
+If `build` is unavailable, try a local wheel build:
+
+```bash
+TMP_BUILD=$(mktemp -d)
+python -m pip wheel --no-deps --no-build-isolation --wheel-dir "$TMP_BUILD" .
+```
+
+Do not install build requirements from the network during acceptance.
+
+### 6. Temporary Clean Installation
+
+When a local artefact is produced:
+
+```bash
+TMP_VENV=$(mktemp -d)
+python -m venv "$TMP_VENV/venv"
+"$TMP_VENV/venv/bin/python" -m pip install --no-index --find-links "$TMP_BUILD" bugslyce
+"$TMP_VENV/venv/bin/python" -m pip check
+"$TMP_VENV/venv/bin/bugslyce" --version
+"$TMP_VENV/venv/bin/bugslyce" --help
+"$TMP_VENV/venv/bin/bugslyce" doctor
+```
+
+Doctor may exit `2` on a host missing `nmap`, `curl` or `gobuster`; that is a
+readiness result, not a package import failure.
+
+### 7. Package Resource Verification
+
+Verify the installed package has both bundled wordlists:
+
+```bash
+"$TMP_VENV/venv/bin/python" - <<'PY'
+import importlib.resources
+
+base = importlib.resources.files("bugslyce").joinpath("wordlists")
+for name in ("lab-root-tiny.txt", "standard-bounded-core.txt"):
+    path = base.joinpath(name)
+    print(name, path.is_file(), len(path.read_text(encoding="utf-8")))
+PY
+```
+
+Both files must exist and be non-empty.
+
+### 8. CLI and Doctor Verification
+
+```bash
+bugslyce --help
+bugslyce --version
+bugslyce project run --help
+bugslyce doctor
+```
+
+Expected version: `bugslyce 1.0.0rc1`.
+
+### 9. Markdown Link Validation
+
+```bash
+python -m pytest -q tests/test_documentation.py tests/test_readme.py
+```
+
+### 10. Clean Tree and Diff Checks
+
+```bash
+git diff --check
+git status --short
+```
+
+## Part 2: Authorised Kali Smoke Acceptance
+
+Set private local variables. Do not use a random public target.
+
+```bash
+export BUGSLYCE_SMOKE_TARGET='AUTHORISED_TARGET'
+export BUGSLYCE_SMOKE_ROOT="$HOME/bugslyce-rc-smoke"
+```
+
+The target must be owned by the operator or explicitly authorised. Review each
+generated `scope.md` before typing `YES`.
+
+### Manual Setup Only
+
+Create a project through the launcher or CLI and choose Manual Setup Only.
+Verify:
+
+- `bugslyce_project.json` exists.
+- `scope.md` exists and was reviewed.
+- no `recon_manifest.json` exists.
+- no live-tool outputs exist.
+- no evidence ZIP is falsely created.
+
+### Quick
+
+Run an authorised project with profile `lab-safe-tiny`.
+Verify:
+
+- core project outputs are present;
+- `recon_manifest.json` is present;
+- `report.md`, `recon_status.md`, `runbook.md` and pipeline metadata are
+  present;
+- the adjacent evidence ZIP exists.
+
+### Standard
+
+Run an authorised project with profile `standard-bounded`.
+Verify:
+
+- bounded collection completed;
+- Standard offline interpretation sections are present;
+- no Deep-only artefacts are present.
+
+### Deep
+
+Run an authorised project with profile `deep-bounded`.
+Verify the five retained Deep artefacts:
+
+- `deep_source_route_collection.md`
+- `deep_source_route_collection.json`
+- `deep_recon_review.md`
+- `deep_recon_runbook.md`
+- `deep_recon_orchestration.json`
+
+### Completed Deep Resume
+
+Hash canonical artefacts before resume:
+
+```bash
+cd "$BUGSLYCE_SMOKE_ROOT/deep-project"
+sha256sum \
+  bugslyce_project.json \
+  scope.md \
+  report.md \
+  recon_status.md \
+  recon_status.json \
+  runbook.md \
+  project_pipeline.md \
+  project_pipeline.json \
+  deep_source_route_collection.md \
+  deep_source_route_collection.json \
+  deep_recon_review.md \
+  deep_recon_runbook.md \
+  deep_recon_orchestration.json \
+  > before.sha256
+```
+
+Run completed resume with the documented command for the project file. Then
+hash the same files again:
+
+```bash
+sha256sum \
+  bugslyce_project.json \
+  scope.md \
+  report.md \
+  recon_status.md \
+  recon_status.json \
+  runbook.md \
+  project_pipeline.md \
+  project_pipeline.json \
+  deep_source_route_collection.md \
+  deep_source_route_collection.json \
+  deep_recon_review.md \
+  deep_recon_runbook.md \
+  deep_recon_orchestration.json \
+  > after.sha256
+diff -u before.sha256 after.sha256
+```
+
+Acceptance requires no live recon rerun, a verified no-op resume and identical
+canonical artefact hashes.
+
+Partial Deep state must fail closed. Do not repeat uncertain bounded Deep
+network collection in the same project; use a clean project for an explicit
+rerun.
+
+### Evidence Pack
+
+Verify:
+
+- the ZIP exists in the documented adjacent location;
+- archive entries contain no absolute paths;
+- archive entries contain no `..` traversal paths;
+- only intended project material is present;
+- Deep artefacts are present for Deep projects;
+- no `.env`, SSH key or unrelated neighbouring file appears;
+- the ZIP is not treated as encrypted or redacted.
+
+### Acceptance Record
+
+Keep private target details out of commits and public tickets.
+
+| Date | Commit | Package version | Kali version | Python version | Private target identifier | Mode | Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+|  |  | `1.0.0rc1` |  |  |  |  |  |  |

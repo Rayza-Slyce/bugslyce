@@ -54,9 +54,10 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     )
     compact = " ".join(readme.split())
 
-    assert "Current package version: `0.3.0`" in readme
-    assert "v1 release-candidate functionality" in compact
-    assert "no v1.0.0 release is claimed" in compact
+    assert "Current package version: `1.0.0rc1`" in readme
+    assert "first BugSlyce v1 release candidate" in compact
+    assert "not the final `1.0.0` release" in compact
+    assert "not been tagged or published" in compact
     assert "validated on Kali Linux and Linux Mint" in readme
     assert "not currently part of the directly validated host set" in compact
     assert "validated on Debian-derived systems such as Kali, Ubuntu and Linux Mint" not in readme
@@ -106,7 +107,7 @@ def test_release_checklist_documents_current_release_gate() -> None:
     compact_lower = compact.lower()
     lowered = checklist.lower()
     for expected in (
-        "0.3.0",
+        "1.0.0rc1",
         "lab-safe-tiny",
         "standard-bounded",
         "deep-bounded",
@@ -119,8 +120,8 @@ def test_release_checklist_documents_current_release_gate() -> None:
 
     assert "brute force" in lowered
     assert "exploitation" in lowered
-    assert "does not create a release, create a git tag" in compact_lower
-    assert "release tagging" in lowered
+    assert "does not create a git tag" in compact_lower
+    assert "NO-GO pending Kali acceptance" in checklist
 
     assert "Deep Recon remains unavailable" not in checklist
     assert "git tag v0.3.0" not in checklist
@@ -133,13 +134,13 @@ def test_release_notes_document_current_scope() -> None:
 
     notes = notes_path.read_text(encoding="utf-8")
     for expected in (
-        "package version `0.3.0`",
+        "1.0.0rc1",
         "Manual Setup Only",
-        "Quick Recon with `lab-safe-tiny`",
-        "Standard Recon with `standard-bounded`",
-        "Deep Recon with `deep-bounded`",
-        "v1 release-candidate functionality",
-        "Do not tag or publish",
+        "Quick Recon using `lab-safe-tiny`",
+        "Standard Recon using `standard-bounded`",
+        "Deep Recon using `deep-bounded`",
+        "first v1 release candidate",
+        "does not create a Git tag or publish",
     ):
         assert expected in notes
 
