@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ import zipfile
 import pytest
 
 from bugslyce.cli import main
-from bugslyce.doctor import DoctorReport
+from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     DeepPipelineOutputs,
@@ -220,8 +221,8 @@ def test_pipeline_rejects_missing_scope_and_existing_plan_directory(
 @pytest.mark.parametrize(
     ("doctor_kwargs", "message"),
     [
-        ({"gobuster": None}, "Required pipeline tools"),
-        ({"bundled": False}, "Bundled lab-root-tiny"),
+        ({"gobuster": None}, "Quick Recon is blocked.*gobuster"),
+        ({"bundled": False}, "Quick Recon is blocked.*lab-root-tiny"),
     ],
 )
 def test_pipeline_stops_on_missing_required_readiness(
@@ -242,6 +243,114 @@ def test_pipeline_stops_on_missing_required_readiness(
 
     with pytest.raises(ValueError, match=message):
         run_project_pipeline(project_file, PIPELINE_PROFILE)
+
+
+@pytest.mark.parametrize(
+    ("profile", "missing_resource", "message"),
+    (
+        (PIPELINE_PROFILE, "lab-root-tiny", "Quick Recon is blocked.*lab-root-tiny"),
+        (
+            STANDARD_PIPELINE_PROFILE,
+            "standard-bounded-core",
+            "Standard Recon is blocked.*standard-bounded-core",
+        ),
+        (
+            DEEP_PIPELINE_PROFILE,
+            "standard-bounded-core",
+            "Deep Recon is blocked.*standard-bounded-core",
+        ),
+    ),
+)
+def test_pipeline_blocks_only_profile_required_missing_resource(
+    tmp_path: Path,
+    monkeypatch,
+    profile: str,
+    missing_resource: str,
+    message: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _patch_live_calls_to_fail(monkeypatch)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _structured_doctor(missing_resource=missing_resource),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        run_project_pipeline(project_file, profile)
+
+    assert not (output_dir / PIPELINE_JSON_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("profile", "irrelevant_missing_resource"),
+    (
+        (PIPELINE_PROFILE, "standard-bounded-core"),
+        (STANDARD_PIPELINE_PROFILE, "lab-root-tiny"),
+        (DEEP_PIPELINE_PROFILE, "lab-root-tiny"),
+    ),
+)
+def test_pipeline_ignores_irrelevant_missing_resource_for_selected_profile(
+    tmp_path: Path,
+    monkeypatch,
+    profile: str,
+    irrelevant_missing_resource: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _structured_doctor(missing_resource=irrelevant_missing_resource),
+    )
+    plan_dir = Path(
+        f"{output_dir}-content-plan-{_content_plan_suffix_for_test(profile)}"
+    )
+    plan_dir.mkdir()
+
+    with pytest.raises(ValueError, match="Content plan directory already exists"):
+        run_project_pipeline(project_file, profile)
+
+
+@pytest.mark.parametrize("missing_tool", ("nmap", "curl", "gobuster"))
+@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE))
+def test_pipeline_missing_shared_tool_blocks_every_executable_profile(
+    tmp_path: Path,
+    monkeypatch,
+    missing_tool: str,
+    profile: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _patch_live_calls_to_fail(monkeypatch)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _structured_doctor(missing_tool=missing_tool),
+    )
+
+    with pytest.raises(ValueError, match=missing_tool):
+        run_project_pipeline(project_file, profile)
+
+    assert not (output_dir / PIPELINE_JSON_FILENAME).exists()
+
+
+def test_pipeline_malformed_readiness_blocks_before_any_step_or_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _patch_live_calls_to_fail(monkeypatch)
+    malformed = _structured_doctor()
+    malformed = replace(
+        malformed,
+        tools=tuple(tool for tool in malformed.tools if tool.name != "gobuster"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: malformed,
+    )
+
+    with pytest.raises(ValueError, match="gobuster.*missing"):
+        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE)
+
+    assert not (output_dir / PIPELINE_JSON_FILENAME).exists()
+    assert not (output_dir / PIPELINE_MARKDOWN_FILENAME).exists()
 
 
 def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
@@ -1831,6 +1940,44 @@ def _doctor(
     gobuster: str | None = "/usr/bin/gobuster",
     bundled: bool = True,
 ) -> DoctorReport:
+    tools = tuple(
+        ToolReadiness(
+            name=name,
+            found=path is not None,
+            path=path,
+            executable=path is not None,
+            ready=path is not None,
+            purpose=f"{name} purpose",
+            blocked_workflows=("quick", "standard", "deep"),
+            problem=None if path is not None else "not found on PATH",
+        )
+        for name, path in (
+            ("nmap", nmap),
+            ("curl", curl),
+            ("gobuster", gobuster),
+        )
+    )
+    resources = tuple(
+        ResourceReadiness(
+            name=name,
+            path=f"/package/{name}.txt",
+            exists=bundled,
+            regular_file=bundled,
+            readable=bundled,
+            non_empty=bundled,
+            inside_package=True,
+            ready=bundled,
+            blocked_workflows=workflows,
+            problem=None if bundled else "resource file is missing",
+        )
+        for name, workflows in (
+            ("lab-root-tiny", ("quick",)),
+            ("standard-bounded-core", ("standard", "deep")),
+        )
+    )
+    ready = all(tool.ready for tool in tools) and all(
+        resource.ready for resource in resources
+    )
     return DoctorReport(
         bugslyce_version="0.3.0",
         python_version="3.12.3",
@@ -1844,9 +1991,81 @@ def _doctor(
         dirbuster_wordlist_available=False,
         dirbuster_wordlist_path="/usr/share/wordlists/dirbuster/small.txt",
         project_commands_available=True,
-        readiness="ready",
+        readiness="ready" if ready else "not ready",
         warnings=(),
+        core_ready=True,
+        recon_ready=ready,
+        overall_ready=ready,
+        tools=tools,
+        resources=resources,
     )
+
+
+def _structured_doctor(
+    *,
+    missing_resource: str | None = None,
+    missing_tool: str | None = None,
+) -> DoctorReport:
+    tools = tuple(
+        ToolReadiness(
+            name=tool,
+            found=tool != missing_tool,
+            path=None if tool == missing_tool else f"/usr/bin/{tool}",
+            executable=tool != missing_tool,
+            ready=tool != missing_tool,
+            purpose=f"{tool} purpose",
+            blocked_workflows=("quick", "standard", "deep"),
+            problem="not found on PATH" if tool == missing_tool else None,
+        )
+        for tool in ("nmap", "curl", "gobuster")
+    )
+    resources = tuple(
+        ResourceReadiness(
+            name=name,
+            path=f"/package/{name}.txt",
+            exists=name != missing_resource,
+            regular_file=name != missing_resource,
+            readable=name != missing_resource,
+            non_empty=name != missing_resource,
+            inside_package=True,
+            ready=name != missing_resource,
+            blocked_workflows=workflows,
+            problem="resource file is missing" if name == missing_resource else None,
+        )
+        for name, workflows in (
+            ("lab-root-tiny", ("quick",)),
+            ("standard-bounded-core", ("standard", "deep")),
+        )
+    )
+    return DoctorReport(
+        bugslyce_version="0.3.0",
+        python_version="3.12.3",
+        python_supported=True,
+        virtual_environment=True,
+        platform_summary="Linux",
+        current_working_directory="/tmp",
+        tool_paths={tool.name: tool.path for tool in tools},
+        bundled_wordlist_available=all(
+            resource.ready for resource in resources if resource.name == "lab-root-tiny"
+        ),
+        bundled_wordlist_path="/package/lab-root-tiny.txt",
+        dirbuster_wordlist_available=False,
+        dirbuster_wordlist_path="/usr/share/wordlists/dirbuster/small.txt",
+        project_commands_available=True,
+        readiness="ready" if all(tool.ready for tool in tools) and all(resource.ready for resource in resources) else "not ready",
+        warnings=(),
+        tools=tools,
+        resources=resources,
+        core_ready=True,
+        recon_ready=all(tool.ready for tool in tools) and all(resource.ready for resource in resources),
+        overall_ready=all(tool.ready for tool in tools) and all(resource.ready for resource in resources),
+    )
+
+
+def _content_plan_suffix_for_test(profile: str) -> str:
+    if profile == PIPELINE_PROFILE:
+        return "tiny"
+    return "standard-bounded-core"
 
 
 def _patch_successful_pipeline(

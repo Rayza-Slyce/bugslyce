@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from bugslyce.doctor import DoctorReport, build_doctor_report
+from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
 from bugslyce.core.project import build_project_state
 from bugslyce.project_session import (
     build_project_runbook,
@@ -616,7 +616,7 @@ def _validate_pipeline(
     if not output_dir.is_dir():
         raise ValueError(f"Project output directory does not exist: {output_dir}")
     validate_explicit_nmap_target_scope(target, scope_file)
-    _validate_readiness(doctor)
+    _validate_readiness(doctor, profile)
     if not resume:
         if (output_dir / "recon_manifest.json").exists():
             raise ValueError(
@@ -643,20 +643,20 @@ def _validate_pipeline(
     )
 
 
-def _validate_readiness(doctor: DoctorReport) -> None:
-    if not doctor.python_supported or not doctor.project_commands_available:
-        raise ValueError("BugSlyce doctor reports required runtime checks are not ready.")
-    if not doctor.bundled_wordlist_available:
-        raise ValueError("Bundled lab-root-tiny wordlist is unavailable.")
-    missing_tools = [
-        tool for tool in ("nmap", "curl", "gobuster") if not doctor.tool_paths.get(tool)
-    ]
-    if missing_tools:
-        raise ValueError(
-            "Required pipeline tools are not available on PATH: "
-            + ", ".join(missing_tools)
-            + "."
-        )
+def _validate_readiness(doctor: DoctorReport, profile: str) -> None:
+    failures = mode_readiness_failures(doctor, _doctor_mode_for_pipeline_profile(profile))
+    if failures:
+        raise ValueError(" ".join(failures))
+
+
+def _doctor_mode_for_pipeline_profile(profile: str) -> str:
+    if profile == PIPELINE_PROFILE:
+        return "quick"
+    if profile == STANDARD_PIPELINE_PROFILE:
+        return "standard"
+    if profile == DEEP_PIPELINE_PROFILE:
+        return "deep"
+    raise ValueError(f"Unsupported project pipeline profile '{profile}'.")
 
 
 def _assess_resume_state(
