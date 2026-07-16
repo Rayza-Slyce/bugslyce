@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from bugslyce.recon.argv_safety import contains_ascii_control
+
 
 @dataclass(frozen=True, order=True)
 class HttpOrigin:
@@ -29,7 +31,7 @@ def http_origin_from_url(raw_url: str) -> HttpOrigin | None:
     """Return a canonical HTTP(S) origin or None for unsafe/non-HTTP input."""
 
     value = raw_url.strip() if isinstance(raw_url, str) else ""
-    if not value:
+    if not value or contains_ascii_control(raw_url):
         return None
     try:
         parsed = urlparse(value)

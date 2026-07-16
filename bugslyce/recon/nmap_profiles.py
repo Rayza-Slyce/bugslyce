@@ -10,6 +10,7 @@ import shlex
 
 from bugslyce.core.models import ReconCommand, ReconCommandValidationResult
 from bugslyce.core.scope import parse_scope, scope_entry_target
+from bugslyce.recon.argv_safety import argv_control_character_errors
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,7 @@ def validate_nmap_command(
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
         if matched:
             errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
+    errors.extend(argv_control_character_errors(argv, label="Nmap"))
     if any(
         value == forbidden or value.startswith(f"{forbidden}=")
         for value in argv
@@ -329,6 +331,7 @@ def validate_live_nmap_service_scan_command(
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
         if matched:
             errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
+    errors.extend(argv_control_character_errors(argv, label="Nmap"))
     if command.output_file and not _output_is_inside(command.output_file, planned_output_dir):
         errors.append("output_file must stay inside the selected input directory.")
     if command.timeout_seconds != profile.default_timeout_seconds:
@@ -391,6 +394,7 @@ def _validate_live_nmap_discovery_command(
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
         if matched:
             errors.append(f"Nmap argv contains forbidden shell metacharacter token '{matched}'.")
+    errors.extend(argv_control_character_errors(argv, label="Nmap"))
     if command.output_file and not _output_is_inside(command.output_file, planned_output_dir):
         errors.append("output_file must stay inside the planned output directory.")
     if profile is not None and command.timeout_seconds != profile.default_timeout_seconds:

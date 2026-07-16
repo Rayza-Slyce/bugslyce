@@ -11,6 +11,7 @@ from bugslyce.core.models import (
     ReconCommand,
     ReconCommandValidationResult,
 )
+from bugslyce.recon.argv_safety import argv_control_character_errors
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
     SHELL_METACHARACTERS,
@@ -79,6 +80,7 @@ def validate_live_content_discovery_command(
             errors.append(
                 f"Gobuster argv contains forbidden shell metacharacter token '{matched}'."
             )
+    errors.extend(argv_control_character_errors(argv, label="Gobuster"))
 
     try:
         profile = get_content_discovery_profile(profile_name)

@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlparse, urlunparse
 
 from bugslyce.core.models import ReconCommand, ReconCommandValidationResult
+from bugslyce.recon.argv_safety import argv_control_character_errors
 
 
 CONTENT_FOLLOWUP_TIMEOUT_SECONDS = 10
@@ -80,6 +81,7 @@ def validate_live_content_followup_command(
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
         if matched:
             errors.append(f"Curl argv contains forbidden shell metacharacter token '{matched}'.")
+    errors.extend(argv_control_character_errors(argv, label="Curl"))
 
     prefix = [
         "curl",

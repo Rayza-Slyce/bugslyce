@@ -12,6 +12,7 @@ from bugslyce.core.models import (
     ReconPlan,
     ReconPlanStep,
 )
+from bugslyce.recon.argv_safety import argv_control_character_errors
 from bugslyce.recon.nmap_profiles import validate_nmap_command
 
 
@@ -83,6 +84,7 @@ def validate_recon_command(
         matched_forbidden = next((token for token in FORBIDDEN_TOKENS if token in lower_value), None)
         if matched_forbidden:
             errors.append(f"argv contains forbidden token '{matched_forbidden}'.")
+    errors.extend(argv_control_character_errors(argv_values, label="Command"))
 
     if command.placeholders:
         errors.append("Command contains unresolved placeholders and is not ready for execution.")

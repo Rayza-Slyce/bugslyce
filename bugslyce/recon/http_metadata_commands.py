@@ -7,6 +7,7 @@ import re
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from bugslyce.core.models import ReconCommand, ReconCommandValidationResult
+from bugslyce.recon.argv_safety import argv_control_character_errors
 
 
 HTTP_METADATA_TIMEOUT_SECONDS = 10
@@ -107,6 +108,7 @@ def validate_live_http_metadata_command(
         matched = next((token for token in SHELL_METACHARACTERS if token in value), None)
         if matched:
             errors.append(f"Curl argv contains forbidden shell metacharacter token '{matched}'.")
+    errors.extend(argv_control_character_errors(argv, label="Curl"))
 
     shape = _command_shape(argv)
     if shape is None:
