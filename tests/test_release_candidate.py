@@ -68,6 +68,45 @@ def test_release_notes_have_current_release_candidate_section() -> None:
     assert "Known Limitations" in notes
 
 
+def test_release_documents_record_completed_acceptance_state() -> None:
+    notes = _read("docs/RELEASE_NOTES.md")
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+    acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
+    combined = "\n".join((notes, checklist, acceptance))
+
+    assert "GO for v1.0.0rc1 tagging" in checklist
+    assert "2026-07-16" in acceptance
+    assert "e4c8fba" in combined
+    for workflow in ("Manual Setup Only", "Quick", "Standard", "Deep"):
+        assert workflow in acceptance
+        assert f"{workflow} | passed" in acceptance
+    assert "Completed Deep no-op resume | passed" in acceptance
+    assert "Canonical Deep hash stability | passed" in acceptance
+    assert "Evidence-pack review | passed" in acceptance
+    assert "authorised private lab/CTF target, identifier withheld" in acceptance
+    assert "tag has not yet been created" in combined
+    assert "nothing has been published" in combined
+    assert "not final `1.0.0`" in combined
+
+
+def test_completed_public_acceptance_record_preserves_privacy() -> None:
+    acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
+    public_record = acceptance.split("## Part 1:", 1)[0]
+
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", public_record)
+    for forbidden in (
+        "/" + "home/",
+        "W" + "gel",
+        "Co" + "dex",
+        "Ja" + "mie",
+        "95" + "B",
+        "95" + "C",
+    ):
+        assert forbidden not in public_record
+    assert "e4c8fba" in public_record
+    assert "deep_source_route_collection.md" not in public_record
+
+
 def test_release_checklist_references_all_executable_profiles() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md")
 
@@ -159,7 +198,8 @@ def test_release_documents_do_not_claim_pypi_publication() -> None:
     )
 
     assert "pip install bugslyce" not in combined
-    assert "published to PyPI" not in combined
+    assert "published to " + "PyPI" not in combined
+    assert "GitHub release " + "created" not in combined
 
 
 def _pyproject() -> dict:

@@ -121,7 +121,7 @@ def test_release_checklist_documents_current_release_gate() -> None:
     assert "brute force" in lowered
     assert "exploitation" in lowered
     assert "does not create a git tag" in compact_lower
-    assert "NO-GO pending Kali acceptance" in checklist
+    assert "GO for v1.0.0rc1 tagging" in checklist
 
     assert "Deep Recon remains unavailable" not in checklist
     assert "git tag v0.3.0" not in checklist

@@ -6,6 +6,17 @@ BugSlyce `1.0.0rc1` is the first v1 release candidate. It is not the final
 `1.0.0` release, and this document does not create a Git tag or publish a
 package.
 
+### Release State
+
+BugSlyce `1.0.0rc1` completed Mint and Kali acceptance on 2026-07-16. Manual
+Setup Only, Quick Recon, Standard Recon and Deep Recon were validated. Quick,
+Standard and Deep were smoke-tested against an authorised private lab target.
+Completed Deep resume, canonical hash stability and evidence-pack containment
+were verified.
+
+This candidate is approved for tagging as `v1.0.0rc1`. The tag has not yet
+been created, no GitHub release exists and no package has been published.
+
 ### Operator Workflow
 
 - Interactive launcher for new projects, resume, project listing and doctor.

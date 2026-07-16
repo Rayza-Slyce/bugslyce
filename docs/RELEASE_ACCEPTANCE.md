@@ -6,6 +6,30 @@ Do not run live recon against any system unless you own it or are explicitly
 authorised to assess it. A generated `scope.md` is a local safety aid, not
 authorisation.
 
+## Completed Public Release Record
+
+| Field | Result |
+| --- | --- |
+| Acceptance date | 2026-07-16 |
+| Accepted source commit | `e4c8fba` |
+| Package version | `1.0.0rc1` |
+| Mint validation | passed |
+| Kali clean installation | passed |
+| Doctor readiness | passed |
+| Manual Setup Only | passed |
+| Quick | passed |
+| Standard | passed |
+| Deep | passed |
+| Completed Deep no-op resume | passed |
+| Canonical Deep hash stability | passed |
+| Evidence-pack review | passed |
+| Repository cleanliness | passed |
+| Target description | authorised private lab/CTF target, identifier withheld |
+| Release outcome | GO for tagging `v1.0.0rc1` |
+
+The Git tag has not yet been created, nothing has been published, and this is
+still release candidate `1.0.0rc1`, not final `1.0.0`.
+
 ## Part 1: Local Non-Network Acceptance
 
 Run these checks from a clean source checkout without contacting a target.

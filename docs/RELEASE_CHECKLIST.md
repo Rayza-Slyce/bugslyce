@@ -3,42 +3,48 @@
 This checklist prepares BugSlyce `1.0.0rc1` for release-candidate acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **NO-GO pending Kali acceptance**.
+Current decision: **GO for v1.0.0rc1 tagging**.
+
+All local and Kali release-candidate blockers have passed for accepted source
+commit `e4c8fba`. The final documentation-only acceptance-record commit will
+follow that tested source commit so the public record can be tagged
+truthfully. The Git tag has not yet been created, nothing has been published,
+and this remains release candidate `1.0.0rc1`, not final `1.0.0`.
 
 ## A. Source Integrity
 
-- [ ] Working tree is clean.
-- [ ] Expected base commit is recorded.
-- [ ] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
+- [x] Working tree is clean.
+- [x] Expected base commit is recorded.
+- [x] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
       report `1.0.0rc1`.
-- [ ] No stale current-version references remain.
-- [ ] No generated target evidence is tracked.
-- [ ] No secrets, `.env` files, provider configuration or private project
+- [x] No stale current-version references remain.
+- [x] No generated target evidence is tracked.
+- [x] No secrets, `.env` files, provider configuration or private project
       directories are tracked.
-- [ ] No temporary build output is committed.
+- [x] No temporary build output is committed.
 
 ## B. Static Safety
 
-- [ ] No `shell=True`.
-- [ ] No `os.system`.
-- [ ] No `subprocess.Popen`.
-- [ ] No unsafe deserialisation such as `pickle.loads` or `yaml.load`.
-- [ ] No offensive-tool integration is executable.
-- [ ] No brute force, exploitation, form submission, authentication testing,
+- [x] No `shell=True`.
+- [x] No `os.system`.
+- [x] No `subprocess.Popen`.
+- [x] No unsafe deserialisation such as `pickle.loads` or `yaml.load`.
+- [x] No offensive-tool integration is executable.
+- [x] No brute force, exploitation, form submission, authentication testing,
       browser automation or JavaScript execution is introduced.
-- [ ] No unexpected HTTP methods are introduced.
-- [ ] Quick remains `lab-safe-tiny`.
-- [ ] Standard remains `standard-bounded`.
-- [ ] Deep remains `deep-bounded`.
-- [ ] Request counts, response-size caps, redirect limits and Deep bounds are
+- [x] No unexpected HTTP methods are introduced.
+- [x] Quick remains `lab-safe-tiny`.
+- [x] Standard remains `standard-bounded`.
+- [x] Deep remains `deep-bounded`.
+- [x] Request counts, response-size caps, redirect limits and Deep bounds are
       unchanged.
 
 ## C. Test Matrix
 
 Run from the repository root:
 
-- [ ] Documentation tests pass.
-- [ ] Full suite passes.
+- [x] Documentation tests pass.
+- [x] Full suite passes.
 
 ```bash
 PYTHON=python3
@@ -70,33 +76,33 @@ git diff --check
 
 ## D. Packaging
 
-- [ ] Build a local wheel or source distribution where local tooling permits.
-- [ ] Create a clean temporary virtual environment.
-- [ ] Install only the built local artefact, without dependency downloads.
-- [ ] Run `python -m pip check`.
-- [ ] Import `bugslyce`.
-- [ ] Verify `bugslyce --version` prints `bugslyce 1.0.0rc1`.
-- [ ] Run `bugslyce doctor`.
-- [ ] Confirm bundled wordlists are present and non-empty:
+- [x] Build a local wheel or source distribution where local tooling permits.
+- [x] Create a clean temporary virtual environment.
+- [x] Install only the built local artefact, without dependency downloads.
+- [x] Run `python -m pip check`.
+- [x] Import `bugslyce`.
+- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0rc1`.
+- [x] Run `bugslyce doctor`.
+- [x] Confirm bundled wordlists are present and non-empty:
       `lab-root-tiny.txt` and `standard-bounded-core.txt`.
-- [ ] Confirm documentation files are present in the source repository.
-- [ ] Confirm no unrelated files are installed as package data.
+- [x] Confirm documentation files are present in the source repository.
+- [x] Confirm no unrelated files are installed as package data.
 
 ## E. Kali Acceptance
 
-- [ ] Clean source pull or clean clone.
-- [ ] Fresh virtual environment.
-- [ ] Local source installation.
-- [ ] `bugslyce doctor` exits `0`.
-- [ ] `bugslyce --help` and `bugslyce --version` work.
-- [ ] Manual Setup Only smoke passes.
-- [ ] Authorised Quick smoke passes with `lab-safe-tiny`.
-- [ ] Authorised Standard smoke passes with `standard-bounded`.
-- [ ] Authorised Deep smoke passes with `deep-bounded`.
-- [ ] Completed Deep resume is a verified no-op.
-- [ ] Canonical Deep artefact hashes remain stable after completed resume.
-- [ ] Evidence ZIP contents are reviewed.
-- [ ] Working tree remains clean after acceptance.
+- [x] Clean source pull or clean clone.
+- [x] Fresh virtual environment.
+- [x] Local source installation.
+- [x] `bugslyce doctor` exits `0`.
+- [x] `bugslyce --help` and `bugslyce --version` work.
+- [x] Manual Setup Only smoke passes.
+- [x] Authorised Quick smoke passes with `lab-safe-tiny`.
+- [x] Authorised Standard smoke passes with `standard-bounded`.
+- [x] Authorised Deep smoke passes with `deep-bounded`.
+- [x] Completed Deep resume is a verified no-op.
+- [x] Canonical Deep artefact hashes remain stable after completed resume.
+- [x] Evidence ZIP contents are reviewed.
+- [x] Working tree remains clean after acceptance.
 
 ## F. Release Decision
 
@@ -127,13 +133,20 @@ Release blockers include:
 - Unit, integration and documentation checks are expected to run locally.
 - Source package-data configuration is expected to be validated locally.
 
-### Pending Kali Acceptance
+### Kali Acceptance Completed
 
-- Fresh clean installation.
-- Doctor exit `0`.
-- Manual Setup Only smoke.
-- Quick Recon smoke.
-- Standard Recon smoke.
-- Deep Recon smoke.
-- Completed Deep no-op and hash stability.
-- Evidence ZIP content review.
+- Fresh clean installation passed.
+- Doctor exit `0` passed.
+- Manual Setup Only smoke passed.
+- Quick Recon smoke passed.
+- Standard Recon smoke passed.
+- Deep Recon smoke passed.
+- Completed Deep no-op and hash stability passed.
+- Evidence ZIP content review passed.
+
+### Still Not Performed
+
+- Git tag creation.
+- Package publication.
+- GitHub release creation.
+- Final `1.0.0` release.
