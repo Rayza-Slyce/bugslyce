@@ -1,4 +1,4 @@
-"""README MVP release-readiness checks."""
+"""Public documentation readiness checks."""
 
 from __future__ import annotations
 
@@ -13,44 +13,38 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     for command in (
         "bugslyce",
         "bugslyce doctor",
-        "bugslyce project scaffold",
-        "bugslyce project run",
-        "bugslyce project next",
-        "bugslyce recon export",
+        "bugslyce --help",
     ):
         assert command in readme
 
     assert "[![Tests]" in readme
     assert "actions/workflows/tests.yml" in readme
-    assert "## Why BugSlyce?" in readme
-    assert "## What It Looks Like" in readme
+    assert "## What BugSlyce Provides" in readme
+    assert "## Operator Modes" in readme
     assert "lab-safe-tiny" in readme
+    assert "standard-bounded" in readme
+    assert "deep-bounded" in readme
 
-    assert "pipx install git+https://github.com/Rayza-Slyce/bugslyce.git" in readme
     assert "python3 -m venv .venv" in readme
-    assert "python -m pip install -e" in readme
-    assert ".[dev]" in readme
+    assert "python -m pip install ." in readme
     assert "## Licence" in readme
     assert "## License" not in readme
 
     for term in (
         "quick recon",
+        "standard recon",
+        "deep recon",
         "manual setup only",
-        "operator summary",
         "evidence pack",
-        "security policy",
         "mit licence",
         "authorised",
-        "no exploitation",
-        "no brute force",
-        "no arbitrary",
-        "no llm",
+        "does not claim confirmed vulnerabilities",
+        "partial deep network state fails closed",
     ):
         assert term in lowered
 
-    assert "BugSlyce is not published to PyPI" not in readme
-    assert "Future User Install With pipx" not in readme
-    assert "Once the repository is ready and tagged" not in readme
+    assert "Deep Recon remains unavailable" not in readme
+    assert "v1.0.0 has already been released" not in readme
     assert 'alias bugslyce="$HOME/projects/bugslyce/.venv/bin/bugslyce"' not in readme
 
 
@@ -58,17 +52,18 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
         encoding="utf-8"
     )
+    compact = " ".join(readme.split())
 
-    assert "## Current MVP Limitations" in readme
-    assert "## Release Checkpoint" in readme
-    assert "Current version: `0.3.0`" in readme
-    assert "Release tag: `v0.3.0`" in readme
-    assert "Standard Recon v1 profile: `standard-bounded`" in readme
-    assert "Standard scan volume: same bounded 12-step collection path as Quick" in readme
-    assert "Investigation Threads" in readme
-    assert "Offline Route/Source Review" in readme
-    assert "There is no vulnerability confirmation" in readme
-    assert "does not replace human programme-scope review" in readme
+    assert "Current package version: `0.3.0`" in readme
+    assert "v1 release-candidate functionality" in compact
+    assert "no v1.0.0 release is claimed" in compact
+    assert "validated on Kali Linux and Linux Mint" in readme
+    assert "not currently part of the directly validated host set" in compact
+    assert "validated on Debian-derived systems such as Kali, Ubuntu and Linux Mint" not in readme
+    assert "Standard Recon | `standard-bounded`" in readme
+    assert "Deep Recon | `deep-bounded`" in readme
+    assert "interactive resume preview is read-only" in readme.lower()
+    assert "not proof that a vulnerability exists" in compact
 
 
 def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
@@ -96,69 +91,59 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
     assert "brute force" in lowered
     assert "exploitation" in lowered
     assert "authorised lab-style target" in lowered
-    assert "example target `10.10.10.10` is a placeholder" in lowered
+    assert "example target `target.example.test` is a documentation placeholder" in lowered
 
-    readme = (root / "README.md").read_text(encoding="utf-8")
-    assert "docs/DEMO_WALKTHROUGH.md" in readme
+    assert "10.10.10.10" not in walkthrough
 
 
-def test_release_checklist_documents_v030_release_gate() -> None:
+def test_release_checklist_documents_current_release_gate() -> None:
     root = Path(__file__).resolve().parents[1]
     checklist_path = root / "docs" / "RELEASE_CHECKLIST.md"
     assert checklist_path.is_file()
 
     checklist = checklist_path.read_text(encoding="utf-8")
+    compact = " ".join(checklist.split())
+    compact_lower = compact.lower()
     lowered = checklist.lower()
     for expected in (
-        "v0.3.0",
-        ".venv/bin/pytest",
-        "bugslyce doctor",
+        "0.3.0",
         "lab-safe-tiny",
         "standard-bounded",
-        "Manual Review Leads",
-        "Investigation Threads",
-        "Standard Investigation Workflow",
-        "Offline Route/Source Review",
-        "engagement context",
-        "route/source review noise reduction",
-        "--resume",
-        "git tag v0.3.0",
+        "deep-bounded",
         "Deep Recon",
+        "bugslyce doctor",
+        "Documentation tests pass",
+        "Full suite passes",
     ):
-        assert expected in checklist
+        assert expected in compact
 
-    assert "engagement-aware" in lowered
     assert "brute force" in lowered
     assert "exploitation" in lowered
-    assert "private evidence" in lowered
-    assert "no zip evidence packs are staged" in lowered
+    assert "does not create a release, create a git tag" in compact_lower
+    assert "release tagging" in lowered
 
-    readme = (root / "README.md").read_text(encoding="utf-8")
-    assert "docs/RELEASE_NOTES.md" in readme
-    assert "docs/RELEASE_CHECKLIST.md" in readme
+    assert "Deep Recon remains unavailable" not in checklist
+    assert "git tag v0.3.0" not in checklist
 
 
-def test_release_notes_document_v030_scope() -> None:
+def test_release_notes_document_current_scope() -> None:
     root = Path(__file__).resolve().parents[1]
     notes_path = root / "docs" / "RELEASE_NOTES.md"
     assert notes_path.is_file()
 
     notes = notes_path.read_text(encoding="utf-8")
     for expected in (
-        "v0.3.0 - Standard Operator Workflow",
-        "Standard Investigation Threads",
-        "Standard Investigation Workflow",
-        "Project engagement context",
-        "CTF / learning lab",
-        "Engagement-aware Standard wording",
-        "Standard Offline Route/Source Review",
-        "Route/source review noise reduction",
-        "Quick Recon is unchanged",
-        "Standard visible pipeline remains 12 steps",
-        "Standard scan volume is unchanged",
-        "Deep Recon remains unavailable",
+        "package version `0.3.0`",
+        "Manual Setup Only",
+        "Quick Recon with `lab-safe-tiny`",
+        "Standard Recon with `standard-bounded`",
+        "Deep Recon with `deep-bounded`",
+        "v1 release-candidate functionality",
+        "Do not tag or publish",
     ):
         assert expected in notes
+
+    assert "Deep Recon remains unavailable" not in notes
 
 
 def test_public_repo_security_and_ci_docs_exist() -> None:

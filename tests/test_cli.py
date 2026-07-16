@@ -48,6 +48,7 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteSkippedItem,
 )
 from bugslyce.recon.modes import (
+    DEEP_RECON_PROFILE,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
     get_recon_mode,
@@ -123,6 +124,28 @@ def test_cli_help_exits_successfully(capsys) -> None:
 
     assert exc_info.value.code == 0
     assert "usage: bugslyce" in captured.out
+    assert (
+        "Local-first recon triage for authorised labs, CTFs, and scoped assessments."
+        in captured.out
+    )
+
+
+def test_cli_project_run_help_lists_all_executable_profiles(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["project", "run", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce project run" in captured.out
+    for profile in (QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE):
+        assert profile in captured.out
+    stale_help = (
+        "Approved project pipeline profile: "
+        "lab-safe-tiny or standard-bounded."
+    )
+    assert stale_help not in captured.out
+    assert "unsafe partial Deep state is refused" in captured.out
 
 
 def test_cli_run_help_exits_successfully(capsys) -> None:

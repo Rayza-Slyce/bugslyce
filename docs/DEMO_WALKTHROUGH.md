@@ -5,10 +5,10 @@
 This walkthrough demonstrates the intended local-first BugSlyce MVP flow
 against a fictional authorised lab-style target.
 
-The example target `10.10.10.10` is a placeholder. Replace it only with a
-target you are explicitly authorised to assess. Review the actual programme
-or lab scope before running recon; this document does not grant
-authorisation.
+The example target `target.example.test` is a documentation placeholder.
+Replace it only with a target you are explicitly authorised to assess. Review
+the actual programme or lab scope before running recon; this document does not
+grant authorisation.
 
 ## Interactive Mode
 
@@ -28,8 +28,10 @@ The launcher presents:
   fast, bounded first pass with the tiny bundled wordlist.
 - **Manual Setup Only**: creates the project and scope template, then prints
   the next safe command preview without running recon.
-- **Standard Recon** and **Deep Recon**: planned future modes that are not
-  available yet.
+- **Standard Recon**: maps to `standard-bounded` and adds offline
+  interpretation to the bounded collection workflow.
+- **Deep Recon**: maps to `deep-bounded` and adds bounded same-origin Deep
+  collection plus offline review orchestration.
 
 The launcher still requires exact `YES` confirmation before creating a
 project or running live recon. Recon mode names do not make activity
@@ -54,9 +56,10 @@ Doctor checks local prerequisites using Python imports, filesystem access, and
 - Supported Python version.
 - Virtual environment status.
 - `nmap`, `curl`, and `gobuster` availability.
-- Bundled `lab-root-tiny` wordlist access.
-- Optional dirbuster small wordlist availability for broader
-  `lab-root-light` discovery.
+- Bundled `lab-root-tiny` wordlist access for Quick Recon.
+- Bundled `standard-bounded-core` wordlist access for Standard and Deep Recon.
+- Optional dirbuster small wordlist availability for older manual planning
+  contexts.
 
 Doctor does not execute those tools, run recon, or contact a target. Missing
 optional broader-discovery resources do not prevent the rest of BugSlyce from
@@ -69,7 +72,7 @@ Create a local project directory:
 ```bash
 bugslyce project scaffold \
   --name example-lab \
-  --target 10.10.10.10 \
+  --target target.example.test \
   --projects-dir bugslyce-output
 ```
 

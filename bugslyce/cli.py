@@ -42,6 +42,7 @@ from bugslyce.project_session import (
 from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
+    SUPPORTED_PIPELINE_PROFILES,
     render_project_pipeline_summary,
     run_project_pipeline,
 )
@@ -255,7 +256,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bugslyce",
-        description="Local-first bug bounty recon triage assistant.",
+        description=(
+            "Local-first recon triage for authorised labs, CTFs, and scoped "
+            "assessments."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"bugslyce {__version__}")
     subparsers = parser.add_subparsers(dest="command")
@@ -390,8 +394,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--profile",
         required=True,
         help=(
-            "Approved project pipeline profile: "
-            f"{PIPELINE_PROFILE} or standard-bounded."
+            "Approved project pipeline profiles: "
+            f"{', '.join(SUPPORTED_PIPELINE_PROFILES)}."
         ),
     )
     project_run_parser.add_argument(
@@ -402,7 +406,10 @@ def _build_parser() -> argparse.ArgumentParser:
     project_run_parser.add_argument(
         "--resume",
         action="store_true",
-        help="Conservatively reuse clearly completed phases from an interrupted run.",
+        help=(
+            "Conservatively reuse supported verified existing phases; unsafe "
+            "partial Deep state is refused."
+        ),
     )
     project_show_parser = project_subparsers.add_parser(
         "show",

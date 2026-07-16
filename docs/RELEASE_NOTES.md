@@ -1,36 +1,33 @@
-# BugSlyce Release Notes
+# Release Notes
 
-## v0.3.0 - Standard Operator Workflow
+BugSlyce currently reports package version `0.3.0`.
 
-BugSlyce v0.3.0 adds Standard Recon operator workflow improvements while
-keeping the live collection model bounded and unchanged.
+These notes describe the current repository state for operators and reviewers.
+They do not create a release, publish a package or claim a v1.0.0 release.
 
-Added:
+## Current Implemented Workflows
 
-- Standard Investigation Threads.
-- Standard Investigation Workflow in `runbook.md`.
-- Project engagement context:
-  - Unknown / not specified.
-  - CTF / learning lab.
-  - Bug bounty.
-  - Internal authorised assessment.
-- Engagement-aware Standard wording.
-- Standard Offline Route/Source Review.
-- Route/source review noise reduction.
+- Manual Setup Only.
+- Quick Recon with `lab-safe-tiny`.
+- Standard Recon with `standard-bounded`.
+- Deep Recon with `deep-bounded`.
 
-Unchanged and safety boundaries:
+The executable recon workflows remain bounded, scope-conscious and
+non-exploitative. They do not submit forms, execute JavaScript, brute force,
+perform authentication testing, mutate parameters or claim confirmed
+vulnerabilities.
 
-- Quick Recon is unchanged.
-- Standard visible pipeline remains 12 steps.
-- Standard scan volume is unchanged.
-- No route fetching.
-- No crawling.
-- No browser automation.
-- No JavaScript execution.
-- No online decoders.
-- No hash cracking.
-- No brute force.
-- No form submission.
-- No authentication testing.
-- No exploitation.
-- Deep Recon remains unavailable.
+## Operator Documentation
+
+Use the current public documentation set:
+
+- [Installation](INSTALLATION.md)
+- [Operator Guide](OPERATOR_GUIDE.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [Recon Modes](RECON_MODES.md)
+
+## Version Boundary
+
+The implemented workflows are v1 release-candidate functionality inside the
+current `0.3.0` package. Do not tag or publish a new release from this file
+alone.
