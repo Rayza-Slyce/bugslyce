@@ -31,6 +31,7 @@ from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
+    DEEP_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_PROFILE,
 )
 from bugslyce.recon.path_followup import PathFollowupNoWork
@@ -257,8 +258,8 @@ def test_pipeline_stops_on_missing_required_readiness(
         ),
         (
             DEEP_PIPELINE_PROFILE,
-            "standard-bounded-core",
-            "Deep Recon is blocked.*standard-bounded-core",
+            "deep-bounded-core",
+            "Deep Recon is blocked.*deep-bounded-core",
         ),
     ),
 )
@@ -286,8 +287,11 @@ def test_pipeline_blocks_only_profile_required_missing_resource(
     ("profile", "irrelevant_missing_resource"),
     (
         (PIPELINE_PROFILE, "standard-bounded-core"),
+        (PIPELINE_PROFILE, "deep-bounded-core"),
         (STANDARD_PIPELINE_PROFILE, "lab-root-tiny"),
+        (STANDARD_PIPELINE_PROFILE, "deep-bounded-core"),
         (DEEP_PIPELINE_PROFILE, "lab-root-tiny"),
+        (DEEP_PIPELINE_PROFILE, "standard-bounded-core"),
     ),
 )
 def test_pipeline_ignores_irrelevant_missing_resource_for_selected_profile(
@@ -1129,7 +1133,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
 
     run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
-    assert observed == [STANDARD_BOUNDED_CORE_PROFILE]
+    assert observed == [DEEP_BOUNDED_CORE_PROFILE]
 
 
 def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
@@ -1202,8 +1206,8 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
         monkeypatch,
         project_file,
         output_dir,
-        _write_plan_file(output_dir, profile=STANDARD_BOUNDED_CORE_PROFILE),
-        STANDARD_BOUNDED_CORE_PROFILE,
+        _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE),
+        DEEP_BOUNDED_CORE_PROFILE,
     )
     _patch_live_calls_to_fail(monkeypatch)
     for dotted_name in (
@@ -1973,7 +1977,8 @@ def _doctor(
         )
         for name, workflows in (
             ("lab-root-tiny", ("quick",)),
-            ("standard-bounded-core", ("standard", "deep")),
+            ("standard-bounded-core", ("standard",)),
+            ("deep-bounded-core", ("deep",)),
         )
     )
     ready = all(tool.ready for tool in tools) and all(
@@ -2035,7 +2040,8 @@ def _structured_doctor(
         )
         for name, workflows in (
             ("lab-root-tiny", ("quick",)),
-            ("standard-bounded-core", ("standard", "deep")),
+            ("standard-bounded-core", ("standard",)),
+            ("deep-bounded-core", ("deep",)),
         )
     )
     return DoctorReport(
@@ -2066,6 +2072,8 @@ def _structured_doctor(
 def _content_plan_suffix_for_test(profile: str) -> str:
     if profile == PIPELINE_PROFILE:
         return "tiny"
+    if profile == DEEP_PIPELINE_PROFILE:
+        return "deep-bounded-core"
     return "standard-bounded-core"
 
 
@@ -2260,7 +2268,12 @@ def _write_plan_file(
     *,
     profile: str = CONTENT_DISCOVERY_TINY_PROFILE,
 ) -> Path:
-    suffix = "tiny" if profile == CONTENT_DISCOVERY_TINY_PROFILE else "standard-bounded-core"
+    if profile == CONTENT_DISCOVERY_TINY_PROFILE:
+        suffix = "tiny"
+    elif profile == DEEP_BOUNDED_CORE_PROFILE:
+        suffix = "deep-bounded-core"
+    else:
+        suffix = "standard-bounded-core"
     plan_dir = Path(f"{output_dir}-content-plan-{suffix}")
     plan_dir.mkdir(parents=True, exist_ok=True)
     plan_path = plan_dir / "content_discovery_plan.json"

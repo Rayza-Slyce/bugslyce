@@ -12,6 +12,8 @@ import pytest
 import bugslyce
 from bugslyce.cli import main
 from bugslyce.recon.content_plan import (
+    DEEP_BOUNDED_CORE_PROFILE,
+    DEEP_BOUNDED_CORE_WORDLIST,
     STANDARD_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_WORDLIST,
     TINY_WORDLIST,
@@ -87,6 +89,22 @@ def test_release_documents_record_completed_acceptance_state() -> None:
     assert "tag has not yet been created" in combined
     assert "nothing has been published" in combined
     assert "not final `1.0.0`" in combined
+
+
+def test_release_documents_preserve_rc1_wordlist_history() -> None:
+    notes = _read("docs/RELEASE_NOTES.md")
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+    acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
+    rc1_notes = notes.split("## 1.0.0rc1", 1)[1]
+
+    assert "After `1.0.0rc1`, Deep content discovery now uses a distinct bundled" in notes
+    assert "The accepted `1.0.0rc1` candidate used" in notes
+    assert "`standard-bounded-core` for both Standard and Deep" in notes
+    assert "`deep-bounded-core` gates" not in rc1_notes
+    assert "standard-bounded-core` gates Standard and Deep Recon" in rc1_notes
+    assert "deep-bounded-core.txt" not in checklist
+    assert '("lab-root-tiny.txt", "standard-bounded-core.txt")' in acceptance
+    assert "deep-bounded-core.txt" not in acceptance
 
 
 def test_completed_public_acceptance_record_preserves_privacy() -> None:
@@ -176,13 +194,14 @@ def test_required_bundled_wordlists_are_tracked_and_package_data_includes_them()
     resource_dir = importlib.resources.files("bugslyce").joinpath("wordlists")
 
     assert "wordlists/*.txt" in package_data
-    for wordlist in (TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST):
+    for wordlist in (TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST):
         assert wordlist.is_file()
         assert wordlist.read_text(encoding="utf-8").strip()
         installed = resource_dir.joinpath(wordlist.name)
         assert installed.is_file()
         assert installed.read_text(encoding="utf-8").strip()
     assert STANDARD_BOUNDED_CORE_PROFILE in _read("docs/INSTALLATION.md")
+    assert DEEP_BOUNDED_CORE_PROFILE in _read("docs/INSTALLATION.md")
 
 
 def test_release_documents_do_not_claim_pypi_publication() -> None:

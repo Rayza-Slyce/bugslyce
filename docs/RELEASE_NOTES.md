@@ -1,5 +1,11 @@
 # Release Notes
 
+## Unreleased
+
+After `1.0.0rc1`, Deep content discovery now uses a distinct bundled
+`deep-bounded-core` resource. The accepted `1.0.0rc1` candidate used
+`standard-bounded-core` for both Standard and Deep.
+
 ## 1.0.0rc1
 
 BugSlyce `1.0.0rc1` is the first v1 release candidate. It is not the final

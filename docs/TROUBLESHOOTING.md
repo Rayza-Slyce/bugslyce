@@ -75,7 +75,8 @@ doctor does not run the tool while checking it.
 BugSlyce installs its v1 bundled resources inside the Python package:
 
 - `lab-root-tiny`;
-- `standard-bounded-core`.
+- `standard-bounded-core`;
+- `deep-bounded-core`.
 
 If one is missing, reinstall BugSlyce:
 

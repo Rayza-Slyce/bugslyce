@@ -336,7 +336,7 @@ def render_content_discovery_execution_markdown(
                 if result.commands_timed_out
                 else "Root content discovery commands were executed."
             ),
-            "No recursion, extensions, brute force, exploitation, or form submission was run.",
+            "No recursion, dynamic Gobuster extension expansion (`-x`), brute force, exploitation, or form submission was run.",
             "",
         ]
     )
@@ -372,7 +372,7 @@ def render_content_discovery_execution_summary(
                 if result.commands_timed_out
                 else "Root content discovery commands were executed."
             ),
-            "No recursion, extensions, brute force, exploitation, or form submission was run.",
+            "No recursion, dynamic Gobuster extension expansion (`-x`), brute force, exploitation, or form submission was run.",
         ]
     )
 

@@ -12,6 +12,8 @@ from bugslyce.core.project import build_project_state
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
     CONTENT_DISCOVERY_TINY_PROFILE,
+    DEEP_BOUNDED_CORE_PROFILE,
+    DEEP_BOUNDED_CORE_WORDLIST,
     DEFAULT_WORDLIST,
     MAX_CONTENT_PLAN_ORIGINS,
     STANDARD_AUTH_CORE_PROFILE,
@@ -177,7 +179,7 @@ def test_standard_auth_core_profile_uses_small_fixed_route_set(tmp_path: Path) -
     assert any("No form submission" in note for note in plan.safety_notes)
 
 
-def test_standard_bounded_core_profile_preserves_tiny_and_appends_auth_routes(
+def test_standard_bounded_core_profile_preserves_tiny_auth_and_sitemap_routes(
     tmp_path: Path,
 ) -> None:
     input_dir, scope = _content_plan_input(tmp_path)
@@ -200,14 +202,17 @@ def test_standard_bounded_core_profile_preserves_tiny_and_appends_auth_routes(
 
     assert plan.profile == STANDARD_BOUNDED_CORE_PROFILE
     assert bounded_routes[: len(tiny_routes)] == tiny_routes
-    assert bounded_routes[len(tiny_routes) :] == [
+    assert bounded_routes[len(tiny_routes) : len(tiny_routes) + len(expected_auth_additions)] == [
         route.lstrip("/") for route in expected_auth_additions
     ]
     assert len(bounded_routes) == len(set(bounded_routes))
-    assert len(bounded_routes) == 37
+    assert 150 <= len(bounded_routes) <= 300
     assert "manual" in bounded_routes
     assert "server-status" in bounded_routes
+    assert "sitemap" in bounded_routes
     assert "login.php" in bounded_routes
+    assert "swagger.json" in bounded_routes
+    assert ".well-known/security.txt" in bounded_routes
     assert all(route.lstrip("/") in bounded_routes for route in STANDARD_AUTH_SURFACE_ROUTES)
     assert first.command_preview[5] == str(STANDARD_BOUNDED_CORE_WORDLIST)
     assert first.command_preview[7] == "5"
@@ -218,6 +223,55 @@ def test_standard_bounded_core_profile_preserves_tiny_and_appends_auth_routes(
     assert "-x" not in first.command_preview
     assert all("?" not in route for route in bounded_routes)
     assert any("lab-root-tiny general root coverage" in note for note in plan.safety_notes)
+
+
+def test_deep_bounded_core_profile_is_broader_than_standard_and_bounded(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _content_plan_input(tmp_path)
+    output_dir = tmp_path / "bugslyce-output" / "deep-bounded-content-plan"
+    standard_routes = _wordlist_routes(STANDARD_BOUNDED_CORE_WORDLIST)
+    deep_routes = _wordlist_routes(DEEP_BOUNDED_CORE_WORDLIST)
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        DEEP_BOUNDED_CORE_PROFILE,
+        output_dir,
+    )
+    first = plan.steps[0]
+
+    assert plan.profile == DEEP_BOUNDED_CORE_PROFILE
+    assert deep_routes[: len(standard_routes)] == standard_routes
+    assert len(deep_routes) == len(set(deep_routes))
+    assert 1000 <= len(deep_routes) <= 3000
+    assert len(deep_routes) > len(standard_routes)
+    assert "sitemap" in deep_routes
+    for general_route in (
+        "api/v1",
+        "graphql",
+        "swagger-ui.html",
+        ".well-known/openid-configuration",
+        "wp-admin",
+        "cgi-bin",
+        "database.zip",
+        "config.json",
+        "admin/login",
+    ):
+        assert general_route in deep_routes
+    for target_shaped_route in (
+        "work-grid",
+        "work-grid.html",
+        "work-grid-without-text",
+        "work-grid-without-text.html",
+    ):
+        assert target_shaped_route not in deep_routes
+    assert first.command_preview[5] == str(DEEP_BOUNDED_CORE_WORDLIST)
+    assert first.command_preview[7] == "5"
+    assert first.expected_artifact.file == "gobuster-deep-bounded-core-10.10.10.10-80-root.txt"
+    assert "--recursive" not in first.command_preview
+    assert "-x" not in first.command_preview
+    assert all("?" not in route for route in deep_routes)
 
 
 def test_quick_tiny_profile_does_not_use_standard_auth_core_wordlist(
@@ -237,10 +291,14 @@ def test_quick_tiny_profile_does_not_use_standard_auth_core_wordlist(
     assert all(step.command_preview[5] == str(TINY_WORDLIST) for step in plan.steps)
     assert STANDARD_AUTH_CORE_PROFILE != CONTENT_DISCOVERY_TINY_PROFILE
     assert STANDARD_BOUNDED_CORE_PROFILE != CONTENT_DISCOVERY_TINY_PROFILE
+    assert DEEP_BOUNDED_CORE_PROFILE != CONTENT_DISCOVERY_TINY_PROFILE
     assert str(STANDARD_AUTH_CORE_WORDLIST) not in json.dumps(
         [step.command_preview for step in plan.steps]
     )
     assert str(STANDARD_BOUNDED_CORE_WORDLIST) not in json.dumps(
+        [step.command_preview for step in plan.steps]
+    )
+    assert str(DEEP_BOUNDED_CORE_WORDLIST) not in json.dumps(
         [step.command_preview for step in plan.steps]
     )
 

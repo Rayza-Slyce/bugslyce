@@ -56,6 +56,10 @@ def build_workflow_provenance(project_state: ProjectState) -> WorkflowProvenance
         "standard-bounded-core" in description for description in descriptions
     ) or "standard-bounded-core" in metadata_profiles:
         content_profiles.append("standard-bounded-core")
+    if any(name.startswith("gobuster-deep-bounded-core-") for name in filenames) or any(
+        "deep-bounded-core" in description for description in descriptions
+    ) or "deep-bounded-core" in metadata_profiles:
+        content_profiles.append("deep-bounded-core")
     if any(name.startswith("gobuster-standard-auth-core-") for name in filenames) or any(
         "standard-auth-core" in description for description in descriptions
     ) or "standard-auth-core" in metadata_profiles:
@@ -66,6 +70,7 @@ def build_workflow_provenance(project_state: ProjectState) -> WorkflowProvenance
             (
                 "gobuster-tiny-",
                 "gobuster-standard-bounded-core-",
+                "gobuster-deep-bounded-core-",
                 "gobuster-standard-auth-core-",
             )
         )

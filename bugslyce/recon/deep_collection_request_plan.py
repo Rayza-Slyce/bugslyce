@@ -323,8 +323,6 @@ def _normalise_unsafe_reference_for_rejection(raw_url: str) -> str | None:
     if port not in (None, default_port):
         authority = f"{authority}:{port}"
     path = parsed.path or "/"
-    if len(path) > 1:
-        path = path.rstrip("/")
     return urlunparse((scheme, authority, path, "", "", ""))
 
 
@@ -378,8 +376,6 @@ def _normalise_url(raw_url: str, *, keep_query: bool) -> tuple[str, str, str] | 
     if parsed.fragment:
         return None
     path = parsed.path or "/"
-    if len(path) > 1:
-        path = path.rstrip("/")
     query = parsed.query if keep_query else ""
     url = urlunparse((origin.scheme, origin.authority, path, "", query, ""))
     return url, origin.origin_url, path

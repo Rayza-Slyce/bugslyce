@@ -28,6 +28,7 @@ from bugslyce.recon.content_followup import (
 )
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
+    DEEP_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_PROFILE,
     STANDARD_AUTH_CORE_PROFILE,
     build_content_discovery_plan,
@@ -1043,8 +1044,10 @@ def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
 
 
 def _content_discovery_profile_for_pipeline(profile: str) -> str:
-    if profile in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
+    if profile == STANDARD_PIPELINE_PROFILE:
         return STANDARD_BOUNDED_CORE_PROFILE
+    if profile == DEEP_PIPELINE_PROFILE:
+        return DEEP_BOUNDED_CORE_PROFILE
     return CONTENT_DISCOVERY_TINY_PROFILE
 
 
@@ -1053,6 +1056,8 @@ def _content_plan_suffix(content_profile: str) -> str:
         return "tiny"
     if content_profile == STANDARD_BOUNDED_CORE_PROFILE:
         return "standard-bounded-core"
+    if content_profile == DEEP_BOUNDED_CORE_PROFILE:
+        return "deep-bounded-core"
     if content_profile == STANDARD_AUTH_CORE_PROFILE:
         return "standard-auth-core"
     return content_profile.replace("/", "-")

@@ -343,8 +343,6 @@ def _normalise_url(raw_url: str):
             auth += ":***"
         netloc = f"{auth}@{netloc}"
     path = parsed.path or "/"
-    if len(path) > 1:
-        path = path.rstrip("/")
     normalised_url = urlunparse((scheme, netloc, path, "", parsed.query, parsed.fragment))
     origin = urlunparse((scheme, netloc.split("@")[-1], "", "", "", ""))
     normalised_parsed = urlparse(normalised_url)

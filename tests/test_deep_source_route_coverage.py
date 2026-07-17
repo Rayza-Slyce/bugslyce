@@ -101,6 +101,71 @@ def test_discovered_path_without_body_source_is_unfetched() -> None:
     assert summary.discovered_unfetched_count == 1
 
 
+def test_same_origin_redirect_targets_are_canonicalised_for_deep_coverage() -> None:
+    cases = (
+        (_redirect_path("http://example.test/sitemap", 301, "/sitemap/"), "http://example.test/sitemap/"),
+        (
+            _redirect_path("http://example.test/sitemap", 302, "http://example.test/sitemap/"),
+            "http://example.test/sitemap/",
+        ),
+        (
+            _redirect_path("http://example.test:80/sitemap", 301, "http://example.test/sitemap/"),
+            "http://example.test/sitemap/",
+        ),
+        (
+            _redirect_path("https://example.test:443/sitemap", 302, "https://example.test/sitemap/"),
+            "https://example.test/sitemap/",
+        ),
+    )
+
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(discovered_paths=[case[0] for case in cases])
+    )
+
+    assert {item.url for item in summary.items} == {case[1] for case in cases}
+
+
+def test_cross_origin_redirect_targets_do_not_replace_original_discovered_path() -> None:
+    paths = [
+        _redirect_path("http://example.test/sitemap", 301, "http://other.test/sitemap/"),
+        _redirect_path("http://example.test/scheme", 301, "https://example.test/scheme/"),
+        _redirect_path("http://example.test/port", 302, "http://example.test:8080/port/"),
+        _redirect_path("http://example.test/fragment", 301, "/fragment/#section"),
+    ]
+
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(discovered_paths=paths)
+    )
+
+    assert {item.url for item in summary.items} == {
+        "http://example.test/sitemap",
+        "http://example.test/scheme",
+        "http://example.test/port",
+        "http://example.test/fragment",
+    }
+
+
+def test_redirect_query_and_status_handling_match_existing_deep_policy() -> None:
+    summary = build_deep_source_route_coverage_from_project_state(
+        _project_state(
+            discovered_paths=[
+                _redirect_path("http://example.test/search", 301, "/search/?q=term"),
+                _redirect_path("http://example.test/temp", 302, "/temp/"),
+                _redirect_path("http://example.test/see-other", 303, "/see-other/"),
+                _redirect_path("http://example.test/permanent", 308, "/permanent/"),
+            ]
+        )
+    )
+
+    assert {item.url for item in summary.items} == {
+        "http://example.test/search/",
+        "http://example.test/temp/",
+        "http://example.test/see-other",
+        "http://example.test/permanent",
+    }
+    assert _item(summary, "http://example.test/search/").path == "/search"
+
+
 def test_endpoint_only_route_is_referenced_only() -> None:
     summary = build_deep_source_route_coverage_from_project_state(
         _project_state(
@@ -443,5 +508,17 @@ def _path(url: str, evidence_id: str) -> DiscoveredPath:
         redirect_location=None,
         source="unit-test",
         evidence_ids=[evidence_id],
+        tags=[],
+    )
+
+
+def _redirect_path(url: str, status_code: int, location: str) -> DiscoveredPath:
+    return DiscoveredPath(
+        url=url,
+        status_code=status_code,
+        content_length=0,
+        redirect_location=location,
+        source="unit-test",
+        evidence_ids=[f"EVID-REDIRECT-{status_code}"],
         tags=[],
     )

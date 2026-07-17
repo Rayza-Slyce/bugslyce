@@ -57,7 +57,8 @@ Doctor checks local prerequisites using Python imports, filesystem access, and
 - Virtual environment status.
 - `nmap`, `curl`, and `gobuster` availability.
 - Bundled `lab-root-tiny` wordlist access for Quick Recon.
-- Bundled `standard-bounded-core` wordlist access for Standard and Deep Recon.
+- Bundled `standard-bounded-core` wordlist access for Standard Recon.
+- Bundled `deep-bounded-core` wordlist access for Deep Recon.
 - Optional dirbuster small wordlist availability for older manual planning
   contexts.
 

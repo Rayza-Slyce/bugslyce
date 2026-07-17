@@ -23,6 +23,7 @@ CONTENT_DISCOVERY_PROFILE = "lab-root-light"
 CONTENT_DISCOVERY_TINY_PROFILE = "lab-root-tiny"
 STANDARD_AUTH_CORE_PROFILE = "standard-auth-core"
 STANDARD_BOUNDED_CORE_PROFILE = "standard-bounded-core"
+DEEP_BOUNDED_CORE_PROFILE = "deep-bounded-core"
 CONTENT_DISCOVERY_SCHEMA_VERSION = "1.0"
 CONTENT_DISCOVERY_CREATED_BY = "bugslyce-content-planner"
 DEFAULT_WORDLIST = Path("/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt")
@@ -32,6 +33,9 @@ STANDARD_AUTH_CORE_WORDLIST = (
 )
 STANDARD_BOUNDED_CORE_WORDLIST = (
     Path(__file__).resolve().parent.parent / "wordlists" / "standard-bounded-core.txt"
+)
+DEEP_BOUNDED_CORE_WORDLIST = (
+    Path(__file__).resolve().parent.parent / "wordlists" / "deep-bounded-core.txt"
 )
 MAX_CONTENT_PLAN_ORIGINS = 5
 CONTENT_PLAN_THREADS = 10
@@ -85,7 +89,8 @@ CONTENT_DISCOVERY_PROFILES = {
         description=(
             "Standard bounded auth-surface route discovery using a small fixed "
             "route set. No form submission, authentication testing, brute force, "
-            "credential use, recursion, extensions, or parameter fuzzing is included."
+            "credential use, recursion, dynamic Gobuster extension expansion "
+            "(`-x`), or parameter fuzzing is included."
         ),
         wordlist=STANDARD_AUTH_CORE_WORDLIST,
         threads=5,
@@ -96,14 +101,32 @@ CONTENT_DISCOVERY_PROFILES = {
         name=STANDARD_BOUNDED_CORE_PROFILE,
         description=(
             "Standard bounded core route discovery combining lab-root-tiny "
-            "general root coverage with a small fixed auth-surface route set. "
+            "general root coverage with a curated first-pass set of common "
+            "application, metadata, API, status, configuration, and auth "
+            "candidates. "
             "No form submission, authentication testing, brute force, credential "
-            "use, recursion, extensions, or parameter fuzzing is included."
+            "use, recursion, dynamic Gobuster extension expansion (`-x`), "
+            "or parameter fuzzing is included."
         ),
         wordlist=STANDARD_BOUNDED_CORE_WORDLIST,
         threads=5,
         timeout_seconds=120,
         output_prefix="gobuster-standard-bounded-core",
+    ),
+    DEEP_BOUNDED_CORE_PROFILE: ContentDiscoveryProfileDefinition(
+        name=DEEP_BOUNDED_CORE_PROFILE,
+        description=(
+            "Deep bounded core route discovery using the Standard bounded list "
+            "plus a curated, package-owned set of common application page "
+            "candidates. No third-party directory list, form submission, "
+            "authentication testing, brute force, credential use, recursion, "
+            "dynamic Gobuster extension expansion (`-x`), or parameter "
+            "fuzzing is included."
+        ),
+        wordlist=DEEP_BOUNDED_CORE_WORDLIST,
+        threads=5,
+        timeout_seconds=120,
+        output_prefix="gobuster-deep-bounded-core",
     ),
     CONTENT_DISCOVERY_PROFILE: ContentDiscoveryProfileDefinition(
         name=CONTENT_DISCOVERY_PROFILE,
@@ -202,7 +225,7 @@ def build_content_discovery_plan(
             profile_definition.description,
             "This plan requires operator review before any future content discovery.",
             "Only discovered HTTP service roots are included.",
-            "The profile proposes no recursion, extensions, arbitrary paths, or user-supplied flags.",
+            "The profile proposes no recursion, dynamic Gobuster extension expansion (`-x`), arbitrary paths, or user-supplied flags.",
             "Future execution must require explicit confirmation and remain in scope.",
         ],
         no_commands_executed=True,

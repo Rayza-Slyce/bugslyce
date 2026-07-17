@@ -26,6 +26,7 @@ def test_recon_modes_doc_matches_current_public_modes() -> None:
         f"`{DEEP_RECON_PROFILE}`",
         "bundled `lab-root-tiny`",
         "bundled `standard-bounded-core`",
+        "bundled `deep-bounded-core`",
         "`nmap`",
         "`curl`",
         "`gobuster`",

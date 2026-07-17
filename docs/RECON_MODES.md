@@ -99,7 +99,24 @@ Deep readiness requires:
 - `nmap`;
 - `curl`;
 - `gobuster`;
-- bundled `standard-bounded-core`.
+- bundled `deep-bounded-core`.
+
+## Bundled Discovery Resources
+
+BugSlyce's executable project workflows use package-local, deterministic
+content-discovery resources:
+
+| Resource | Current entries | Used by | Assembly approach |
+| --- | ---: | --- | --- |
+| `lab-root-tiny` | 25 | Quick Recon | Minimal smoke-oriented root candidates. |
+| `standard-bounded-core` | 220 | Standard Recon | Curated first-pass categories for common application, metadata, API, status, configuration and authentication routes. |
+| `deep-bounded-core` | 1,753 | Deep Recon | Strict superset of Standard with broader category-driven coverage for administration, APIs, backups, configuration, version-control artefacts, CMS/framework routes, CGI/legacy paths, metadata and bounded extension variants. |
+
+The Standard and Deep lists are maintained as BugSlyce package data. They were
+assembled from general route categories rather than copied from a third-party
+directory list. Do not replace them with an external list without checking
+licence compatibility, attribution requirements and the resulting request
+budget.
 
 ## Resume Contract
 

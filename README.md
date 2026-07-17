@@ -46,7 +46,7 @@ claimed.
 | Manual Setup Only | none | Create project metadata and `scope.md` without running recon. |
 | Quick Recon | `lab-safe-tiny` | Fast first-pass bounded collection using the bundled `lab-root-tiny` wordlist. |
 | Standard Recon | `standard-bounded` | Bounded collection plus offline interpretation using `standard-bounded-core`. |
-| Deep Recon | `deep-bounded` | Bounded same-origin Deep collection and offline review orchestration using `standard-bounded-core`. |
+| Deep Recon | `deep-bounded` | Bounded same-origin Deep collection and offline review orchestration using `deep-bounded-core`. |
 
 ## Minimal Install
 

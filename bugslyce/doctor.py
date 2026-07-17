@@ -14,6 +14,8 @@ from typing import Callable
 from bugslyce import __version__
 from bugslyce.project_session import initialize_project, inspect_project_status
 from bugslyce.recon.content_plan import (
+    DEEP_BOUNDED_CORE_PROFILE,
+    DEEP_BOUNDED_CORE_WORDLIST,
     STANDARD_BOUNDED_CORE_PROFILE,
     TINY_WORDLIST,
     STANDARD_BOUNDED_CORE_WORDLIST,
@@ -56,7 +58,12 @@ REQUIRED_BUNDLED_RESOURCES = (
     ResourceRequirement(
         name=STANDARD_BOUNDED_CORE_PROFILE,
         path=STANDARD_BOUNDED_CORE_WORDLIST,
-        workflows=("standard", "deep"),
+        workflows=("standard",),
+    ),
+    ResourceRequirement(
+        name=DEEP_BOUNDED_CORE_PROFILE,
+        path=DEEP_BOUNDED_CORE_WORDLIST,
+        workflows=("deep",),
     ),
 )
 

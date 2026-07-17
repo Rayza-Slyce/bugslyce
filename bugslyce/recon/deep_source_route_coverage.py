@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from bugslyce.core.models import ProjectState
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 BODY_SOURCE_ARTIFACT_TYPES = {
@@ -226,6 +227,7 @@ def build_deep_source_route_coverage_from_project_state(
         normalised_url = _normalise_url(path_record.url)
         if normalised_url is None:
             continue
+        normalised_url = _same_origin_redirect_target(path_record, normalised_url)
         path = _normalised_path(normalised_url)
         status, category = _status_category_for_path(path)
         if status not in {"static_noise", "metadata_context"}:
@@ -564,6 +566,39 @@ def _normalise_url(raw_url: str) -> str | None:
     netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
     path = _normalise_path_value(parsed.path)
     return urlunparse((parsed.scheme.lower(), netloc, path, "", "", ""))
+
+
+def _same_origin_redirect_target(path_record, normalised_url: str) -> str:
+    if path_record.status_code not in {301, 302} or not path_record.redirect_location:
+        return normalised_url
+    try:
+        original_origin = http_origin_from_url(normalised_url)
+        redirected_raw = urljoin(normalised_url, path_record.redirect_location)
+        redirected_origin = http_origin_from_url(redirected_raw)
+        redirected_normalised = _normalise_url(redirected_raw)
+        redirected_raw_parsed = urlparse(redirected_raw)
+    except (TypeError, ValueError):
+        return normalised_url
+    if (
+        original_origin is None
+        or redirected_origin is None
+        or redirected_origin != original_origin
+        or redirected_normalised is None
+        or redirected_raw_parsed.fragment
+    ):
+        return normalised_url
+    redirected = urlparse(redirected_normalised)
+    redirected_path = redirected_raw_parsed.path or "/"
+    return urlunparse(
+        (
+            redirected.scheme,
+            redirected.netloc,
+            redirected_path,
+            "",
+            "",
+            "",
+        )
+    )
 
 
 def _normalised_path(url: str) -> str:

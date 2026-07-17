@@ -136,7 +136,7 @@ readiness result, not a package import failure.
 
 ### 7. Package Resource Verification
 
-Verify the installed package has both bundled wordlists:
+Verify the installed package has all bundled wordlists:
 
 ```bash
 "$TMP_VENV/venv/bin/python" - <<'PY'

@@ -11,6 +11,7 @@ import pytest
 from bugslyce import __version__
 from bugslyce.cli import main
 from bugslyce.doctor import (
+    DEEP_BOUNDED_CORE_WORDLIST,
     DoctorReport,
     DIRBUSTER_SMALL_WORDLIST,
     ResourceReadiness,
@@ -34,7 +35,12 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
     report = build_doctor_report(
         which=tool_paths.get,
         path_exists=lambda path: path
-        in {DIRBUSTER_SMALL_WORDLIST, TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        in {
+            DIRBUSTER_SMALL_WORDLIST,
+            TINY_WORDLIST,
+            STANDARD_BOUNDED_CORE_WORDLIST,
+            DEEP_BOUNDED_CORE_WORDLIST,
+        },
         path_is_file=lambda path: True,
         path_is_dir=lambda path: False,
         path_is_executable=lambda path: str(path).startswith("/usr/bin/"),
@@ -62,6 +68,7 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
     assert "gobuster: ready (/usr/bin/gobuster)" in rendered
     assert "lab-root-tiny: ready" in rendered
     assert "standard-bounded-core: ready" in rendered
+    assert "deep-bounded-core: ready" in rendered
     assert "dirbuster small: found" in rendered
     assert "Project/CLI command surface: ready" in rendered
     assert "Manual Setup Only: ready" in rendered
@@ -77,6 +84,7 @@ def test_build_doctor_report_produces_complete_structured_readiness() -> None:
     assert tuple(resource.name for resource in report.resources) == (
         "lab-root-tiny",
         "standard-bounded-core",
+        "deep-bounded-core",
     )
     for mode in ("quick", "standard", "deep"):
         assert mode_readiness_failures(report, mode) == ()
@@ -86,7 +94,8 @@ def test_build_doctor_report_produces_complete_structured_readiness() -> None:
 def test_missing_required_tools_block_recon_but_not_manual_setup() -> None:
     report = build_doctor_report(
         which=lambda tool: "/usr/bin/curl" if tool == "curl" else None,
-        path_exists=lambda path: path in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        path_exists=lambda path: path
+        in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST},
         path_is_file=lambda path: True,
         path_is_dir=lambda path: False,
         path_is_executable=lambda path: str(path) == "/usr/bin/curl",
@@ -133,8 +142,10 @@ def test_missing_bundled_wordlist_is_not_ready() -> None:
 def test_invalid_tool_path_is_not_ready() -> None:
     report = build_doctor_report(
         which=lambda tool: f"/tools/{tool}",
-        path_exists=lambda path: path in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
-        path_is_file=lambda path: path in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        path_exists=lambda path: path
+        in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST},
+        path_is_file=lambda path: path
+        in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST},
         path_is_dir=lambda path: str(path) == "/tools/nmap",
         path_is_executable=lambda path: False,
         path_is_readable=lambda path: True,
@@ -151,7 +162,8 @@ def test_invalid_tool_path_is_not_ready() -> None:
 def test_runtime_version_check_is_testable() -> None:
     old = build_doctor_report(
         which=lambda tool: f"/usr/bin/{tool}",
-        path_exists=lambda path: path in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        path_exists=lambda path: path
+        in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST},
         path_is_file=lambda path: True,
         path_is_dir=lambda path: False,
         path_is_executable=lambda path: True,
@@ -162,7 +174,8 @@ def test_runtime_version_check_is_testable() -> None:
     )
     minimum = build_doctor_report(
         which=lambda tool: f"/usr/bin/{tool}",
-        path_exists=lambda path: path in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        path_exists=lambda path: path
+        in {TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST},
         path_is_file=lambda path: True,
         path_is_dir=lambda path: False,
         path_is_executable=lambda path: True,
@@ -182,6 +195,7 @@ def test_runtime_version_check_is_testable() -> None:
 def test_mode_readiness_resource_blockers_are_profile_specific() -> None:
     tiny_missing = _ready_report_with_missing_resources({TINY_WORDLIST})
     standard_missing = _ready_report_with_missing_resources({STANDARD_BOUNDED_CORE_WORDLIST})
+    deep_missing = _ready_report_with_missing_resources({DEEP_BOUNDED_CORE_WORDLIST})
 
     assert mode_readiness_failures(tiny_missing, "quick") == (
         "Quick Recon is blocked: required bundled resource `lab-root-tiny` is unavailable: resource file is missing.",
@@ -192,18 +206,23 @@ def test_mode_readiness_resource_blockers_are_profile_specific() -> None:
     assert mode_readiness_failures(standard_missing, "standard") == (
         "Standard Recon is blocked: required bundled resource `standard-bounded-core` is unavailable: resource file is missing.",
     )
-    assert mode_readiness_failures(standard_missing, "deep") == (
-        "Deep Recon is blocked: required bundled resource `standard-bounded-core` is unavailable: resource file is missing.",
+    assert mode_readiness_failures(standard_missing, "deep") == ()
+    assert mode_readiness_failures(deep_missing, "quick") == ()
+    assert mode_readiness_failures(deep_missing, "standard") == ()
+    assert mode_readiness_failures(deep_missing, "deep") == (
+        "Deep Recon is blocked: required bundled resource `deep-bounded-core` is unavailable: resource file is missing.",
     )
     assert tiny_missing.recon_ready is False
     assert standard_missing.recon_ready is False
+    assert deep_missing.recon_ready is False
     assert doctor_exit_code(tiny_missing) == 2
     assert doctor_exit_code(standard_missing) == 2
+    assert doctor_exit_code(deep_missing) == 2
     modes = {mode.mode: mode.status for mode in standard_missing.modes}
     assert modes["manual_setup"] == "ready"
     assert modes["quick"] == "ready"
     assert modes["standard"] == "blocked"
-    assert modes["deep"] == "blocked"
+    assert modes["deep"] == "ready"
 
 
 @pytest.mark.parametrize("tool", ("nmap", "curl", "gobuster"))
@@ -320,6 +339,14 @@ def test_mode_readiness_missing_resource_records_are_profile_specific() -> None:
             if resource.name != "standard-bounded-core"
         ),
     )
+    deep_missing = replace(
+        report,
+        resources=tuple(
+            resource
+            for resource in report.resources
+            if resource.name != "deep-bounded-core"
+        ),
+    )
 
     assert mode_readiness_failures(tiny_missing, "quick") == (
         "Quick Recon is blocked: required readiness record for bundled resource `lab-root-tiny` is missing.",
@@ -330,11 +357,15 @@ def test_mode_readiness_missing_resource_records_are_profile_specific() -> None:
     assert mode_readiness_failures(standard_missing, "standard") == (
         "Standard Recon is blocked: required readiness record for bundled resource `standard-bounded-core` is missing.",
     )
-    assert mode_readiness_failures(standard_missing, "deep") == (
-        "Deep Recon is blocked: required readiness record for bundled resource `standard-bounded-core` is missing.",
+    assert mode_readiness_failures(standard_missing, "deep") == ()
+    assert mode_readiness_failures(deep_missing, "quick") == ()
+    assert mode_readiness_failures(deep_missing, "standard") == ()
+    assert mode_readiness_failures(deep_missing, "deep") == (
+        "Deep Recon is blocked: required readiness record for bundled resource `deep-bounded-core` is missing.",
     )
     assert doctor_exit_code(tiny_missing) == 2
     assert doctor_exit_code(standard_missing) == 2
+    assert doctor_exit_code(deep_missing) == 2
 
 
 @pytest.mark.parametrize(
@@ -396,7 +427,12 @@ def test_doctor_exit_code_fails_closed_for_contradictory_global_readiness() -> N
 def _ready_report_with_missing_resources(missing: set[Path]):
     return _ready_report(
         path_exists=lambda path: path
-        in {DIRBUSTER_SMALL_WORDLIST, TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST}
+        in {
+            DIRBUSTER_SMALL_WORDLIST,
+            TINY_WORDLIST,
+            STANDARD_BOUNDED_CORE_WORDLIST,
+            DEEP_BOUNDED_CORE_WORDLIST,
+        }
         and path not in missing,
         bundled_wordlist_probe=lambda: (
             TINY_WORDLIST not in missing,
@@ -415,7 +451,12 @@ def _ready_report(**overrides):
     kwargs = {
         "which": lambda tool: f"/usr/bin/{tool}",
         "path_exists": lambda path: path
-        in {DIRBUSTER_SMALL_WORDLIST, TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST},
+        in {
+            DIRBUSTER_SMALL_WORDLIST,
+            TINY_WORDLIST,
+            STANDARD_BOUNDED_CORE_WORDLIST,
+            DEEP_BOUNDED_CORE_WORDLIST,
+        },
         "path_is_file": lambda path: True,
         "path_is_dir": lambda path: False,
         "path_is_executable": lambda path: str(path).startswith("/usr/bin/"),

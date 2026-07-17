@@ -79,7 +79,8 @@ Standard interpretation does not turn leads into confirmed findings.
 
 Deep Recon uses profile `deep-bounded`. It adds bounded same-origin Deep
 collection, shallow follow-up and offline orchestration over existing Deep
-review stages. It remains manual-review oriented.
+review stages. It uses the bundled `deep-bounded-core` resource and remains
+manual-review oriented.
 
 Deep Recon:
 
@@ -108,7 +109,7 @@ deep_recon_orchestration.json
 | Manual Setup Only | Scope review before recon | none | none | none | no live phase to resume |
 | Quick Recon | Fast first pass | bounded base workflow | core report/status/runbook | `lab-root-tiny` | completed runs can be reused |
 | Standard Recon | Evidence review after bounded collection | bounded base workflow | Standard offline interpretation | `standard-bounded-core` | completed runs can be reused |
-| Deep Recon | Same-origin detailed manual review | bounded base plus Deep collection | Deep offline orchestration | `standard-bounded-core` | completed runs reuse safely; partial Deep state fails closed |
+| Deep Recon | Same-origin detailed manual review | bounded base plus Deep collection | Deep offline orchestration | `deep-bounded-core` | completed runs reuse safely; partial Deep state fails closed |
 
 Deep is not always the right choice. Use the narrowest mode that fits the
 engagement and the question you need to answer.

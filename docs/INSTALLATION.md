@@ -33,7 +33,8 @@ Executable recon readiness also requires:
 | `curl` | Quick, Standard and Deep Recon |
 | `gobuster` | Quick, Standard and Deep Recon |
 | bundled `lab-root-tiny` wordlist | Quick Recon |
-| bundled `standard-bounded-core` wordlist | Standard and Deep Recon |
+| bundled `standard-bounded-core` wordlist | Standard Recon |
+| bundled `deep-bounded-core` wordlist | Deep Recon |
 
 Manual Setup Only is governed by core readiness. It can create project metadata
 and `scope.md` even when live-recon tools are missing.
@@ -150,7 +151,8 @@ bugslyce --help
 bugslyce doctor
 ```
 
-If both bundled wordlists are installed correctly, the doctor lists
-`lab-root-tiny` and `standard-bounded-core` under Bundled resources. The
-installed package data files are `lab-root-tiny.txt` and
-`standard-bounded-core.txt`.
+If the bundled wordlists are installed correctly, the doctor lists
+`lab-root-tiny`, `standard-bounded-core` and `deep-bounded-core` under
+Bundled resources. The installed package data files are
+`lab-root-tiny.txt`, `standard-bounded-core.txt` and
+`deep-bounded-core.txt`.

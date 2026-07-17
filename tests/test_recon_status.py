@@ -157,6 +157,35 @@ def test_status_detects_standard_bounded_core_content_profile(tmp_path: Path) ->
     assert "lab-root-light" not in result.workflow_summary.content_discovery_profiles
 
 
+def test_status_detects_deep_bounded_core_content_profile(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="gobuster")
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if not artifact.get("file", "").startswith("gobuster-")
+    ]
+    deep_file = input_dir / "gobuster-deep-bounded-core-10.10.10.10-80-root.txt"
+    deep_file.write_text("sitemap (Status: 301) [--> /sitemap/]\n", encoding="utf-8")
+    manifest["artifacts"].append(
+        {
+            "type": "gobuster",
+            "file": deep_file.name,
+            "base_url": "http://10.10.10.10/",
+            "description": "Bounded Deep content discovery",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.workflow_summary.content_discovery_profiles == ["deep-bounded-core"]
+    assert "deep-bounded-core" in rendered
+    assert "lab-root-light" not in result.workflow_summary.content_discovery_profiles
+
+
 def test_status_detects_content_profile_from_execution_metadata(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, stage="services")
     (input_dir / "recon_execution_content_run.json").write_text(

@@ -8,6 +8,8 @@ import tomllib
 
 from bugslyce.doctor import REQUIRED_EXTERNAL_TOOLS
 from bugslyce.recon.content_plan import (
+    DEEP_BOUNDED_CORE_PROFILE,
+    DEEP_BOUNDED_CORE_WORDLIST,
     STANDARD_BOUNDED_CORE_PROFILE,
     TINY_WORDLIST,
     STANDARD_BOUNDED_CORE_WORDLIST,
@@ -87,8 +89,10 @@ def test_modes_profiles_tools_and_resources_are_documented() -> None:
         DEEP_RECON_PROFILE,
         "lab-root-tiny",
         STANDARD_BOUNDED_CORE_PROFILE,
+        DEEP_BOUNDED_CORE_PROFILE,
         TINY_WORDLIST.name,
         STANDARD_BOUNDED_CORE_WORDLIST.name,
+        DEEP_BOUNDED_CORE_WORDLIST.name,
     ):
         assert expected in combined
 
