@@ -75,7 +75,7 @@ def test_html_comment_username_creates_credential_like_review_candidate() -> Non
         if candidate.candidate_type == "credential_like_artifact_review"
     )
 
-    assert candidate.priority == "high"
+    assert candidate.priority == "medium"
     assert "Credential-like artefact review" in candidate.title
     assert candidate.candidate_type == "credential_like_artifact_review"
     assert candidate.affected_endpoints == ["https://app.example-bounty.test/"]
@@ -88,7 +88,7 @@ def test_html_comment_username_creates_credential_like_review_candidate() -> Non
     )
 
 
-def test_keyword_only_sensitive_hits_create_medium_grouped_candidate() -> None:
+def test_keyword_only_sensitive_hits_do_not_create_credential_candidate() -> None:
     state = build_project_state(FIXTURES_ROOT / "basic_saas")
     state = replace(
         state,
@@ -119,10 +119,222 @@ def test_keyword_only_sensitive_hits_create_medium_grouped_candidate() -> None:
         if candidate.candidate_type == "credential_like_artifact_review"
     ]
 
+    assert credential_candidates == []
+
+
+def test_contextual_secret_comment_creates_review_candidate_with_supporting_keywords() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="html_comment",
+                value="Deployment note: api_key = sk_test_placeholder_12345",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-COMMENT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="secret",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-SECRET"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert len(credential_candidates) == 1
+    assert credential_candidates[0].priority == "high"
+    assert credential_candidates[0].evidence_ids == ["EVID-ART-COMMENT", "EVID-ART-SECRET"]
+    assert "confirmed credential" not in credential_candidates[0].kill_switch_guidance.lower()
+
+
+def test_generic_template_keywords_do_not_create_credential_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/sitemap/"
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="keyword_hit",
+                value=value,
+                source_file="sitemap.html",
+                evidence_ids=[f"EVID-ART-{index:04d}"],
+                tags=[],
+            )
+            for index, value in enumerate(("admin", "api", "key", "token", "user"), start=1)
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert credential_candidates == []
+
+
+def test_security_vocabulary_comments_without_values_do_not_create_credential_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    comments = (
+        "Password reset page",
+        "Pass this note to the frontend team",
+        "Token generation documentation",
+        "Username field styling",
+        "Secret management documentation",
+    )
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example-bounty.test/docs.html",
+                artifact_type="html_comment",
+                value=value,
+                source_file="docs.html",
+                evidence_ids=[f"EVID-COMMENT-{index}"],
+                tags=[],
+            )
+            for index, value in enumerate(comments, start=1)
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert credential_candidates == []
+
+
+def test_documentation_assignments_do_not_create_credential_candidates() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    comments = (
+        "password: reset",
+        "token: generation",
+        "secret = management",
+        "username: field",
+        "api key: documentation",
+    )
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example-bounty.test/docs.html",
+                artifact_type="html_comment",
+                value=value,
+                source_file="docs.html",
+                evidence_ids=[f"EVID-DOC-{index}"],
+                tags=[],
+            )
+            for index, value in enumerate(comments, start=1)
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert credential_candidates == []
+
+
+def test_standalone_username_assignment_creates_medium_review_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example-bounty.test/config.html",
+                artifact_type="html_comment",
+                value="username: appuser",
+                source_file="config.html",
+                evidence_ids=["EVID-USER"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
     assert len(credential_candidates) == 1
     assert credential_candidates[0].priority == "medium"
-    assert credential_candidates[0].evidence_ids == ["EVID-ART-PASS", "EVID-ART-SECRET"]
-    assert "confirmed credential" not in credential_candidates[0].kill_switch_guidance.lower()
+    assert credential_candidates[0].evidence_ids == ["EVID-USER"]
+
+
+def test_username_password_pair_comment_creates_review_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="html_comment",
+                value="DB_USER=appuser DB_PASSWORD=correct-horse-battery-staple",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-PAIR"],
+                tags=[],
+            ),
+        ],
+    )
+
+    credential_candidates = [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
+
+    assert len(credential_candidates) == 1
+    assert credential_candidates[0].priority == "high"
+    assert credential_candidates[0].evidence_ids == ["EVID-ART-PAIR"]
+
+
+def test_keyword_matching_respects_token_boundaries() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="admin",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-ADMIN"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example-bounty.test/",
+                artifact_type="keyword_hit",
+                value="api",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-API"],
+                tags=[],
+            ),
+        ],
+    )
+
+    assert not [
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+    ]
 
 
 def test_comment_and_keyword_hits_on_same_url_are_grouped() -> None:
@@ -165,7 +377,7 @@ def test_comment_and_keyword_hits_on_same_url_are_grouped() -> None:
     ]
 
     assert len(credential_candidates) == 1
-    assert credential_candidates[0].priority == "high"
+    assert credential_candidates[0].priority == "medium"
     assert credential_candidates[0].evidence_ids == [
         "EVID-ART-USER",
         "EVID-ART-PASS",

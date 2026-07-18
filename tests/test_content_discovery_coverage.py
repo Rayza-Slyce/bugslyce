@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 from bugslyce import __version__
 from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
@@ -108,6 +109,10 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     source_json = json.loads(
         (output_dir / "deep_source_route_collection.json").read_text(encoding="utf-8")
     )
+    orchestration_json = json.loads(
+        (output_dir / "deep_recon_orchestration.json").read_text(encoding="utf-8")
+    )
+    status_json = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
     sitemap_items = [
         item
         for item in source_json["collected"]
@@ -115,14 +120,37 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     ]
     assert sitemap_items
     assert "application-overview.html" in sitemap_items[0]["body_preview"]
+    assert orchestration_json["deep_mode_enabled"] is True
+    assert status_json["latest_execution"]["pipeline_final_status"] == "completed"
+    assert "- Pipeline Final Status: completed" in (output_dir / "recon_status.md").read_text(
+        encoding="utf-8"
+    )
+    local_runbook = (output_dir / "runbook.md").read_text(encoding="utf-8")
+    assert "Pipeline steps satisfied: 14/14" in local_runbook
+    assert "Deep pipeline phases: 2/2" in local_runbook
 
     deep_report = (output_dir / "deep_recon_review.md").read_text(encoding="utf-8")
+    primary_report = (output_dir / "report.md").read_text(encoding="utf-8")
     assert "http://10.10.10.10/application-overview.html" in deep_report
     assert "http://10.10.10.10/feature-tour.html" in deep_report
     assert "https://external.example.test/offsite.html" in deep_report
     assert "http://10.10.10.10/subscribe" in deep_report
     assert "Form occurrences observed: 1" in deep_report
     assert "https://external.example.test/offsite.html` | `GET`" not in deep_report
+    assert "Detailed Deep review output is retained in `deep_recon_review.md`" in primary_report
+    assert "## Deep Collection Review Bundle" not in primary_report
+    assert "## Deep Form Inventory" not in primary_report
+    assert "deep_recon_review.md" in primary_report
+    with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
+        packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
+        packed_runbook = archive.read("runbook.md").decode("utf-8")
+        packed_orchestration = json.loads(
+            archive.read("raw/deep_recon_orchestration.json").decode("utf-8")
+        )
+    assert packed_status["latest_execution"]["pipeline_final_status"] == "completed"
+    assert "Pipeline steps satisfied: 14/14" in packed_runbook
+    assert "Deep pipeline phases: 2/2" in packed_runbook
+    assert packed_orchestration["deep_mode_enabled"] is True
 
     discovered = build_project_state(output_dir).discovered_paths
     assert any(

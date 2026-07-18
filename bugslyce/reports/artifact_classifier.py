@@ -105,12 +105,8 @@ def classify_encoded_artifact(artifact: HTTPArtifact) -> ArtifactClassification:
 
     if PATH_LIKE.fullmatch(value):
         return ArtifactClassification(
-            LIKELY_SIGNAL if body_fetched_path else POSSIBLE_SIGNAL,
-            (
-                "Path-like value came from a body-fetched discovered path and is not obvious documentation."
-                if body_fetched_path
-                else "Path-like value is not obvious documentation but lacks stronger context."
-            ),
+            LIKELY_NOISE,
+            "Looks like an ordinary slash-delimited URL or path fragment.",
         )
 
     if len(value) >= 24 and _encoded_character_diversity(value):

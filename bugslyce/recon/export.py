@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath
+import tempfile
 import zipfile
 
 from bugslyce.time_utils import Clock, utc_now_iso
@@ -81,7 +82,7 @@ def export_recon_evidence_pack(
     for name in ("report.md", "project_state.json", "recon_manifest.json"):
         _add_optional_file(included, missing_files, input_dir / name, name)
 
-    for name in ("recon_status.md", "recon_status.json"):
+    for name in ("recon_status.md", "recon_status.json", "runbook.md"):
         _add_optional_file(included, missing_files, input_dir / name, name, record_missing=False)
 
     metadata_paths = {
@@ -160,21 +161,49 @@ def export_recon_evidence_pack(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(
-        output_path,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=9,
-    ) as archive:
-        export_readme = EXPORT_README_TEMPLATE.format(exported_at=exported_at)
-        _write_bytes(archive, "BUGSLYCE_EXPORT_README.md", export_readme.encode("utf-8"))
-        _write_bytes(
-            archive,
-            "bugslyce_export_manifest.json",
-            (json.dumps(export_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-        )
-        for archive_name, source_path in sorted(included.items()):
-            _write_bytes(archive, archive_name, source_path.read_bytes())
+    temp_path: Path | None = None
+    primary_error: BaseException | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            dir=output_path.parent,
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+        with zipfile.ZipFile(
+            temp_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            export_readme = EXPORT_README_TEMPLATE.format(exported_at=exported_at)
+            _write_bytes(archive, "BUGSLYCE_EXPORT_README.md", export_readme.encode("utf-8"))
+            _write_bytes(
+                archive,
+                "bugslyce_export_manifest.json",
+                (json.dumps(export_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            )
+            for archive_name, source_path in sorted(included.items()):
+                _write_bytes(archive, archive_name, source_path.read_bytes())
+        temp_path.replace(output_path)
+        temp_path = None
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                if primary_error is not None:
+                    primary_error.add_note(
+                        f"temporary export archive cleanup failed: {exc}"
+                    )
+                else:
+                    raise
 
     warnings = ["This export may contain sensitive recon evidence."]
     if missing_files:

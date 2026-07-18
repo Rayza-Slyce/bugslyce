@@ -339,6 +339,7 @@ def _low_signal_items(
         path
         for path in project_state.discovered_paths
         if path.status_code in {401, 403} and path.evidence_ids
+        and not _has_independent_endpoint_reference(project_state, path)
     ]
     if forbidden_paths:
         items.append(
@@ -405,6 +406,36 @@ def _coverage_lines(project_state: ProjectState) -> list[str]:
         f"Collected phases visible in evidence: {', '.join(phases) if phases else 'input ingestion only'}",
         "Remaining unknowns require manual validation; absence of evidence is not proof of safety.",
     ]
+
+
+def _has_independent_endpoint_reference(project_state: ProjectState, path) -> bool:
+    canonical = _canonical_summary_url(path.url)
+    boundary_ids = {value for value in path.evidence_ids if value}
+    for endpoint in project_state.endpoints:
+        if _canonical_summary_url(endpoint.url) != canonical:
+            continue
+        endpoint_ids = {value for value in endpoint.evidence_ids if value}
+        if endpoint_ids - boundary_ids:
+            return True
+    return False
+
+
+def _canonical_summary_url(value: str | None) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not scheme or not host:
+        return value.rstrip("/")
+    try:
+        port = parsed.port
+    except ValueError:
+        return value.rstrip("/")
+    default_port = 80 if scheme == "http" else 443 if scheme == "https" else None
+    netloc = host if port in {None, default_port} else f"{host}:{port}"
+    path = parsed.path or "/"
+    return f"{scheme}://{netloc}{path.rstrip('/') or '/'}"
 
 
 def _interesting_path(path: str) -> bool:

@@ -89,7 +89,7 @@ def test_completed_project_runbook_includes_manual_review_and_export(
         id="export",
         title="Optionally create a portable evidence pack after review.",
         command_preview=(
-            ".venv/bin/bugslyce recon export "
+            "bugslyce recon export "
             f"--input-dir {scaffold.project.output_dir} "
             f"--output {scaffold.project.output_dir}-evidence-pack.zip"
         ),
@@ -102,7 +102,7 @@ def test_completed_project_runbook_includes_manual_review_and_export(
             project=original.project,
             project_file=original.project_file,
             recon_pack_exists=True,
-            status_summary="Detected phases: 14/14.",
+            status_summary="Pipeline steps satisfied: 14/14.",
             recommended_action=manual,
             optional_actions=[export],
         ),

@@ -75,7 +75,7 @@ def test_human_triage_brief_promotes_universal_manual_review_signals() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Token-like review value: dG9rZW4tdmFsdWU=",
+                value="Ops team: rotate the staging token before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-COMMENT"],
                 tags=[],
@@ -125,8 +125,8 @@ def test_human_triage_brief_promotes_universal_manual_review_signals() -> None:
     assert "Auth/account route observed" in markdown
     assert "Directory listing or browsable path observed" in markdown
     assert "robots.txt or metadata clue observed" in markdown
-    assert "Source credential/context clue group observed" in markdown
-    assert "source credential/context cluster" in markdown
+    assert "Human-authored source comment observed" in markdown
+    assert "html_comment" in markdown
     assert "SSH service context" in markdown
     assert "Static or library route" in markdown
     assert "EVID-ENDPOINT-LOGIN" in markdown
@@ -285,7 +285,7 @@ def test_readable_evidence_cards_deduplicate_start_and_value_items() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Token-like review value: dG9rZW4tdmFsdWU=",
+                value="Ops team: rotate the staging token before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-COMMENT"],
                 tags=[],
@@ -295,7 +295,7 @@ def test_readable_evidence_cards_deduplicate_start_and_value_items() -> None:
 
     markdown = render_readable_evidence_cards_markdown(build_human_triage_brief(state, []))
 
-    assert markdown.count("### Source comment or keyword context observed") == 1
+    assert markdown.count("### Human-authored source comment observed") == 1
     assert markdown.count("EVID-ART-COMMENT") == 1
 
 
@@ -329,7 +329,7 @@ def test_readable_evidence_cards_preserve_distinct_same_url_signals() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Token-like review value: dG9rZW4tdmFsdWU=",
+                value="Ops team: rotate the staging token before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-COMMENT"],
                 tags=[],
@@ -347,7 +347,7 @@ def test_readable_evidence_cards_preserve_distinct_same_url_signals() -> None:
 
     markdown = render_readable_evidence_cards_markdown(build_human_triage_brief(state, []))
 
-    assert "### Source comment or keyword context observed" in markdown
+    assert "### Human-authored source comment observed" in markdown
     assert "### Encoded-looking source artefact observed" in markdown
     assert "EVID-ART-COMMENT" in markdown
     assert "EVID-ART-ENCODED" in markdown
@@ -359,7 +359,7 @@ def test_human_triage_groups_same_source_comment_keyword_clues() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Note to self, remember username: demo-user",
+                value="Ops team: update credential configuration username: demo-user before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-0006"],
                 tags=[],
@@ -391,11 +391,12 @@ def test_human_triage_groups_same_source_comment_keyword_clues() -> None:
         1,
     )[0]
 
-    assert start_here.count("**Source credential/context clue group observed**") == 1
-    assert "source credential/context cluster" in markdown
-    assert "`EVID-ART-0006`, `EVID-ART-0007`, `EVID-ART-0008`" in markdown
-    assert "Note to self, remember username: demo-user; password; secret" in markdown
-    assert "Source comment or keyword context observed" not in start_here
+    assert start_here.count("**Human-authored source comment observed**") == 1
+    assert "`EVID-ART-0006`" in markdown
+    assert "EVID-ART-0007" not in start_here
+    assert "EVID-ART-0008" not in start_here
+    assert "Ops team: update credential configuration username: demo-user before release" in markdown
+    assert "Source credential/context clue group observed" not in start_here
     assert start_here.count("password") == 0
     assert start_here.count("secret") == 0
     assert "confirmed" not in start_here.lower()
@@ -410,7 +411,7 @@ def test_human_triage_group_absorbs_matching_credential_like_candidate() -> None
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Note to self, remember username: demo-user",
+                value="Ops team: update credential configuration username: demo-user before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-0006"],
                 tags=[],
@@ -452,9 +453,9 @@ def test_human_triage_group_absorbs_matching_credential_like_candidate() -> None
         "### Evidence Values Worth Noting",
         1,
     )[0]
-    assert start_here.count("Source credential/context clue group observed") == 1
+    assert start_here.count("Human-authored source comment observed") == 1
     assert "Credential-like artefact review in homepage HTML" not in start_here
-    assert "`EVID-ART-0006`, `EVID-ART-0007`, `EVID-ART-0008`" in start_here
+    assert "`EVID-ART-0006`" in start_here
 
 
 def test_readable_cards_group_same_source_clues_once() -> None:
@@ -463,7 +464,7 @@ def test_readable_cards_group_same_source_clues_once() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Note to self, remember username: demo-user",
+                value="Ops team: update credential configuration username: demo-user before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-0006"],
                 tags=[],
@@ -489,12 +490,12 @@ def test_readable_cards_group_same_source_clues_once() -> None:
 
     markdown = render_readable_evidence_cards_markdown(build_human_triage_brief(state, []))
 
-    assert markdown.count("### Source credential/context clue group observed") == 1
-    assert "### Source comment or keyword context observed" not in markdown
+    assert markdown.count("### Human-authored source comment observed") == 1
+    assert "### Source credential/context clue group observed" not in markdown
     assert "EVID-ART-0006" in markdown
-    assert "EVID-ART-0007" in markdown
-    assert "EVID-ART-0008" in markdown
-    assert "Note to self, remember username: demo-user; password; secret" in markdown
+    assert "EVID-ART-0007" not in markdown
+    assert "EVID-ART-0008" not in markdown
+    assert "Ops team: update credential configuration username: demo-user before release" in markdown
 
 
 def test_human_triage_promotes_robots_body_value_as_metadata_context() -> None:
@@ -537,7 +538,7 @@ def test_human_triage_keeps_source_group_and_robots_value_separate() -> None:
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Note to self, remember username: demo-user",
+                value="Ops team: update credential configuration username: demo-user before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-SOURCE-1"],
                 tags=[],
@@ -567,7 +568,7 @@ def test_human_triage_keeps_source_group_and_robots_value_separate() -> None:
         1,
     )[0]
 
-    assert "Source credential/context clue group observed" in start_here
+    assert "Human-authored source comment observed" in start_here
     assert "robots.txt clue-like value observed" in start_here
     assert "username + robots" not in markdown.lower()
     assert "use this with the username" not in markdown.lower()
@@ -605,7 +606,7 @@ def test_human_triage_brief_separates_evidence_values_from_review_next() -> None
             HTTPArtifact(
                 url="http://example.test/",
                 artifact_type="html_comment",
-                value="Token-like review value: dG9rZW4tdmFsdWU=",
+                value="Ops team: rotate the staging token before release",
                 source_file="homepage.html",
                 evidence_ids=["EVID-ART-COMMENT"],
                 tags=[],
@@ -669,6 +670,231 @@ def test_human_triage_candidate_input_is_not_mutated() -> None:
     build_human_triage_brief(state, candidates)
 
     assert candidates == [before]
+
+
+def test_human_authored_operational_comment_is_rendered_with_excerpt_and_url() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="html_comment",
+                value="Jessie don't forget to udate the webiste",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0015"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="http://example.test/",
+                artifact_type="keyword_hit",
+                value="admin",
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-0016"],
+                tags=[],
+            ),
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    rendered = render_human_triage_brief_markdown(brief)
+
+    assert "Jessie don't forget to udate the webiste" in rendered
+    assert "http://example.test/" in rendered
+    assert "EVID-ART-0015" in rendered
+    assert "Credential-like artefact review" not in rendered
+
+
+def test_varied_operational_source_comments_surface_without_exact_phrase_rules() -> None:
+    comments = (
+        "Sarah, update the staging configuration before release",
+        "Dev team: remove the legacy login route before launch",
+        "Mike, the backup page still points to the old server",
+    )
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url=f"http://example.test/page-{index}.html",
+                artifact_type="html_comment",
+                value=value,
+                source_file=f"page-{index}.html",
+                evidence_ids=[f"EVID-COMMENT-{index}"],
+                tags=[],
+            )
+            for index, value in enumerate(comments, start=1)
+        ]
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    for index, value in enumerate(comments, start=1):
+        assert value in rendered
+        assert f"http://example.test/page-{index}.html" in rendered
+        assert f"EVID-COMMENT-{index}" in rendered
+    assert rendered.count("Human-authored source comment observed") >= 3
+    assert "Credential-like artefact review" not in rendered
+
+
+def test_generic_template_marketing_and_documentation_comments_stay_low_signal() -> None:
+    comments = (
+        "Remember to follow us on Twitter",
+        "Password reset documentation",
+        "User administration template",
+        "Do not forget to subscribe",
+        "Bootstrap template",
+        "Facebook and Twitter integration",
+        "Animate.css",
+        "Icomoon Icon Fonts",
+    )
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/template.html",
+                artifact_type="html_comment",
+                value=value,
+                source_file="template.html",
+                evidence_ids=[f"EVID-NOISE-{index}"],
+                tags=[],
+            )
+            for index, value in enumerate(comments, start=1)
+        ]
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    assert "Human-authored source comment observed" not in rendered
+    assert "Source credential/context clue group observed" not in rendered
+    assert "Credential-like artefact review" not in rendered
+
+
+def test_structural_comment_noise_with_punctuation_stays_low_signal() -> None:
+    comments = (
+        "Copyright 2026 Example Company, all rights reserved.",
+        "Licensed under permissive terms; see the distribution notice for details.",
+        "Load component: responsive menu assets for the public landing page.",
+        "Social metadata: share this article with your professional network.",
+        "Deployment documentation heading: rotate token generation workflow.",
+        "Subscribe today, review our new launch guide, and follow the product news.",
+    )
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/page.html",
+                artifact_type="html_comment",
+                value=value,
+                source_file="page.html",
+                evidence_ids=[f"EVID-STRUCT-NOISE-{index}"],
+                tags=[],
+            )
+            for index, value in enumerate(comments, start=1)
+        ]
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    assert "Human-authored source comment observed" not in rendered
+    assert "Source credential/context clue group observed" not in rendered
+    assert "Credential-like artefact review" not in rendered
+
+
+def test_differently_worded_operational_comment_surfaces_as_source_clue() -> None:
+    comment = "Ops team: rotate the staging certificate before the next deployment"
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="http://example.test/releases.html",
+                artifact_type="html_comment",
+                value=comment,
+                source_file="releases.html",
+                evidence_ids=["EVID-OPS-COMMENT"],
+                tags=[],
+            )
+        ]
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    assert "Human-authored source comment observed" in rendered
+    assert comment in rendered
+    assert "http://example.test/releases.html" in rendered
+    assert "EVID-OPS-COMMENT" in rendered
+    assert "Credential-like artefact review" not in rendered
+
+
+def test_forbidden_server_status_is_access_control_context_not_admin_prompt() -> None:
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url="http://example.test/server-status",
+                status_code=403,
+                content_length=12,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-STATUS"],
+                tags=[],
+            )
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    rendered = render_human_triage_brief_markdown(brief)
+
+    assert "Access-control response context" not in rendered
+    assert "HTTP 403" not in rendered
+    assert "Admin/hidden path discovered" not in rendered
+
+
+def test_endpoint_and_discovered_forbidden_route_have_one_access_boundary_prompt() -> None:
+    url = "http://example.test/management"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/management",
+                query_params=[],
+                evidence_ids=["EVID-PATH-MGMT"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=12,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-MGMT"],
+                tags=[],
+            )
+        ],
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+    before_pointers = rendered.split("### Raw Evidence Pointers", 1)[0]
+
+    assert url not in before_pointers
+    assert "Access-control response context" not in before_pointers
+    assert "Admin-labelled route observed" not in before_pointers
+    assert "Admin/hidden path discovered" not in before_pointers
+
+
+def test_correlated_admin_route_without_forbidden_boundary_can_still_promote() -> None:
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url="http://example.test/admin",
+                hostname="example.test",
+                path="/admin",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-ADMIN"],
+                tags=[],
+            )
+        ]
+    )
+
+    rendered = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
+
+    assert "Admin-labelled route observed" in rendered
+    assert "Access-control response context" not in rendered
 
 
 def _project_state(

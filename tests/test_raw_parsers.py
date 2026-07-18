@@ -142,3 +142,45 @@ def test_html_parser_extracts_metadata_and_conservative_artifacts(tmp_path: Path
         "keyword_hit",
     } <= artifact_types
     assert any(artifact.value == "Example Account Portal" for artifact in artifacts)
+
+
+def test_html_parser_does_not_classify_url_path_fragments_as_encoded(tmp_path: Path) -> None:
+    source = tmp_path / "template.html"
+    source.write_text(
+        """
+        <html>
+          <body>
+            <a href="https://vimeo.example/channels/staffpicks/93951774">video</a>
+            <script>const mediaPath = "com/channels/staffpicks/93951774";</script>
+            <script>const token = "ObsJmP173N2X6dOrAgEAL0Vu";</script>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+
+    artifacts = parse_html(source, "https://app.example-bounty.test/sitemap/")
+
+    encoded_values = [
+        artifact.value
+        for artifact in artifacts
+        if artifact.artifact_type == "encoded_like_artifact"
+    ]
+    assert "com/channels/staffpicks/93951774" not in encoded_values
+    assert "ObsJmP173N2X6dOrAgEAL0Vu" in encoded_values
+
+
+def test_html_keyword_matching_respects_token_boundaries(tmp_path: Path) -> None:
+    source = tmp_path / "substrings.html"
+    source.write_text(
+        "<html><body>administrator apical keypad tokenization username-field password_reset</body></html>",
+        encoding="utf-8",
+    )
+
+    artifacts = parse_html(source, "https://app.example-bounty.test/")
+
+    assert not [
+        artifact
+        for artifact in artifacts
+        if artifact.artifact_type == "keyword_hit"
+    ]

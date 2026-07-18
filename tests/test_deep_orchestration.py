@@ -192,6 +192,14 @@ def test_writer_creates_three_deterministic_artifacts(tmp_path: Path) -> None:
     assert payload["runbook_markdown_file"] == DEEP_RECON_RUNBOOK_MARKDOWN
     assert payload["no_network_requests_made"] is True
     assert payload["deep_mode_enabled"] is False
+    enabled_paths = write_deep_recon_orchestration_artifacts(
+        result,
+        tmp_path,
+        force=True,
+        deep_mode_enabled=True,
+    )
+    enabled_payload = json.loads(enabled_paths[2].read_text(encoding="utf-8"))
+    assert enabled_payload["deep_mode_enabled"] is True
     public_json = paths[2].read_text(encoding="utf-8")
     assert "SECRET_VALUE" not in public_json
     assert "<form" not in public_json

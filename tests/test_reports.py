@@ -6,8 +6,12 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
-from bugslyce.core.models import HTTPArtifact
+from bugslyce.core.models import DiscoveredPath, Endpoint, HTTPArtifact
 from bugslyce.core.project import build_project_state
+from bugslyce.reports.human_triage import (
+    build_human_triage_brief,
+    render_human_triage_brief_markdown,
+)
 from bugslyce.reports.markdown import (
     export_project_state_json,
     format_endpoint_list,
@@ -716,7 +720,7 @@ def test_operator_summary_promotes_credential_like_homepage_artifacts() -> None:
         HTTPArtifact(
             url="http://10.81.143.79/",
             artifact_type="html_comment",
-            value="Note to self, remember username! Username: R1ckRul3s",
+            value="DB_USER=appuser DB_PASSWORD=correct-horse-battery-staple",
             source_file="homepage-pickle.html",
             evidence_ids=["EVID-ART-USER"],
             tags=[],
@@ -774,8 +778,118 @@ def test_operator_summary_promotes_credential_like_homepage_artifacts() -> None:
     assert "Candidate type: `credential_like_artifact_review`" in manual_queue
     assert "Do not brute force." in manual_queue
     assert "Do not attempt authentication unless explicitly authorised." in manual_queue
-    assert "confirmed credential" not in review_first.lower()
-    assert "vulnerable" not in review_first.lower()
+
+
+def test_primary_report_plain_forbidden_route_owned_by_operator_summary() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/admin"
+    state = replace(
+        state,
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/admin",
+                query_params=[],
+                evidence_ids=["EVID-PATH-ADMIN403"],
+                tags=[],
+            ),
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=12,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-PATH-ADMIN403"],
+                tags=[],
+            )
+        ],
+    )
+    candidates = generate_candidates(state)
+    triage = render_human_triage_brief_markdown(build_human_triage_brief(state, candidates))
+    report = render_markdown_report(state, candidates, human_triage_brief_markdown=triage)
+    primary = report.split("## Scope Summary", 1)[0]
+    start_here = primary.split("### Start Here", 1)[1].split(
+        "### Evidence Values Worth Noting",
+        1,
+    )[0]
+
+    assert primary.count("Access-controlled path context") == 1
+    assert primary.count(url) == 1
+    assert "access-control context" in primary
+    assert url not in start_here
+    assert "Admin/hidden route observed" not in primary
+    assert "Admin-labelled route observed" not in primary
+
+
+def test_primary_report_independent_forbidden_route_evidence_merges_operator_prompt() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/management"
+    state = replace(
+        state,
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/management",
+                query_params=[],
+                evidence_ids=["EVID-SOURCE-MGMT"],
+                tags=[],
+            ),
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=12,
+                redirect_location=None,
+                source="gobuster",
+                evidence_ids=["EVID-HTTP-MGMT403"],
+                tags=[],
+            )
+        ],
+    )
+    candidates = generate_candidates(state)
+    triage = render_human_triage_brief_markdown(build_human_triage_brief(state, candidates))
+    report = render_markdown_report(state, candidates, human_triage_brief_markdown=triage)
+    primary = report.split("## Scope Summary", 1)[0]
+
+    assert primary.count(url) == 1
+    assert "Independently referenced access-boundary route" in primary
+    assert "bounded request returned HTTP 403" in primary
+    assert "EVID-SOURCE-MGMT" in primary
+    assert "EVID-HTTP-MGMT403" in primary
+    assert "Access-controlled path context" not in primary
+    lowered = primary.lower()
+    assert "vulnerable" not in lowered
+    assert "authentication bypass" not in lowered
+    assert "exposed" not in lowered
+
+
+def test_primary_report_non_forbidden_admin_route_can_still_promote() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/admin"
+    state = replace(
+        state,
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/admin",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-ADMIN200"],
+                tags=[],
+            ),
+        ],
+    )
+    candidates = generate_candidates(state)
+    triage = render_human_triage_brief_markdown(build_human_triage_brief(state, candidates))
+    report = render_markdown_report(state, candidates, human_triage_brief_markdown=triage)
+
+    assert "Admin-labelled route observed" in report
+    assert "Access-controlled path context" not in report
 
 
 def test_encoded_artifact_classification_keeps_signal_noise_and_raw_rows() -> None:

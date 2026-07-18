@@ -29,7 +29,8 @@ SAFETY_NOTES = (
     "This is a review-only prioritisation layer, not a collection result.",
     "Review-only priority; not a confirmed finding.",
     "No network requests were made by this bundle.",
-    "No files were read or written by this bundle.",
+    "No files were written by this bundle command.",
+    "Existing local collection artefacts were read only.",
     "This stage produces static manual-review context only.",
 )
 CATEGORY_PRIORITY = {

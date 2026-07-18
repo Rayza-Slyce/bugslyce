@@ -377,6 +377,27 @@ def test_status_reports_completed_deep_pipeline_profile_and_phases(tmp_path: Pat
     assert "- Deep pipeline phases: 2/2" in rendered
 
 
+def test_status_counts_skipped_existing_steps_as_satisfied_pipeline_work(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-010": "completed",
+            "PIPELINE-STEP-011": "skipped_existing",
+            "PIPELINE-STEP-012": "noop",
+            "PIPELINE-STEP-013": "failed",
+        },
+    )
+
+    result = build_recon_status(input_dir)
+
+    assert result.artifact_overview["pipeline_steps_satisfied"] == 3
+    assert result.artifact_overview["pipeline_steps_total"] == 4
+
+
 def test_status_reports_deep_phases_from_running_pipeline_checkpoint(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, include_body=True)
     _write_deep_pipeline_metadata(

@@ -240,6 +240,71 @@ class ProjectPipelineFailed(ValueError):
         self.result = result
 
 
+def format_exception_diagnostic(exc: BaseException) -> str:
+    """Render an exception and its ordered notes without relying on a traceback."""
+
+    primary = str(exc).strip() or type(exc).__name__
+    notes = getattr(exc, "__notes__", ())
+    rendered_notes: list[str] = []
+    seen: set[str] = set()
+    primary_folded = primary.casefold()
+    for raw_note in notes:
+        note = str(raw_note).strip()
+        if not note:
+            continue
+        normalised = note.rstrip().rstrip(".")
+        fingerprint = normalised.casefold()
+        if not normalised or fingerprint in seen or fingerprint in primary_folded:
+            continue
+        seen.add(fingerprint)
+        if fingerprint.startswith(("cleanup warning:", "reconciliation warning:")):
+            rendered_notes.append(_as_diagnostic_sentence(normalised))
+        elif "cleanup" in fingerprint:
+            rendered_notes.append(
+                _as_diagnostic_sentence(f"Cleanup warning: {normalised}")
+            )
+        elif "reconcil" in fingerprint:
+            rendered_notes.append(
+                _as_diagnostic_sentence(f"Reconciliation warning: {normalised}")
+            )
+        else:
+            rendered_notes.append(
+                _as_diagnostic_sentence(f"Pipeline warning: {normalised}")
+            )
+    if not rendered_notes:
+        return primary
+    return " ".join((_as_diagnostic_sentence(primary), *rendered_notes))
+
+
+def _as_diagnostic_sentence(value: str) -> str:
+    value = value.rstrip()
+    if value.endswith((".", "!", "?")):
+        return value
+    return value + "."
+
+
+def render_project_pipeline_failure_guidance(result: PipelineResult) -> tuple[str, ...]:
+    """Return truthful operator guidance for an unsuccessful pipeline execution."""
+
+    failed_step = result.failed_step
+    if failed_step is None:
+        failed = next((step for step in result.steps if step.status == "failed"), None)
+        failed_step = failed.step_id if failed is not None else "unknown"
+    if failed_step == "PIPELINE-FINALISE":
+        return (
+            "The bounded collection pipeline steps had completed, but final output "
+            "reconciliation or evidence-pack publication failed.",
+            "The run is classified as failed.",
+            "No successful final evidence pack is being advertised.",
+            "Review local artefacts and pipeline diagnostics.",
+        )
+    return (
+        f"Pipeline stopped at step {failed_step}.",
+        "No later steps were executed.",
+        "Review the error and local evidence.",
+    )
+
+
 @dataclass(frozen=True)
 class ResumeAssessment:
     """Validated existing state that can be reused by a resumed pipeline."""
@@ -352,6 +417,7 @@ def run_project_pipeline(
         "plan_dir": plan_dir,
         "plan_path": plan_path,
         "export_path": export_path,
+        "published_export_path": None,
         "target": project.target,
         "resume": resume,
         "profile": profile,
@@ -391,28 +457,46 @@ def run_project_pipeline(
             ContentFollowupExecutionIncomplete,
             BodyFetchExecutionIncomplete,
         ) as exc:
+            diagnostic = format_exception_diagnostic(exc)
             _write_incomplete_phase_metadata(exc, output_dir, plan_dir)
             result = _failed_result(
                 result,
                 index,
                 started_step,
-                str(exc),
+                diagnostic,
                 clock,
             )
             _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+            result = _reconcile_failed_pipeline_outputs(
+                result,
+                project_file,
+                scope_file,
+                context,
+                clock,
+                preserve_canonical_pipeline_metadata,
+            )
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
-            raise ProjectPipelineFailed(str(exc), result) from exc
+            raise ProjectPipelineFailed(diagnostic, result) from exc
         except (ValueError, OSError) as exc:
+            diagnostic = format_exception_diagnostic(exc)
             result = _failed_result(
                 result,
                 index,
                 started_step,
-                str(exc),
+                diagnostic,
                 clock,
             )
             _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+            result = _reconcile_failed_pipeline_outputs(
+                result,
+                project_file,
+                scope_file,
+                context,
+                clock,
+                preserve_canonical_pipeline_metadata,
+            )
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
-            raise ProjectPipelineFailed(str(exc), result) from exc
+            raise ProjectPipelineFailed(diagnostic, result) from exc
 
         completed_step = replace(
             started_step,
@@ -433,6 +517,44 @@ def run_project_pipeline(
         final_status="completed",
     )
     _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+    if not preserve_canonical_pipeline_metadata:
+        try:
+            _refresh_final_pipeline_outputs(result, project_file, scope_file, context, clock)
+        except (ValueError, OSError) as exc:
+            diagnostic = format_exception_diagnostic(exc)
+            result = replace(
+                result,
+                final_status="failed",
+                failed_step="PIPELINE-FINALISE",
+                completed_at=utc_now_iso(clock),
+            )
+            warning_index = len(result.steps) - 1
+            warning_step = result.steps[warning_index]
+            result = _replace_step(
+                result,
+                warning_index,
+                replace(
+                    warning_step,
+                    message=(
+                        f"{warning_step.message} Finalisation failed: {diagnostic}"
+                    ).strip(),
+                ),
+            )
+            _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+            cleanup_errors = _remove_owned_export_after_finalisation_failure(context)
+            if isinstance(context.get("published_export_path"), Path):
+                result = replace(result, export_path=None)
+                _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+            result = _reconcile_failed_pipeline_outputs(
+                result,
+                project_file,
+                scope_file,
+                context,
+                clock,
+                preserve_canonical_pipeline_metadata,
+                cleanup_errors,
+            )
+            raise ProjectPipelineFailed(diagnostic, result) from exc
     return result
 
 
@@ -525,8 +647,8 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
             "",
             "```bash",
             f"less {outputs['report']}",
-            f".venv/bin/bugslyce project next --project {result.project_file}",
-            f".venv/bin/bugslyce project status --project {result.project_file}",
+            f"bugslyce project next --project {result.project_file}",
+            f"bugslyce project status --project {result.project_file}",
             "```",
             "",
             "No NSE scripts, UDP scans, brute force, exploitation, recursive discovery, form submission, authentication testing, or arbitrary commands were run.",
@@ -569,7 +691,7 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
             "",
             "Optional:",
             "* Preview next safe action:",
-            f"  .venv/bin/bugslyce project next --project {result.project_file}",
+            f"  bugslyce project next --project {result.project_file}",
             "",
             "No NSE scripts, UDP scans, brute force, exploitation, recursive discovery, form submission, authentication testing, or arbitrary commands were run.",
         ]
@@ -1266,6 +1388,7 @@ def _step_runners(
             orchestration,
             output_dir,
             force=resume,
+            deep_mode_enabled=profile == DEEP_PIPELINE_PROFILE,
         )
         context["deep_outputs"] = replace(
             current,
@@ -1339,6 +1462,7 @@ def _step_runners(
                 clock=clock,
                 deep_evidence_paths=deep_evidence_paths,
             )
+        context["published_export_path"] = Path(result.output_path)
         return (
             "Portable evidence pack exported.",
             [result.output_path],
@@ -1427,7 +1551,7 @@ def _write_interpretation_report_if_needed(
         orchestration = _deep_outputs_from_context(context).orchestration
         if orchestration is None:
             raise ValueError("Deep orchestration is required before report generation.")
-        deep_recon_markdown = orchestration.deep_recon_markdown
+        deep_recon_markdown = _render_deep_report_index(orchestration)
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
@@ -1472,6 +1596,232 @@ def _write_interpretation_report_if_needed(
         **report_kwargs,
     )
     return [str(report_path), str(json_path)]
+
+
+def _refresh_final_pipeline_outputs(
+    result: PipelineResult,
+    project_file: Path,
+    scope_file: Path,
+    context: dict[str, object],
+    clock: Clock | None,
+) -> None:
+    output_dir = Path(result.output_dir).expanduser().resolve()
+    if not _step_satisfied(result, "PIPELINE-STEP-010"):
+        return
+    status_result = build_recon_status(output_dir, scope_file, clock=clock)
+    write_recon_status(status_result, output_dir)
+    runbook_kwargs: dict[str, object] = {
+        "clock": clock,
+        "standard_investigation_workflow_markdown": (
+            _build_standard_investigation_runbook_section_if_needed(
+                result.profile,
+                output_dir,
+            )
+        ),
+    }
+    deep_runbook_markdown = _deep_runbook_markdown_required(result.profile, context)
+    if deep_runbook_markdown is not None:
+        runbook_kwargs["deep_recon_runbook_markdown"] = deep_runbook_markdown
+    write_project_runbook(build_project_runbook(project_file, **runbook_kwargs))
+    if result.export_path and _step_completed(result, "PIPELINE-STEP-012"):
+        export_kwargs: dict[str, object] = {"force": True, "clock": clock}
+        deep_paths = _deep_evidence_paths_for_final_export(result.profile, output_dir)
+        if deep_paths is not None:
+            export_kwargs["deep_evidence_paths"] = deep_paths
+        export_recon_evidence_pack(
+            output_dir,
+            Path(result.export_path),
+            **export_kwargs,
+        )
+
+
+def _reconcile_failed_pipeline_outputs(
+    result: PipelineResult,
+    project_file: Path,
+    scope_file: Path,
+    context: dict[str, object],
+    clock: Clock | None,
+    preserve_canonical_pipeline_metadata: bool,
+    initial_cleanup_errors: list[str] | None = None,
+) -> PipelineResult:
+    if preserve_canonical_pipeline_metadata:
+        return result
+    cleanup_errors: list[str] = list(initial_cleanup_errors or [])
+    try:
+        _refresh_recon_status_after_failure(result, scope_file, clock)
+    except (ValueError, OSError) as exc:
+        cleanup_errors.append(
+            f"recon status refresh failed: {format_exception_diagnostic(exc)}"
+        )
+    try:
+        _refresh_runbook_after_failure(result, project_file, context, clock)
+    except (ValueError, OSError) as exc:
+        cleanup_errors.append(f"runbook refresh failed: {format_exception_diagnostic(exc)}")
+    if not cleanup_errors:
+        return result
+    failed_index = next(
+        (index for index, step in enumerate(result.steps) if step.status == "failed"),
+        None,
+    )
+    if failed_index is None:
+        warning_index = len(result.steps) - 1
+        warning_step = result.steps[warning_index]
+        message = _append_reconciliation_warnings(warning_step.message, cleanup_errors)
+        reconciled = _replace_step(
+            result,
+            warning_index,
+            replace(warning_step, message=message),
+        )
+        _write_project_pipeline_checkpoint(reconciled, preserve_canonical_pipeline_metadata)
+        return reconciled
+    failed_step = result.steps[failed_index]
+    message = _append_reconciliation_warnings(failed_step.message, cleanup_errors)
+    reconciled = _replace_step(result, failed_index, replace(failed_step, message=message))
+    reconciled = _refresh_result_counts(reconciled)
+    _write_project_pipeline_checkpoint(reconciled, preserve_canonical_pipeline_metadata)
+    return reconciled
+
+
+def _append_reconciliation_warnings(message: str, warnings: list[str]) -> str:
+    retained: list[str] = []
+    seen: set[str] = set()
+    message_folded = message.casefold()
+    for warning in warnings:
+        normalised = warning.strip().rstrip(".")
+        fingerprint = normalised.casefold()
+        if not normalised or fingerprint in seen or fingerprint in message_folded:
+            continue
+        seen.add(fingerprint)
+        retained.append(normalised)
+    if not retained:
+        return message
+    return (
+        f"{message.rstrip()} Reconciliation warning: {'; '.join(retained)}."
+    ).strip()
+
+
+def _refresh_recon_status_after_failure(
+    result: PipelineResult,
+    scope_file: Path,
+    clock: Clock | None,
+) -> None:
+    output_dir = Path(result.output_dir).expanduser().resolve()
+    status = next((step.status for step in result.steps if step.step_id == "PIPELINE-STEP-010"), None)
+    if status in {"failed", "running"}:
+        _quarantine_previous_status_files(output_dir)
+        return
+    if not _status_refresh_allowed_after_failure(result, output_dir):
+        return
+    status_result = build_recon_status(output_dir, scope_file, clock=clock)
+    write_recon_status(status_result, output_dir)
+
+
+def _status_refresh_allowed_after_failure(result: PipelineResult, output_dir: Path) -> bool:
+    status = next((step.status for step in result.steps if step.step_id == "PIPELINE-STEP-010"), None)
+    if status == "completed":
+        return True
+    if status in {"failed", "running"}:
+        return False
+    return (output_dir / "recon_status.json").is_file() and (output_dir / "recon_status.md").is_file()
+
+
+def _quarantine_previous_status_files(output_dir: Path) -> None:
+    for name in ("recon_status.json", "recon_status.md"):
+        source = output_dir / name
+        if not source.exists():
+            continue
+        destination = output_dir / name.replace("recon_status", "recon_status.previous")
+        if destination.exists():
+            destination.unlink()
+        source.replace(destination)
+
+
+def _step_satisfied(result: PipelineResult, step_id: str) -> bool:
+    return any(
+        step.step_id == step_id and step.status in {"completed", "noop", "skipped_existing"}
+        for step in result.steps
+    )
+
+
+def _step_completed(result: PipelineResult, step_id: str) -> bool:
+    return any(step.step_id == step_id and step.status == "completed" for step in result.steps)
+
+
+def _refresh_runbook_after_failure(
+    result: PipelineResult,
+    project_file: Path,
+    context: dict[str, object],
+    clock: Clock | None,
+) -> None:
+    output_dir = Path(result.output_dir).expanduser().resolve()
+    if not (output_dir / "runbook.md").is_file():
+        return
+    runbook_kwargs: dict[str, object] = {
+        "clock": clock,
+        "standard_investigation_workflow_markdown": (
+            _build_standard_investigation_runbook_section_if_needed(
+                result.profile,
+                output_dir,
+            )
+        ),
+    }
+    deep_runbook_markdown = _deep_runbook_markdown_required(result.profile, context)
+    if deep_runbook_markdown is not None:
+        runbook_kwargs["deep_recon_runbook_markdown"] = deep_runbook_markdown
+    write_project_runbook(build_project_runbook(project_file, **runbook_kwargs))
+
+
+def _deep_evidence_paths_for_final_export(profile: str, output_dir: Path) -> tuple[Path, ...] | None:
+    if profile != DEEP_PIPELINE_PROFILE:
+        return None
+    deep_paths = tuple(output_dir / name for name in DEEP_FIXED_ARTEFACT_FILENAMES)
+    if not all(path.is_file() for path in deep_paths):
+        raise ValueError("Deep evidence artefacts are incomplete before final export refresh.")
+    return deep_paths
+
+
+def _remove_owned_export_after_finalisation_failure(context: dict[str, object]) -> list[str]:
+    published = context.get("published_export_path")
+    if not isinstance(published, Path):
+        return []
+    try:
+        if published.is_symlink():
+            return [
+                f"owned evidence pack cleanup refused symlink path: {published}; stale path remains: {published}"
+            ]
+        if published.is_file():
+            published.unlink()
+    except OSError as exc:
+        return [f"owned evidence pack cleanup failed: {exc}; stale path remains: {published}"]
+    return []
+
+
+def _render_deep_report_index(orchestration: DeepReconOrchestrationResult) -> str:
+    lines = [
+        "## Deep Recon Review",
+        "",
+        "Detailed Deep review output is retained in `deep_recon_review.md`; this primary report lists the completed Deep stages and bounded counts for navigation.",
+        "",
+        "### Completed Deep Stages",
+        "",
+    ]
+    for index, stage_id in enumerate(getattr(orchestration, "stage_order", ()), start=1):
+        lines.append(f"{index}. `{stage_id}`")
+    lines.extend(["", "### Deep Stage Counts", ""])
+    for stage_id, count in getattr(orchestration, "stage_counts", ()):
+        lines.append(f"- `{stage_id}`: {count}")
+    lines.extend(
+        [
+            "",
+            "### Deep Detail Artefact",
+            "",
+            "- Exhaustive Deep tables and inventories: `deep_recon_review.md`",
+            "- Compact Deep operator guide: `deep_recon_runbook.md`",
+            "- Bounded metadata index: `deep_recon_orchestration.json`",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _build_standard_investigation_runbook_section_if_needed(

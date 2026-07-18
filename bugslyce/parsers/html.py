@@ -63,9 +63,20 @@ def parse_html(path: Path, url: str = "") -> list[HTTPArtifact]:
     values.extend(("input", value) for value in parser.inputs)
 
     searchable = "\n".join([text, *parser.comments])
-    lower_searchable = searchable.lower()
-    values.extend(("keyword_hit", keyword) for keyword in sorted(KEYWORDS) if keyword in lower_searchable)
-    values.extend(("encoded_like_artifact", match.group(0)) for match in BASE64_LIKE.finditer(searchable))
+    values.extend(
+        ("keyword_hit", keyword)
+        for keyword in sorted(KEYWORDS)
+        if re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(keyword)}(?![A-Za-z0-9_-])",
+            searchable,
+            re.IGNORECASE,
+        )
+    )
+    values.extend(
+        ("encoded_like_artifact", value)
+        for value in (match.group(0) for match in BASE64_LIKE.finditer(searchable))
+        if not _looks_like_url_or_path_fragment(value)
+    )
 
     artifacts: list[HTTPArtifact] = []
     seen: set[tuple[str, str]] = set()
@@ -138,3 +149,15 @@ class _ArtifactHTMLParser(HTMLParser):
 
     def handle_comment(self, data: str) -> None:
         self.comments.append(" ".join(data.split()))
+
+
+def _looks_like_url_or_path_fragment(value: str) -> bool:
+    lowered = value.lower()
+    if "://" in lowered or lowered.startswith("//"):
+        return True
+    if "/" not in value:
+        return False
+    if any(char in value for char in "+="):
+        return False
+    parts = [part for part in value.strip("/").split("/") if part]
+    return len(parts) >= 2 and all(re.fullmatch(r"[A-Za-z0-9._~-]+", part) for part in parts)

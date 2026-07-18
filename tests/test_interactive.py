@@ -11,11 +11,16 @@ import pytest
 from bugslyce.cli import main
 from bugslyce.interactive import (
     QUICK_RECON_LABEL,
+    _run_pipeline,
     render_recon_mode_menu,
     map_user_recon_mode_to_internal_profile,
     run_interactive_launcher,
 )
-from bugslyce.project_pipeline import PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE
+from bugslyce.project_pipeline import (
+    PIPELINE_PROFILE,
+    ProjectPipelineFailed,
+    STANDARD_PIPELINE_PROFILE,
+)
 from bugslyce.project_session import PROJECT_SCHEMA_VERSION
 
 
@@ -596,6 +601,75 @@ def test_quick_recon_run_now_uses_resolved_home_project_file(
     assert received["project_file"] == project_file
     assert f"* Project directory: {project_file.parent}" in rendered
     assert "* Recon mode: Quick Recon" in rendered
+
+
+def test_interactive_pipeline_handles_finalisation_failure_without_failed_ordinary_step(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result = SimpleNamespace(
+        failed_step="PIPELINE-FINALISE",
+        steps=[
+            SimpleNamespace(step_id=f"PIPELINE-STEP-{index:03d}", status="completed")
+            for index in range(1, 13)
+        ],
+    )
+
+    def fail_finalisation(**kwargs):
+        raise ProjectPipelineFailed("final output refresh failed", result)
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fail_finalisation)
+    output: list[str] = []
+
+    exit_code = _run_pipeline(
+        tmp_path / "bugslyce_project.json",
+        output.append,
+        profile=PIPELINE_PROFILE,
+        resume=False,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 2
+    assert "Error: final output refresh failed" in rendered
+    assert "bounded collection pipeline steps had completed" in rendered
+    assert "final output reconciliation or evidence-pack publication failed" in rendered
+    assert "classified as failed" in rendered
+    assert "No successful final evidence pack is being advertised." in rendered
+    assert "Review local artefacts and pipeline diagnostics." in rendered
+    assert "No later steps were executed." not in rendered
+
+
+def test_interactive_pipeline_shows_ordinary_failure_cleanup_note(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result = SimpleNamespace(
+        failed_step="PIPELINE-STEP-012",
+        steps=[SimpleNamespace(step_id="PIPELINE-STEP-012", status="failed")],
+    )
+    message = (
+        "archive write failed. Cleanup warning: temporary export archive cleanup "
+        "failed: permission denied."
+    )
+
+    def fail_export(**kwargs):
+        raise ProjectPipelineFailed(message, result)
+
+    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fail_export)
+    output: list[str] = []
+
+    exit_code = _run_pipeline(
+        tmp_path / "bugslyce_project.json",
+        output.append,
+        profile=PIPELINE_PROFILE,
+        resume=False,
+    )
+
+    rendered = "\n".join(output)
+    assert exit_code == 2
+    assert f"Error: {message}" in rendered
+    assert "Pipeline stopped at step PIPELINE-STEP-012." in rendered
+    assert "No later steps were executed." in rendered
 
 
 def test_quick_recon_no_run_shows_command_preview(

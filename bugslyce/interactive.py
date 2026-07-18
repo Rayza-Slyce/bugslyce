@@ -23,6 +23,7 @@ from bugslyce.project_pipeline import (
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
     SUPPORTED_PIPELINE_PROFILES,
+    render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
 )
@@ -315,11 +316,9 @@ def _run_pipeline(
         )
     except ProjectPipelineFailed as exc:
         result = exc.result
-        failed = next(step for step in result.steps if step.status == "failed")
         print_func(f"Error: {exc}")
-        print_func(f"Pipeline stopped at step {failed.step_id}.")
-        print_func("No later steps were executed.")
-        print_func("Review the error and local evidence.")
+        for message in render_project_pipeline_failure_guidance(result):
+            print_func(message)
         return 2
     except ValueError as exc:
         print_func(f"Error: {exc}")

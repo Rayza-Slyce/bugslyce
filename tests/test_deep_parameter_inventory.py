@@ -17,7 +17,9 @@ from bugslyce.recon.deep_javascript_route_extraction import (
 )
 from bugslyce.recon.deep_parameter_inventory import (
     MAX_PARAMETER_NAME_CHARS,
+    MAX_RENDERED_VALUES,
     MAX_RENDERED_VALUE_CHARS,
+    _format_values,
     build_deep_parameter_inventory,
     render_deep_parameter_inventory_markdown,
 )
@@ -28,6 +30,16 @@ from bugslyce.recon.deep_shallow_route_followup import (
     DeepShallowRouteFollowupResult,
     DeepShallowRouteFollowupResultSummaryCounts,
 )
+
+
+def test_value_list_truncation_never_renders_negative_remaining_count() -> None:
+    assert _format_values(()) == "`none`"
+    assert "+-" not in _format_values(("GET",))
+    exact_limit = tuple(f"value-{index}" for index in range(MAX_RENDERED_VALUES))
+    assert "+-" not in _format_values(exact_limit)
+    above_limit = _format_values((*exact_limit, "extra"))
+    assert "... +1 more" in above_limit
+    assert "+-" not in above_limit
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,

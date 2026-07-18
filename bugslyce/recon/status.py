@@ -468,6 +468,11 @@ def _artifact_overview(
         detected, total = deep_counts
         overview["deep_pipeline_phases_detected"] = detected
         overview["deep_pipeline_phases_total"] = total
+    pipeline_counts = _pipeline_step_counts(pipeline_metadata)
+    if pipeline_counts is not None:
+        satisfied, total = pipeline_counts
+        overview["pipeline_steps_satisfied"] = satisfied
+        overview["pipeline_steps_total"] = total
     return overview
 
 
@@ -621,6 +626,17 @@ def _pipeline_step_statuses(pipeline_metadata: dict[str, Any] | None) -> dict[st
         if isinstance(step_id, str) and isinstance(status, str):
             statuses[step_id] = status
     return statuses
+
+
+def _pipeline_step_counts(pipeline_metadata: dict[str, Any] | None) -> tuple[int, int] | None:
+    statuses = _pipeline_step_statuses(pipeline_metadata)
+    if not statuses:
+        return None
+    satisfied = sum(
+        status in {"completed", "noop", "skipped_existing"}
+        for status in statuses.values()
+    )
+    return satisfied, len(statuses)
 
 
 def _deep_pipeline_profile(result: ReconStatusResult) -> str | None:

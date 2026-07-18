@@ -24,6 +24,7 @@ from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
+    format_exception_diagnostic,
     run_project_pipeline,
 )
 from bugslyce.project_session import scaffold_project
@@ -138,6 +139,165 @@ def test_cli_project_run_forwards_resume(
     assert f"less {output_dir / 'report.md'}" in captured.out
 
 
+def test_cli_project_run_handles_finalisation_failure_without_failed_ordinary_step(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    project_file, _output_dir = _fresh_project(tmp_path)
+    result = SimpleNamespace(
+        failed_step="PIPELINE-FINALISE",
+        steps=[
+            SimpleNamespace(step_id=f"PIPELINE-STEP-{index:03d}", status="completed")
+            for index in range(1, 13)
+        ],
+    )
+
+    def fail_finalisation(**kwargs):
+        raise ProjectPipelineFailed("final output refresh failed", result)
+
+    monkeypatch.setattr("bugslyce.cli.run_project_pipeline", fail_finalisation)
+
+    exit_code = main(
+        [
+            "project",
+            "run",
+            "--project",
+            str(project_file),
+            "--profile",
+            PIPELINE_PROFILE,
+            "--confirm",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "Error: final output refresh failed" in captured.err
+    assert "bounded collection pipeline steps had completed" in captured.err
+    assert "final output reconciliation or evidence-pack publication failed" in captured.err
+    assert "classified as failed" in captured.err
+    assert "No successful final evidence pack is being advertised." in captured.err
+    assert "Review local artefacts and pipeline diagnostics." in captured.err
+    assert "No later steps were executed." not in captured.err
+
+
+def test_cli_project_run_retains_ordinary_failed_step_wording(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    project_file, _output_dir = _fresh_project(tmp_path)
+    result = SimpleNamespace(
+        failed_step="PIPELINE-STEP-004",
+        steps=[
+            SimpleNamespace(step_id="PIPELINE-STEP-004", status="failed"),
+            SimpleNamespace(step_id="PIPELINE-STEP-005", status="pending"),
+        ],
+    )
+
+    def fail_step(**kwargs):
+        raise ProjectPipelineFailed("HTTP metadata failed", result)
+
+    monkeypatch.setattr("bugslyce.cli.run_project_pipeline", fail_step)
+
+    exit_code = main(
+        [
+            "project",
+            "run",
+            "--project",
+            str(project_file),
+            "--profile",
+            PIPELINE_PROFILE,
+            "--confirm",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "Pipeline stopped at step PIPELINE-STEP-004." in captured.err
+    assert "No later steps were executed." in captured.err
+    assert "Review the error and local evidence." in captured.err
+    assert "final output reconciliation" not in captured.err
+
+
+def test_exception_diagnostic_preserves_ordered_notes_without_duplicates() -> None:
+    error = OSError("archive write failed")
+    error.add_note("temporary export archive cleanup failed: permission denied")
+    error.add_note("")
+    error.add_note("reconciliation retained an incomplete local archive")
+    error.add_note("temporary export archive cleanup failed: permission denied")
+
+    diagnostic = format_exception_diagnostic(error)
+
+    assert diagnostic == (
+        "archive write failed. Cleanup warning: temporary export archive cleanup "
+        "failed: permission denied. Reconciliation warning: reconciliation retained "
+        "an incomplete local archive."
+    )
+
+
+def test_cli_project_run_preserves_export_cleanup_note(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def fail_export(input_dir, output_path, **kwargs):
+        error = OSError("archive write failed")
+        error.add_note("temporary export archive cleanup failed: permission denied")
+        raise error
+
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fail_export)
+    captured_failures: list[ProjectPipelineFailed] = []
+
+    def run_and_capture(**kwargs):
+        try:
+            return run_project_pipeline(**kwargs)
+        except ProjectPipelineFailed as exc:
+            captured_failures.append(exc)
+            raise
+
+    monkeypatch.setattr("bugslyce.cli.run_project_pipeline", run_and_capture)
+
+    exit_code = main(
+        [
+            "project",
+            "run",
+            "--project",
+            str(project_file),
+            "--profile",
+            PIPELINE_PROFILE,
+            "--confirm",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert len(captured_failures) == 1
+    assert "Cleanup warning: temporary export archive cleanup failed" in str(
+        captured_failures[0]
+    )
+    assert isinstance(captured_failures[0].__cause__, OSError)
+    assert "Error: archive write failed." in captured.err
+    assert (
+        "Cleanup warning: temporary export archive cleanup failed: permission denied."
+        in captured.err
+    )
+    payload = json.loads(
+        (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    failed_step = next(
+        step for step in payload["steps"] if step["step_id"] == "PIPELINE-STEP-012"
+    )
+    assert "archive write failed" in failed_step["message"]
+    assert "Cleanup warning: temporary export archive cleanup failed" in failed_step["message"]
+    markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
+    assert "Cleanup warning: temporary export archive cleanup failed" in markdown
+
+
 def test_pipeline_rejects_unsupported_profile_and_invalid_project(
     tmp_path: Path,
 ) -> None:
@@ -189,6 +349,7 @@ def test_pipeline_rejects_scope_readiness_and_existing_outputs_before_live_phase
     export_path.write_bytes(b"existing")
     with pytest.raises(ValueError, match="Evidence pack output already exists"):
         run_project_pipeline(project_file, PIPELINE_PROFILE)
+    assert export_path.read_bytes() == b"existing"
 
 
 def test_pipeline_rejects_missing_scope_and_existing_plan_directory(
@@ -414,13 +575,18 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
         "runbook",
         "runbook-write",
         "export",
+        "status",
+        "status-write",
+        "runbook",
+        "runbook-write",
+        "export",
     ]
     assert result.final_status == "completed"
     assert [step.status for step in result.steps] == ["completed"] * 12
     assert result.report_path == str(output_dir / "report.md")
     assert result.runbook_path == str(output_dir / "runbook.md")
     assert result.export_path == f"{output_dir}-evidence-pack.zip"
-    assert runbook_sections == [None]
+    assert runbook_sections == [None, None]
     assert "[1/12] environment and project validation starting..." in progress
     assert "[12/12] evidence pack export complete" in progress
 
@@ -596,6 +762,11 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         "runbook",
         "runbook-write",
         "export",
+        "status",
+        "status-write",
+        "runbook",
+        "runbook-write",
+        "export",
     ]
     assert result.profile == STANDARD_PIPELINE_PROFILE
     assert result.report_path == str(output_dir / "report.md")
@@ -610,13 +781,62 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
     assert "not proof of vulnerability" in report
     assert runbook_sections == [
-        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n"
+        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
+        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
     ]
     assert route_sections == [
         "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n"
     ]
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     assert payload["profile"] == STANDARD_PIPELINE_PROFILE
+
+
+def test_failure_after_status_refreshes_pipeline_status_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def status_from_pipeline(input_dir, scope_file=None, clock=None):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            latest_execution={
+                "pipeline_profile": payload["profile"],
+                "pipeline_final_status": payload["final_status"],
+            },
+            artifact_overview={},
+        )
+
+    def write_status(result, output_path):
+        calls.append("status-write")
+        (output_path / "recon_status.json").write_text(
+            json.dumps({"latest_execution": result.latest_execution}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (output_path / "recon_status.md").write_text(
+            f"- Pipeline Final Status: {result.latest_execution['pipeline_final_status']}\n",
+            encoding="utf-8",
+        )
+        return output_path / "recon_status.json", output_path / "recon_status.md"
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", status_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_recon_status", write_status)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_runbook",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("runbook failed")),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert exc_info.value.result.final_status == "failed"
+    status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
+    assert "Pipeline Final Status: failed" in (output_dir / "recon_status.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_project_pipeline_selects_standard_bounded_core_content_profile(
@@ -720,12 +940,15 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     orchestration = SimpleNamespace(
         deep_recon_markdown="## Deep Collection Review\n\nDeep report block.\n",
         deep_recon_runbook_markdown="## Deep Recon Review Guide\n\nDeep runbook block.\n",
+        stage_order=(),
+        stage_counts=(),
     )
     identities: dict[str, object] = {}
     captured_report: list[str | None] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
     checkpoint_seen: list[dict[str, str]] = []
+    final_status_seen: list[str] = []
 
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_project_state",
@@ -798,9 +1021,10 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         fake_orchestrate,
     )
 
-    def fake_write_orchestration(result, output_path, *, force=False):
+    def fake_write_orchestration(result, output_path, *, force=False, deep_mode_enabled=False):
         calls.append("deep-orchestration-write")
         assert result is orchestration
+        assert deep_mode_enabled is True
         paths = (
             output_path / "deep_recon_review.md",
             output_path / "deep_recon_runbook.md",
@@ -864,7 +1088,8 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
             for step in payload["steps"]
         }
         assert payload["profile"] == DEEP_PIPELINE_PROFILE
-        assert payload["final_status"] == "running"
+        assert payload["final_status"] in {"running", "completed"}
+        final_status_seen.append(payload["final_status"])
         assert payload["target"] == "10.10.10.10"
         assert Path(payload["output_dir"]).resolve() == output_dir
         assert statuses["PIPELINE-STEP-010D"] == "completed"
@@ -974,21 +1199,30 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert identities["orchestration_source"] is source_collection
     assert identities["orchestration_shallow"] is shallow_followups
     assert identities["source_fetcher"] is identities["shallow_fetcher"]
-    assert captured_report == [orchestration.deep_recon_markdown]
-    assert captured_runbook == [orchestration.deep_recon_runbook_markdown]
+    assert len(captured_report) == 1
+    assert captured_report[0] is not None
+    assert captured_report[0].startswith("## Deep Recon Review\n")
+    assert "deep_recon_review.md" in captured_report[0]
+    assert "deep_recon_runbook.md" in captured_report[0]
+    assert "deep_recon_orchestration.json" in captured_report[0]
+    assert orchestration.deep_recon_markdown not in captured_report
+    assert captured_runbook == [
+        orchestration.deep_recon_runbook_markdown,
+        orchestration.deep_recon_runbook_markdown,
+    ]
     assert checkpoint_seen
+    assert final_status_seen[-1] == "completed"
     assert identities["runbook_standard"] == (
         "## Standard Investigation Workflow\n\nStandard guidance.\n"
     )
-    assert captured_evidence_paths == [
-        (
-            output_dir / "deep_source_route_collection.md",
-            output_dir / "deep_source_route_collection.json",
-            output_dir / "deep_recon_review.md",
-            output_dir / "deep_recon_runbook.md",
-            output_dir / "deep_recon_orchestration.json",
-        )
-    ]
+    expected_deep_paths = (
+        output_dir / "deep_source_route_collection.md",
+        output_dir / "deep_source_route_collection.json",
+        output_dir / "deep_recon_review.md",
+        output_dir / "deep_recon_runbook.md",
+        output_dir / "deep_recon_orchestration.json",
+    )
+    assert captured_evidence_paths == [expected_deep_paths, expected_deep_paths]
     assert calls.index("body-fetch") < calls.index("deep-source-collect")
     assert calls.index("deep-shallow-collect") < calls.index("deep-orchestrate")
     assert calls.index("deep-orchestration-write") < calls.index("deep-report-write")
@@ -1004,6 +1238,410 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         )
         packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
     assert packed_status["artifact_overview"]["deep_pipeline_phases_detected"] == 2
+
+
+def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: SimpleNamespace(project_name="pipeline-test"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_collection_request_plan_from_project_state",
+        lambda state: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
+        lambda plan, *, fetcher: SimpleNamespace(),
+    )
+
+    def write_source(result, output_path):
+        paths = (
+            output_path / "deep_source_route_collection.md",
+            output_path / "deep_source_route_collection.json",
+        )
+        for path in paths:
+            path.write_text(path.name + "\n", encoding="utf-8")
+        return paths
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        write_source,
+    )
+    monkeypatch.setattr("bugslyce.project_pipeline.build_deep_html_route_extraction", lambda result: SimpleNamespace())
+    monkeypatch.setattr("bugslyce.project_pipeline.build_deep_javascript_route_extraction", lambda result: SimpleNamespace())
+    monkeypatch.setattr("bugslyce.project_pipeline.build_deep_shallow_route_followup_plan", lambda html, js: SimpleNamespace())
+    monkeypatch.setattr("bugslyce.project_pipeline.collect_deep_shallow_route_followups", lambda plan, *, fetcher: SimpleNamespace())
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_recon_orchestration",
+        lambda source, shallow: SimpleNamespace(
+            deep_recon_markdown="## Deep detail\n",
+            deep_recon_runbook_markdown="## Deep guide\n",
+            stage_order=(),
+            stage_counts=(),
+        ),
+    )
+
+    def write_orchestration(result, output_path, **kwargs):
+        paths = (
+            output_path / "deep_recon_review.md",
+            output_path / "deep_recon_runbook.md",
+            output_path / "deep_recon_orchestration.json",
+        )
+        for path in paths:
+            path.write_text(path.name + "\n", encoding="utf-8")
+        return paths
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_recon_orchestration_artifacts",
+        write_orchestration,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+        lambda state: SimpleNamespace(
+            manual_review_leads_markdown="## Manual Review Leads\n",
+            review_leads=(),
+            sources=(),
+        ),
+    )
+    monkeypatch.setattr("bugslyce.project_pipeline.generate_candidates", lambda state: [])
+    monkeypatch.setattr("bugslyce.project_pipeline.build_investigation_threads", lambda *args, **kwargs: ())
+    monkeypatch.setattr("bugslyce.project_pipeline.render_investigation_threads_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr("bugslyce.project_pipeline.build_route_source_review", lambda *args, **kwargs: ())
+    monkeypatch.setattr("bugslyce.project_pipeline.render_route_source_review_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr("bugslyce.project_pipeline.build_human_triage_brief", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr("bugslyce.project_pipeline.render_human_triage_brief_markdown", lambda brief: "")
+    monkeypatch.setattr("bugslyce.project_pipeline.render_readable_evidence_cards_markdown", lambda brief: "")
+    monkeypatch.setattr("bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        lambda state, candidates, output_path, **kwargs: (
+            output_path / "report.md",
+            output_path / "project_state.json",
+        ),
+    )
+
+    def status_from_pipeline(input_dir, scope_file=None, clock=None):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            latest_execution={
+                "pipeline_profile": payload["profile"],
+                "pipeline_final_status": payload["final_status"],
+            },
+            artifact_overview={},
+        )
+
+    def write_status(result, output_path):
+        (output_path / "recon_status.json").write_text(
+            json.dumps({"latest_execution": result.latest_execution}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (output_path / "recon_status.md").write_text(
+            f"- Pipeline Final Status: {result.latest_execution['pipeline_final_status']}\n",
+            encoding="utf-8",
+        )
+        return output_path / "recon_status.json", output_path / "recon_status.md"
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", status_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_recon_status", write_status)
+
+    def build_runbook_from_pipeline(project_file_arg, **kwargs):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            runbook_path=str(output_dir / "runbook.md"),
+            content=f"Pipeline status: {payload['final_status']}\n",
+        )
+
+    def write_runbook(result):
+        path = output_dir / "runbook.md"
+        path.write_text(result.content, encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_project_runbook", build_runbook_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_project_runbook", write_runbook)
+    export_calls = 0
+
+    def export_then_fail(input_dir, output_path, **kwargs):
+        nonlocal export_calls
+        export_calls += 1
+        if export_calls == 2:
+            error = OSError("final export refresh failed")
+            error.add_note("temporary export archive cleanup failed: permission denied")
+            raise error
+        Path(output_path).write_bytes(b"zip\n")
+        return SimpleNamespace(output_path=str(output_path))
+
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_then_fail)
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert export_calls == 2
+    assert exc_info.value.result.final_status == "failed"
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert exc_info.value.result.export_path is None
+    assert "Cleanup warning: temporary export archive cleanup failed" in str(
+        exc_info.value
+    )
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert payload["final_status"] == "failed"
+    assert payload["export_path"] is None
+    markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
+    assert f"- Evidence pack: `{output_dir}-evidence-pack.zip`" not in markdown
+    assert "final export refresh failed" in markdown
+    assert "Cleanup warning: temporary export archive cleanup failed" in markdown
+    status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
+    assert (output_dir / "runbook.md").read_text(encoding="utf-8") == "Pipeline status: failed\n"
+    assert not Path(f"{output_dir}-evidence-pack.zip").exists()
+
+
+def test_finalisation_owned_pack_cleanup_failure_does_not_mask_original_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    export_calls = 0
+
+    def export_then_fail(input_dir, output_path, **kwargs):
+        nonlocal export_calls
+        export_calls += 1
+        if export_calls == 2:
+            raise OSError("final export refresh failed")
+        Path(output_path).write_bytes(b"owned stale pack\n")
+        return SimpleNamespace(output_path=str(output_path))
+
+    original_unlink = Path.unlink
+
+    def fail_owned_unlink(path, *args, **kwargs):
+        if path == export_path:
+            raise PermissionError("cannot remove owned pack")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_then_fail)
+    monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert str(exc_info.value) == "final export refresh failed"
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert exc_info.value.result.export_path is None
+    assert export_path.read_bytes() == b"owned stale pack\n"
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert payload["failed_step"] == "PIPELINE-FINALISE"
+    assert payload["export_path"] is None
+    assert "owned evidence pack cleanup failed: cannot remove owned pack" in payload["steps"][-1]["message"]
+    assert str(export_path) in payload["steps"][-1]["message"]
+
+
+def test_finalisation_cleanup_refuses_symlink_export_without_unlinking_target(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    symlink_target = tmp_path / "target-pack.zip"
+    symlink_target.write_bytes(b"previous external pack")
+    export_calls = 0
+
+    def export_symlink_then_fail(input_dir, output_path, **kwargs):
+        nonlocal export_calls
+        export_calls += 1
+        if export_calls == 2:
+            raise OSError("final export refresh failed")
+        Path(output_path).symlink_to(symlink_target)
+        return SimpleNamespace(output_path=str(output_path))
+
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_symlink_then_fail)
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert export_path.is_symlink()
+    assert symlink_target.read_bytes() == b"previous external pack"
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert "owned evidence pack cleanup refused symlink path" in payload["steps"][-1]["message"]
+
+
+def test_ordinary_export_failure_refreshes_existing_status_and_runbook(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def status_from_pipeline(input_dir, scope_file=None, clock=None):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            latest_execution={
+                "pipeline_profile": payload["profile"],
+                "pipeline_final_status": payload["final_status"],
+            },
+            artifact_overview={},
+        )
+
+    def write_status(result, output_path):
+        (output_path / "recon_status.json").write_text(
+            json.dumps({"latest_execution": result.latest_execution}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (output_path / "recon_status.md").write_text(
+            f"- Pipeline Final Status: {result.latest_execution['pipeline_final_status']}\n",
+            encoding="utf-8",
+        )
+        return output_path / "recon_status.json", output_path / "recon_status.md"
+
+    def build_runbook_from_pipeline(project_file_arg, **kwargs):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            runbook_path=str(output_dir / "runbook.md"),
+            content=f"Status summary: {payload['final_status']}\n",
+        )
+
+    def write_runbook(result):
+        path = output_dir / "runbook.md"
+        path.write_text(result.content, encoding="utf-8")
+        return path
+
+    def fail_export(input_dir, output_path, **kwargs):
+        raise OSError("ordinary export failed")
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", status_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_recon_status", write_status)
+    monkeypatch.setattr("bugslyce.project_pipeline.build_project_runbook", build_runbook_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_project_runbook", write_runbook)
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fail_export)
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert "ordinary export failed" in str(exc_info.value)
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
+    assert exc_info.value.result.failed_step != "PIPELINE-FINALISE"
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert payload["final_status"] == "failed"
+    status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
+    assert (output_dir / "runbook.md").read_text(encoding="utf-8") == "Status summary: failed\n"
+    assert not Path(f"{output_dir}-evidence-pack.zip").exists()
+
+
+def test_status_generation_failure_is_not_retried_during_failure_reconciliation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    (output_dir / "recon_status.json").write_text(
+        json.dumps({"latest_execution": {"pipeline_final_status": "completed"}}) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "recon_status.md").write_text(
+        "- Pipeline Final Status: completed\n",
+        encoding="utf-8",
+    )
+    status_calls = 0
+
+    def fail_status(*args, **kwargs):
+        nonlocal status_calls
+        status_calls += 1
+        raise ValueError("status generation failed")
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", fail_status)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_recon_status",
+        lambda *args, **kwargs: pytest.fail("status writer must not be called"),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert status_calls == 1
+    assert "status generation failed" in str(exc_info.value)
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-010"
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert payload["final_status"] == "failed"
+    failed_step = next(step for step in payload["steps"] if step["step_id"] == "PIPELINE-STEP-010")
+    assert failed_step["message"] == "status generation failed"
+    assert not (output_dir / "recon_status.json").exists()
+    assert not (output_dir / "recon_status.md").exists()
+    assert (output_dir / "recon_status.previous.json").is_file()
+    assert (output_dir / "recon_status.previous.md").is_file()
+    assert "completed" in (output_dir / "recon_status.previous.md").read_text(encoding="utf-8")
+
+
+def test_failure_reconciliation_warning_does_not_mask_original_export_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def status_from_pipeline(input_dir, scope_file=None, clock=None):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        return SimpleNamespace(
+            latest_execution={"pipeline_final_status": payload["final_status"]},
+            artifact_overview={},
+        )
+
+    def write_status(result, output_path):
+        (output_path / "recon_status.json").write_text(
+            json.dumps({"latest_execution": result.latest_execution}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (output_path / "recon_status.md").write_text(
+            f"- Pipeline Final Status: {result.latest_execution['pipeline_final_status']}\n",
+            encoding="utf-8",
+        )
+        return output_path / "recon_status.json", output_path / "recon_status.md"
+
+    def runbook_maybe_fail(project_file_arg, **kwargs):
+        payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+        if payload["final_status"] == "failed":
+            raise ValueError("runbook cleanup failed")
+        return SimpleNamespace(runbook_path=str(output_dir / "runbook.md"), content="running\n")
+
+    def write_runbook(result):
+        path = output_dir / "runbook.md"
+        path.write_text(result.content, encoding="utf-8")
+        return path
+
+    def fail_export(input_dir, output_path, **kwargs):
+        raise OSError("ordinary export failed")
+
+    monkeypatch.setattr("bugslyce.project_pipeline.build_recon_status", status_from_pipeline)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_recon_status", write_status)
+    monkeypatch.setattr("bugslyce.project_pipeline.build_project_runbook", runbook_maybe_fail)
+    monkeypatch.setattr("bugslyce.project_pipeline.write_project_runbook", write_runbook)
+    monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fail_export)
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    assert str(exc_info.value) == "ordinary export failed"
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
+    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    failed_step = next(step for step in payload["steps"] if step["step_id"] == "PIPELINE-STEP-012")
+    assert "ordinary export failed" in failed_step["message"]
+    assert "Reconciliation warning: runbook refresh failed: runbook cleanup failed." in failed_step["message"]
+    status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
+    assert not Path(f"{output_dir}-evidence-pack.zip").exists()
 
 
 def test_deep_pipeline_selects_standard_bounded_core_content_profile(
@@ -1819,7 +2457,16 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
         progress_callback=progress.append,
     )
 
-    assert calls == ["status", "status-write", "runbook", "runbook-write"]
+    assert calls == [
+        "status",
+        "status-write",
+        "runbook",
+        "runbook-write",
+        "status",
+        "status-write",
+        "runbook",
+        "runbook-write",
+    ]
     assert result.steps[11].status == "skipped_existing"
     assert result.steps[11].message == (
         "Existing completed evidence pack detected; export skipped during resume."

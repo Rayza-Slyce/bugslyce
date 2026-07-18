@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+import re
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Asset, Candidate, Endpoint, ProjectState
@@ -39,29 +40,29 @@ from bugslyce.triage.scoring import (
     priority_for_service,
 )
 
-COMMENT_SIGNAL_TERMS = {
-    "api key",
-    "credential",
-    "key",
-    "login",
-    "pass",
-    "password",
-    "secret",
-    "token",
-    "user",
-    "username",
-}
 KEYWORD_SIGNAL_TERMS = {
-    "admin",
-    "api",
-    "key",
-    "login",
     "password",
     "secret",
-    "token",
 }
+ASSIGNMENT_LIKE_COMMENT = re.compile(
+    r"(?i)\b(?P<label>"
+    r"api[_ -]?key|database[_ -]?(?:user|password)|db[_ -]?(?:user|password)|"
+    r"password|passwd|pwd|secret|token|username|user"
+    r")\b"
+    r"\s*[:=]\s*['\"]?(?P<value>[A-Za-z0-9._~+/=-]{3,})"
+)
 GENERIC_LOGIN_FORM_KEYWORDS = {"login", "password"}
 LOGIN_FORM_ARTIFACT_TYPES = {"form", "input"}
+DOCUMENTATION_VALUE_WORDS = {
+    "documentation",
+    "field",
+    "generation",
+    "management",
+    "reset",
+    "style",
+    "styling",
+    "workflow",
+}
 
 
 def generate_candidates(project_state: ProjectState) -> list[Candidate]:
@@ -424,8 +425,8 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
         if not host:
             continue
         asset = assets_by_host.get(host)
-        has_sensitive_comment = any(_is_sensitive_comment(artifact) for artifact in artifacts)
-        priority = "high" if has_sensitive_comment else "medium"
+        has_secret_comment = any(_is_secret_comment(artifact) for artifact in artifacts)
+        priority = "high" if has_secret_comment else "medium"
         if asset and asset.in_scope is False:
             priority = "kill_switch"
         path = urlparse(url).path or "/"
@@ -658,11 +659,17 @@ def _credential_like_artifact_groups(project_state: ProjectState) -> dict[str, l
             continue
         artifacts_by_url.setdefault(artifact.url, []).append(artifact)
 
+    supporting_keywords_by_url: dict[str, list] = {}
     for artifact in project_state.http_artifacts:
         if not artifact.url or not artifact.evidence_ids:
             continue
-        if _is_sensitive_comment(artifact) or _is_sensitive_keyword_hit(artifact):
+        if _is_sensitive_comment(artifact):
             groups.setdefault(artifact.url, []).append(artifact)
+        elif _is_sensitive_keyword_hit(artifact):
+            supporting_keywords_by_url.setdefault(artifact.url, []).append(artifact)
+    for url, supporting_keywords in supporting_keywords_by_url.items():
+        if url in groups:
+            groups[url].extend(supporting_keywords)
     return {
         url: artifacts
         for url, artifacts in groups.items()
@@ -688,8 +695,100 @@ def _is_generic_login_form_keyword_group(
 def _is_sensitive_comment(artifact) -> bool:
     if artifact.artifact_type != "html_comment":
         return False
-    value = artifact.value.lower()
-    return any(term in value for term in COMMENT_SIGNAL_TERMS)
+    return any(
+        _is_sensitive_assignment(label, value)
+        for label, value in _comment_assignments(artifact.value)
+    )
+
+
+def _is_secret_comment(artifact) -> bool:
+    if artifact.artifact_type != "html_comment":
+        return False
+    return any(
+        _is_secret_assignment(label, value)
+        for label, value in _comment_assignments(artifact.value)
+    )
+
+
+def _comment_assignments(value: str) -> list[tuple[str, str]]:
+    return [
+        (_normalise_assignment_label(match.group("label")), match.group("value").strip("'\""))
+        for match in ASSIGNMENT_LIKE_COMMENT.finditer(value)
+    ]
+
+
+def _is_sensitive_assignment(label: str, value: str) -> bool:
+    if _is_secret_assignment(label, value):
+        return True
+    return _is_username_label(label) and _is_plausible_username(value)
+
+
+def _normalise_assignment_label(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+def _is_username_label(label: str) -> bool:
+    return label in {"user", "username", "db_user", "database_user"}
+
+
+def _is_secret_label(label: str) -> bool:
+    return label in {
+        "api_key",
+        "db_password",
+        "database_password",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+    }
+
+
+def _is_secret_assignment(label: str, value: str) -> bool:
+    if not _is_secret_label(label):
+        return False
+    if label == "api_key":
+        return _looks_like_api_key(value) or _looks_like_config_secret(value)
+    if label == "token":
+        return _looks_like_token(value)
+    return _looks_like_config_secret(value)
+
+
+def _is_plausible_username(value: str) -> bool:
+    if len(value) < 4 or len(value) > 64:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        return False
+    return value.lower() not in DOCUMENTATION_VALUE_WORDS
+
+
+def _looks_like_config_secret(value: str) -> bool:
+    if len(value) < 10 or _looks_like_documentation_word(value):
+        return False
+    classes = sum(
+        bool(pattern.search(value))
+        for pattern in (
+            re.compile(r"[a-z]"),
+            re.compile(r"[A-Z]"),
+            re.compile(r"\d"),
+            re.compile(r"[-_./+=~]"),
+        )
+    )
+    return classes >= 2
+
+
+def _looks_like_api_key(value: str) -> bool:
+    return bool(re.match(r"(?i)^[a-z]{2,}_[A-Za-z0-9][A-Za-z0-9._-]{10,}$", value))
+
+
+def _looks_like_token(value: str) -> bool:
+    if value.count(".") >= 2 and len(value) >= 20:
+        return True
+    return _looks_like_config_secret(value)
+
+
+def _looks_like_documentation_word(value: str) -> bool:
+    return value.lower() in DOCUMENTATION_VALUE_WORDS
 
 
 def _is_sensitive_keyword_hit(artifact) -> bool:

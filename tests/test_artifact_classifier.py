@@ -45,7 +45,7 @@ def test_classifier_marks_static_and_low_diversity_values_as_noise() -> None:
     assert classify_encoded_artifact(_artifact("aaaaaaaaaaaaaaaaaaaaaaaa")).category == LIKELY_NOISE
 
 
-def test_body_fetched_discovered_path_strengthens_path_like_context() -> None:
+def test_path_like_fragments_are_noise_even_from_body_fetched_context() -> None:
     ordinary = _artifact("com/photo/2016/12/24/11/48/lost")
     body_fetched = HTTPArtifact(
         url="http://10.10.10.10/portal/",
@@ -59,9 +59,9 @@ def test_body_fetched_discovered_path_strengthens_path_like_context() -> None:
     ordinary_result = classify_encoded_artifact(ordinary)
     body_result = classify_encoded_artifact(body_fetched)
 
-    assert ordinary_result.category == POSSIBLE_SIGNAL
-    assert body_result.category == LIKELY_SIGNAL
-    assert "body-fetched discovered path" in body_result.reason
+    assert ordinary_result.category == LIKELY_NOISE
+    assert body_result.category == LIKELY_NOISE
+    assert "path fragment" in body_result.reason
 
 
 def test_unusual_robots_user_agent_is_possible_signal() -> None:

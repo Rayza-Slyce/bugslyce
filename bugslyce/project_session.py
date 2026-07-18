@@ -426,17 +426,32 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         for name in artifact_names
     )
     has_gobuster = any(name.startswith("gobuster-") for name in artifact_names)
+    deep_total = status.artifact_overview.get("deep_pipeline_phases_total", 0)
+    deep_detected = status.artifact_overview.get("deep_pipeline_phases_detected", 0)
+    pipeline_total = status.artifact_overview.get("pipeline_steps_total", 0)
+    pipeline_satisfied = status.artifact_overview.get(
+        "pipeline_steps_satisfied",
+        status.artifact_overview.get("pipeline_steps_completed_or_noop", 0),
+    )
+    if pipeline_total:
+        detected_total = int(pipeline_satisfied)
+        phase_total = int(pipeline_total)
+    else:
+        detected_total = sum(value == "detected" for value in phase_status.values())
+        phase_total = len(phase_status)
+    if deep_total and not pipeline_total:
+        detected_total += int(deep_detected)
+        phase_total += int(deep_total)
+    summary_label = "Pipeline steps satisfied" if pipeline_total else "Detected phases"
     status_summary = (
-        f"Detected phases: {sum(value == 'detected' for value in phase_status.values())}/"
-        f"{len(phase_status)}; HTTP services: "
+        f"{summary_label}: {detected_total}/{phase_total}; HTTP services: "
         f"{status.artifact_overview.get('http_services', 0)}; unique discovered paths: "
         f"{status.artifact_overview.get('unique_discovered_paths', 0)}."
     )
-    deep_total = status.artifact_overview.get("deep_pipeline_phases_total", 0)
     if deep_total:
         status_summary += (
             " Deep pipeline phases: "
-            f"{status.artifact_overview.get('deep_pipeline_phases_detected', 0)}/{deep_total}."
+            f"{deep_detected}/{deep_total}."
         )
 
     if has_discovery and not detected("nmap_services"):
@@ -444,7 +459,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
             "nmap-services",
             "Run service/version detection on already discovered open TCP ports.",
             [
-                ".venv/bin/bugslyce",
+                "bugslyce",
                 "recon",
                 "nmap-services",
                 "--input-dir",
@@ -494,7 +509,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                 "content-run-tiny",
                 "Run the reviewed lab-root-tiny content discovery plan.",
                 [
-                    ".venv/bin/bugslyce",
+                    "bugslyce",
                     "recon",
                     "content-run",
                     "--plan",
@@ -529,7 +544,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                     ),
                     command_preview=_format_command(
                         [
-                            ".venv/bin/bugslyce",
+                            "bugslyce",
                             "recon",
                             "content-run",
                             "--plan",
@@ -553,7 +568,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                 title="Optionally create a portable evidence pack after review.",
                 command_preview=_format_command(
                     [
-                        ".venv/bin/bugslyce",
+                        "bugslyce",
                         "recon",
                         "export",
                         "--input-dir",
@@ -881,7 +896,7 @@ def _nmap_discovery_action(project: BugSlyceProject) -> GuidedProjectAction:
         "nmap-discover",
         "Start with scoped full TCP discovery.",
         [
-            ".venv/bin/bugslyce",
+            "bugslyce",
             "recon",
             "nmap-discover",
             "--target",
@@ -916,7 +931,7 @@ def _content_plan_action(
         title=title,
         command_preview=_format_command(
             [
-                ".venv/bin/bugslyce",
+                "bugslyce",
                 "recon",
                 "content-plan",
                 "--input-dir",
@@ -945,7 +960,7 @@ def _live_action(action_id: str, title: str, argv: list[str]) -> GuidedProjectAc
 
 def _input_scope_confirm_argv(command: str, project: BugSlyceProject) -> list[str]:
     return [
-        ".venv/bin/bugslyce",
+        "bugslyce",
         "recon",
         command,
         "--input-dir",

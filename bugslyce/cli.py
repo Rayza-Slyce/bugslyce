@@ -43,6 +43,8 @@ from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
     SUPPORTED_PIPELINE_PROFILES,
+    format_exception_diagnostic,
+    render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
 )
@@ -1271,11 +1273,9 @@ def _project(args: argparse.Namespace) -> int:
             )
         except ProjectPipelineFailed as exc:
             result = exc.result
-            failed = next(step for step in result.steps if step.status == "failed")
             print(f"Error: {exc}", file=sys.stderr)
-            print(f"Pipeline stopped at step {failed.step_id}.", file=sys.stderr)
-            print("No later steps were executed.", file=sys.stderr)
-            print("Review the error and local evidence.", file=sys.stderr)
+            for message in render_project_pipeline_failure_guidance(result):
+                print(message, file=sys.stderr)
             return 2
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -2068,8 +2068,8 @@ def _recon(args: argparse.Namespace) -> int:
                 output_path=args.output_path,
                 force=args.force,
             )
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
+        except (ValueError, OSError) as exc:
+            print(f"Error: {format_exception_diagnostic(exc)}", file=sys.stderr)
             print("No live commands were executed.", file=sys.stderr)
             print("No network requests were made.", file=sys.stderr)
             return 2

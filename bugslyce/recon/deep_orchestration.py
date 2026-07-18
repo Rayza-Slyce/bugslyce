@@ -203,6 +203,7 @@ def write_deep_recon_orchestration_artifacts(
     output_dir: Path,
     *,
     force: bool = False,
+    deep_mode_enabled: bool = False,
 ) -> tuple[Path, ...]:
     """Write fixed local Deep orchestration artefacts for explicit export."""
 
@@ -229,7 +230,7 @@ def write_deep_recon_orchestration_artifacts(
         if resolved.exists() and not resolved.is_file():
             raise ValueError(f"Deep orchestration artefact path is not a file: {resolved}")
 
-    payload = _orchestration_json_payload(result)
+    payload = _orchestration_json_payload(result, deep_mode_enabled=deep_mode_enabled)
     paths[0].write_text(result.deep_recon_markdown, encoding="utf-8")
     paths[1].write_text(result.deep_recon_runbook_markdown, encoding="utf-8")
     paths[2].write_text(
@@ -329,7 +330,11 @@ def _safety_notes(*note_groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(deduped)
 
 
-def _orchestration_json_payload(result: DeepReconOrchestrationResult) -> dict[str, object]:
+def _orchestration_json_payload(
+    result: DeepReconOrchestrationResult,
+    *,
+    deep_mode_enabled: bool = False,
+) -> dict[str, object]:
     return {
         "schema_version": ORCHESTRATION_SCHEMA_VERSION,
         "stage_order": list(result.stage_order),
@@ -341,5 +346,5 @@ def _orchestration_json_payload(result: DeepReconOrchestrationResult) -> dict[st
         "report_markdown_file": DEEP_RECON_REVIEW_MARKDOWN,
         "runbook_markdown_file": DEEP_RECON_RUNBOOK_MARKDOWN,
         "no_network_requests_made": True,
-        "deep_mode_enabled": False,
+        "deep_mode_enabled": deep_mode_enabled,
     }

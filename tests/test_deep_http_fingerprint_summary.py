@@ -215,7 +215,7 @@ def test_status_buckets_and_counts_cover_all_status_classes() -> None:
 
     assert tuple(fp.status_bucket for fp in summary.fingerprints) == (
         "4xx_client_error",
-        "102" and "other_status",
+        "other_status",
         "2xx_success",
         "3xx_redirect",
         "5xx_server_error",

@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 import re
 from urllib.parse import urlparse
 
-from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
+from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, HTTPArtifact, ProjectState
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
@@ -46,7 +46,6 @@ ADMIN_PATH_TERMS = {
     "old",
     "secret",
     "server-info",
-    "server-status",
     "staging",
     "status",
     "test",
@@ -99,6 +98,109 @@ CLUE_LIKE_TERMS = {
     "remember",
     "token",
     "username",
+}
+COMMENT_ACTION_TERMS = {
+    "add",
+    "change",
+    "check",
+    "clean",
+    "configure",
+    "confirm",
+    "create",
+    "disable",
+    "enable",
+    "fix",
+    "move",
+    "remove",
+    "replace",
+    "restore",
+    "review",
+    "rotate",
+    "switch",
+    "update",
+    "verify",
+}
+COMMENT_OBJECT_TERMS = {
+    "account",
+    "application",
+    "backup",
+    "cache",
+    "certificate",
+    "config",
+    "configuration",
+    "credential",
+    "database",
+    "deployment",
+    "endpoint",
+    "environment",
+    "host",
+    "login",
+    "page",
+    "path",
+    "release",
+    "route",
+    "secret",
+    "server",
+    "service",
+    "source",
+    "staging",
+    "token",
+}
+COMMENT_STATE_TERMS = {
+    "broken",
+    "deprecated",
+    "legacy",
+    "missing",
+    "old",
+    "pending",
+    "stale",
+    "temporary",
+    "unused",
+    "wrong",
+}
+COMMENT_TASK_MARKERS = {
+    "do",
+    "don't",
+    "please",
+    "todo",
+    "fixme",
+}
+COMMENT_RESOURCE_LABEL_TERMS = {
+    "asset",
+    "component",
+    "documentation",
+    "font",
+    "heading",
+    "icon",
+    "image",
+    "include",
+    "integration",
+    "library",
+    "license",
+    "licence",
+    "load",
+    "metadata",
+    "module",
+    "plugin",
+    "script",
+    "section",
+    "social",
+    "style",
+    "subscribe",
+}
+COMMENT_STATIC_EXTENSIONS = {
+    ".css",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".map",
+    ".png",
+    ".svg",
+    ".ttf",
+    ".woff",
+    ".woff2",
 }
 SENSITIVE_PREVIEW_TERMS = re.compile(
     r"\b(flag|exploit|vulnerable|vulnerability)\b",
@@ -175,18 +277,20 @@ def build_human_triage_brief(
         for group in source_groups
         for evidence_id in group.evidence_ids
     }
+    direct_comment_evidence_ids = _useful_source_comment_evidence_ids(project_state)
     grouped_urls = {group.url for group in source_groups if group.url}
 
     _add_candidate_items(
         start,
         ignore,
         candidates,
-        grouped_evidence_ids=grouped_evidence_ids,
+        grouped_evidence_ids=grouped_evidence_ids | direct_comment_evidence_ids,
         grouped_urls=grouped_urls,
     )
     _add_http_service_items(start, project_state)
     _add_port_service_items(start, project_state)
-    _add_endpoint_items(start, ignore, project_state)
+    access_boundary_paths = _access_boundary_paths_by_url(project_state)
+    _add_endpoint_items(start, ignore, project_state, access_boundary_paths)
     _add_discovered_path_items(start, ignore, project_state)
     _add_artifact_items(
         start,
@@ -415,8 +519,14 @@ def _add_endpoint_items(
     start: list[HumanTriageItem],
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
+    access_boundary_paths: dict[str, DiscoveredPath],
 ) -> None:
     for endpoint in project_state.endpoints:
+        access_boundary = access_boundary_paths.get(_canonical_triage_url(endpoint.url))
+        if access_boundary is not None:
+            if _has_independent_endpoint_evidence(endpoint, access_boundary):
+                start.append(_independent_access_boundary_item(endpoint, access_boundary))
+            continue
         terms = _path_terms(endpoint.path)
         if _is_static_path(endpoint.path):
             ignore.append(
@@ -437,7 +547,7 @@ def _add_endpoint_items(
         if terms & AUTH_PATH_TERMS:
             start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Auth/account route observed", "auth_route"))
         elif terms & ADMIN_PATH_TERMS:
-            start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Admin/hidden route observed", "admin_route"))
+            start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Admin-labelled route observed", "admin_route"))
 
 
 def _add_discovered_path_items(
@@ -481,25 +591,76 @@ def _add_discovered_path_items(
                 )
             )
             continue
-        if terms & AUTH_PATH_TERMS:
+        if path.status_code in {401, 403} and path.evidence_ids:
+            continue
+        elif terms & AUTH_PATH_TERMS:
             start.append(_path_item(path.url, path.evidence_ids, "Auth/account path discovered", "auth_route"))
         elif terms & ADMIN_PATH_TERMS:
             start.append(_path_item(path.url, path.evidence_ids, "Admin/hidden path discovered", "admin_route"))
-        elif path.status_code in {401, 403} and path.evidence_ids:
-            start.append(
-                HumanTriageItem(
-                    title="Access-control response context",
-                    priority="medium",
-                    category="access_control_context",
-                    source="discovered_path",
-                    value=path.url,
-                    why_it_matters="A 401/403 response can help map scoped access-control boundaries without proving exposure.",
-                    suggested_manual_action="Correlate with scope and nearby evidence; avoid repeated attempts unless explicitly authorised.",
-                    evidence_ids=tuple(path.evidence_ids),
-                    url=path.url,
-                    signal=f"HTTP {path.status_code}",
-                )
-            )
+
+
+def _access_boundary_paths_by_url(project_state: ProjectState) -> dict[str, DiscoveredPath]:
+    result: dict[str, DiscoveredPath] = {}
+    for path in project_state.discovered_paths:
+        if path.status_code not in {401, 403}:
+            continue
+        canonical = _canonical_triage_url(path.url)
+        if canonical and canonical not in result:
+            result[canonical] = path
+    return result
+
+
+def _has_independent_endpoint_evidence(
+    endpoint: Endpoint,
+    access_boundary: DiscoveredPath,
+) -> bool:
+    endpoint_ids = {value for value in endpoint.evidence_ids if value}
+    boundary_ids = {value for value in access_boundary.evidence_ids if value}
+    return bool(endpoint_ids - boundary_ids)
+
+
+def _independent_access_boundary_item(
+    endpoint: Endpoint,
+    access_boundary: DiscoveredPath,
+) -> HumanTriageItem:
+    evidence_ids = tuple(_dedupe([*endpoint.evidence_ids, *access_boundary.evidence_ids]))
+    return HumanTriageItem(
+        title="Independently referenced access-boundary route",
+        priority="medium",
+        category="access_boundary_context",
+        source="endpoint+discovered_path",
+        value=endpoint.url,
+        why_it_matters=(
+            f"Saved source or route evidence references {endpoint.url}, and a bounded request "
+            f"returned HTTP {access_boundary.status_code}. This is access-control context, "
+            "not a confirmed weakness."
+        ),
+        suggested_manual_action=(
+            "Correlate the saved source reference with the recorded HTTP response and scope. "
+            "Do not attempt login, bypass, brute force, or form submission from this prompt."
+        ),
+        evidence_ids=evidence_ids,
+        url=endpoint.url,
+        signal=f"independent route reference + HTTP {access_boundary.status_code}",
+    )
+
+
+def _canonical_triage_url(value: str | None) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not scheme or not host:
+        return value.rstrip("/")
+    try:
+        port = parsed.port
+    except ValueError:
+        return value.rstrip("/")
+    default_port = 80 if scheme == "http" else 443 if scheme == "https" else None
+    netloc = host if port in {None, default_port} else f"{host}:{port}"
+    path = parsed.path or "/"
+    return f"{scheme}://{netloc}{path.rstrip('/') or '/'}"
 
 
 def _add_artifact_items(
@@ -529,18 +690,20 @@ def _add_artifact_items(
             start.append(item)
             values.append(item)
             continue
-        if artifact_type in {"html_comment", "keyword_hit"}:
-            value_lower = artifact.value.lower()
-            priority = "high" if any(term in value_lower for term in VALUE_SIGNAL_TERMS) else "medium"
+        if artifact_type == "html_comment":
+            if not _is_useful_source_comment(artifact.value):
+                continue
             item = _artifact_item(
                 artifact,
-                "Source comment or keyword context observed",
+                "Human-authored source comment observed",
                 "source_comment",
-                priority,
-                "Source-level text can provide a review signal when correlated with routes and service context.",
+                "medium",
+                "A specific source comment can provide direct manual-review context when correlated with saved source and route evidence.",
             )
             start.append(item)
             values.append(item)
+            continue
+        if artifact_type == "keyword_hit":
             continue
         if artifact_type == "robots_value":
             item = _artifact_item(
@@ -587,6 +750,8 @@ def _build_source_context_groups(project_state: ProjectState) -> tuple[_SourceCo
             artifacts_by_url[artifact.url].append(artifact)
     for artifact in project_state.http_artifacts:
         if artifact.artifact_type not in SOURCE_CONTEXT_ARTIFACT_TYPES:
+            continue
+        if artifact.artifact_type in {"html_comment", "keyword_hit"}:
             continue
         if artifact.artifact_type in {"encoded_like_artifact", "hidden_element"}:
             classification = classify_encoded_artifact(artifact)
@@ -644,8 +809,82 @@ def _source_group_has_signal(artifacts: list[HTTPArtifact]) -> bool:
     artifact_types = {artifact.artifact_type for artifact in artifacts}
     if artifact_types & {"encoded_like_artifact", "hidden_element"}:
         return True
-    values = " ".join(artifact.value.lower() for artifact in artifacts)
+    if any(
+        artifact.artifact_type == "html_comment"
+        and _is_useful_source_comment(artifact.value)
+        for artifact in artifacts
+    ):
+        return True
+    values = " ".join(
+        artifact.value.lower()
+        for artifact in artifacts
+        if artifact.artifact_type != "keyword_hit"
+    )
     return any(term in values for term in VALUE_SIGNAL_TERMS | CLUE_LIKE_TERMS)
+
+
+def _is_useful_source_comment(value: str) -> bool:
+    compact = " ".join(value.split())
+    if not compact:
+        return False
+    lowered = compact.lower()
+    if _is_generic_comment_noise(compact):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", compact)
+    if len(words) < 5:
+        return False
+    word_set = {word.lower() for word in words}
+    has_action = bool(word_set & COMMENT_ACTION_TERMS)
+    has_object = bool(word_set & COMMENT_OBJECT_TERMS)
+    has_state = bool(word_set & COMMENT_STATE_TERMS)
+    has_task_marker = bool(word_set & COMMENT_TASK_MARKERS)
+    has_actor = _has_comment_actor_or_addressee(compact, words)
+    has_reference = bool(re.search(r"[/._-][A-Za-z0-9]", compact)) or any(
+        token.isupper() and len(token) > 1 for token in compact.split()
+    )
+    if has_action and has_object and (has_actor or has_state or has_reference):
+        return True
+    if has_actor and has_object and has_state:
+        return True
+    return has_actor and has_task_marker and len(words) >= 6
+
+
+def _is_generic_comment_noise(compact: str) -> bool:
+    lowered = compact.lower()
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", compact)
+    word_set = {word.lower() for word in words}
+    if re.search(r"(?i)\b(copyright|all rights reserved|mit license|apache license|gnu|licensed)\b", compact):
+        return True
+    if re.search(r"(?i)^\s*(?:\[?if\s+|endif\b)", compact):
+        return True
+    if any(extension in lowered for extension in COMMENT_STATIC_EXTENSIONS):
+        return True
+    if word_set & COMMENT_RESOURCE_LABEL_TERMS:
+        return True
+    if len(words) <= 4 and not (word_set & COMMENT_ACTION_TERMS and word_set & COMMENT_OBJECT_TERMS):
+        return True
+    return False
+
+
+def _has_comment_actor_or_addressee(compact: str, words: list[str]) -> bool:
+    if re.match(r"^[A-Z][A-Za-z'-]{1,30}\s*,", compact):
+        return True
+    if re.match(r"^[A-Z][A-Za-z0-9 _/-]{1,40}:", compact):
+        return True
+    if re.match(r"^[A-Z][A-Za-z'-]{1,30}\s+", compact):
+        return True
+    lowered = {word.lower() for word in words}
+    return bool(lowered & {"admin", "developer", "dev", "operator", "ops", "team"})
+
+
+def _useful_source_comment_evidence_ids(project_state: ProjectState) -> set[str]:
+    return {
+        evidence_id
+        for artifact in project_state.http_artifacts
+        if artifact.artifact_type == "html_comment"
+        and _is_useful_source_comment(artifact.value)
+        for evidence_id in artifact.evidence_ids
+    }
 
 
 def _is_generic_login_form_source_group(

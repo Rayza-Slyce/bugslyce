@@ -1349,7 +1349,7 @@ def _format_values(values: tuple[str, ...]) -> str:
         return "`none`"
     rendered = ", ".join(f"`{_compact_single(value)}`" for value in values[:MAX_RENDERED_VALUES])
     remaining = len(values) - MAX_RENDERED_VALUES
-    if remaining:
+    if remaining > 0:
         rendered += f", ... +{remaining} more"
     return rendered
 

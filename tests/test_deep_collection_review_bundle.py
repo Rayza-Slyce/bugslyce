@@ -53,6 +53,9 @@ def test_empty_summaries_produce_safe_empty_bundle() -> None:
     assert "### Safety Notes" in rendered
     assert "No unified review priorities were generated." in rendered
     assert "No network requests were made by this bundle." in rendered
+    assert "No files were written by this bundle command." in rendered
+    assert "Existing local collection artefacts were read only." in rendered
+    assert "No files were read or written by this bundle." not in rendered
     assert "This stage produces static manual-review context only." in rendered
 
 

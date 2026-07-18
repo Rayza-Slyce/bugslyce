@@ -6,6 +6,8 @@ import inspect
 
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_form_inventory import (
+    MAX_RENDERED_VALUES,
+    _format_values,
     build_deep_form_inventory,
     render_deep_form_inventory_markdown,
 )
@@ -43,6 +45,16 @@ def test_empty_inputs_produce_safe_empty_result_and_renderer_sections() -> None:
         "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
+
+
+def test_value_list_truncation_never_renders_negative_remaining_count() -> None:
+    assert _format_values(()) == "`none`"
+    assert "+-" not in _format_values(("GET",))
+    exact_limit = tuple(f"value-{index}" for index in range(MAX_RENDERED_VALUES))
+    assert "+-" not in _format_values(exact_limit)
+    above_limit = _format_values((*exact_limit, "extra"))
+    assert "... +1 more" in above_limit
+    assert "+-" not in above_limit
 
 
 def test_inputs_are_not_mutated_and_full_bodies_are_used_not_preview() -> None:

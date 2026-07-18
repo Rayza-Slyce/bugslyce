@@ -9,6 +9,7 @@ import zipfile
 
 import pytest
 
+from bugslyce.recon import export as export_module
 from bugslyce.cli import main
 from bugslyce.recon.export import export_recon_evidence_pack
 
@@ -48,6 +49,108 @@ def test_export_refuses_overwrite_without_force_and_allows_force(tmp_path: Path)
 
     assert result.output_path == str(output_path.resolve())
     assert zipfile.is_zipfile(output_path)
+
+
+def test_export_failure_preserves_existing_pack_and_removes_temporary_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+    output_path.write_bytes(b"previous pack")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("archive write failed")
+
+    monkeypatch.setattr(export_module, "_write_bytes", fail_write)
+
+    with pytest.raises(OSError, match="archive write failed"):
+        export_recon_evidence_pack(input_dir, output_path, force=True)
+
+    assert output_path.read_bytes() == b"previous pack"
+    assert list(tmp_path.glob(".pack.zip.*.tmp")) == []
+
+
+def test_export_failure_without_existing_pack_does_not_publish_final_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    def fail_write(*args, **kwargs):
+        raise OSError("archive write failed")
+
+    monkeypatch.setattr(export_module, "_write_bytes", fail_write)
+
+    with pytest.raises(OSError, match="archive write failed"):
+        export_recon_evidence_pack(input_dir, output_path)
+
+    assert not output_path.exists()
+    assert list(tmp_path.glob(".pack.zip.*.tmp")) == []
+
+
+def test_export_archive_failure_preserves_primary_error_when_temp_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+    output_path.write_bytes(b"previous pack")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("archive write failed")
+
+    original_unlink = Path.unlink
+
+    def fail_temp_unlink(path, *args, **kwargs):
+        if path.name.startswith(".pack.zip.") and path.suffix == ".tmp":
+            raise PermissionError("temporary cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(export_module, "_write_bytes", fail_write)
+    monkeypatch.setattr(Path, "unlink", fail_temp_unlink)
+
+    with pytest.raises(OSError) as exc_info:
+        export_recon_evidence_pack(input_dir, output_path, force=True)
+
+    assert str(exc_info.value) == "archive write failed"
+    assert any("temporary cleanup failed" in note for note in getattr(exc_info.value, "__notes__", ()))
+    assert output_path.read_bytes() == b"previous pack"
+    assert list(tmp_path.glob(".pack.zip.*.tmp"))
+
+
+def test_export_replace_failure_preserves_primary_error_when_temp_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+    output_path.write_bytes(b"previous pack")
+
+    original_replace = Path.replace
+    original_unlink = Path.unlink
+
+    def fail_replace(path, target):
+        if path.name.startswith(".pack.zip.") and Path(target) == output_path:
+            raise OSError("atomic replace failed")
+        return original_replace(path, target)
+
+    def fail_temp_unlink(path, *args, **kwargs):
+        if path.name.startswith(".pack.zip.") and path.suffix == ".tmp":
+            raise PermissionError("temporary cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_temp_unlink)
+
+    with pytest.raises(OSError) as exc_info:
+        export_recon_evidence_pack(input_dir, output_path, force=True)
+
+    assert str(exc_info.value) == "atomic replace failed"
+    assert any("temporary cleanup failed" in note for note in getattr(exc_info.value, "__notes__", ()))
+    assert output_path.read_bytes() == b"previous pack"
+    assert list(tmp_path.glob(".pack.zip.*.tmp"))
 
 
 def test_export_preserves_existing_positional_force_and_clock(tmp_path: Path) -> None:
@@ -623,6 +726,56 @@ def test_cli_export_succeeds_without_live_activity(tmp_path: Path, capsys) -> No
     assert "BugSlyce evidence pack export complete" in captured.out
     assert "No live commands were executed." in captured.out
     assert "No network requests were made." in captured.out
+
+
+@pytest.mark.parametrize(
+    ("message", "note"),
+    (
+        ("archive write failed", None),
+        (
+            "archive write failed",
+            "temporary export archive cleanup failed: permission denied",
+        ),
+        ("atomic replace failed", None),
+    ),
+)
+def test_cli_export_handles_expected_oserror_without_traceback(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+    message: str,
+    note: str | None,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    def fail_export(*args, **kwargs):
+        error = OSError(message)
+        if note is not None:
+            error.add_note(note)
+        raise error
+
+    monkeypatch.setattr("bugslyce.cli.export_recon_evidence_pack", fail_export)
+
+    exit_code = main(
+        [
+            "recon",
+            "export",
+            "--input-dir",
+            str(input_dir),
+            "--output",
+            str(output_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert f"Error: {message}" in captured.err
+    if note is not None:
+        assert f"Cleanup warning: {note}." in captured.err
+    assert "No live commands were executed." in captured.err
+    assert "No network requests were made." in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_export_module_has_no_command_or_network_execution_apis() -> None:
