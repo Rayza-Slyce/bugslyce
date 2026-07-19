@@ -734,8 +734,8 @@ def test_renderer_safety_wording_and_prohibited_language() -> None:
         "No form was submitted.",
         "No form action was fetched.",
         "No JavaScript was executed.",
-        "No field value was retained, replayed, or invented.",
-        "Individual control names are deliberately deferred to Phase 92B.",
+        "The Deep form-inventory stage did not retain, replay, or invent individual control values.",
+        "Individual control names are not displayed in this form inventory; review the Deep parameter inventory for retained parameter names.",
         "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
@@ -752,6 +752,23 @@ def test_renderer_safety_wording_and_prohibited_language() -> None:
         "no vulnerabilities found",
     ):
         assert forbidden.lower() not in rendered.lower()
+
+
+def test_released_form_inventory_points_to_parameter_inventory_without_phase_text() -> None:
+    result = build_deep_form_inventory(
+        _source_result(
+            _source_item(
+                body=b"<html><form action='/submit'><input name='record_id'></form></html>"
+            )
+        ),
+        _shallow_result(),
+    )
+    rendered = render_deep_form_inventory_markdown(result)
+
+    assert "Phase 92B" not in rendered
+    assert "control names are not displayed in this form inventory" in rendered
+    assert "Deep parameter inventory" in rendered
+    assert "record_id" not in rendered
 
 
 def test_bodies_names_values_and_raw_malformed_values_are_not_public() -> None:

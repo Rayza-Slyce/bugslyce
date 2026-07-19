@@ -116,6 +116,39 @@ def test_deterministic_tags_are_applied() -> None:
     assert "static_asset" in static_endpoint.tags
 
 
+def test_file_content_tags_use_bounded_path_and_parameter_tokens(tmp_path: Path) -> None:
+    (tmp_path / "urls.txt").write_text(
+        "\n".join(
+            (
+                "https://app.example.test/profile.php",
+                "https://app.example.test/uploads/",
+                "https://app.example.test/files/",
+                "https://app.example.test/download",
+                "https://app.example.test/account?profile=compact",
+                "https://app.example.test/view?file=report",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    endpoints = {item.url: item for item in build_project_state(tmp_path).endpoints}
+
+    assert "file_or_content_surface" not in endpoints[
+        "https://app.example.test/profile.php"
+    ].tags
+    assert "file_or_content_surface" not in endpoints[
+        "https://app.example.test/account?profile=compact"
+    ].tags
+    for url in (
+        "https://app.example.test/uploads/",
+        "https://app.example.test/files/",
+        "https://app.example.test/download",
+        "https://app.example.test/view?file=report",
+    ):
+        assert "file_or_content_surface" in endpoints[url].tags
+
+
 def test_missing_optional_files_do_not_crash_project_assembly(tmp_path: Path) -> None:
     (tmp_path / "subdomains.txt").write_text(
         "app.example-bounty.test\napp.example-bounty.test\n",

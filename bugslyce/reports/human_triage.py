@@ -45,18 +45,22 @@ AUTH_PATH_TERMS = {
 }
 ADMIN_PATH_TERMS = {
     "admin",
-    "backup",
-    "console",
+}
+TEST_DEVELOPMENT_PATH_TERMS = {
     "debug",
     "dev",
+    "staging",
+    "test",
+}
+HIDDEN_OPERATIONAL_PATH_TERMS = {
+    "backup",
+    "console",
     "hidden",
     "internal",
     "old",
     "secret",
     "server-info",
-    "staging",
     "status",
-    "test",
 }
 STATIC_TERMS = {
     "bootstrap",
@@ -300,6 +304,7 @@ def build_human_triage_brief(
         if lead.category == "account_workflow"
         for url in lead.covered_urls
     }
+    direct_structured_urls = _direct_structured_review_urls(deep_orchestration)
     start.extend(_workflow_triage_item(lead) for lead in grouped_workflows)
 
     _add_candidate_items(
@@ -310,6 +315,7 @@ def build_human_triage_brief(
         grouped_evidence_ids=grouped_evidence_ids | direct_comment_evidence_ids,
         grouped_urls=grouped_urls,
         grouped_account_urls=grouped_account_urls,
+        direct_structured_urls=direct_structured_urls,
     )
     _add_http_service_items(start, ignore, project_state)
     _add_port_service_items(start, project_state)
@@ -320,12 +326,14 @@ def build_human_triage_brief(
         project_state,
         access_boundary_paths,
         grouped_account_urls,
+        direct_structured_urls,
     )
     _add_discovered_path_items(
         start,
         ignore,
         project_state,
         grouped_account_urls,
+        direct_structured_urls,
     )
     _add_artifact_items(
         start,
@@ -476,6 +484,7 @@ def _add_candidate_items(
     grouped_evidence_ids: set[str],
     grouped_urls: set[str],
     grouped_account_urls: set[str],
+    direct_structured_urls: set[str],
 ) -> None:
     for candidate in candidates:
         if candidate.candidate_type == "object_reference_review":
@@ -492,6 +501,15 @@ def _add_candidate_items(
         if (
             candidate.candidate_type == "high_port_http_service"
             and _candidate_matches_generic_default_service(candidate, project_state)
+        ):
+            continue
+        if (
+            candidate.candidate_type in {"admin_surface", "hidden_path_review"}
+            and candidate.affected_endpoints
+            and all(
+                _canonical_triage_url(endpoint) in direct_structured_urls
+                for endpoint in candidate.affected_endpoints
+            )
         ):
             continue
         if _candidate_duplicate_of_source_group(
@@ -632,6 +650,7 @@ def _add_endpoint_items(
     project_state: ProjectState,
     access_boundary_paths: dict[str, DiscoveredPath],
     grouped_account_urls: set[str],
+    direct_structured_urls: set[str],
 ) -> None:
     for endpoint in project_state.endpoints:
         if _canonical_triage_url(endpoint.url) in grouped_account_urls:
@@ -640,6 +659,8 @@ def _add_endpoint_items(
         if access_boundary is not None:
             if _has_independent_endpoint_evidence(endpoint, access_boundary):
                 start.append(_independent_access_boundary_item(endpoint, access_boundary))
+            continue
+        if _canonical_triage_url(endpoint.url) in direct_structured_urls:
             continue
         terms = _path_terms(endpoint.path)
         if _is_static_path(endpoint.path):
@@ -662,6 +683,24 @@ def _add_endpoint_items(
             start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Auth/account route observed", "auth_route"))
         elif terms & ADMIN_PATH_TERMS:
             start.append(_path_item(endpoint.url, endpoint.evidence_ids, "Admin-labelled route observed", "admin_route"))
+        elif terms & TEST_DEVELOPMENT_PATH_TERMS:
+            start.append(
+                _path_item(
+                    endpoint.url,
+                    endpoint.evidence_ids,
+                    "Test/development route observed",
+                    "environment_route",
+                )
+            )
+        elif terms & HIDDEN_OPERATIONAL_PATH_TERMS:
+            start.append(
+                _path_item(
+                    endpoint.url,
+                    endpoint.evidence_ids,
+                    "Hidden/operational route observed",
+                    "hidden_route",
+                )
+            )
 
 
 def _add_discovered_path_items(
@@ -669,6 +708,7 @@ def _add_discovered_path_items(
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
     grouped_account_urls: set[str],
+    direct_structured_urls: set[str],
 ) -> None:
     for path in project_state.discovered_paths:
         if _canonical_triage_url(path.url) in grouped_account_urls:
@@ -710,10 +750,30 @@ def _add_discovered_path_items(
             continue
         if path.status_code in {401, 403} and path.evidence_ids:
             continue
+        elif _canonical_triage_url(path.url) in direct_structured_urls:
+            continue
         elif terms & AUTH_PATH_TERMS:
             start.append(_path_item(path.url, path.evidence_ids, "Auth/account path discovered", "auth_route"))
         elif terms & ADMIN_PATH_TERMS:
-            start.append(_path_item(path.url, path.evidence_ids, "Admin/hidden path discovered", "admin_route"))
+            start.append(_path_item(path.url, path.evidence_ids, "Admin-labelled path discovered", "admin_route"))
+        elif terms & TEST_DEVELOPMENT_PATH_TERMS:
+            start.append(
+                _path_item(
+                    path.url,
+                    path.evidence_ids,
+                    "Test/development path discovered",
+                    "environment_route",
+                )
+            )
+        elif terms & HIDDEN_OPERATIONAL_PATH_TERMS:
+            start.append(
+                _path_item(
+                    path.url,
+                    path.evidence_ids,
+                    "Hidden/operational path discovered",
+                    "hidden_route",
+                )
+            )
 
 
 def _workflow_triage_item(lead: WorkflowLead) -> HumanTriageItem:
@@ -779,6 +839,23 @@ def _independent_access_boundary_item(
 
 def _canonical_triage_url(value: str | None) -> str:
     return canonical_workflow_url(value)
+
+
+def _direct_structured_review_urls(deep_orchestration: object | None) -> set[str]:
+    source_review = getattr(deep_orchestration, "source_route_collection_review", None)
+    urls: set[str] = set()
+    for lead in getattr(source_review, "review_leads", ()):
+        if getattr(lead, "category", "") not in {
+            "structured_configuration_body",
+            "structured_json_routes",
+        }:
+            continue
+        for attribute in ("urls", "final_urls"):
+            for value in getattr(lead, attribute, ()):
+                canonical = _canonical_triage_url(value)
+                if canonical:
+                    urls.add(canonical)
+    return urls
 
 
 def _add_artifact_items(
@@ -1288,14 +1365,16 @@ def _category_rank(category: str) -> int:
         "source_context_group": 3,
         "object_reference_surface": 4,
         "admin_route": 5,
-        "robots_metadata_value": 6,
-        "robots_metadata": 7,
-        "source_comment": 8,
-        "encoded_source": 9,
-        "http_service": 10,
-        "access_control_context": 11,
-        "service_context": 12,
-        "static_noise": 13,
+        "environment_route": 6,
+        "hidden_route": 7,
+        "robots_metadata_value": 8,
+        "robots_metadata": 9,
+        "source_comment": 10,
+        "encoded_source": 11,
+        "http_service": 12,
+        "access_control_context": 13,
+        "service_context": 14,
+        "static_noise": 15,
     }
     return order.get(category, 20)
 

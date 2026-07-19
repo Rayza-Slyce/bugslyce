@@ -89,7 +89,7 @@ SAFETY_NOTES = (
     "No form submission was performed by orchestration.",
     "No form action was fetched by orchestration.",
     "No JavaScript was executed by orchestration.",
-    "No parameter value was retained, replayed, guessed, or mutated by orchestration.",
+    "No parameter value was replayed, guessed, or mutated by orchestration.",
     "Deep outputs are static manual review context only.",
     "No confirmed vulnerability claim is made by orchestration.",
 )

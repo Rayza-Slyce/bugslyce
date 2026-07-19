@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from bugslyce.core.models import HTTPArtifact
+from bugslyce.core.models import Endpoint, HTTPArtifact
 from bugslyce.core.project import build_project_state
 from bugslyce.triage.candidates import generate_candidates
 
@@ -459,6 +459,52 @@ def test_api_account_resource_path_does_not_create_auth_candidate() -> None:
         for candidate in candidates
         if candidate.candidate_type == "auth_surface"
         for endpoint in candidate.affected_endpoints
+    )
+
+
+def test_profile_route_requires_direct_file_evidence_for_file_candidate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/profile.php"
+    endpoint = Endpoint(
+        url=url,
+        hostname="app.example-bounty.test",
+        path="/profile.php",
+        query_params=[],
+        evidence_ids=["EVID-ENDPOINT-PROFILE"],
+        tags=["auth_surface"],
+    )
+    without_file_control = replace(state, endpoints=[endpoint], http_artifacts=[])
+
+    assert not any(
+        item.candidate_type == "file_or_content_surface"
+        for item in generate_candidates(without_file_control)
+    )
+
+    with_file_control = replace(
+        without_file_control,
+        http_artifacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="input",
+                value="name=attachment;type=file",
+                source_file="profile.html",
+                evidence_ids=["EVID-FILE-CONTROL"],
+                tags=[],
+            )
+        ],
+    )
+    first = generate_candidates(with_file_control)
+    second = generate_candidates(with_file_control)
+    candidate = next(
+        item for item in first if item.candidate_type == "file_or_content_surface"
+    )
+
+    assert first == second
+    assert candidate.affected_endpoints == [url]
+    assert candidate.evidence_ids == ["EVID-ENDPOINT-PROFILE", "EVID-FILE-CONTROL"]
+    assert any(
+        item.candidate_type == "auth_surface" and url in item.affected_endpoints
+        for item in first
     )
 
 

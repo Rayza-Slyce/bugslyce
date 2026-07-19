@@ -271,6 +271,73 @@ def test_direct_structured_evidence_outranks_generic_service_inventory() -> None
     assert any(service_url in item.endpoints for item in summary.low_signal)
 
 
+def test_object_reference_action_is_shared_across_concise_layers() -> None:
+    urls = (
+        "https://records.example.test/view?record_id=1",
+        "https://records.example.test/history?record_id=2",
+    )
+    endpoints = [
+        Endpoint(
+            url=url,
+            hostname="records.example.test",
+            path=url.split("records.example.test", 1)[1].split("?", 1)[0],
+            query_params=["record_id"],
+            evidence_ids=[f"EVID-ENDPOINT-{index}"],
+            tags=["object_reference"],
+        )
+        for index, url in enumerate(urls, start=1)
+    ]
+    state = _state(assets=[_asset("records.example.test")], endpoints=endpoints)
+    parameter = _parameter(
+        "record_id",
+        contexts=("html_route_query",),
+        route_urls=urls,
+        occurrence_count=2,
+    )
+    orchestration = _orchestration_with_parameters((parameter,))
+    candidates = generate_candidates(state)
+    workflow_leads = build_grouped_workflow_leads(state, orchestration)
+    brief = build_human_triage_brief(
+        state,
+        candidates,
+        deep_orchestration=orchestration,
+        workflow_leads=workflow_leads,
+    )
+    threads = build_investigation_threads(
+        state,
+        candidates,
+        workflow_leads=workflow_leads,
+    )
+    runbook = render_standard_investigation_workflow_runbook_section(threads)
+    report = render_markdown_report(
+        state,
+        candidates,
+        human_triage_brief_markdown=render_human_triage_brief_markdown(brief),
+    )
+    action = (
+        "Review retained responses and directly observed URLs for expected "
+        "access-behaviour differences within the authorised scope. Any active "
+        "parameter testing is outside BugSlyce v1 and requires separate authorisation."
+    )
+    candidate = next(
+        item for item in candidates if item.candidate_type == "object_reference_review"
+    )
+    workflow_item = next(
+        item for item in brief.start_here if item.category == "object_reference_surface"
+    )
+    thread = next(
+        item for item in threads if item.category == "object_reference_surface"
+    )
+
+    assert candidate.suggested_manual_validation[0] == action
+    assert workflow_item.suggested_manual_action == action
+    assert thread.suggested_manual_review_order[0] == action
+    assert action in runbook
+    assert action in report
+    assert "authenticated user context" not in report
+    assert "authorised accounts only" not in report
+
+
 def test_account_routes_and_forms_are_grouped_without_losing_detail() -> None:
     base = "https://accounts.example.test"
     form_urls = (

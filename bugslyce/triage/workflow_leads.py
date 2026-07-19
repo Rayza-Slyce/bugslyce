@@ -129,6 +129,11 @@ _MAX_CONTEXT_ROUTES = 3
 _MAX_PARAMETER_NAMES = 5
 _MAX_FIELD_NAMES = 6
 _MAX_EVIDENCE_IDS = 12
+OBJECT_REFERENCE_MANUAL_ACTION = (
+    "Review retained responses and directly observed URLs for expected "
+    "access-behaviour differences within the authorised scope. Any active "
+    "parameter testing is outside BugSlyce v1 and requires separate authorisation."
+)
 
 
 @dataclass(frozen=True)
@@ -588,12 +593,7 @@ def _object_reference_workflow_leads(
                     "across multiple routes or repeated numeric URL references. This is a "
                     "review surface, not a confirmed authorisation issue."
                 ),
-                suggested_manual_action=(
-                    "Review retained responses and directly observed URLs for expected "
-                    "access-behaviour differences within the authorised scope. Any active "
-                    "parameter testing is outside BugSlyce v1 and requires separate "
-                    "authorisation."
-                ),
+                suggested_manual_action=OBJECT_REFERENCE_MANUAL_ACTION,
                 representative_urls=tuple(urls[:_MAX_REPRESENTATIVE_ROUTES]),
                 covered_urls=tuple(urls),
                 evidence_ids=tuple(evidence_ids[:_MAX_EVIDENCE_IDS]),

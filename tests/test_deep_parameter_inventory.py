@@ -65,7 +65,7 @@ def test_empty_inputs_produce_safe_empty_result_and_renderer_sections() -> None:
         "### Inventory Interpretation Notes",
         "### Safety Notes",
         "No network request was made.",
-        "No parameter value was retained.",
+        "The Deep parameter-inventory stage did not retain parameter values.",
         "This stage produces static manual-review context only.",
     ):
         assert expected in rendered
@@ -711,9 +711,9 @@ def test_renderer_safety_wording_prohibited_words_and_no_body_or_values() -> Non
         "### Parameters",
         "### Inventory Interpretation Notes",
         "### Safety Notes",
-        "No parameter value was retained.",
-        "No parameter value was replayed, guessed, or invented.",
-        "No parameter was mutated.",
+        "The Deep parameter-inventory stage did not retain parameter values.",
+        "The Deep parameter-inventory stage did not replay, guess, or invent parameter values.",
+        "The Deep parameter-inventory stage did not mutate parameters.",
         "Names may be case-sensitive and were not case-folded.",
     ):
         assert expected in rendered

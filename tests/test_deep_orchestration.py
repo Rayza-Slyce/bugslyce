@@ -162,7 +162,7 @@ def test_compact_runbook_contains_counts_safety_and_not_full_report() -> None:
         "No form submission was performed by orchestration.",
         "No form action was fetched by orchestration.",
         "No JavaScript was executed by orchestration.",
-        "No parameter value was retained, replayed, guessed, or mutated by orchestration.",
+        "No parameter value was replayed, guessed, or mutated by orchestration.",
         "No confirmed vulnerability claim is made by orchestration.",
         "Deep profile selection is not established by this standalone offline orchestration.",
         "Deep offline review orchestration completed for the supplied result.",
@@ -173,6 +173,21 @@ def test_compact_runbook_contains_counts_safety_and_not_full_report() -> None:
     assert runbook.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
     assert "see the `report.md`" not in result.deep_recon_markdown
     assert "see the `report.md`" not in runbook
+
+
+def test_composite_runbook_qualifies_parameter_retention_to_inventory_stage() -> None:
+    source = _source_item(url="http://example.test/view?record_id=7")
+    result = build_deep_recon_orchestration(
+        _source_result(source),
+        _shallow_result(),
+    )
+    runbook = result.deep_recon_runbook_markdown
+
+    assert "Phase 92B" not in result.deep_recon_markdown
+    assert "Phase 92B" not in runbook
+    assert "No parameter value was retained" not in runbook
+    assert "Deep parameter-inventory stage" in runbook
+    assert source.url == "http://example.test/view?record_id=7"
 
 
 def test_individual_deep_stage_notes_do_not_repeat_generic_retention_policy() -> None:

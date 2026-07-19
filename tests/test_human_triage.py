@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 from bugslyce.core.models import (
     Candidate,
@@ -895,6 +896,99 @@ def test_correlated_admin_route_without_forbidden_boundary_can_still_promote() -
 
     assert "Admin-labelled route observed" in rendered
     assert "Access-control response context" not in rendered
+
+
+def test_test_route_uses_non_admin_title_in_triage_and_readable_card() -> None:
+    url = "http://example.test/test"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/test",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-TEST"],
+                tags=[],
+            )
+        ]
+    )
+
+    brief = build_human_triage_brief(state, [])
+    triage_item = next(item for item in brief.start_here if item.url == url)
+    card = next(item for item in brief.evidence_cards if item.url == url)
+
+    assert triage_item.title == "Test/development route observed"
+    assert card.title == triage_item.title
+    assert "Admin-labelled" not in render_human_triage_brief_markdown(brief)
+    assert "Admin-labelled" not in render_readable_evidence_cards_markdown(brief)
+
+
+def test_bounded_admin_path_segment_keeps_admin_title() -> None:
+    for path in ("/admin", "/admin/", "/admin/index.php"):
+        url = f"http://example.test{path}"
+        state = _project_state(
+            endpoints=[
+                Endpoint(
+                    url=url,
+                    hostname="example.test",
+                    path=path,
+                    query_params=[],
+                    evidence_ids=[f"EVID-{path}"],
+                    tags=[],
+                )
+            ]
+        )
+
+        brief = build_human_triage_brief(state, [])
+
+        assert next(item for item in brief.start_here if item.url == url).title == (
+            "Admin-labelled route observed"
+        )
+
+
+def test_structured_configuration_suppresses_duplicate_test_route_prompt() -> None:
+    url = "http://example.test/test"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/test",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-TEST"],
+                tags=[],
+            )
+        ]
+    )
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(
+            review_leads=(
+                SimpleNamespace(
+                    category="structured_configuration_body",
+                    urls=(url,),
+                    final_urls=(url,),
+                    evidence_ids=("EVID-CONFIG",),
+                    evidence_excerpt=("service_port 9000",),
+                ),
+            )
+        )
+    )
+
+    brief = build_human_triage_brief(
+        state,
+        [],
+        deep_orchestration=orchestration,
+        workflow_leads=(),
+    )
+
+    assert all(item.url != url for item in brief.start_here)
+    assert all(item.url != url for item in brief.evidence_cards)
+    from bugslyce.project_pipeline import _deep_operator_summary_leads
+
+    direct_lead = _deep_operator_summary_leads(orchestration)[0]
+    assert direct_lead.title == "Structured operational configuration observed"
+    assert direct_lead.endpoints == [url]
+    assert direct_lead.evidence_ids == ["EVID-CONFIG"]
 
 
 def _project_state(

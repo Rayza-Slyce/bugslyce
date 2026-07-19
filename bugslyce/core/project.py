@@ -7,6 +7,7 @@ from collections.abc import Callable
 import ipaddress
 from pathlib import Path
 import json
+import re
 from urllib.parse import urlparse
 import warnings as warnings_module
 
@@ -453,17 +454,30 @@ def _endpoint_tags(path: str, query_params: list[str]) -> list[str]:
     lower_path = path.lower()
     lower_params = [param.lower() for param in query_params]
     combined_params = " ".join(lower_params)
+    path_terms = _bounded_semantic_terms((lower_path,))
+    parameter_terms = _bounded_semantic_terms(tuple(lower_params))
     tags: list[str] = []
 
     if _is_auth_surface_path(lower_path):
         tags.append("auth_surface")
-    if "admin" in lower_path:
+    if "admin" in path_terms:
         tags.append("admin_surface")
     if any(marker in lower_path for marker in ("/api/", "/v1/", "/v2/", "/graphql")):
         tags.append("api_surface")
-    if any(marker in lower_path for marker in ("upload", "import", "export", "download", "file", "content")) or any(
-        marker in combined_params for marker in ("upload", "import", "export", "download", "file", "content")
-    ):
+    file_content_terms = {
+        "content",
+        "contents",
+        "download",
+        "downloads",
+        "export",
+        "file",
+        "filename",
+        "files",
+        "import",
+        "upload",
+        "uploads",
+    }
+    if path_terms & file_content_terms or parameter_terms & file_content_terms:
         tags.append("file_or_content_surface")
     if any(marker in combined_params for marker in ("id", "user_id", "account_id", "org_id", "tenant_id", "order_id")):
         tags.append("object_reference")
@@ -473,6 +487,18 @@ def _endpoint_tags(path: str, query_params: list[str]) -> list[str]:
         tags.append("static_asset")
 
     return tags
+
+
+def _bounded_semantic_terms(values: tuple[str, ...]) -> set[str]:
+    terms: set[str] = set()
+    for value in values:
+        for segment in value.strip("/").split("/"):
+            terms.update(
+                token
+                for token in re.split(r"[-_.]+", segment.casefold())
+                if token
+            )
+    return terms
 
 
 def _is_auth_surface_path(path: str) -> bool:

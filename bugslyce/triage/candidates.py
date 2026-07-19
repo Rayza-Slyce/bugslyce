@@ -40,6 +40,7 @@ from bugslyce.triage.scoring import (
     priority_for_endpoint,
     priority_for_service,
 )
+from bugslyce.triage.workflow_leads import OBJECT_REFERENCE_MANUAL_ACTION
 
 KEYWORD_SIGNAL_TERMS = {
     "password",
@@ -74,6 +75,7 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
     assets_by_host = {asset.hostname: asset for asset in project_state.assets}
     endpoint_groups: dict[tuple[str, str], _EndpointCandidateGroup] = {}
     endpoint_group_order: list[tuple[str, str]] = []
+    file_control_evidence = _file_control_evidence_by_url(project_state)
 
     for endpoint in project_state.endpoints:
         asset = assets_by_host.get(endpoint.hostname)
@@ -138,7 +140,8 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                     "Record request/response evidence before escalating this lead.",
                 ],
             )
-        if "file_or_content_surface" in endpoint.tags:
+        direct_file_evidence = file_control_evidence.get(endpoint.url, ())
+        if "file_or_content_surface" in endpoint.tags or direct_file_evidence:
             _record_endpoint_group(
                 endpoint_groups,
                 endpoint_group_order,
@@ -146,12 +149,18 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                 asset,
                 FILE_OR_CONTENT_SURFACE,
                 f"File or content-flow manual review for {endpoint.hostname}",
-                "This endpoint has upload, import, export, download, file, or content context in parsed URL evidence.",
+                (
+                    "Saved HTML directly records a file input control on this endpoint."
+                    if direct_file_evidence
+                    and "file_or_content_surface" not in endpoint.tags
+                    else "This endpoint has upload, import, export, download, file, or content context in parsed URL evidence."
+                ),
                 [
                     "Check whether upload or download functionality has documented constraints.",
                     "Review the programme scope before any manual testing.",
                     "Record request/response evidence before escalating this lead.",
                 ],
+                additional_evidence_ids=direct_file_evidence,
             )
         if "object_reference" in endpoint.tags:
             _record_endpoint_group(
@@ -163,8 +172,7 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                 f"Object reference review for {endpoint.hostname}",
                 "This endpoint has object-like query parameters in parsed URL evidence.",
                 [
-                    "Check whether object-like parameters are tied to the authenticated user context.",
-                    "Review expected access boundaries using authorised accounts only.",
+                    OBJECT_REFERENCE_MANUAL_ACTION,
                     "Record request/response evidence before escalating this lead.",
                 ],
             )
@@ -577,6 +585,7 @@ def _record_endpoint_group(
     title: str,
     rationale: str,
     suggested_manual_validation: list[str],
+    additional_evidence_ids: Iterable[str] = (),
 ) -> None:
     if not endpoint.evidence_ids:
         return
@@ -595,6 +604,8 @@ def _record_endpoint_group(
     group = groups[key]
     _append_unique(group.affected_endpoints, endpoint.url)
     for evidence_id in endpoint.evidence_ids:
+        _append_unique(group.evidence_ids, evidence_id)
+    for evidence_id in additional_evidence_ids:
         _append_unique(group.evidence_ids, evidence_id)
     group.priorities.append(priority_for_endpoint(endpoint, asset, candidate_type))
     guidance = endpoint_kill_switch_guidance(endpoint, asset)
@@ -677,6 +688,25 @@ def _with_candidate_id(index: int, candidate: Candidate) -> Candidate:
 
 def _only_static_context(endpoint: Endpoint) -> bool:
     return "static_asset" in endpoint.tags and all(tag == "static_asset" for tag in endpoint.tags)
+
+
+def _file_control_evidence_by_url(project_state: ProjectState) -> dict[str, tuple[str, ...]]:
+    pending: dict[str, list[str]] = {}
+    for artifact in project_state.http_artifacts:
+        if artifact.artifact_type != "input" or not artifact.url:
+            continue
+        attributes = {
+            key.strip().casefold(): value.strip().casefold()
+            for part in artifact.value.split(";")
+            if "=" in part
+            for key, value in (part.split("=", 1),)
+        }
+        if attributes.get("type") != "file":
+            continue
+        evidence_ids = pending.setdefault(artifact.url, [])
+        for evidence_id in artifact.evidence_ids:
+            _append_unique(evidence_ids, evidence_id)
+    return {url: tuple(evidence_ids) for url, evidence_ids in pending.items()}
 
 
 def _has_hidden_path_marker(path: str) -> bool:
