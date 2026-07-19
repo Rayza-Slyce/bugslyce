@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bugslyce.core.models import (
+    Asset,
     DiscoveredPath,
     Endpoint,
     HTTPArtifact,
@@ -188,8 +189,113 @@ def test_confirmed_endpoint_and_discovered_paths_preserve_source_noise_patterns(
     assert "/photo/2016/12/24/11/48/lost" in all_routes
 
 
+def test_cross_origin_absolute_links_are_not_flattened_into_target_routes() -> None:
+    external_http = "http://docs.external.test/reference/server-guide.html"
+    external_https = "https://issues.external.test/project/runtime"
+    state = _project_state(
+        assets=[
+            Asset(
+                hostname="app.example.test",
+                in_scope=True,
+                sources=["scope.md"],
+                evidence_ids=["EVID-SCOPE-TARGET"],
+                tags=[],
+            ),
+            Asset(
+                hostname="docs.external.test",
+                in_scope=None,
+                sources=["collected.html"],
+                evidence_ids=["EVID-ENDPOINT-EXTERNAL-HTTP"],
+                tags=[],
+            ),
+            Asset(
+                hostname="issues.external.test",
+                in_scope=None,
+                sources=["collected.html"],
+                evidence_ids=["EVID-ENDPOINT-EXTERNAL-HTTPS"],
+                tags=[],
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=external_http,
+                hostname="docs.external.test",
+                path="/reference/server-guide.html",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-EXTERNAL-HTTP"],
+                tags=[],
+            ),
+            Endpoint(
+                url=external_https,
+                hostname="issues.external.test",
+                path="/project/runtime",
+                query_params=[],
+                evidence_ids=["EVID-ENDPOINT-EXTERNAL-HTTPS"],
+                tags=[],
+            ),
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://app.example.test/",
+                artifact_type="link",
+                value=external_http,
+                source_file="collected.html",
+                evidence_ids=["EVID-LINK-EXTERNAL-HTTP"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url="https://app.example.test/",
+                artifact_type="link",
+                value=external_https,
+                source_file="collected.html",
+                evidence_ids=["EVID-LINK-EXTERNAL-HTTPS"],
+                tags=[],
+            ),
+        ],
+    )
+    sources = (
+        _source(
+            (
+                'href="/relative-target" '
+                'href="https://app.example.test/absolute-target" '
+                'href="https://app.example.test:8443/alternate-port"'
+            ),
+            source_id="EVID-SOURCE-TARGET",
+            url="https://app.example.test/",
+        ),
+        _source(
+            f'href="{external_http}" href="{external_https}"',
+            source_id="EVID-SOURCE-EXTERNAL-LINKS",
+            url="https://app.example.test/",
+        ),
+    )
+
+    leads = build_route_source_review(state, sources)
+    general = next(lead for lead in leads if lead.category == "general route references")
+    markdown = render_route_source_review_markdown(leads)
+
+    assert general.route_references == (
+        "/absolute-target",
+        "/alternate-port",
+        "/relative-target",
+    )
+    assert general.rationale.startswith(
+        "Already-collected local evidence contains 3 route-shaped reference(s)"
+    )
+    assert general.source_ids == ("EVID-SOURCE-TARGET",)
+    assert "/reference/server-guide.html" not in markdown
+    assert "/project/runtime" not in markdown
+    assert "EVID-SOURCE-EXTERNAL-LINKS" not in markdown
+    assert [endpoint.url for endpoint in state.endpoints] == [external_http, external_https]
+    assert [artifact.value for artifact in state.http_artifacts] == [
+        external_http,
+        external_https,
+    ]
+
+
 def _project_state(
     *,
+    assets: list[Asset] | None = None,
     http_services: list[HTTPService] | None = None,
     endpoints: list[Endpoint] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
@@ -201,7 +307,7 @@ def _project_state(
         input_dir="/tmp/route-test",
         processed_files=[],
         scope_summary="No scope file parsed.",
-        assets=[],
+        assets=assets or [],
         http_services=http_services or [],
         endpoints=endpoints or [],
         port_services=[],
@@ -229,12 +335,17 @@ def _service(url: str) -> HTTPService:
     )
 
 
-def _source(text: str, *, source_id: str = "SRC-1") -> ArtefactSource:
+def _source(
+    text: str,
+    *,
+    source_id: str = "SRC-1",
+    url: str = "http://example.test/",
+) -> ArtefactSource:
     return ArtefactSource(
         source_id=source_id,
         source_kind="html",
         source_label="source",
-        url="http://example.test/",
+        url=url,
         path=None,
         port=80,
         service="http",

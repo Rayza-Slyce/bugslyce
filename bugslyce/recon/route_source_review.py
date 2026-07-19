@@ -117,8 +117,7 @@ def build_route_source_review(
 ) -> tuple[RouteSourceLead, ...]:
     """Build deterministic route/source leads from local ProjectState and sources."""
 
-    allowed_hosts = _allowed_hosts(project_state)
-    allowed_hosts.update(_source_hosts(sources))
+    allowed_hosts = _allowed_hosts(project_state, sources)
     observations: list[_RouteObservation] = []
     source_order = 0
 
@@ -468,19 +467,32 @@ def _lead_sort_key(lead: RouteSourceLead) -> tuple[object, ...]:
     return (CATEGORY_ORDER.get(lead.category, 99), first_route, first_source)
 
 
-def _allowed_hosts(project_state: ProjectState) -> set[str]:
+def _allowed_hosts(
+    project_state: ProjectState,
+    sources: Sequence[ArtefactSource],
+) -> set[str]:
+    scoped_hosts: set[str] = set()
+    for asset in project_state.assets:
+        host = _normalise_host(asset.hostname)
+        if asset.in_scope is True and host:
+            scoped_hosts.add(host)
+    if any(asset.in_scope is not None for asset in project_state.assets):
+        return scoped_hosts
+
+    # Legacy states may not contain parsed scope decisions. In that case, use
+    # collection origins rather than retained endpoint hosts, which can include
+    # intentionally preserved cross-origin references.
     hosts: set[str] = set()
     manifest = project_state.recon_manifest
     if manifest and manifest.target:
-        hosts.add(manifest.target.lower())
+        host = _host_from_target(manifest.target)
+        if host:
+            hosts.add(host)
     for service in project_state.http_services:
-        hosts.add(service.hostname.lower())
-    for endpoint in project_state.endpoints:
-        hosts.add(endpoint.hostname.lower())
-    for artifact in project_state.http_artifacts:
-        parsed = urlparse(artifact.url)
-        if parsed.hostname:
-            hosts.add(parsed.hostname.lower())
+        host = _normalise_host(service.hostname)
+        if host:
+            hosts.add(host)
+    hosts.update(_source_hosts(sources))
     return hosts
 
 
@@ -489,8 +501,21 @@ def _source_hosts(sources: Sequence[ArtefactSource]) -> set[str]:
     for source in sources:
         parsed = urlparse(source.url or "")
         if parsed.hostname:
-            hosts.add(parsed.hostname.lower())
+            hosts.add(_normalise_host(parsed.hostname))
     return hosts
+
+
+def _host_from_target(value: str) -> str:
+    candidate = value if "://" in value else f"//{value}"
+    try:
+        parsed = urlparse(candidate)
+        return _normalise_host(parsed.hostname or "")
+    except ValueError:
+        return ""
+
+
+def _normalise_host(value: str) -> str:
+    return value.strip().strip(".").lower()
 
 
 def _dedupe_preserve_order(values) -> list[str]:

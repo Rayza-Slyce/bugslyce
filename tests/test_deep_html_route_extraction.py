@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import inspect
+from urllib.parse import urlparse
 
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_html_route_extraction import (
@@ -166,6 +167,36 @@ def test_protocol_relative_references_resolve_against_trusted_document_scheme() 
     by_url = {route.safe_resolved_url: route for route in result.routes}
     assert by_url["https://example.test/same"].origin_relationship == "same_origin"
     assert by_url["https://external.test/cross"].origin_relationship == "cross_origin"
+
+
+def test_absolute_external_references_keep_complete_cross_origin_provenance() -> None:
+    external_http = "http://docs.external.test/reference/server-guide.html"
+    external_https = "https://issues.external.test/project/runtime"
+    result = build_deep_html_route_extraction(
+        _result(
+            _item(
+                url="https://app.example.test/source",
+                body=(
+                    f'<html><a href="{external_http}">docs</a>'
+                    f'<a href="{external_https}">issues</a></html>'
+                ).encode(),
+            )
+        )
+    )
+
+    by_url = {route.safe_resolved_url: route for route in result.routes}
+
+    assert tuple(by_url) == (external_http, external_https)
+    assert (
+        urlparse(by_url[external_http].safe_resolved_url).hostname
+        == "docs.external.test"
+    )
+    assert (
+        urlparse(by_url[external_https].safe_resolved_url).hostname
+        == "issues.external.test"
+    )
+    assert by_url[external_http].origin_relationship == "cross_origin"
+    assert by_url[external_https].origin_relationship == "cross_origin"
 
 
 def test_fragment_unsupported_empty_and_malformed_references_are_skipped() -> None:
