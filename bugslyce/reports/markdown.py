@@ -10,11 +10,13 @@ from typing import Any
 
 from bugslyce.core.engagement_context import engagement_context_label
 from bugslyce.core.models import Candidate, ProjectState
+from bugslyce.core.sensitive_evidence import REPORT_SENSITIVE_EVIDENCE_NOTICE
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
     POSSIBLE_SIGNAL,
     classify_encoded_artifact,
+    effective_candidate_priority,
 )
 from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
 from bugslyce.reports.provenance import build_workflow_provenance
@@ -83,9 +85,10 @@ def render_markdown_report(
     _asset_inventory(lines, project_state)
     _http_services(lines, project_state)
     _surface_areas(lines, candidates)
-    _priority_queue(lines, candidates)
+    _priority_queue(lines, project_state, candidates)
     _evidence_table(lines, project_state)
     _operator_notes(lines, project_state)
+    _sensitive_evidence_notice(lines)
     _safe_next_steps(lines)
     _kill_switch_warnings(lines, project_state, candidates)
     _unknowns(lines)
@@ -389,11 +392,17 @@ def _surface_areas(lines: list[str], candidates: list[Candidate]) -> None:
     lines.append("")
 
 
-def _priority_queue(lines: list[str], candidates: list[Candidate]) -> None:
+def _priority_queue(
+    lines: list[str],
+    project_state: ProjectState,
+    candidates: list[Candidate],
+) -> None:
     lines.extend(["## Manual Review Queue", ""])
     candidates_by_priority: dict[str, list[Candidate]] = defaultdict(list)
     for candidate in candidates:
-        candidates_by_priority[candidate.priority].append(candidate)
+        candidates_by_priority[
+            effective_candidate_priority(project_state, candidate)
+        ].append(candidate)
 
     for priority in PRIORITY_ORDER:
         lines.extend([f"### {priority}", ""])
@@ -402,16 +411,21 @@ def _priority_queue(lines: list[str], candidates: list[Candidate]) -> None:
             lines.extend(["No candidates in this priority bucket.", ""])
             continue
         for candidate in items:
-            lines.extend(_candidate_lines(candidate))
+            lines.extend(
+                _candidate_lines(
+                    candidate,
+                    priority=effective_candidate_priority(project_state, candidate),
+                )
+            )
             lines.append("")
 
 
-def _candidate_lines(candidate: Candidate) -> list[str]:
+def _candidate_lines(candidate: Candidate, *, priority: str | None = None) -> list[str]:
     lines = [
         f"#### {candidate.id}: {_md(candidate.title)}",
         "",
         f"- Candidate type: `{candidate.candidate_type}`",
-        f"- Priority: `{candidate.priority}`",
+        f"- Priority: `{priority or candidate.priority}`",
         f"- Rationale: {_md(candidate.rationale)}",
         f"- Affected assets: {_csv(candidate.affected_assets)}",
         f"- Affected endpoints: {format_endpoint_list(candidate.affected_endpoints)}",
@@ -581,11 +595,15 @@ def _safe_next_steps(lines: list[str]) -> None:
             "- Collect request/response evidence before escalating any lead.",
             "- Avoid unsupported claims in notes and summaries.",
             "- Stop on low-signal paths unless new evidence appears.",
-            "- Evidence directories and exported ZIP packs may retain complete response headers, cookie values, session identifiers, or tokens.",
-            "- Restrict access and delete or sanitise sensitive retained evidence after the authorised engagement when it is no longer required.",
             "",
         ]
     )
+
+
+def _sensitive_evidence_notice(lines: list[str]) -> None:
+    lines.extend(["## Sensitive Evidence Notice", ""])
+    for paragraph in REPORT_SENSITIVE_EVIDENCE_NOTICE:
+        lines.extend([paragraph, ""])
 
 
 def _kill_switch_warnings(lines: list[str], project_state: ProjectState, candidates: list[Candidate]) -> None:

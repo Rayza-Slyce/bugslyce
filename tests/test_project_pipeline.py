@@ -650,7 +650,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_investigation_threads",
-        lambda state, candidates, review_leads: (),
+        lambda state, candidates, review_leads, **kwargs: (),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_investigation_threads_markdown",
@@ -880,7 +880,7 @@ def test_project_pipeline_selects_standard_bounded_core_content_profile(
             )
             monkeypatch.setattr(
                 "bugslyce.project_pipeline.build_investigation_threads",
-                lambda state, candidates, review_leads: (),
+                lambda state, candidates, review_leads, **kwargs: (),
             )
             monkeypatch.setattr(
                 "bugslyce.project_pipeline.render_investigation_threads_markdown",
@@ -971,10 +971,12 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     identities: dict[str, object] = {}
     captured_report: list[str | None] = []
     captured_operator_leads: list[tuple] = []
+    captured_manual_review: list[str | None] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
     checkpoint_seen: list[dict[str, str]] = []
     final_status_seen: list[str] = []
+    referenced_direct_counts: list[int] = []
 
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_project_state",
@@ -1071,17 +1073,24 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         "bugslyce.project_pipeline.write_deep_recon_orchestration_artifacts",
         fake_write_orchestration,
     )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
-        lambda state: SimpleNamespace(
-            manual_review_leads_markdown="## Manual Review Leads\n\nStandard leads.\n",
+    def fake_standard_interpretation(state, *, referenced_direct_lead_count=0):
+        referenced_direct_counts.append(referenced_direct_lead_count)
+        return SimpleNamespace(
+            manual_review_leads_markdown=(
+                "## Manual Review Leads\n\n"
+                "2 direct structured disclosures are listed once in the Operator Summary.\n"
+            ),
             review_leads=(),
             sources=(),
-        ),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
+        fake_standard_interpretation,
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_investigation_threads",
-        lambda state, candidates, review_leads: (),
+        lambda state, candidates, review_leads, **kwargs: (),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_investigation_threads_markdown",
@@ -1167,6 +1176,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         calls.append("deep-report-write")
         captured_report.append(deep_recon_markdown)
         captured_operator_leads.append(operator_summary_leads)
+        captured_manual_review.append(kwargs.get("manual_review_leads_markdown"))
         report_path = output_path / "report.md"
         json_path = output_path / "project_state.json"
         report_path.write_text(deep_recon_markdown or "", encoding="utf-8")
@@ -1253,6 +1263,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert captured_operator_leads[0][1].endpoints == [
         "https://example.test/catalogue.json"
     ]
+    assert 2 in referenced_direct_counts
+    assert "No interpretation review leads" not in (captured_manual_review[0] or "")
+    assert "listed once in the Operator Summary" in (captured_manual_review[0] or "")
     assert "request began at `https://example.test/catalogue`" in (
         captured_operator_leads[0][1].why
     )
@@ -1780,7 +1793,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_investigation_threads",
-        lambda state, candidates, review_leads: (),
+        lambda state, candidates, review_leads, **kwargs: (),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_investigation_threads_markdown",

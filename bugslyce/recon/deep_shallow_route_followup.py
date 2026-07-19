@@ -96,7 +96,6 @@ RESULT_SAFETY_NOTES = (
     "Redirects were not manually followed by this phase.",
     "No vulnerability was confirmed.",
     "Network access was limited to the supplied bounded fetcher and the selected plan requests.",
-    "Collected response headers may retain Set-Cookie values in memory; this human-readable Markdown redacts cookie values while preserving cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 

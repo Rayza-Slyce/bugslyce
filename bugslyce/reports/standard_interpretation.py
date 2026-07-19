@@ -27,6 +27,7 @@ from bugslyce.reports.human_triage import (
     render_readable_evidence_cards_markdown,
 )
 from bugslyce.reports.markdown import render_markdown_report
+from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
 
 @dataclass(frozen=True)
@@ -57,10 +58,12 @@ def render_standard_interpretation_report(
 
     assembly = assemble_standard_interpretation_from_project_state(project_state)
     candidates_list = list(candidates)
+    workflow_leads = build_grouped_workflow_leads(project_state)
     threads = build_investigation_threads(
         project_state,
         candidates_list,
         assembly.review_leads,
+        workflow_leads=workflow_leads,
     )
     threads_markdown = render_investigation_threads_markdown(
         threads,
@@ -78,6 +81,7 @@ def render_standard_interpretation_report(
         project_state,
         candidates_list,
         engagement_context=project_state.engagement_context,
+        workflow_leads=workflow_leads,
     )
     human_triage_markdown = render_human_triage_brief_markdown(human_triage_brief)
     evidence_cards_markdown = render_readable_evidence_cards_markdown(human_triage_brief)

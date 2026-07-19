@@ -20,7 +20,10 @@ from bugslyce.recon.interpretation import (
     ReviewLead,
     aggregate_interpretation_leads,
 )
-from bugslyce.recon.interpretation_rendering import render_review_leads_markdown
+from bugslyce.recon.interpretation_rendering import (
+    render_review_leads_markdown,
+    validate_referenced_direct_lead_count,
+)
 from bugslyce.recon.robots_analysis import RobotsAnalysis, analyse_robots_txt
 
 
@@ -47,6 +50,7 @@ class InterpretationCollection:
     html_source_analyses: tuple[HtmlSourceAnalysis, ...]
     review_leads: tuple[ReviewLead, ...]
     manual_review_leads_markdown: str | None
+    referenced_direct_lead_count: int = 0
 
 
 def collect_interpretation_from_sources(
@@ -54,8 +58,13 @@ def collect_interpretation_from_sources(
     *,
     render_markdown: bool = True,
     engagement_context: str | None = None,
+    referenced_direct_lead_count: int = 0,
 ) -> InterpretationCollection:
     """Run offline interpretation analysers over already-collected source text."""
+
+    referenced_direct_lead_count = validate_referenced_direct_lead_count(
+        referenced_direct_lead_count
+    )
 
     all_hashes: list[HashArtefactCandidate] = []
     all_transforms: list[TransformArtefactCandidate] = []
@@ -104,6 +113,7 @@ def collect_interpretation_from_sources(
         render_review_leads_markdown(
             review_leads,
             engagement_context=engagement_context,
+            referenced_direct_lead_count=referenced_direct_lead_count,
         )
         if render_markdown
         else None
@@ -116,6 +126,7 @@ def collect_interpretation_from_sources(
         html_source_analyses=tuple(html_analyses),
         review_leads=review_leads,
         manual_review_leads_markdown=markdown,
+        referenced_direct_lead_count=referenced_direct_lead_count,
     )
 
 

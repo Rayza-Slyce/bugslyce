@@ -8,6 +8,7 @@ import re
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Asset, Candidate, Endpoint, ProjectState
+from bugslyce.reports.artifact_classifier import classify_http_service_priority
 from bugslyce.triage.classify import (
     ADMIN_SURFACE,
     API_SURFACE,
@@ -301,14 +302,22 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
         if port is None or port <= 1024:
             continue
         asset = assets_by_host.get(service.hostname)
+        service_priority = classify_http_service_priority(project_state, service.url)
         _add_candidate(
             candidates,
             seen,
             HIGH_PORT_HTTP_SERVICE,
             service.url,
             title=f"High-port HTTP service review for {service.hostname}:{port}",
-            priority="medium" if asset and asset.in_scope is True else "kill_switch",
-            rationale="Structured HTTP metadata shows an HTTP service on a port above 1024.",
+            priority=(
+                service_priority.priority
+                if asset and asset.in_scope is True
+                else "kill_switch"
+            ),
+            rationale=(
+                "Structured HTTP metadata shows an HTTP service on a port above 1024. "
+                f"{service_priority.reason}"
+            ),
             affected_assets=[service.hostname],
             affected_endpoints=[service.url],
             evidence_ids=service.evidence_ids,
@@ -325,14 +334,43 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
         if len(distinct_urls) < 2:
             continue
         asset = assets_by_host.get(hostname)
+        high_port_services = [
+            service
+            for service in services
+            if (urlparse(service.url).port or 0) not in {0, 80, 443}
+        ]
+        high_port_priorities = {
+            classify_http_service_priority(project_state, service.url).priority
+            for service in high_port_services
+        }
+        if len(high_port_priorities) > 1:
+            # Origin-specific candidates preserve each service's priority without
+            # promoting a generic origin through one mixed host-level aggregate.
+            continue
+        generic_high_port_only = bool(high_port_services) and all(
+            classify_http_service_priority(project_state, service.url).priority == "low"
+            for service in high_port_services
+        )
         _add_candidate(
             candidates,
             seen,
             MULTIPLE_HTTP_SERVICES,
             hostname,
             title=f"Multiple HTTP services review for {hostname}",
-            priority="medium" if asset and asset.in_scope is True else "kill_switch",
-            rationale="Structured HTTP metadata shows multiple distinct HTTP service URLs for this host.",
+            priority=(
+                "low"
+                if asset and asset.in_scope is True and generic_high_port_only
+                else "medium"
+                if asset and asset.in_scope is True
+                else "kill_switch"
+            ),
+            rationale=(
+                "Structured HTTP metadata shows multiple distinct HTTP service URLs "
+                "for this host. Generic/default high-port origins remain low-priority "
+                "inventory context unless independent application evidence is present."
+                if generic_high_port_only
+                else "Structured HTTP metadata shows multiple distinct HTTP service URLs for this host."
+            ),
             affected_assets=[hostname],
             affected_endpoints=distinct_urls,
             evidence_ids=_dedupe(

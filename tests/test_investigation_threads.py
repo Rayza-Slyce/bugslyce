@@ -140,6 +140,272 @@ def test_encoded_or_source_evidence_generates_artefact_thread() -> None:
     )
 
 
+def test_hidden_element_creates_source_context_without_encoded_guidance() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/workflow",
+                artifact_type="hidden_element",
+                value="input type=hidden name=workflow_state",
+                source_file="body-fetch-workflow.html",
+                evidence_ids=["EVID-HIDDEN"],
+                tags=["source_structure"],
+            )
+        ]
+    )
+
+    threads = build_investigation_threads(state)
+
+    assert len(threads) == 1
+    thread = threads[0]
+    assert thread.title == "Source artefact review"
+    assert "EVID-HIDDEN" in thread.related_evidence_ids
+    rendered = " ".join(
+        (
+            thread.title,
+            thread.summary,
+            *thread.suggested_manual_review_order,
+        )
+    ).lower()
+    assert "encoded" not in rendered
+    assert "decoder" not in rendered
+    assert "valid credentials" not in rendered
+
+
+def test_source_comment_without_transform_evidence_has_no_encoded_guidance() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/",
+                artifact_type="html_comment",
+                value="Review the deployment route before release",
+                source_file="homepage.html",
+                evidence_ids=["EVID-COMMENT"],
+                tags=["source_comment"],
+            )
+        ]
+    )
+    leads = [
+        _lead(
+            "LEAD-SOURCE",
+            category="html_source",
+            lead_type="html_comment_clue_review",
+            url="https://portal.example.test/",
+        )
+    ]
+
+    thread = build_investigation_threads(state, review_leads=leads)[0]
+    rendered = " ".join(
+        (thread.title, thread.summary, *thread.suggested_manual_review_order)
+    ).lower()
+
+    assert thread.title == "Source artefact review"
+    assert "encoded" not in rendered
+    assert "valid credentials" not in rendered
+
+
+def test_credential_candidate_has_caution_without_encoded_guidance() -> None:
+    candidate = _candidate(
+        "CAND-CREDENTIAL",
+        "credential_like_artifact_review",
+        endpoints=["https://portal.example.test/source"],
+        evidence_ids=["EVID-CREDENTIAL"],
+    )
+
+    thread = build_investigation_threads(
+        _project_state(),
+        candidates=[candidate],
+    )[0]
+    rendered = " ".join(
+        (thread.title, thread.summary, *thread.suggested_manual_review_order)
+    ).lower()
+
+    assert thread.title == "Source artefact review"
+    assert "do not treat source values as valid credentials" in rendered
+    assert "encoded" not in rendered
+    assert "decoder" not in rendered
+    assert "hash-shaped" not in rendered
+
+
+def test_encoded_candidate_has_no_credential_specific_caution() -> None:
+    candidate = _candidate(
+        "CAND-ENCODED",
+        "encoded_artifact_review",
+        endpoints=["https://portal.example.test/source"],
+        evidence_ids=["EVID-ENCODED"],
+    )
+
+    thread = build_investigation_threads(
+        _project_state(),
+        candidates=[candidate],
+    )[0]
+    rendered = " ".join(
+        (thread.title, thread.summary, *thread.suggested_manual_review_order)
+    ).lower()
+
+    assert thread.title == "Encoded or source artefact review"
+    assert "validate encoded or hash-shaped artefacts locally" in rendered
+    assert "valid credentials" not in rendered
+
+
+def test_combined_encoded_and_credential_candidates_keep_each_caution_once() -> None:
+    candidates = [
+        _candidate(
+            "CAND-ENCODED",
+            "encoded_artifact_review",
+            endpoints=["https://portal.example.test/source"],
+            evidence_ids=["EVID-ENCODED"],
+        ),
+        _candidate(
+            "CAND-CREDENTIAL",
+            "credential_like_artifact_review",
+            endpoints=["https://portal.example.test/source"],
+            evidence_ids=["EVID-CREDENTIAL"],
+        ),
+    ]
+
+    thread = build_investigation_threads(
+        _project_state(),
+        candidates=candidates,
+    )[0]
+    rendered = " ".join(thread.suggested_manual_review_order).lower()
+
+    assert thread.title == "Encoded or source artefact review"
+    assert rendered.count("validate encoded or hash-shaped artefacts locally") == 1
+    assert rendered.count("do not treat source values as valid credentials") == 1
+
+
+def test_hash_or_transform_lead_enables_encoded_guidance() -> None:
+    lead = _lead(
+        "LEAD-HASH",
+        category="html_source",
+        lead_type="possible_hash",
+        url="https://portal.example.test/source",
+    )
+
+    thread = build_investigation_threads(
+        _project_state(),
+        review_leads=[lead],
+    )[0]
+
+    assert thread.title == "Encoded or source artefact review"
+    assert "Validate encoded or hash-shaped artefacts locally." in (
+        thread.suggested_manual_review_order
+    )
+
+
+def test_mixed_generic_and_meaningful_high_port_origins_stay_separate() -> None:
+    generic_url = "https://generic.example.test:7443/"
+    application_url = "https://application.example.test:8443/"
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url=generic_url,
+                hostname="generic.example.test",
+                status_code=200,
+                title="It works!",
+                technologies=[],
+                content_length=100,
+                evidence_ids=["EVID-GENERIC"],
+                tags=[],
+            ),
+            HTTPService(
+                url=application_url,
+                hostname="application.example.test",
+                status_code=200,
+                title="Operations workspace",
+                technologies=[],
+                content_length=200,
+                evidence_ids=["EVID-APPLICATION"],
+                tags=[],
+            ),
+        ]
+    )
+    candidates = [
+        _candidate(
+            "CAND-GENERIC",
+            "high_port_http_service",
+            endpoints=[generic_url],
+            evidence_ids=["EVID-GENERIC"],
+        ),
+        _candidate(
+            "CAND-APPLICATION",
+            "high_port_http_service",
+            endpoints=[application_url],
+            evidence_ids=["EVID-APPLICATION"],
+        ),
+    ]
+
+    first = build_investigation_threads(state, candidates)
+    second = build_investigation_threads(state, candidates)
+
+    assert first == second
+    assert len(first) == 2
+    meaningful = next(
+        thread for thread in first if thread.title == "High-port HTTP application review"
+    )
+    generic = next(
+        thread for thread in first if thread.title == "Generic high-port HTTP service context"
+    )
+    assert meaningful.priority == "medium"
+    assert meaningful.related_endpoints == (application_url,)
+    assert meaningful.related_candidate_ids == ("CAND-APPLICATION",)
+    assert generic.priority == "low"
+    assert generic.related_endpoints == (generic_url,)
+    assert generic.related_candidate_ids == ("CAND-GENERIC",)
+    assert first.index(meaningful) < first.index(generic)
+    generic_guidance = " ".join(generic.suggested_manual_review_order).lower()
+    assert "encoded" not in generic_guidance
+    assert "credential" not in generic_guidance
+
+
+def test_multiple_high_port_origins_group_only_with_matching_priority() -> None:
+    generic_urls = (
+        "https://one.example.test:7443/",
+        "https://two.example.test:8443/",
+    )
+    meaningful_urls = (
+        "https://three.example.test:9443/",
+        "https://four.example.test:10443/",
+    )
+    services = [
+        *(
+            HTTPService(
+                url=url,
+                hostname=url.split("//", 1)[1].split(":", 1)[0],
+                status_code=200,
+                title="It works!",
+                technologies=[],
+                content_length=100,
+                evidence_ids=[f"EVID-GENERIC-{index}"],
+                tags=[],
+            )
+            for index, url in enumerate(generic_urls, start=1)
+        ),
+        *(
+            HTTPService(
+                url=url,
+                hostname=url.split("//", 1)[1].split(":", 1)[0],
+                status_code=200,
+                title="Team workspace",
+                technologies=[],
+                content_length=200,
+                evidence_ids=[f"EVID-APP-{index}"],
+                tags=[],
+            )
+            for index, url in enumerate(meaningful_urls, start=1)
+        ),
+    ]
+
+    threads = build_investigation_threads(_project_state(http_services=services))
+
+    assert len(threads) == 2
+    meaningful = next(thread for thread in threads if thread.priority == "medium")
+    generic = next(thread for thread in threads if thread.priority == "low")
+    assert meaningful.related_endpoints == tuple(sorted(meaningful_urls))
+    assert generic.related_endpoints == tuple(sorted(generic_urls))
+
+
 def test_thread_order_and_ids_are_deterministic() -> None:
     state = _project_state(
         http_services=[
@@ -186,18 +452,18 @@ def test_thread_order_and_ids_are_deterministic() -> None:
         "THREAD-0003",
     ]
     assert [thread.title for thread in first] == [
+        "Encoded or source artefact review",
         "High-port HTTP application review",
         "Discovered hidden-path review",
-        "Encoded or source artefact review",
     ]
-    assert first[2].priority == "high"
+    assert first[0].priority == "high"
 
     markdown = render_investigation_threads_markdown(first)
-    assert markdown.index("### THREAD-0001: High-port HTTP application review") < markdown.index(
-        "### THREAD-0002: Discovered hidden-path review"
+    assert markdown.index("### THREAD-0001: Encoded or source artefact review") < markdown.index(
+        "### THREAD-0002: High-port HTTP application review"
     )
-    assert markdown.index("### THREAD-0002: Discovered hidden-path review") < markdown.index(
-        "### THREAD-0003: Encoded or source artefact review"
+    assert markdown.index("### THREAD-0002: High-port HTTP application review") < markdown.index(
+        "### THREAD-0003: Discovered hidden-path review"
     )
 
 
@@ -253,11 +519,11 @@ def test_runbook_workflow_renderer_preserves_thread_order_and_core_fields() -> N
     assert markdown.startswith("## Standard Investigation Workflow")
     assert "manual review prompts, not confirmed findings" in markdown
     assert "Offline Route/Source Review section" in markdown
-    assert markdown.index("### THREAD-0001: High-port HTTP application review") < markdown.index(
-        "### THREAD-0002: Discovered hidden-path review"
+    assert markdown.index("### THREAD-0001: Encoded or source artefact review") < markdown.index(
+        "### THREAD-0002: High-port HTTP application review"
     )
-    assert markdown.index("### THREAD-0002: Discovered hidden-path review") < markdown.index(
-        "### THREAD-0003: Encoded or source artefact review"
+    assert markdown.index("### THREAD-0002: High-port HTTP application review") < markdown.index(
+        "### THREAD-0003: Discovered hidden-path review"
     )
     assert "* Related endpoints:" in markdown
     assert "`EVID-SVC`" in markdown
@@ -322,9 +588,9 @@ def test_standard_thread_renderers_include_context_guidance_without_reordering()
         "THREAD-0003",
     ]
     assert [thread.title for thread in threads] == [
+        "Encoded or source artefact review",
         "High-port HTTP application review",
         "Discovered hidden-path review",
-        "Encoded or source artefact review",
     ]
     assert "In a bug bounty context, treat this as low-confidence metadata" in report_markdown
     assert "In a bug bounty context, treat this as low-confidence metadata" in runbook_markdown

@@ -284,7 +284,8 @@ def test_human_collection_markdown_redacts_retained_set_cookie_values() -> None:
     assert result.collected[0].headers[1][1].startswith("session_id=target-secret")
     assert "target-secret" not in rendered
     assert "session_id=<redacted>; Path=/; HttpOnly; SameSite=Lax" in rendered
-    assert "Machine-readable collection evidence retains complete response headers" in rendered
+    assert "Sensitive evidence notice" not in rendered
+    assert "cookie values" not in rendered
 
 
 def test_full_body_is_available_but_not_represented_or_rendered() -> None:

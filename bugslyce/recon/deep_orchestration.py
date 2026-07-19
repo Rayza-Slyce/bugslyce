@@ -7,10 +7,14 @@ inspect directories.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 
+from bugslyce.core.sensitive_evidence import (
+    DEEP_SENSITIVE_EVIDENCE_NOTICE,
+    without_generic_sensitive_retention_notes,
+)
 from bugslyce.recon.deep_collection_review_bundle import (
     DeepCollectionReviewBundle,
     build_deep_collection_review_bundle,
@@ -177,6 +181,24 @@ def build_deep_recon_orchestration(
         form_inventory.safety_notes,
         parameter_inventory.safety_notes,
     )
+    report_http_summary = replace(
+        http_summary,
+        safety_notes=without_generic_sensitive_retention_notes(
+            http_summary.safety_notes
+        ),
+    )
+    report_redirect_review = replace(
+        redirect_review,
+        safety_notes=without_generic_sensitive_retention_notes(
+            redirect_review.safety_notes
+        ),
+    )
+    report_shallow_followups = replace(
+        shallow_followups,
+        safety_notes=without_generic_sensitive_retention_notes(
+            shallow_followups.safety_notes
+        ),
+    )
     report_markdown = _combined_report_markdown(
         (
             _render_deep_execution_state_markdown(
@@ -184,12 +206,14 @@ def build_deep_recon_orchestration(
                 deep_collection_completed=deep_collection_completed,
             ),
             render_deep_collection_review_bundle_markdown(collection_bundle),
-            render_deep_http_fingerprint_summary_markdown(http_summary),
-            render_deep_redirect_auth_flow_review_markdown(redirect_review),
+            render_deep_http_fingerprint_summary_markdown(report_http_summary),
+            render_deep_redirect_auth_flow_review_markdown(report_redirect_review),
             render_deep_response_similarity_review_markdown(similarity_review),
             render_deep_html_route_extraction_markdown(html_routes),
             render_deep_javascript_route_extraction_markdown(javascript_routes),
-            render_deep_shallow_route_followup_result_markdown(shallow_followups),
+            render_deep_shallow_route_followup_result_markdown(
+                report_shallow_followups
+            ),
             render_deep_form_inventory_markdown(form_inventory),
             render_deep_parameter_inventory_markdown(parameter_inventory),
         )
@@ -320,6 +344,7 @@ def _render_deep_execution_state_markdown(
             deep_collection_completed,
         )
     )
+    lines.extend(["", f"- {DEEP_SENSITIVE_EVIDENCE_NOTICE}"])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -364,7 +389,8 @@ def _render_deep_recon_runbook_markdown(
 def _safety_notes(*note_groups: tuple[str, ...]) -> tuple[str, ...]:
     notes: list[str] = list(SAFETY_NOTES)
     for group in note_groups:
-        notes.extend(group)
+        notes.extend(without_generic_sensitive_retention_notes(group))
+    notes.append(DEEP_SENSITIVE_EVIDENCE_NOTICE)
     deduped: list[str] = []
     seen: set[str] = set()
     for note in notes:

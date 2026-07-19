@@ -11,6 +11,11 @@ from bugslyce import __version__
 from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.core.project import build_project_state
 from bugslyce.core.models import DiscoveredPath, ProjectState
+from bugslyce.core.sensitive_evidence import (
+    DEEP_SENSITIVE_EVIDENCE_NOTICE,
+    PACK_SENSITIVE_EVIDENCE_NOTICE,
+    REPORT_SENSITIVE_EVIDENCE_NOTICE,
+)
 from bugslyce.project_pipeline import DEEP_PIPELINE_PROFILE, run_project_pipeline
 from bugslyce.project_session import scaffold_project
 from bugslyce.recon.content_followup import select_content_followup_urls
@@ -145,6 +150,9 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "Optional bounded" in local_runbook
 
     deep_report = (output_dir / "deep_recon_review.md").read_text(encoding="utf-8")
+    deep_runbook = (output_dir / "deep_recon_runbook.md").read_text(
+        encoding="utf-8"
+    )
     primary_report = (output_dir / "report.md").read_text(encoding="utf-8")
     assert "http://10.10.10.10/application-overview.html" in deep_report
     assert "http://10.10.10.10/feature-tour.html" in deep_report
@@ -158,7 +166,30 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "deep_recon_review.md" in primary_report
     assert "Deep profile selected: yes (`deep-bounded`)." in deep_report
     assert "Bounded Deep collection completed" in deep_report
+    assert primary_report.count(REPORT_SENSITIVE_EVIDENCE_NOTICE[0]) == 1
+    assert REPORT_SENSITIVE_EVIDENCE_NOTICE[0] not in local_runbook
+    assert REPORT_SENSITIVE_EVIDENCE_NOTICE[0] not in local_status
+    assert deep_report.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert deep_runbook.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert "see the `report.md` Sensitive Evidence Notice" not in deep_report
+    assert "see the `report.md` Sensitive Evidence Notice" not in deep_runbook
+    assert deep_report.lower().count("may retain complete set-cookie") == 0
+    assert deep_runbook.lower().count("may retain complete set-cookie") == 0
+    assert "Set-Cookie present: yes" in deep_report
+    assert "session_id (Path=/; HttpOnly)" in deep_report
+    assert "retained-cookie-value" not in deep_report
+    retained_headers = [
+        header
+        for item in source_json["collected"]
+        for header in item["headers"]
+        if header[0].casefold() == "set-cookie"
+    ]
+    assert retained_headers == [
+        ["Set-Cookie", "session_id=retained-cookie-value; Path=/; HttpOnly"]
+    ]
     with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
+        packed_report = archive.read("report.md").decode("utf-8")
+        packed_readme = archive.read("BUGSLYCE_EXPORT_README.md").decode("utf-8")
         packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
         packed_status_markdown = archive.read("recon_status.md").decode("utf-8")
         packed_runbook = archive.read("runbook.md").decode("utf-8")
@@ -168,6 +199,17 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
         packed_deep_review = archive.read("raw/deep_recon_review.md").decode(
             "utf-8"
         )
+        packed_deep_runbook = archive.read("raw/deep_recon_runbook.md").decode(
+            "utf-8"
+        )
+        packed_source = json.loads(
+            archive.read("raw/deep_source_route_collection.json").decode("utf-8")
+        )
+    assert packed_report.count(REPORT_SENSITIVE_EVIDENCE_NOTICE[0]) == 1
+    assert sum(
+        packed_readme.count(paragraph) for paragraph in PACK_SENSITIVE_EVIDENCE_NOTICE
+    ) == len(PACK_SENSITIVE_EVIDENCE_NOTICE)
+    assert packed_readme.count("This archive may contain sensitive recon evidence") == 1
     assert packed_status["latest_execution"]["pipeline_final_status"] == "completed"
     assert packed_status_markdown == local_status
     assert packed_runbook == local_runbook
@@ -180,6 +222,14 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert packed_orchestration["deep_collection_completed"] is True
     assert "Deep profile selected: yes (`deep-bounded`)." in packed_deep_review
     assert "Bounded Deep collection completed" in packed_deep_review
+    assert packed_deep_review.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert packed_deep_runbook.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert any(
+        header[1] == "session_id=retained-cookie-value; Path=/; HttpOnly"
+        for item in packed_source["collected"]
+        for header in item["headers"]
+        if header[0].casefold() == "set-cookie"
+    )
 
     discovered = build_project_state(output_dir).discovered_paths
     assert any(
@@ -411,13 +461,18 @@ def _deep_fetcher(request, fetch_urls: list[str]) -> DeepHTTPResponse:
     fetch_urls.append(request.url)
     if request.url == "http://10.10.10.10/sitemap/":
         body = SITEMAP_HTML
+        headers = (
+            ("Content-Type", "text/html"),
+            ("Set-Cookie", "session_id=retained-cookie-value; Path=/; HttpOnly"),
+        )
     else:
         body = b"<!doctype html><html><body>child</body></html>"
+        headers = (("Content-Type", "text/html"),)
     return DeepHTTPResponse(
         url=request.url,
         final_url=request.url,
         status_code=200,
-        headers=(("Content-Type", "text/html"),),
+        headers=headers,
         body=body,
         elapsed_seconds=0.01,
     )

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from bugslyce.core.models import Evidence, HTTPArtifact, ProjectState
 from bugslyce.recon.modes import get_recon_mode
 from bugslyce.recon.standard_interpretation import (
@@ -25,6 +27,34 @@ def test_empty_project_state_produces_empty_safe_assembly() -> None:
     assert "## Manual Review Leads" in assembly.manual_review_leads_markdown
     assert "No interpretation review leads were generated" in assembly.manual_review_leads_markdown
     assert "No vulnerabilities found" not in assembly.manual_review_leads_markdown
+
+
+def test_referenced_direct_leads_keep_interpretation_count_semantics() -> None:
+    assembly = assemble_standard_interpretation_from_project_state(
+        _project_state(),
+        referenced_direct_lead_count=2,
+    )
+
+    assert assembly.review_lead_count == len(assembly.review_leads) == 0
+    assert assembly.referenced_direct_lead_count == 2
+    assert assembly.total_manual_review_prompt_count == 2
+    assert "2 direct structured disclosures" in (
+        assembly.manual_review_leads_markdown or ""
+    )
+    assert "No interpretation review leads were generated" not in (
+        assembly.manual_review_leads_markdown or ""
+    )
+
+
+def test_negative_referenced_direct_lead_count_is_rejected() -> None:
+    with pytest.raises(
+        ValueError,
+        match="referenced_direct_lead_count must not be negative",
+    ):
+        assemble_standard_interpretation_from_project_state(
+            _project_state(),
+            referenced_direct_lead_count=-1,
+        )
 
 
 def test_robots_artifact_produces_robots_review_lead_through_full_chain() -> None:

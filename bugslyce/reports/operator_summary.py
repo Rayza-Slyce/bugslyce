@@ -11,7 +11,8 @@ from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
     classify_encoded_artifact,
-    has_nondefault_application_title,
+    classify_http_service_priority,
+    effective_candidate_priority,
     is_generic_default_page_text,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
@@ -173,6 +174,8 @@ def _candidate_service_lead(
             score=85,
         )
     if candidate.candidate_type == "multiple_http_services":
+        if effective_candidate_priority(project_state, candidate) == "low":
+            return None
         return OperatorSummaryLead(
             title=candidate.title,
             why="Multiple distinct HTTP service origins are recorded for the same host.",
@@ -431,25 +434,17 @@ def _candidate_is_unconfirmed_default_service(
         for endpoint in candidate.affected_endpoints
         if (origin := http_origin_from_url(endpoint)) is not None
     }
-    for service in project_state.http_services:
-        service_origin = http_origin_from_url(service.url)
-        if service_origin not in candidate_origins:
-            continue
-        if (
-            is_generic_default_page_text(service.title)
-            and not has_nondefault_application_title(project_state, service.url)
-        ):
-            return True
-        for artifact in project_state.http_artifacts:
-            if (
-                artifact.artifact_type == "page_title"
-                and http_origin_from_url(artifact.url) == service_origin
-                and urlparse(artifact.url).path in {"", "/"}
-                and is_generic_default_page_text(artifact.value)
-                and not has_nondefault_application_title(project_state, service.url)
-            ):
-                return True
-    return False
+    if not candidate_origins:
+        return False
+    matching_services = [
+        service
+        for service in project_state.http_services
+        if http_origin_from_url(service.url) in candidate_origins
+    ]
+    return bool(matching_services) and all(
+        classify_http_service_priority(project_state, service.url).priority == "low"
+        for service in matching_services
+    )
 
 
 def _coverage_lines(project_state: ProjectState) -> list[str]:

@@ -38,8 +38,6 @@ SAFETY_NOTES = (
     "It does not crawl.",
     "It does not collect query-string URLs.",
     "It does not confirm vulnerabilities.",
-    "Machine-readable collection evidence retains complete response headers, including Set-Cookie values.",
-    "This human-readable Markdown redacts cookie values while preserving cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 

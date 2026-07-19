@@ -112,6 +112,7 @@ from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.reports.operator_summary import OperatorSummaryLead
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
+from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
 
 PIPELINE_PROFILE = QUICK_RECON_PROFILE
@@ -1432,6 +1433,7 @@ def _step_runners(
                 _build_standard_investigation_runbook_section_if_needed(
                     profile,
                     output_dir,
+                    context,
                 )
             ),
         }
@@ -1549,19 +1551,31 @@ def _write_interpretation_report_if_needed(
     if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
         return []
     deep_recon_markdown = None
+    orchestration: DeepReconOrchestrationResult | None = None
+    operator_summary_leads: tuple[OperatorSummaryLead, ...] = ()
     if profile == DEEP_PIPELINE_PROFILE:
         orchestration = _deep_outputs_from_context(context).orchestration
         if orchestration is None:
             raise ValueError("Deep orchestration is required before report generation.")
         deep_recon_markdown = _render_deep_report_index(orchestration)
+        operator_summary_leads = _deep_operator_summary_leads(orchestration)
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
-    assembly = assemble_standard_interpretation_from_project_state(project_state)
+    workflow_leads = build_grouped_workflow_leads(project_state, orchestration)
+    assembly = (
+        assemble_standard_interpretation_from_project_state(
+            project_state,
+            referenced_direct_lead_count=len(operator_summary_leads),
+        )
+        if operator_summary_leads
+        else assemble_standard_interpretation_from_project_state(project_state)
+    )
     engagement_context = getattr(project_state, "engagement_context", "unknown")
     threads = build_investigation_threads(
         project_state,
         candidates,
         assembly.review_leads,
+        workflow_leads=workflow_leads,
     )
     route_source_leads = build_route_source_review(
         project_state,
@@ -1571,6 +1585,8 @@ def _write_interpretation_report_if_needed(
         project_state,
         candidates,
         engagement_context=engagement_context,
+        deep_orchestration=orchestration,
+        workflow_leads=workflow_leads,
     )
     report_kwargs: dict[str, object] = {
         "human_triage_brief_markdown": render_human_triage_brief_markdown(
@@ -1591,9 +1607,7 @@ def _write_interpretation_report_if_needed(
     }
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
-        report_kwargs["operator_summary_leads"] = _deep_operator_summary_leads(
-            orchestration,
-        )
+        report_kwargs["operator_summary_leads"] = operator_summary_leads
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
@@ -1621,6 +1635,7 @@ def _refresh_final_pipeline_outputs(
             _build_standard_investigation_runbook_section_if_needed(
                 result.profile,
                 output_dir,
+                context,
             )
         ),
     }
@@ -1767,6 +1782,7 @@ def _refresh_runbook_after_failure(
             _build_standard_investigation_runbook_section_if_needed(
                 result.profile,
                 output_dir,
+                context,
             )
         ),
     }
@@ -1889,17 +1905,25 @@ def _deep_operator_summary_leads(
 def _build_standard_investigation_runbook_section_if_needed(
     profile: str,
     output_dir: Path,
+    context: dict[str, object] | None = None,
 ) -> str | None:
     if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
         return None
     project_state = build_project_state(output_dir)
     candidates = generate_candidates(project_state)
     assembly = assemble_standard_interpretation_from_project_state(project_state)
+    orchestration = None
+    if profile == DEEP_PIPELINE_PROFILE and context is not None:
+        outputs = context.get("deep_outputs")
+        if isinstance(outputs, DeepPipelineOutputs):
+            orchestration = outputs.orchestration
+    workflow_leads = build_grouped_workflow_leads(project_state, orchestration)
     engagement_context = getattr(project_state, "engagement_context", "unknown")
     threads = build_investigation_threads(
         project_state,
         candidates,
         assembly.review_leads,
+        workflow_leads=workflow_leads,
     )
     return render_standard_investigation_workflow_runbook_section(
         threads,

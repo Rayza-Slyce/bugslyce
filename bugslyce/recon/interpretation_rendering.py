@@ -11,14 +11,29 @@ from bugslyce.recon.interpretation import ReviewLead
 DEFAULT_MAX_VALUE_CHARS = 160
 
 
+def validate_referenced_direct_lead_count(value: int) -> int:
+    """Validate the separate count of direct leads rendered in another section."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("referenced_direct_lead_count must be an integer")
+    if value < 0:
+        raise ValueError("referenced_direct_lead_count must not be negative")
+    return value
+
+
 def render_review_leads_markdown(
     leads: Sequence[ReviewLead],
     *,
     heading: str = "Manual Review Leads",
     max_value_chars: int = DEFAULT_MAX_VALUE_CHARS,
     engagement_context: str | None = None,
+    referenced_direct_lead_count: int = 0,
 ) -> str:
     """Render interpretation review leads as deterministic Markdown."""
+
+    referenced_direct_lead_count = validate_referenced_direct_lead_count(
+        referenced_direct_lead_count
+    )
 
     lines = [
         f"## {heading}",
@@ -31,6 +46,20 @@ def render_review_leads_markdown(
     ]
     if engagement_context is not None:
         lines.extend([engagement_context_review_guidance(engagement_context), ""])
+
+    if not leads and referenced_direct_lead_count:
+        lines.extend(
+            [
+                (
+                    f"{referenced_direct_lead_count} direct structured disclosure"
+                    f"{'s are' if referenced_direct_lead_count != 1 else ' is'} listed "
+                    "once in the Operator Summary as manual-review evidence. No "
+                    "additional offline interpretation leads were generated in this section."
+                ),
+                "",
+            ]
+        )
+        return "\n".join(lines).rstrip() + "\n"
 
     if not leads:
         lines.extend(

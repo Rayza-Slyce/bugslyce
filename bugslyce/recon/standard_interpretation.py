@@ -26,10 +26,17 @@ class StandardInterpretationAssembly:
     manual_review_leads_markdown: str | None
     sources_analyzed: int
     review_lead_count: int
+    referenced_direct_lead_count: int = 0
 
     @property
     def review_leads(self) -> tuple[ReviewLead, ...]:
         return self.collection.review_leads
+
+    @property
+    def total_manual_review_prompt_count(self) -> int:
+        """Count local interpretation leads plus direct leads rendered elsewhere."""
+
+        return self.review_lead_count + self.referenced_direct_lead_count
 
 
 def assemble_standard_interpretation_from_project_state(
@@ -37,6 +44,7 @@ def assemble_standard_interpretation_from_project_state(
     *,
     render_markdown: bool = True,
     max_source_chars: int = DEFAULT_MAX_SOURCE_CHARS,
+    referenced_direct_lead_count: int = 0,
 ) -> StandardInterpretationAssembly:
     """Map project state to sources, collect interpretation, and return assembly."""
 
@@ -48,6 +56,7 @@ def assemble_standard_interpretation_from_project_state(
         sources,
         render_markdown=render_markdown,
         engagement_context=project_state.engagement_context,
+        referenced_direct_lead_count=referenced_direct_lead_count,
     )
     return StandardInterpretationAssembly(
         sources=sources,
@@ -55,4 +64,5 @@ def assemble_standard_interpretation_from_project_state(
         manual_review_leads_markdown=collection.manual_review_leads_markdown,
         sources_analyzed=collection.sources_analyzed,
         review_lead_count=len(collection.review_leads),
+        referenced_direct_lead_count=referenced_direct_lead_count,
     )

@@ -321,8 +321,8 @@ def test_cookie_fingerprint_keeps_names_and_attributes_without_values() -> None:
     assert rendered.count("theme") == 1
     assert "PHPSESSID (Path=/; HttpOnly)" in rendered
     assert "theme (Secure)" in rendered
-    assert "Raw collection evidence may retain complete Set-Cookie headers" in rendered
-    assert "derived human summary omits cookie values" in rendered
+    assert "Sensitive evidence notice" not in rendered
+    assert "cookie values" not in rendered
 
 
 def test_cookie_fingerprint_renders_names_only_when_no_attributes_exist() -> None:

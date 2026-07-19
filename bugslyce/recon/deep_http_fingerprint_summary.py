@@ -58,8 +58,6 @@ SAFETY_NOTES = (
     "No collection or network activity is performed by this summary.",
     "Titles are extracted only when visible in bounded previews.",
     "Not observed headers are evidence notes, not vulnerability findings.",
-    "Raw collection evidence may retain complete Set-Cookie headers and cookie values.",
-    "This derived human summary omits cookie values and shows only cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 TITLE_RE = re.compile(r"<title(?:\s[^>]*)?>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -255,14 +253,9 @@ def render_deep_http_fingerprint_summary_markdown(
             "- Browser-oriented header notes are only attached to HTML-like "
             "responses.",
             "- Strict-Transport-Security is only checked for HTTPS responses.",
-            "- Raw collection artefacts may retain complete Set-Cookie headers. "
-            "This derived summary renders cookie names and relevant attributes, "
-            "but omits cookie values.",
-            "",
-            "### Safety Notes",
-            "",
         ]
     )
+    lines.extend(["", "### Safety Notes", ""])
     lines.extend(f"- {note}" for note in summary.safety_notes)
     lines.append("")
     return "\n".join(lines).rstrip()

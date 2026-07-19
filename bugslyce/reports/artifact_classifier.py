@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 
-from bugslyce.core.models import HTTPArtifact, ProjectState
+from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
 from bugslyce.recon.http_origin import http_origin_from_url
 
 
@@ -56,6 +56,16 @@ class ArtifactClassification:
     """One explainable classification without decoding or interpretation."""
 
     category: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class HttpServicePriority:
+    """Shared concise-report priority for one HTTP service origin."""
+
+    priority: str
+    generic_default_page: bool
+    independent_application_evidence: bool
     reason: str
 
 
@@ -164,6 +174,106 @@ def has_nondefault_application_title(
         and not is_generic_default_page_text(artifact.value)
         for artifact in project_state.http_artifacts
     )
+
+
+def classify_http_service_priority(
+    project_state: ProjectState,
+    service_url: str,
+) -> HttpServicePriority:
+    """Classify service presence consistently across concise report layers."""
+
+    origin = http_origin_from_url(service_url)
+    if origin is None:
+        return HttpServicePriority(
+            priority="medium",
+            generic_default_page=False,
+            independent_application_evidence=False,
+            reason="The service origin could not be compared with collected page evidence.",
+        )
+
+    matching_services = [
+        service
+        for service in project_state.http_services
+        if http_origin_from_url(service.url) == origin
+    ]
+    root_titles = [
+        artifact.value
+        for artifact in project_state.http_artifacts
+        if artifact.artifact_type == "page_title"
+        and http_origin_from_url(artifact.url) == origin
+        and urlparse(artifact.url).path in {"", "/"}
+    ]
+    titles = [
+        *(service.title for service in matching_services if service.title),
+        *root_titles,
+    ]
+    generic_default = any(is_generic_default_page_text(title) for title in titles)
+    nondefault_service_title = any(
+        title and not is_generic_default_page_text(title)
+        for title in titles
+    )
+    independent_application = (
+        nondefault_service_title
+        or has_nondefault_application_title(project_state, service_url)
+    )
+    if generic_default and not independent_application:
+        return HttpServicePriority(
+            priority="low",
+            generic_default_page=True,
+            independent_application_evidence=False,
+            reason=(
+                "The origin presents a generic/default landing page without "
+                "independent non-default application evidence."
+            ),
+        )
+    return HttpServicePriority(
+        priority="medium",
+        generic_default_page=generic_default,
+        independent_application_evidence=independent_application,
+        reason=(
+            "Independent non-default application evidence is present on this origin."
+            if independent_application
+            else "The service is not established as a generic/default landing page."
+        ),
+    )
+
+
+def effective_candidate_priority(
+    project_state: ProjectState,
+    candidate: Candidate,
+) -> str:
+    """Return the shared concise priority without mutating candidate evidence."""
+
+    if candidate.priority == "kill_switch" or candidate.candidate_type not in {
+        "high_port_http_service",
+        "multiple_http_services",
+    }:
+        return candidate.priority
+    candidate_origins = {
+        origin
+        for endpoint in candidate.affected_endpoints
+        if (origin := http_origin_from_url(endpoint)) is not None
+    }
+    matching_services = [
+        service
+        for service in project_state.http_services
+        if http_origin_from_url(service.url) in candidate_origins
+    ]
+    relevant_services = (
+        [
+            service
+            for service in matching_services
+            if (urlparse(service.url).port or 0) not in {0, 80, 443}
+        ]
+        if candidate.candidate_type == "multiple_http_services"
+        else matching_services
+    )
+    if relevant_services and all(
+        classify_http_service_priority(project_state, service.url).priority == "low"
+        for service in relevant_services
+    ):
+        return "low"
+    return candidate.priority
 
 
 def is_absolute_http_reference(value: str) -> bool:

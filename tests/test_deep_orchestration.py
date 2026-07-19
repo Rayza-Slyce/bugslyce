@@ -10,6 +10,10 @@ import zipfile
 import pytest
 
 from bugslyce.core.project import build_project_state
+from bugslyce.core.sensitive_evidence import (
+    DEEP_SENSITIVE_EVIDENCE_NOTICE,
+    is_generic_sensitive_retention_note,
+)
 from bugslyce.project_session import build_project_runbook, scaffold_project
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
@@ -165,6 +169,36 @@ def test_compact_runbook_contains_counts_safety_and_not_full_report() -> None:
     ):
         assert expected in runbook
     assert len(result.safety_notes) == len(set(result.safety_notes))
+    assert result.deep_recon_markdown.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert runbook.count(DEEP_SENSITIVE_EVIDENCE_NOTICE) == 1
+    assert "see the `report.md`" not in result.deep_recon_markdown
+    assert "see the `report.md`" not in runbook
+
+
+def test_individual_deep_stage_notes_do_not_repeat_generic_retention_policy() -> None:
+    from bugslyce.recon.deep_http_fingerprint_summary import (
+        SAFETY_NOTES as FINGERPRINT_NOTES,
+    )
+    from bugslyce.recon.deep_metadata_collector import SAFETY_NOTES as METADATA_NOTES
+    from bugslyce.recon.deep_redirect_auth_flow_review import (
+        SAFETY_NOTES as REDIRECT_NOTES,
+    )
+    from bugslyce.recon.deep_shallow_route_followup import (
+        RESULT_SAFETY_NOTES as SHALLOW_NOTES,
+    )
+    from bugslyce.recon.deep_source_route_collector import (
+        SAFETY_NOTES as SOURCE_NOTES,
+    )
+
+    for notes in (
+        METADATA_NOTES,
+        SOURCE_NOTES,
+        FINGERPRINT_NOTES,
+        REDIRECT_NOTES,
+        SHALLOW_NOTES,
+    ):
+        assert not any(is_generic_sensitive_retention_note(note) for note in notes)
+        assert all("report.md" not in note for note in notes)
 
 
 def test_pure_builder_creates_no_files(tmp_path: Path) -> None:

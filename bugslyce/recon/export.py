@@ -9,29 +9,23 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import zipfile
 
+from bugslyce.core.sensitive_evidence import (
+    EXPORT_RESULT_SENSITIVE_WARNINGS,
+    PACK_SENSITIVE_EVIDENCE_NOTICE,
+)
 from bugslyce.time_utils import Clock, utc_now_iso
 
 
 EXPORT_VERSION = "1.0"
-EXPORT_README_TEMPLATE = """# BugSlyce Evidence Pack Export
-
-Exported at: `{exported_at}`
-
-This archive may contain sensitive recon evidence, including target IP
-addresses, URLs, response headers, saved HTML, service banners, and discovered
-paths. Raw response evidence may include complete Set-Cookie headers, session
-identifiers, tokens, or other target-derived values.
-
-Restrict access to this archive. Do not share it publicly unless sharing is
-authorised and the contents have been reviewed. Delete it, or sanitise retained
-sensitive evidence, after the authorised engagement when it is no longer
-required.
-
-BugSlyce output is evidence for manual review. It does not establish confirmed
-vulnerabilities.
-
-No live commands were executed during export.
-"""
+EXPORT_README_TEMPLATE = (
+    "# BugSlyce Evidence Pack Export\n\n"
+    "Exported at: `{exported_at}`\n\n"
+    + "\n\n".join(PACK_SENSITIVE_EVIDENCE_NOTICE)
+    + "\n\n"
+    "BugSlyce output is evidence for manual review. It does not establish confirmed\n"
+    "vulnerabilities.\n\n"
+    "No live commands were executed during export.\n"
+)
 
 
 @dataclass(frozen=True)
@@ -208,10 +202,7 @@ def export_recon_evidence_pack(
                 else:
                     raise
 
-    warnings = [
-        "This export may contain sensitive recon evidence, including retained response headers, cookie values, session identifiers, or tokens.",
-        "Restrict access and delete or sanitise retained sensitive evidence after the authorised engagement when it is no longer required.",
-    ]
+    warnings = list(EXPORT_RESULT_SENSITIVE_WARNINGS)
     if missing_files:
         warnings.append(
             f"{len(set(missing_files))} referenced or expected file(s) were missing and not included."

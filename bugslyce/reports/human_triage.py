@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
@@ -13,10 +14,14 @@ from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
     classify_encoded_artifact,
-    has_nondefault_application_title,
-    is_generic_default_page_text,
+    classify_http_service_priority,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.triage.workflow_leads import (
+    WorkflowLead,
+    build_grouped_workflow_leads,
+    canonical_workflow_url,
+)
 
 
 MAX_BRIEF_ITEMS = 8
@@ -267,6 +272,8 @@ def build_human_triage_brief(
     candidates: list[Candidate],
     *,
     engagement_context: str | None = None,
+    deep_orchestration: object | None = None,
+    workflow_leads: Sequence[WorkflowLead] | None = None,
 ) -> HumanTriageBrief:
     """Build a deterministic Standard human triage brief from local state."""
 
@@ -282,6 +289,18 @@ def build_human_triage_brief(
     }
     direct_comment_evidence_ids = _useful_source_comment_evidence_ids(project_state)
     grouped_urls = {group.url for group in source_groups if group.url}
+    grouped_workflows = tuple(
+        workflow_leads
+        if workflow_leads is not None
+        else build_grouped_workflow_leads(project_state, deep_orchestration)
+    )
+    grouped_account_urls = {
+        url
+        for lead in grouped_workflows
+        if lead.category == "account_workflow"
+        for url in lead.covered_urls
+    }
+    start.extend(_workflow_triage_item(lead) for lead in grouped_workflows)
 
     _add_candidate_items(
         start,
@@ -290,12 +309,24 @@ def build_human_triage_brief(
         project_state=project_state,
         grouped_evidence_ids=grouped_evidence_ids | direct_comment_evidence_ids,
         grouped_urls=grouped_urls,
+        grouped_account_urls=grouped_account_urls,
     )
     _add_http_service_items(start, ignore, project_state)
     _add_port_service_items(start, project_state)
     access_boundary_paths = _access_boundary_paths_by_url(project_state)
-    _add_endpoint_items(start, ignore, project_state, access_boundary_paths)
-    _add_discovered_path_items(start, ignore, project_state)
+    _add_endpoint_items(
+        start,
+        ignore,
+        project_state,
+        access_boundary_paths,
+        grouped_account_urls,
+    )
+    _add_discovered_path_items(
+        start,
+        ignore,
+        project_state,
+        grouped_account_urls,
+    )
     _add_artifact_items(
         start,
         values,
@@ -362,7 +393,16 @@ def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
             lines.extend(_render_bullet_item(item))
         lines.append("")
     else:
-        lines.extend(["- No compact evidence values were promoted into this section.", ""])
+        lines.extend(
+            [
+                (
+                    "- No additional source-comment, metadata, or encoded values were "
+                    "promoted in this section; review the Operator Summary and Start "
+                    "Here sections for other direct evidence."
+                ),
+                "",
+            ]
+        )
 
     lines.extend(["### Review Next", ""])
     if brief.review_next:
@@ -435,8 +475,20 @@ def _add_candidate_items(
     project_state: ProjectState,
     grouped_evidence_ids: set[str],
     grouped_urls: set[str],
+    grouped_account_urls: set[str],
 ) -> None:
     for candidate in candidates:
+        if candidate.candidate_type == "object_reference_review":
+            continue
+        if (
+            candidate.candidate_type == "auth_surface"
+            and grouped_account_urls
+            and any(
+                _canonical_triage_url(endpoint) in grouped_account_urls
+                for endpoint in candidate.affected_endpoints
+            )
+        ):
+            continue
         if (
             candidate.candidate_type == "high_port_http_service"
             and _candidate_matches_generic_default_service(candidate, project_state)
@@ -477,14 +529,14 @@ def _candidate_matches_generic_default_service(
     }
     if not candidate_origins:
         return False
-    return all(
-        any(
-            http_origin_from_url(service.url) == origin
-            and is_generic_default_page_text(service.title)
-            and not has_nondefault_application_title(project_state, service.url)
-            for service in project_state.http_services
-        )
-        for origin in candidate_origins
+    matching_services = [
+        service
+        for service in project_state.http_services
+        if http_origin_from_url(service.url) in candidate_origins
+    ]
+    return bool(matching_services) and all(
+        classify_http_service_priority(project_state, service.url).priority == "low"
+        for service in matching_services
     )
 
 
@@ -522,10 +574,8 @@ def _add_http_service_items(
             url=service.url,
             signal=f"HTTP {status}: {service.title or 'untitled'}",
         )
-        if (
-            is_generic_default_page_text(service.title)
-            and not has_nondefault_application_title(project_state, service.url)
-        ):
+        service_priority = classify_http_service_priority(project_state, service.url)
+        if service_priority.priority == "low":
             ignore.append(
                 HumanTriageItem(
                     title="Generic/default HTTP landing page",
@@ -581,8 +631,11 @@ def _add_endpoint_items(
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
     access_boundary_paths: dict[str, DiscoveredPath],
+    grouped_account_urls: set[str],
 ) -> None:
     for endpoint in project_state.endpoints:
+        if _canonical_triage_url(endpoint.url) in grouped_account_urls:
+            continue
         access_boundary = access_boundary_paths.get(_canonical_triage_url(endpoint.url))
         if access_boundary is not None:
             if _has_independent_endpoint_evidence(endpoint, access_boundary):
@@ -615,8 +668,11 @@ def _add_discovered_path_items(
     start: list[HumanTriageItem],
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
+    grouped_account_urls: set[str],
 ) -> None:
     for path in project_state.discovered_paths:
+        if _canonical_triage_url(path.url) in grouped_account_urls:
+            continue
         parsed = urlparse(path.url)
         terms = _path_terms(parsed.path)
         tags = {tag.lower() for tag in path.tags}
@@ -658,6 +714,21 @@ def _add_discovered_path_items(
             start.append(_path_item(path.url, path.evidence_ids, "Auth/account path discovered", "auth_route"))
         elif terms & ADMIN_PATH_TERMS:
             start.append(_path_item(path.url, path.evidence_ids, "Admin/hidden path discovered", "admin_route"))
+
+
+def _workflow_triage_item(lead: WorkflowLead) -> HumanTriageItem:
+    return HumanTriageItem(
+        title=lead.title,
+        priority=lead.priority,
+        category=lead.category,
+        source="grouped_workflow_evidence",
+        value=lead.summary,
+        why_it_matters=lead.why_it_matters,
+        suggested_manual_action=lead.suggested_manual_action,
+        evidence_ids=lead.evidence_ids,
+        url=lead.representative_urls[0] if lead.representative_urls else None,
+        signal=lead.signal,
+    )
 
 
 def _access_boundary_paths_by_url(project_state: ProjectState) -> dict[str, DiscoveredPath]:
@@ -707,21 +778,7 @@ def _independent_access_boundary_item(
 
 
 def _canonical_triage_url(value: str | None) -> str:
-    if not value:
-        return ""
-    parsed = urlparse(value)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if not scheme or not host:
-        return value.rstrip("/")
-    try:
-        port = parsed.port
-    except ValueError:
-        return value.rstrip("/")
-    default_port = 80 if scheme == "http" else 443 if scheme == "https" else None
-    netloc = host if port in {None, default_port} else f"{host}:{port}"
-    path = parsed.path or "/"
-    return f"{scheme}://{netloc}{path.rstrip('/') or '/'}"
+    return canonical_workflow_url(value)
 
 
 def _add_artifact_items(
@@ -1057,6 +1114,8 @@ def _build_cards(
     cards: list[ReadableEvidenceCard] = []
     seen_card_keys: set[tuple[str, str, str, tuple[str, ...], str, str]] = set()
     for item in [*start, *values]:
+        if item.category in {"account_workflow", "object_reference_surface"}:
+            continue
         if not item.evidence_ids:
             continue
         card = ReadableEvidenceCard(
@@ -1223,31 +1282,40 @@ def _priority_rank(priority: str) -> int:
 
 def _category_rank(category: str) -> int:
     order = {
-        "auth_route": 0,
-        "directory_listing": 1,
-        "source_context_group": 2,
-        "admin_route": 3,
-        "robots_metadata_value": 4,
-        "robots_metadata": 5,
-        "source_comment": 6,
-        "encoded_source": 7,
-        "http_service": 8,
-        "access_control_context": 9,
-        "service_context": 10,
-        "static_noise": 11,
+        "account_workflow": 0,
+        "auth_route": 1,
+        "directory_listing": 2,
+        "source_context_group": 3,
+        "object_reference_surface": 4,
+        "admin_route": 5,
+        "robots_metadata_value": 6,
+        "robots_metadata": 7,
+        "source_comment": 8,
+        "encoded_source": 9,
+        "http_service": 10,
+        "access_control_context": 11,
+        "service_context": 12,
+        "static_noise": 13,
     }
     return order.get(category, 20)
 
 
 def _render_numbered_item(index: int, item: HumanTriageItem) -> list[str]:
-    return [
+    lines = [
         f"{index}. **{_md(item.title)}**",
         f"   - Why it matters: {_md(item.why_it_matters)}",
-        f"   - Evidence: {format_evidence_ids(item.evidence_ids)}",
-        f"   - Suggested manual action: {_md(item.suggested_manual_action)}",
-        f"   - Signal: {_md(item.signal or item.category)}",
-        "",
     ]
+    if item.category in {"account_workflow", "object_reference_surface"}:
+        lines.append(f"   - Direct context: {_code(item.value)}")
+    lines.extend(
+        [
+            f"   - Evidence: {format_evidence_ids(item.evidence_ids)}",
+            f"   - Suggested manual action: {_md(item.suggested_manual_action)}",
+            f"   - Signal: {_md(item.signal or item.category)}",
+            "",
+        ]
+    )
+    return lines
 
 
 def _render_bullet_item(item: HumanTriageItem) -> list[str]:
@@ -1287,7 +1355,7 @@ def _code(value: object) -> str:
     return f"`{text}`"
 
 
-def _dedupe(values: list[str]) -> list[str]:
+def _dedupe(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     for value in values:
         if value and value not in result:
