@@ -35,6 +35,11 @@ KEYWORDS = {
     "download",
 }
 BASE64_LIKE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
+ABSOLUTE_HTTP_URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+REFERENCE_ATTRIBUTE = re.compile(
+    r"\b(?:href|src)\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))",
+    re.IGNORECASE,
+)
 
 
 def parse_html(path: Path, url: str = "") -> list[HTTPArtifact]:
@@ -72,10 +77,14 @@ def parse_html(path: Path, url: str = "") -> list[HTTPArtifact]:
             re.IGNORECASE,
         )
     )
+    absolute_url_spans = tuple(match.span() for match in ABSOLUTE_HTTP_URL.finditer(searchable))
+    reference_spans = _reference_attribute_value_spans(searchable)
     values.extend(
-        ("encoded_like_artifact", value)
-        for value in (match.group(0) for match in BASE64_LIKE.finditer(searchable))
-        if not _looks_like_url_or_path_fragment(value)
+        ("encoded_like_artifact", match.group(0))
+        for match in BASE64_LIKE.finditer(searchable)
+        if not _span_within_any(match.span(), absolute_url_spans)
+        and not _span_within_any(match.span(), reference_spans)
+        and not _looks_like_url_or_path_fragment(match.group(0))
     )
 
     artifacts: list[HTTPArtifact] = []
@@ -160,4 +169,29 @@ def _looks_like_url_or_path_fragment(value: str) -> bool:
     if any(char in value for char in "+="):
         return False
     parts = [part for part in value.strip("/").split("/") if part]
-    return len(parts) >= 2 and all(re.fullmatch(r"[A-Za-z0-9._~-]+", part) for part in parts)
+    return (
+        len(parts) >= 3
+        and all(re.fullmatch(r"[A-Za-z0-9._~-]+", part) for part in parts)
+        and sum(bool(re.search(r"[a-z]", part)) for part in parts) >= 2
+    )
+
+
+def _span_within_any(
+    candidate: tuple[int, int],
+    containers: tuple[tuple[int, int], ...],
+) -> bool:
+    start, end = candidate
+    return any(
+        container_start <= start and end <= container_end
+        for container_start, container_end in containers
+    )
+
+
+def _reference_attribute_value_spans(value: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    for match in REFERENCE_ATTRIBUTE.finditer(value):
+        for group in ("double", "single", "bare"):
+            if match.group(group) is not None:
+                spans.append(match.span(group))
+                break
+    return tuple(spans)

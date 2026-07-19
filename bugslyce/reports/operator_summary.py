@@ -11,7 +11,10 @@ from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
     classify_encoded_artifact,
+    has_nondefault_application_title,
+    is_generic_default_page_text,
 )
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 REVIEW_TYPE_ORDER = (
@@ -38,6 +41,8 @@ INTERESTING_SEGMENTS = {
     "config",
     "files",
 }
+
+
 @dataclass(frozen=True)
 class OperatorSummaryLead:
     """One compact report lead grounded in existing evidence IDs."""
@@ -73,10 +78,13 @@ class OperatorSummary:
 def build_operator_summary(
     project_state: ProjectState,
     candidates: list[Candidate],
+    *,
+    additional_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> OperatorSummary:
     """Build a conservative ranked summary from structured evidence."""
 
-    leads: list[OperatorSummaryLead] = []
+    body_leads = _body_page_leads(project_state)
+    leads: list[OperatorSummaryLead] = list(additional_leads)
     candidates_by_type = {
         candidate_type: [
             candidate for candidate in candidates if candidate.candidate_type == candidate_type
@@ -85,11 +93,14 @@ def build_operator_summary(
     }
     for candidate_type in REVIEW_TYPE_ORDER:
         for candidate in candidates_by_type[candidate_type]:
-            lead = _candidate_service_lead(candidate)
+            lead = _candidate_service_lead(
+                candidate,
+                project_state,
+            )
             if lead:
                 leads.append(lead)
 
-    leads.extend(_body_page_leads(project_state))
+    leads.extend(body_leads)
     encoded_lead = _encoded_artifact_lead(project_state)
     if encoded_lead:
         leads.append(encoded_lead)
@@ -111,12 +122,18 @@ def build_operator_summary(
 
     return OperatorSummary(
         review_first=ranked,
-        low_signal=_low_signal_items(project_state, candidates)[:8],
+        low_signal=_low_signal_items(
+            project_state,
+            candidates,
+        )[:8],
         coverage=_coverage_lines(project_state),
     )
 
 
-def _candidate_service_lead(candidate: Candidate) -> OperatorSummaryLead | None:
+def _candidate_service_lead(
+    candidate: Candidate,
+    project_state: ProjectState,
+) -> OperatorSummaryLead | None:
     if not candidate.evidence_ids:
         return None
     if candidate.candidate_type == "credential_like_artifact_review":
@@ -141,6 +158,11 @@ def _candidate_service_lead(candidate: Candidate) -> OperatorSummaryLead | None:
             score=(98 if homepage_context else 96) if high_signal else 84,
         )
     if candidate.candidate_type == "high_port_http_service":
+        if _candidate_is_unconfirmed_default_service(
+            candidate,
+            project_state,
+        ):
+            return None
         return OperatorSummaryLead(
             title=candidate.title,
             why="A separate HTTP service is recorded on a non-default high port.",
@@ -202,6 +224,8 @@ def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
         if not evidence_ids:
             continue
         title = title_artifacts[0].value
+        if is_generic_default_page_text(title):
+            continue
         interesting = _interesting_path(parsed.path)
         leads.append(
             OperatorSummaryLead(
@@ -334,6 +358,26 @@ def _low_signal_items(
                     evidence_ids=candidate.evidence_ids,
                 )
             )
+        if (
+            candidate.candidate_type == "high_port_http_service"
+            and candidate.evidence_ids
+            and _candidate_is_unconfirmed_default_service(
+                candidate,
+                project_state,
+            )
+        ):
+            items.append(
+                OperatorSummaryNoise(
+                    title="Generic landing page on a high-port HTTP service",
+                    reason=(
+                        "The unusual port remains useful surface context, but the "
+                        "collected title matches a generic/default landing page and "
+                        "has no stronger independent application evidence."
+                    ),
+                    endpoints=candidate.affected_endpoints,
+                    evidence_ids=candidate.evidence_ids,
+                )
+            )
 
     forbidden_paths = [
         path
@@ -376,6 +420,36 @@ def _low_signal_items(
             )
         )
     return items
+
+
+def _candidate_is_unconfirmed_default_service(
+    candidate: Candidate,
+    project_state: ProjectState,
+) -> bool:
+    candidate_origins = {
+        origin
+        for endpoint in candidate.affected_endpoints
+        if (origin := http_origin_from_url(endpoint)) is not None
+    }
+    for service in project_state.http_services:
+        service_origin = http_origin_from_url(service.url)
+        if service_origin not in candidate_origins:
+            continue
+        if (
+            is_generic_default_page_text(service.title)
+            and not has_nondefault_application_title(project_state, service.url)
+        ):
+            return True
+        for artifact in project_state.http_artifacts:
+            if (
+                artifact.artifact_type == "page_title"
+                and http_origin_from_url(artifact.url) == service_origin
+                and urlparse(artifact.url).path in {"", "/"}
+                and is_generic_default_page_text(artifact.value)
+                and not has_nondefault_application_title(project_state, service.url)
+            ):
+                return True
+    return False
 
 
 def _coverage_lines(project_state: ProjectState) -> list[str]:

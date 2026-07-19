@@ -259,12 +259,15 @@ steps. The pack contains a manifest, safety notes, reports, status, scope,
 pipeline metadata and selected raw evidence.
 
 Evidence packs may contain sensitive target data such as IP addresses, URLs,
-headers, service banners, HTML and discovered paths. Store them carefully and
-do not share them publicly without review. The ZIP is not encrypted and is not
-redacted.
+complete response headers (including `Set-Cookie` values), session identifiers,
+tokens, service banners, HTML and discovered paths. Human-facing summaries
+normally omit cookie values, but raw and machine-readable evidence can retain
+them. Restrict access, review the pack before sharing, and delete it or sanitise
+sensitive retained evidence after the authorised engagement when it is no
+longer required. The ZIP is not encrypted and is not redacted.
 
-An evidence pack is not encrypted and is not redacted. It is not proof that a
-vulnerability exists. Manual validation is required before reporting any issue.
+An evidence pack is not proof that a vulnerability exists. Manual validation
+is required before reporting any issue.
 
 ## 12. Reading Results
 

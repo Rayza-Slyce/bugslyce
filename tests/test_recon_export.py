@@ -195,6 +195,7 @@ def test_export_contains_pack_metadata_scope_and_manifest_artifacts(tmp_path: Pa
             archive.read("bugslyce_export_manifest.json").decode("utf-8")
         )
         readme = archive.read("BUGSLYCE_EXPORT_README.md").decode("utf-8")
+    compact_readme = " ".join(readme.split())
 
     assert {
         "BUGSLYCE_EXPORT_README.md",
@@ -222,6 +223,12 @@ def test_export_contains_pack_metadata_scope_and_manifest_artifacts(tmp_path: Pa
     assert export_manifest["warning"] == "sensitive recon evidence"
     assert export_manifest["no_live_commands_executed"] is True
     assert "may contain sensitive recon evidence" in readme
+    assert "complete Set-Cookie headers" in compact_readme
+    assert "session identifiers, tokens" in compact_readme
+    assert "Restrict access" in compact_readme
+    assert "Delete it, or sanitise retained" in compact_readme
+    assert any("cookie values" in warning for warning in result.warnings)
+    assert any("delete or sanitise" in warning for warning in result.warnings)
     assert "Exported at: `2026-06-14T13:45:12Z`" in readme
     assert "No live commands were executed during export." in readme
 

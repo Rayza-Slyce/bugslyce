@@ -64,6 +64,23 @@ def test_path_like_fragments_are_noise_even_from_body_fetched_context() -> None:
     assert "path fragment" in body_result.reason
 
 
+def test_absolute_documentation_url_is_noise_but_standalone_encoded_value_is_signal() -> None:
+    documentation = classify_encoded_artifact(
+        _artifact("https://tracker.example/issues/AbCdEfGhIjKlMnOpQrStUvWxYz012345")
+    )
+    standalone = classify_encoded_artifact(
+        _artifact("QWxwaGEvQmV0YStHYW1tYTEyMzQ1Njc4OTA=")
+    )
+    slash_containing = classify_encoded_artifact(
+        _artifact("AbCdEfGhIjKlMnOp/QrStUvWxYz0123456789ABC")
+    )
+
+    assert documentation.category == LIKELY_NOISE
+    assert "absolute HTTP" in documentation.reason
+    assert standalone.category in {LIKELY_SIGNAL, POSSIBLE_SIGNAL}
+    assert slash_containing.category in {LIKELY_SIGNAL, POSSIBLE_SIGNAL}
+
+
 def test_unusual_robots_user_agent_is_possible_signal() -> None:
     artifact = HTTPArtifact(
         url="http://10.10.10.10/robots.txt",

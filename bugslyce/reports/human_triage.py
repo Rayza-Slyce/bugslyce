@@ -13,7 +13,10 @@ from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
     classify_encoded_artifact,
+    has_nondefault_application_title,
+    is_generic_default_page_text,
 )
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 MAX_BRIEF_ITEMS = 8
@@ -284,10 +287,11 @@ def build_human_triage_brief(
         start,
         ignore,
         candidates,
+        project_state=project_state,
         grouped_evidence_ids=grouped_evidence_ids | direct_comment_evidence_ids,
         grouped_urls=grouped_urls,
     )
-    _add_http_service_items(start, project_state)
+    _add_http_service_items(start, ignore, project_state)
     _add_port_service_items(start, project_state)
     access_boundary_paths = _access_boundary_paths_by_url(project_state)
     _add_endpoint_items(start, ignore, project_state, access_boundary_paths)
@@ -428,10 +432,16 @@ def _add_candidate_items(
     ignore: list[HumanTriageItem],
     candidates: list[Candidate],
     *,
+    project_state: ProjectState,
     grouped_evidence_ids: set[str],
     grouped_urls: set[str],
 ) -> None:
     for candidate in candidates:
+        if (
+            candidate.candidate_type == "high_port_http_service"
+            and _candidate_matches_generic_default_service(candidate, project_state)
+        ):
+            continue
         if _candidate_duplicate_of_source_group(
             candidate,
             grouped_evidence_ids=grouped_evidence_ids,
@@ -456,7 +466,33 @@ def _add_candidate_items(
             start.append(item)
 
 
-def _add_http_service_items(start: list[HumanTriageItem], project_state: ProjectState) -> None:
+def _candidate_matches_generic_default_service(
+    candidate: Candidate,
+    project_state: ProjectState,
+) -> bool:
+    candidate_origins = {
+        origin
+        for endpoint in candidate.affected_endpoints
+        if (origin := http_origin_from_url(endpoint)) is not None
+    }
+    if not candidate_origins:
+        return False
+    return all(
+        any(
+            http_origin_from_url(service.url) == origin
+            and is_generic_default_page_text(service.title)
+            and not has_nondefault_application_title(project_state, service.url)
+            for service in project_state.http_services
+        )
+        for origin in candidate_origins
+    )
+
+
+def _add_http_service_items(
+    start: list[HumanTriageItem],
+    ignore: list[HumanTriageItem],
+    project_state: ProjectState,
+) -> None:
     for service in project_state.http_services:
         if not service.evidence_ids:
             continue
@@ -464,30 +500,55 @@ def _add_http_service_items(start: list[HumanTriageItem], project_state: Project
         port = parsed.port
         high_port = port is not None and port not in {80, 443}
         status = service.status_code if service.status_code is not None else "unknown"
-        start.append(
-            HumanTriageItem(
-                title=(
-                    "High-port HTTP service review"
-                    if high_port
-                    else "HTTP application surface review"
-                ),
-                priority="medium",
-                category="http_service",
-                source="http_service",
-                value=service.url,
-                why_it_matters=(
-                    "A non-default HTTP port may indicate a separate application surface."
-                    if high_port
-                    else "An HTTP application surface is available for scoped manual review."
-                ),
-                suggested_manual_action=(
-                    "Compare title, status, technology, and nearby evidence before deeper manual review."
-                ),
-                evidence_ids=tuple(service.evidence_ids),
-                url=service.url,
-                signal=f"HTTP {status}: {service.title or 'untitled'}",
-            )
+        item = HumanTriageItem(
+            title=(
+                "High-port HTTP service review"
+                if high_port
+                else "HTTP application surface review"
+            ),
+            priority="medium",
+            category="http_service",
+            source="http_service",
+            value=service.url,
+            why_it_matters=(
+                "A non-default HTTP port may indicate a separate application surface."
+                if high_port
+                else "An HTTP application surface is available for scoped manual review."
+            ),
+            suggested_manual_action=(
+                "Compare title, status, technology, and nearby evidence before deeper manual review."
+            ),
+            evidence_ids=tuple(service.evidence_ids),
+            url=service.url,
+            signal=f"HTTP {status}: {service.title or 'untitled'}",
         )
+        if (
+            is_generic_default_page_text(service.title)
+            and not has_nondefault_application_title(project_state, service.url)
+        ):
+            ignore.append(
+                HumanTriageItem(
+                    title="Generic/default HTTP landing page",
+                    priority="low",
+                    category="default_page_context",
+                    source="http_service",
+                    value=service.url,
+                    why_it_matters=(
+                        "The service remains useful surface evidence, but its title "
+                        "matches a generic/default landing page without stronger "
+                        "independent application evidence."
+                    ),
+                    suggested_manual_action=(
+                        "Keep the service in the inventory and prioritise direct "
+                        "application evidence first."
+                    ),
+                    evidence_ids=tuple(service.evidence_ids),
+                    url=service.url,
+                    signal=f"HTTP {status}: generic/default landing page",
+                )
+            )
+        else:
+            start.append(item)
 
 
 def _add_port_service_items(start: list[HumanTriageItem], project_state: ProjectState) -> None:

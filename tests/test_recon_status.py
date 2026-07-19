@@ -377,6 +377,54 @@ def test_status_reports_completed_deep_pipeline_profile_and_phases(tmp_path: Pat
     assert "- Deep pipeline phases: 2/2" in rendered
 
 
+def test_completed_deep_review_is_primary_and_remaining_collection_is_optional(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="gobuster")
+    (input_dir / "report.md").write_text(
+        "# Report\n\n## Operator Summary\n",
+        encoding="utf-8",
+    )
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+
+    assert "review the Operator Summary" in result.next_actions[0]
+    assert "`report.md`" in result.next_actions[0]
+    assert "Optional additional bounded collection" in result.next_actions[1]
+    assert "`bugslyce recon content-followup`" in result.next_actions[1]
+
+
+def test_incomplete_deep_review_keeps_collection_recovery_first(tmp_path: Path) -> None:
+    input_dir, _scope = _status_input(tmp_path, stage="gobuster")
+    (input_dir / "report.md").write_text(
+        "# Report\n\n## Operator Summary\n",
+        encoding="utf-8",
+    )
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="running",
+        step_statuses={
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "pending",
+        },
+    )
+    _write_deep_artifacts(input_dir)
+
+    result = build_recon_status(input_dir)
+
+    assert "`bugslyce recon content-followup`" in result.next_actions[0]
+    assert "Optional additional bounded collection" not in result.next_actions[0]
+
+
 def test_status_counts_skipped_existing_steps_as_satisfied_pipeline_work(
     tmp_path: Path,
 ) -> None:

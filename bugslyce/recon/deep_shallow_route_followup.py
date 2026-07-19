@@ -26,6 +26,7 @@ from bugslyce.recon.deep_javascript_route_extraction import (
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_source_route_collector import MAX_BODY_PREVIEW_CHARS
 from bugslyce.recon.http_origin import same_http_origin
+from bugslyce.recon.http_header_display import render_response_headers_for_humans
 
 
 DEFAULT_MAX_REQUESTS = 12
@@ -95,6 +96,7 @@ RESULT_SAFETY_NOTES = (
     "Redirects were not manually followed by this phase.",
     "No vulnerability was confirmed.",
     "Network access was limited to the supplied bounded fetcher and the selected plan requests.",
+    "Collected response headers may retain Set-Cookie values in memory; this human-readable Markdown redacts cookie values while preserving cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 
@@ -952,7 +954,7 @@ def _render_collected(item: DeepShallowRouteFollowupCollectedItem) -> list[str]:
     if item.headers:
         lines.append(
             "- Headers: "
-            + _format_compact_values(tuple(f"{name}: {value}" for name, value in item.headers))
+            + _format_compact_values(render_response_headers_for_humans(item.headers))
         )
     lines.extend([f"- Interpretation: {item.interpretation}", ""])
     return lines

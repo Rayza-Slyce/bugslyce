@@ -6,7 +6,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
-from bugslyce.core.models import DiscoveredPath, Endpoint, HTTPArtifact
+from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, HTTPArtifact, HTTPService
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.human_triage import (
     build_human_triage_brief,
@@ -19,6 +19,7 @@ from bugslyce.reports.markdown import (
     render_markdown_report,
     write_project_outputs,
 )
+from bugslyce.reports.operator_summary import OperatorSummaryLead
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -38,6 +39,9 @@ def test_markdown_report_renders_for_basic_saas() -> None:
     assert "basic_saas" in report
     assert f"Generated at: `{_state.generated_at}`" in report
     assert "- Engagement context: Unknown / not specified" in report
+    assert "Evidence directories and exported ZIP packs may retain" in report
+    assert "cookie values, session identifiers, or tokens" in report
+    assert "delete or sanitise sensitive retained evidence" in report
 
 
 def test_report_includes_project_engagement_context(tmp_path: Path) -> None:
@@ -612,6 +616,245 @@ def test_operator_summary_prioritises_services_and_separates_noise() -> None:
     assert "vulnerable" not in summary.lower()
     assert "exploitable" not in summary.lower()
     assert "confirmed issue" not in summary.lower()
+
+
+def test_direct_structured_disclosures_rank_first_while_generic_service_stays_low() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    service_url = "https://app.example-bounty.test:8443/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=service_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Welcome to nginx!",
+                technologies=["HTTP"],
+                content_length=612,
+                evidence_ids=["EVID-DEFAULT-SERVICE"],
+                tags=[],
+            )
+        ],
+    )
+    high_port = Candidate(
+        id="CAND-DEFAULT-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["app.example-bounty.test"],
+        affected_endpoints=[service_url],
+        evidence_ids=["EVID-DEFAULT-SERVICE"],
+        suggested_manual_validation=["Compare the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+    direct_leads = (
+        OperatorSummaryLead(
+            title="Structured operational configuration observed",
+            why="Collected plaintext contains coherent directive and assignment structure.",
+            endpoints=["https://app.example-bounty.test:8443/runtime.conf"],
+            evidence_ids=["EVID-CONFIG"],
+            next_action="Inspect the saved response in context.",
+            signal="high",
+            score=97,
+        ),
+        OperatorSummaryLead(
+            title="Routes disclosed by structured JSON response",
+            why="Valid JSON directly contains bounded relative route strings.",
+            endpoints=["https://app.example-bounty.test:8443/catalogue.json"],
+            evidence_ids=["EVID-JSON"],
+            next_action="Correlate the disclosed routes with existing evidence.",
+            signal="high",
+            score=94,
+        ),
+    )
+
+    report = render_markdown_report(
+        state,
+        [high_port],
+        operator_summary_leads=direct_leads,
+    )
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    low_signal = report.split("### Low-Signal / Avoid Rabbit Holes", 1)[1].split(
+        "### Current Coverage",
+        1,
+    )[0]
+
+    assert review_first.index("Structured operational configuration observed") < review_first.index(
+        "Routes disclosed by structured JSON response"
+    )
+    assert "High-port HTTP service review" not in review_first
+    assert "Generic landing page on a high-port HTTP service" in low_signal
+    triage = build_human_triage_brief(state, [high_port])
+    assert not any(
+        item.category == "high_port_http_service" for item in triage.start_here
+    )
+    assert any(
+        item.category == "default_page_context" for item in triage.ignore_for_now
+    )
+
+
+def test_generic_high_port_landing_page_without_independent_signal_is_low_priority() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    service_url = "https://default.example-bounty.test:9443/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=service_url,
+                hostname="default.example-bounty.test",
+                status_code=200,
+                title="Welcome to nginx!",
+                technologies=["HTTP"],
+                content_length=612,
+                evidence_ids=["EVID-DEFAULT-SERVICE"],
+                tags=[],
+            )
+        ],
+    )
+    candidate = Candidate(
+        id="CAND-DEFAULT-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["default.example-bounty.test"],
+        affected_endpoints=[service_url],
+        evidence_ids=["EVID-DEFAULT-SERVICE"],
+        suggested_manual_validation=["Compare the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+
+    report = render_markdown_report(state, [candidate])
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    low_signal = report.split("### Low-Signal / Avoid Rabbit Holes", 1)[1].split(
+        "### Current Coverage",
+        1,
+    )[0]
+
+    assert "High-port HTTP service review" not in review_first
+    assert "Generic landing page on a high-port HTTP service" in low_signal
+    assert service_url in low_signal
+    triage = build_human_triage_brief(state, [candidate])
+    assert not any(
+        item.category == "high_port_http_service"
+        for item in triage.start_here
+    )
+    assert sum(
+        item.category == "default_page_context"
+        and item.url == service_url
+        for item in triage.ignore_for_now
+    ) == 1
+
+
+def test_nonroot_application_title_promotes_generic_root_service_consistently() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    service_url = "https://portal.example-bounty.test:9443/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=service_url,
+                hostname="portal.example-bounty.test",
+                status_code=200,
+                title="Welcome to nginx!",
+                technologies=["HTTP"],
+                content_length=612,
+                evidence_ids=["EVID-GENERIC-ROOT"],
+                tags=[],
+            )
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url=f"{service_url}workspace",
+                artifact_type="page_title",
+                value="Operations workspace",
+                source_file="body-fetch-workspace.html",
+                evidence_ids=["EVID-APPLICATION-TITLE"],
+                tags=[],
+            )
+        ],
+    )
+    candidate = Candidate(
+        id="CAND-GENERIC-ROOT-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["portal.example-bounty.test"],
+        affected_endpoints=[service_url],
+        evidence_ids=["EVID-GENERIC-ROOT"],
+        suggested_manual_validation=["Compare the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+
+    report = render_markdown_report(state, [candidate])
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+    triage = build_human_triage_brief(state, [candidate])
+
+    assert "High-port HTTP service review" in review_first
+    assert any(
+        item.title == "High-port HTTP service review" for item in triage.start_here
+    )
+    assert not any(
+        item.category == "default_page_context" for item in triage.ignore_for_now
+    )
+
+
+def test_nondefault_high_port_application_remains_operator_review_evidence() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    service_url = "https://app.example-bounty.test:8443/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=service_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Operations workspace",
+                technologies=["HTTP"],
+                content_length=2048,
+                evidence_ids=["EVID-APPLICATION-SERVICE"],
+                tags=[],
+            )
+        ],
+    )
+    high_port = Candidate(
+        id="CAND-APPLICATION-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["app.example-bounty.test"],
+        affected_endpoints=[service_url],
+        evidence_ids=["EVID-APPLICATION-SERVICE"],
+        suggested_manual_validation=["Compare the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+
+    report = render_markdown_report(state, [high_port])
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+
+    assert "High-port HTTP service review" in review_first
+    assert service_url in review_first
+    triage = build_human_triage_brief(state, [high_port])
+    assert any(
+        item.title == "High-port HTTP service review"
+        and item.url == service_url
+        for item in triage.start_here
+    )
 
 
 def test_operator_summary_promotes_generic_body_fetched_200_path(tmp_path: Path) -> None:

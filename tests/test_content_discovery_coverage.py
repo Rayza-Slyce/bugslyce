@@ -113,6 +113,9 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
         (output_dir / "deep_recon_orchestration.json").read_text(encoding="utf-8")
     )
     status_json = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
+    pipeline_json = json.loads(
+        (output_dir / "project_pipeline.json").read_text(encoding="utf-8")
+    )
     sitemap_items = [
         item
         for item in source_json["collected"]
@@ -121,13 +124,25 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert sitemap_items
     assert "application-overview.html" in sitemap_items[0]["body_preview"]
     assert orchestration_json["deep_mode_enabled"] is True
+    assert orchestration_json["deep_profile_selected"] is True
+    assert orchestration_json["deep_collection_completed"] is True
+    assert orchestration_json["deep_offline_review_completed"] is True
+    assert pipeline_json["final_status"] == "completed"
+    pipeline_statuses = {
+        step["step_id"]: step["status"] for step in pipeline_json["steps"]
+    }
+    assert pipeline_statuses["PIPELINE-STEP-010D"] == "completed"
+    assert pipeline_statuses["PIPELINE-STEP-011D"] == "completed"
     assert status_json["latest_execution"]["pipeline_final_status"] == "completed"
-    assert "- Pipeline Final Status: completed" in (output_dir / "recon_status.md").read_text(
-        encoding="utf-8"
-    )
+    local_status = (output_dir / "recon_status.md").read_text(encoding="utf-8")
+    assert "- Pipeline Final Status: completed" in local_status
+    assert "review the Operator Summary in `report.md`" in local_status
+    assert "Optional additional bounded collection:" in local_status
     local_runbook = (output_dir / "runbook.md").read_text(encoding="utf-8")
     assert "Pipeline steps satisfied: 14/14" in local_runbook
     assert "Deep pipeline phases: 2/2" in local_runbook
+    assert "Review the Operator Summary and raw evidence manually." in local_runbook
+    assert "Optional bounded" in local_runbook
 
     deep_report = (output_dir / "deep_recon_review.md").read_text(encoding="utf-8")
     primary_report = (output_dir / "report.md").read_text(encoding="utf-8")
@@ -141,16 +156,30 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "## Deep Collection Review Bundle" not in primary_report
     assert "## Deep Form Inventory" not in primary_report
     assert "deep_recon_review.md" in primary_report
+    assert "Deep profile selected: yes (`deep-bounded`)." in deep_report
+    assert "Bounded Deep collection completed" in deep_report
     with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
         packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
+        packed_status_markdown = archive.read("recon_status.md").decode("utf-8")
         packed_runbook = archive.read("runbook.md").decode("utf-8")
         packed_orchestration = json.loads(
             archive.read("raw/deep_recon_orchestration.json").decode("utf-8")
         )
+        packed_deep_review = archive.read("raw/deep_recon_review.md").decode(
+            "utf-8"
+        )
     assert packed_status["latest_execution"]["pipeline_final_status"] == "completed"
+    assert packed_status_markdown == local_status
+    assert packed_runbook == local_runbook
+    assert "review the Operator Summary in `report.md`" in packed_status_markdown
+    assert "Optional additional bounded collection:" in packed_status_markdown
     assert "Pipeline steps satisfied: 14/14" in packed_runbook
     assert "Deep pipeline phases: 2/2" in packed_runbook
     assert packed_orchestration["deep_mode_enabled"] is True
+    assert packed_orchestration["deep_profile_selected"] is True
+    assert packed_orchestration["deep_collection_completed"] is True
+    assert "Deep profile selected: yes (`deep-bounded`)." in packed_deep_review
+    assert "Bounded Deep collection completed" in packed_deep_review
 
     discovered = build_project_state(output_dir).discovered_paths
     assert any(

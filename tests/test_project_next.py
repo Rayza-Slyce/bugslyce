@@ -185,6 +185,48 @@ def test_project_next_complete_pack_suggests_manual_review_and_export(
     assert f"{output_dir}-evidence-pack.zip" in export.command_preview
 
 
+def test_project_next_completed_deep_review_keeps_remaining_collection_optional(
+    tmp_path: Path,
+) -> None:
+    project_file, output_dir = _project(tmp_path)
+    _write_pack(output_dir, "gobuster")
+    _write(output_dir / "report.md", "# Report\n\n## Operator Summary\n")
+    for name in (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    ):
+        _write(output_dir / name, "{}\n" if name.endswith(".json") else "# Deep\n")
+    _write(
+        output_dir / "project_pipeline.json",
+        json.dumps(
+            {
+                "target": "10.10.10.10",
+                "output_dir": str(output_dir.resolve()),
+                "profile": "deep-bounded",
+                "final_status": "completed",
+                "steps": [
+                    {"step_id": "PIPELINE-STEP-010D", "status": "completed"},
+                    {"step_id": "PIPELINE-STEP-011D", "status": "completed"},
+                ],
+            }
+        ),
+    )
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "manual-review"
+    optional = next(
+        action
+        for action in result.optional_actions
+        if action.id == "optional-content-followup"
+    )
+    assert "recon content-followup" in optional.command_preview
+    assert "--confirm" in optional.command_preview
+
+
 def test_project_next_tiny_completion_suggests_optional_light_plan(
     tmp_path: Path,
 ) -> None:

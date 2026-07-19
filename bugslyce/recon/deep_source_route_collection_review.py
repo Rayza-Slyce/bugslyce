@@ -10,6 +10,15 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
 )
+from bugslyce.recon.deep_structured_body_review import (
+    DeepStructuredBodyDisclosure,
+    analyse_deep_structured_body,
+    render_configuration_excerpt_line,
+)
+from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.deep_shallow_route_followup import (
+    DeepShallowRouteFollowupCollectedItem,
+)
 
 
 STATUS_BUCKET_ORDER = (
@@ -31,19 +40,21 @@ SAFETY_NOTES = (
     "This stage produces static manual-review context only.",
 )
 CATEGORY_PRIORITY = {
-    "redirect_to_login": 0,
-    "cookie_set_on_redirect": 1,
-    "auth_route_response": 2,
-    "forbidden_admin_or_status_route": 3,
-    "admin_status_route_response": 4,
-    "route_redirect": 5,
-    "route_success": 6,
-    "empty_body_response": 7,
-    "repeated_body_signature": 8,
-    "query_string_route_skipped": 9,
-    "metadata_request_skipped": 10,
-    "policy_blocked_skipped": 11,
-    "fetch_error_skipped": 12,
+    "structured_configuration_body": 0,
+    "structured_json_routes": 1,
+    "redirect_to_login": 2,
+    "cookie_set_on_redirect": 3,
+    "auth_route_response": 4,
+    "forbidden_admin_or_status_route": 5,
+    "admin_status_route_response": 6,
+    "route_redirect": 7,
+    "route_success": 8,
+    "empty_body_response": 9,
+    "repeated_body_signature": 10,
+    "query_string_route_skipped": 11,
+    "metadata_request_skipped": 12,
+    "policy_blocked_skipped": 13,
+    "fetch_error_skipped": 14,
 }
 
 
@@ -78,6 +89,10 @@ class DeepSourceRouteReviewLead:
     evidence_ids: tuple[str, ...]
     reason: str
     signals: tuple[str, ...] = ()
+    observed_values: tuple[str, ...] = ()
+    evidence_excerpt: tuple[str, ...] = ()
+    source_body_sha256: str | None = None
+    final_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,17 +116,28 @@ class _PendingLead:
     evidence_ids: tuple[str, ...]
     reason: str
     signals: tuple[str, ...] = ()
+    observed_values: tuple[str, ...] = ()
+    evidence_excerpt: tuple[str, ...] = ()
+    source_body_sha256: str | None = None
+    final_urls: tuple[str, ...] = ()
 
 
 def build_deep_source_route_collection_review(
     result: DeepSourceRouteCollectionResult,
+    *,
+    additional_collected: tuple[DeepShallowRouteFollowupCollectedItem, ...] = (),
 ) -> DeepSourceRouteCollectionReviewSummary:
     """Build a deterministic offline review summary from source/route output."""
 
     status_buckets = _build_status_buckets(result.collected)
     body_signatures = _build_body_signatures(result.collected)
     skip_reasons = _build_skip_reasons(result)
-    review_leads = _build_review_leads(result, body_signatures, skip_reasons)
+    review_leads = _build_review_leads(
+        result,
+        body_signatures,
+        skip_reasons,
+        additional_collected=additional_collected,
+    )
     return DeepSourceRouteCollectionReviewSummary(
         total_collected=result.total_collected,
         total_skipped=result.total_skipped,
@@ -162,6 +188,23 @@ def render_deep_source_route_collection_review_markdown(
             )
             if lead.signals:
                 lines.append(f"  - Signals: {_format_values(lead.signals)}")
+            differing_final_urls = tuple(
+                final_url for final_url in lead.final_urls if final_url not in lead.urls
+            )
+            if differing_final_urls:
+                lines.append(
+                    "  - Final response URLs: " + _format_urls(differing_final_urls)
+                )
+            if lead.observed_values:
+                lines.append(
+                    f"  - Directly observed values: {_format_values(lead.observed_values)}"
+                )
+            if lead.evidence_excerpt:
+                lines.append(
+                    f"  - Bounded evidence excerpt: {_format_values(lead.evidence_excerpt)}"
+                )
+            if lead.source_body_sha256:
+                lines.append(f"  - Source body SHA-256: `{lead.source_body_sha256}`")
             if lead.evidence_ids:
                 lines.append(f"  - Evidence: {_format_values(lead.evidence_ids)}")
     else:
@@ -259,9 +302,36 @@ def _build_review_leads(
     result: DeepSourceRouteCollectionResult,
     body_signatures: tuple[DeepSourceRouteBodySignature, ...],
     skip_reasons: tuple[tuple[str, int], ...],
+    *,
+    additional_collected: tuple[DeepShallowRouteFollowupCollectedItem, ...],
 ) -> tuple[DeepSourceRouteReviewLead, ...]:
     pending: list[_PendingLead] = []
     collected = result.collected
+
+    structured_items = (
+        *((item, item.url) for item in collected),
+        *((item, item.requested_url) for item in additional_collected),
+    )
+    known_urls = tuple(
+        url
+        for collected_item, source_url in structured_items
+        for url in (source_url, collected_item.final_url)
+    )
+    for item, source_url in structured_items:
+        source_origin = http_origin_from_url(item.final_url) or http_origin_from_url(
+            source_url
+        )
+        known_routes = frozenset(
+            urlparse(url).path or "/"
+            for url in known_urls
+            if source_origin is not None and http_origin_from_url(url) == source_origin
+        )
+        for disclosure in analyse_deep_structured_body(
+            item,
+            source_url=source_url,
+            known_routes=known_routes,
+        ):
+            pending.append(_lead_from_structured_disclosure(disclosure))
 
     success_items = [item for item in collected if 200 <= item.status_code <= 299]
     if success_items:
@@ -436,6 +506,32 @@ def _lead_from_items(
     )
 
 
+def _lead_from_structured_disclosure(
+    disclosure: DeepStructuredBodyDisclosure,
+) -> _PendingLead:
+    if disclosure.kind == "structured_json_routes":
+        title = "Relative routes disclosed by structured JSON"
+        evidence_excerpt = disclosure.excerpt_lines
+    else:
+        title = "Structured operational configuration observed in response body"
+        evidence_excerpt = tuple(
+            render_configuration_excerpt_line(value)
+            for value in disclosure.excerpt_lines
+        )
+    return _PendingLead(
+        category=disclosure.kind,
+        title=title,
+        urls=(disclosure.source_url,),
+        final_urls=(disclosure.source_final_url,),
+        evidence_ids=disclosure.evidence_ids,
+        reason=disclosure.reason,
+        signals=(),
+        observed_values=disclosure.observed_values,
+        evidence_excerpt=evidence_excerpt,
+        source_body_sha256=disclosure.source_body_sha256,
+    )
+
+
 def _signals_for_items(items) -> tuple[str, ...]:
     signals: list[str] = []
     for item in items:
@@ -478,6 +574,10 @@ def _assign_lead_ids(
             evidence_ids=lead.evidence_ids,
             reason=lead.reason,
             signals=lead.signals,
+            observed_values=lead.observed_values,
+            evidence_excerpt=lead.evidence_excerpt,
+            source_body_sha256=lead.source_body_sha256,
+            final_urls=lead.final_urls,
         )
         for index, lead in enumerate(ordered, start=1)
     )

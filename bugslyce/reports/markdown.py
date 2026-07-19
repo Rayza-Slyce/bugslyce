@@ -16,7 +16,7 @@ from bugslyce.reports.artifact_classifier import (
     POSSIBLE_SIGNAL,
     classify_encoded_artifact,
 )
-from bugslyce.reports.operator_summary import build_operator_summary
+from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
 from bugslyce.reports.provenance import build_workflow_provenance
 
 
@@ -47,6 +47,7 @@ def render_markdown_report(
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
+    operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> str:
     """Render a cautious deterministic triage report."""
 
@@ -61,7 +62,12 @@ def render_markdown_report(
         "",
     ]
 
-    _operator_summary(lines, project_state, candidates)
+    _operator_summary(
+        lines,
+        project_state,
+        candidates,
+        additional_leads=operator_summary_leads,
+    )
     _optional_prerendered_section(lines, human_triage_brief_markdown)
     _manual_review_leads_section(lines, manual_review_leads_markdown)
     # Phase 93A: already-rendered Deep Markdown belongs at the same report seam
@@ -91,8 +97,14 @@ def _operator_summary(
     lines: list[str],
     project_state: ProjectState,
     candidates: list[Candidate],
+    *,
+    additional_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> None:
-    summary = build_operator_summary(project_state, candidates)
+    summary = build_operator_summary(
+        project_state,
+        candidates,
+        additional_leads=additional_leads,
+    )
     lines.extend(["## Operator Summary", "", "### Review First", ""])
     if not summary.review_first:
         lines.extend(
@@ -150,6 +162,7 @@ def write_project_outputs(
     investigation_threads_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
+    operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -167,6 +180,7 @@ def write_project_outputs(
             investigation_threads_markdown=investigation_threads_markdown,
             route_source_review_markdown=route_source_review_markdown,
             readable_evidence_cards_markdown=readable_evidence_cards_markdown,
+            operator_summary_leads=operator_summary_leads,
         ),
         encoding="utf-8",
     )
@@ -567,6 +581,8 @@ def _safe_next_steps(lines: list[str]) -> None:
             "- Collect request/response evidence before escalating any lead.",
             "- Avoid unsupported claims in notes and summaries.",
             "- Stop on low-signal paths unless new evidence appears.",
+            "- Evidence directories and exported ZIP packs may retain complete response headers, cookie values, session identifiers, or tokens.",
+            "- Restrict access and delete or sanitise sensitive retained evidence after the authorised engagement when it is no longer required.",
             "",
         ]
     )

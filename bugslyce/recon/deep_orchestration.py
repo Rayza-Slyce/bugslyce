@@ -1,8 +1,8 @@
 """Deterministic Phase 93C Deep review orchestration.
 
 This module composes existing offline Deep review stages from already supplied
-bounded collection results. It does not collect, fetch, discover files, inspect
-directories, or enable Deep Recon.
+bounded collection results. It does not collect, fetch, discover files, or
+inspect directories.
 """
 
 from __future__ import annotations
@@ -88,7 +88,6 @@ SAFETY_NOTES = (
     "No parameter value was retained, replayed, guessed, or mutated by orchestration.",
     "Deep outputs are static manual review context only.",
     "No confirmed vulnerability claim is made by orchestration.",
-    "Deep mode was not enabled.",
 )
 
 
@@ -111,16 +110,25 @@ class DeepReconOrchestrationResult:
     deep_recon_markdown: str
     deep_recon_runbook_markdown: str
     safety_notes: tuple[str, ...]
+    deep_profile_selected: bool = False
+    deep_collection_completed: bool | None = None
+    deep_offline_review_completed: bool = True
 
 
 def build_deep_recon_orchestration(
     source_collection: DeepSourceRouteCollectionResult,
     shallow_followups: DeepShallowRouteFollowupResult,
+    *,
+    deep_profile_selected: bool = False,
+    deep_collection_completed: bool | None = None,
 ) -> DeepReconOrchestrationResult:
     """Compose completed offline Deep review stages without collection or IO."""
 
     empty_metadata = _empty_metadata_collection_result()
-    source_review = build_deep_source_route_collection_review(source_collection)
+    source_review = build_deep_source_route_collection_review(
+        source_collection,
+        additional_collected=shallow_followups.collected,
+    )
     collection_bundle = build_deep_collection_review_bundle(
         empty_deep_metadata_collection_review_summary(),
         source_review,
@@ -155,6 +163,10 @@ def build_deep_recon_orchestration(
         parameter_inventory,
     )
     safety_notes = _safety_notes(
+        _deep_execution_state_notes(
+            deep_profile_selected,
+            deep_collection_completed,
+        ),
         collection_bundle.safety_notes,
         http_summary.safety_notes,
         redirect_review.safety_notes,
@@ -167,6 +179,10 @@ def build_deep_recon_orchestration(
     )
     report_markdown = _combined_report_markdown(
         (
+            _render_deep_execution_state_markdown(
+                deep_profile_selected=deep_profile_selected,
+                deep_collection_completed=deep_collection_completed,
+            ),
             render_deep_collection_review_bundle_markdown(collection_bundle),
             render_deep_http_fingerprint_summary_markdown(http_summary),
             render_deep_redirect_auth_flow_review_markdown(redirect_review),
@@ -195,6 +211,9 @@ def build_deep_recon_orchestration(
         deep_recon_markdown=report_markdown,
         deep_recon_runbook_markdown=runbook_markdown,
         safety_notes=safety_notes,
+        deep_profile_selected=deep_profile_selected,
+        deep_collection_completed=deep_collection_completed,
+        deep_offline_review_completed=True,
     )
 
 
@@ -203,9 +222,18 @@ def write_deep_recon_orchestration_artifacts(
     output_dir: Path,
     *,
     force: bool = False,
-    deep_mode_enabled: bool = False,
+    deep_mode_enabled: bool | None = None,
 ) -> tuple[Path, ...]:
-    """Write fixed local Deep orchestration artefacts for explicit export."""
+    """Write fixed artefacts; the immutable result owns Deep execution state."""
+
+    if (
+        deep_mode_enabled is not None
+        and deep_mode_enabled is not result.deep_profile_selected
+    ):
+        raise ValueError(
+            "deep_mode_enabled conflicts with the authoritative orchestration "
+            "result; pass execution state to build_deep_recon_orchestration()."
+        )
 
     output_dir = output_dir.expanduser().resolve()
     if not output_dir.exists():
@@ -230,7 +258,7 @@ def write_deep_recon_orchestration_artifacts(
         if resolved.exists() and not resolved.is_file():
             raise ValueError(f"Deep orchestration artefact path is not a file: {resolved}")
 
-    payload = _orchestration_json_payload(result, deep_mode_enabled=deep_mode_enabled)
+    payload = _orchestration_json_payload(result)
     paths[0].write_text(result.deep_recon_markdown, encoding="utf-8")
     paths[1].write_text(result.deep_recon_runbook_markdown, encoding="utf-8")
     paths[2].write_text(
@@ -277,6 +305,22 @@ def _stage_counts(
 def _combined_report_markdown(blocks: tuple[str, ...]) -> str:
     sections = tuple(block.strip() for block in blocks if block.strip())
     return "\n\n".join(sections).rstrip() + "\n"
+
+
+def _render_deep_execution_state_markdown(
+    *,
+    deep_profile_selected: bool,
+    deep_collection_completed: bool | None,
+) -> str:
+    lines = ["## Deep Execution State", ""]
+    lines.extend(
+        f"- {note}"
+        for note in _deep_execution_state_notes(
+            deep_profile_selected,
+            deep_collection_completed,
+        )
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_deep_recon_runbook_markdown(
@@ -330,11 +374,55 @@ def _safety_notes(*note_groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(deduped)
 
 
+def _deep_execution_state_notes(
+    deep_profile_selected: bool,
+    deep_collection_completed: bool | None,
+) -> tuple[str, ...]:
+    if deep_profile_selected:
+        collection_note = {
+            True: "Bounded Deep collection completed before this offline orchestration.",
+            False: "Bounded Deep collection is recorded as not completed.",
+            None: "Bounded Deep collection completion is not established.",
+        }[deep_collection_completed]
+        return (
+            "Deep profile selected: yes (`deep-bounded`).",
+            collection_note,
+            "Deep offline review orchestration completed.",
+        )
+    collection_note = (
+        "Bounded Deep collection completion was explicitly supplied as completed."
+        if deep_collection_completed is True
+        else "Bounded Deep collection completion is not established."
+        if deep_collection_completed is None
+        else "Bounded Deep collection is recorded as not completed."
+    )
+    return (
+        "Deep profile selection is not established by this standalone offline orchestration.",
+        collection_note,
+        "Deep offline review orchestration completed for the supplied result.",
+    )
+
+
 def _orchestration_json_payload(
     result: DeepReconOrchestrationResult,
-    *,
-    deep_mode_enabled: bool = False,
 ) -> dict[str, object]:
+    structured_disclosures = [
+        {
+            "category": lead.category,
+            "title": lead.title,
+            "source_urls": list(lead.urls),
+            "final_response_urls": list(lead.final_urls),
+            "evidence_ids": list(lead.evidence_ids),
+            "observed_values": list(lead.observed_values),
+            "evidence_excerpt": list(lead.evidence_excerpt),
+            "source_body_sha256": lead.source_body_sha256,
+        }
+        for lead in result.source_route_collection_review.review_leads
+        if lead.category in {
+            "structured_configuration_body",
+            "structured_json_routes",
+        }
+    ]
     return {
         "schema_version": ORCHESTRATION_SCHEMA_VERSION,
         "stage_order": list(result.stage_order),
@@ -346,5 +434,9 @@ def _orchestration_json_payload(
         "report_markdown_file": DEEP_RECON_REVIEW_MARKDOWN,
         "runbook_markdown_file": DEEP_RECON_RUNBOOK_MARKDOWN,
         "no_network_requests_made": True,
-        "deep_mode_enabled": deep_mode_enabled,
+        "deep_mode_enabled": result.deep_profile_selected,
+        "deep_profile_selected": result.deep_profile_selected,
+        "deep_collection_completed": result.deep_collection_completed,
+        "deep_offline_review_completed": result.deep_offline_review_completed,
+        "structured_body_disclosures": structured_disclosures,
     }

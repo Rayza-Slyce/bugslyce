@@ -286,7 +286,7 @@ def test_incomplete_title_is_not_claimed() -> None:
     assert summary.summary_counts.responses_with_title_observed_in_bounded_preview == 0
 
 
-def test_cookie_fingerprint_keeps_names_without_values_or_attributes() -> None:
+def test_cookie_fingerprint_keeps_names_and_attributes_without_values() -> None:
     item = _source_item(
         url="http://example.test/portal.php",
         status_code=302,
@@ -308,13 +308,38 @@ def test_cookie_fingerprint_keeps_names_without_values_or_attributes() -> None:
     assert fingerprint.set_cookie_present is True
     assert fingerprint.set_cookie_count == 2
     assert fingerprint.cookie_names == ("PHPSESSID", "theme")
+    assert fingerprint.cookie_summaries == (
+        "PHPSESSID (Path=/; HttpOnly)",
+        "theme (Secure)",
+    )
     assert summary.summary_counts.responses_setting_cookies == 1
     assert "secret-value" not in repr(summary)
-    assert "HttpOnly" not in repr(summary)
     assert "should-not-copy" not in repr(summary)
     assert "secret-value" not in rendered
-    assert "Cookie names: `PHPSESSID`, `theme`" in rendered
-    assert "No cookie values are retained or rendered." in rendered
+    assert "Cookie names: `PHPSESSID`, `theme`" not in rendered
+    assert rendered.count("PHPSESSID") == 1
+    assert rendered.count("theme") == 1
+    assert "PHPSESSID (Path=/; HttpOnly)" in rendered
+    assert "theme (Secure)" in rendered
+    assert "Raw collection evidence may retain complete Set-Cookie headers" in rendered
+    assert "derived human summary omits cookie values" in rendered
+
+
+def test_cookie_fingerprint_renders_names_only_when_no_attributes_exist() -> None:
+    item = _source_item(
+        url="http://example.test/session",
+        headers=(("Set-Cookie", "session_id=retained-secret-value"),),
+    )
+
+    summary = build_deep_http_fingerprint_summary(
+        _metadata_result(),
+        _source_result(item),
+    )
+    rendered = render_deep_http_fingerprint_summary_markdown(summary)
+
+    assert "Cookie names: `session_id`" in rendered
+    assert "Cookie names and relevant attributes" not in rendered
+    assert "retained-secret-value" not in rendered
 
 
 def test_interesting_headers_are_allowlisted_bounded_and_normalised() -> None:

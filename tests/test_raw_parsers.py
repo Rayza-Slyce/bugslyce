@@ -170,6 +170,64 @@ def test_html_parser_does_not_classify_url_path_fragments_as_encoded(tmp_path: P
     assert "ObsJmP173N2X6dOrAgEAL0Vu" in encoded_values
 
 
+def test_html_parser_does_not_extract_encoded_fragment_from_absolute_documentation_url(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "documentation-link.html"
+    source.write_text(
+        """
+        <html><body>
+          <a href="https://docs.example/reference/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789">
+            Reference
+          </a>
+          <script>const standalone = "QWxwaGEvQmV0YStHYW1tYTEyMzQ1Njc4OTA=";</script>
+          <script>const slashToken = "AbCdEfGhIjKlMnOp/QrStUvWxYz0123456789ABC";</script>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    artifacts = parse_html(source, "https://app.example.test/")
+    encoded_values = {
+        artifact.value
+        for artifact in artifacts
+        if artifact.artifact_type == "encoded_like_artifact"
+    }
+
+    assert "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" not in encoded_values
+    assert "QWxwaGEvQmV0YStHYW1tYTEyMzQ1Njc4OTA=" in encoded_values
+    assert "AbCdEfGhIjKlMnOp/QrStUvWxYz0123456789ABC" in encoded_values
+
+
+def test_html_parser_suppresses_encoded_matches_inside_href_and_src_values(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "reference-paths.html"
+    source.write_text(
+        """
+        <html><body>
+          <a href="/assets/bootstrapbundleminified">asset</a>
+          <script src="//static.example.test/librarybundleminified"></script>
+          <a href="https://docs.example.test/reference/DocumentationBundleMinified">docs</a>
+          <p>AbCdEfGhIjKlMnOp/QrStUvWxYz012345</p>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    artifacts = parse_html(source, "https://app.example.test/")
+    encoded_values = [
+        artifact.value
+        for artifact in artifacts
+        if artifact.artifact_type == "encoded_like_artifact"
+    ]
+
+    assert "bootstrapbundleminified" not in encoded_values
+    assert "librarybundleminified" not in encoded_values
+    assert "DocumentationBundleMinified" not in encoded_values
+    assert "AbCdEfGhIjKlMnOp/QrStUvWxYz012345" in encoded_values
+
+
 def test_html_keyword_matching_respects_token_boundaries(tmp_path: Path) -> None:
     source = tmp_path / "substrings.html"
     source.write_text(

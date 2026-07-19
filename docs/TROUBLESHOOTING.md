@@ -190,6 +190,11 @@ It may contain sensitive target evidence and is not encrypted or redacted.
 Review the ZIP before sharing it. Do not publish target evidence, credentials,
 cookies, tokens or private programme data.
 
+Raw response evidence may retain complete `Set-Cookie` values even when
+human-facing summaries show only cookie names and relevant attributes. Restrict
+access and delete the pack, or sanitise retained sensitive evidence, after the
+authorised engagement when it is no longer required.
+
 ## Getting Diagnostic Information
 
 Safe local commands:

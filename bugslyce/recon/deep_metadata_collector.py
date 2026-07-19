@@ -17,6 +17,7 @@ from bugslyce.recon.deep_collection_policy import (
     DeepCollectionRequest,
 )
 from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
+from bugslyce.recon.http_header_display import render_response_headers_for_humans
 
 
 MAX_BODY_PREVIEW_CHARS = 500
@@ -30,6 +31,8 @@ SAFETY_NOTES = (
     "It does not crawl.",
     "It does not collect non-metadata routes.",
     "It does not confirm vulnerabilities.",
+    "Machine-readable collection evidence retains complete response headers, including Set-Cookie values.",
+    "This human-readable Markdown redacts cookie values while preserving cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 
@@ -204,7 +207,9 @@ def _render_collected_item(item: DeepMetadataCollectedItem) -> list[str]:
     if item.body_preview:
         lines.append(f"  - Body preview: `{item.body_preview}`")
     if item.headers:
-        headers = ", ".join(f"`{name}: {value}`" for name, value in item.headers)
+        headers = ", ".join(
+            f"`{value}`" for value in render_response_headers_for_humans(item.headers)
+        )
         lines.append(f"  - Headers: {headers}")
     if item.evidence_ids:
         evidence = ", ".join(f"`{evidence_id}`" for evidence_id in item.evidence_ids)

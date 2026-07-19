@@ -107,6 +107,8 @@ def build_recon_status(
         manifest=manifest,
         target=target,
         detected=detected,
+        input_dir=input_dir,
+        pipeline_metadata=pipeline_metadata,
     )
     workflow_summary = build_workflow_provenance(project_state)
 
@@ -669,6 +671,8 @@ def _next_actions(
     manifest: dict[str, object],
     target: str,
     detected: dict[str, ReconStatusPhase],
+    input_dir: Path,
+    pipeline_metadata: dict[str, Any] | None,
 ) -> list[str]:
     has = lambda phase_id: detected[phase_id].status == "detected"
     content_considered, content_pending = _pending_content_followups(
@@ -684,24 +688,25 @@ def _next_actions(
     )
 
     actions: list[str] = []
+    collection_action: str
     if (has("nmap_full") or _has_nmap_discovery(manifest)) and not has("nmap_services"):
-        actions.append(
+        collection_action = (
             "Recommended next safe action: run `bugslyce recon nmap-services` "
             "against the existing discovery output after scope review."
         )
     elif project_state.http_services and not has("http_metadata"):
-        actions.append(
+        collection_action = (
             "Recommended next safe action: run `bugslyce recon http-metadata` "
             "for the already discovered HTTP services."
         )
     elif content_pending:
-        actions.append(
+        collection_action = (
             "Recommended next safe action: run `bugslyce recon content-followup`; "
             f"{len(content_pending)} eligible URL(s) remain from {content_considered} "
             "content-discovery path(s) considered."
         )
     elif body_pending:
-        actions.append(
+        collection_action = (
             "Recommended next safe action: run `bugslyce recon body-fetch`; "
             f"{len(body_pending)} eligible URL(s) remain from {body_considered} "
             "followed path(s) considered."
@@ -712,22 +717,35 @@ def _next_actions(
         and not has("path_followup")
         and not (has("content_tiny") or has("content_light"))
     ):
-        actions.append(
+        collection_action = (
             "Recommended next safe action: run `bugslyce recon path-followup` "
             "for same-origin paths already present in HTTP evidence."
         )
     elif project_state.http_services and not (
         has("content_plan") or has("content_tiny") or has("content_light")
     ):
-        actions.append(
+        collection_action = (
             "Recommended next safe action: create a `lab-root-tiny` "
             "`bugslyce recon content-plan` for the discovered HTTP origins."
         )
     else:
-        actions.append(
+        collection_action = (
             "No eligible automated follow-up appears pending; review the Operator "
             "Summary and raw evidence manually."
         )
+
+    if _completed_deep_review_available(input_dir, pipeline_metadata):
+        actions.append(
+            "Recommended next safe action: review the Operator Summary in `report.md` "
+            "and correlate its concise leads with the retained Deep review artefacts."
+        )
+        if collection_action.startswith("Recommended next safe action:"):
+            actions.append(
+                "Optional additional bounded collection:"
+                + collection_action.removeprefix("Recommended next safe action:")
+            )
+    else:
+        actions.append(collection_action)
 
     if has("content_tiny") and not has("content_light"):
         actions.append(
@@ -735,6 +753,34 @@ def _next_actions(
             "and run approved origins one immutable step at a time."
         )
     return actions
+
+
+def _completed_deep_review_available(
+    input_dir: Path,
+    pipeline_metadata: dict[str, Any] | None,
+) -> bool:
+    if not pipeline_metadata:
+        return False
+    if (
+        pipeline_metadata.get("profile") != "deep-bounded"
+        or pipeline_metadata.get("final_status") != "completed"
+    ):
+        return False
+    statuses = _pipeline_step_statuses(pipeline_metadata)
+    if not all(
+        statuses.get(step_id) == "completed"
+        for step_id in ("PIPELINE-STEP-010D", "PIPELINE-STEP-011D")
+    ):
+        return False
+    required = (
+        input_dir / "report.md",
+        input_dir / "deep_source_route_collection.md",
+        input_dir / "deep_source_route_collection.json",
+        input_dir / "deep_recon_review.md",
+        input_dir / "deep_recon_runbook.md",
+        input_dir / "deep_recon_orchestration.json",
+    )
+    return all(path.is_file() for path in required)
 
 
 def _pending_content_followups(

@@ -19,10 +19,13 @@ Exported at: `{exported_at}`
 
 This archive may contain sensitive recon evidence, including target IP
 addresses, URLs, response headers, saved HTML, service banners, and discovered
-paths.
+paths. Raw response evidence may include complete Set-Cookie headers, session
+identifiers, tokens, or other target-derived values.
 
-Do not share this archive publicly unless sharing is authorised and the
-contents have been reviewed.
+Restrict access to this archive. Do not share it publicly unless sharing is
+authorised and the contents have been reviewed. Delete it, or sanitise retained
+sensitive evidence, after the authorised engagement when it is no longer
+required.
 
 BugSlyce output is evidence for manual review. It does not establish confirmed
 vulnerabilities.
@@ -205,7 +208,10 @@ def export_recon_evidence_pack(
                 else:
                     raise
 
-    warnings = ["This export may contain sensitive recon evidence."]
+    warnings = [
+        "This export may contain sensitive recon evidence, including retained response headers, cookie values, session identifiers, or tokens.",
+        "Restrict access and delete or sanitise retained sensitive evidence after the authorised engagement when it is no longer required.",
+    ]
     if missing_files:
         warnings.append(
             f"{len(set(missing_files))} referenced or expected file(s) were missing and not included."

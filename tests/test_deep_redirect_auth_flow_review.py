@@ -392,7 +392,7 @@ def test_renderer_contains_required_cautions_and_no_prohibited_language() -> Non
         "Origin comparison is based only on parsed source and Location evidence.",
         "Auth-related classification is lexical path evidence only.",
         "Query values, fragments, and URL userinfo are not retained.",
-        "Cookie values are not retained or rendered.",
+        "Raw collection evidence may retain Set-Cookie values; this derived review renders cookie names only.",
         "No authentication was attempted.",
         "This stage produces static manual-review context only.",
     ):

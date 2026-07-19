@@ -21,6 +21,7 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
 )
+from bugslyce.recon.http_header_display import summarise_set_cookie
 
 
 MAX_RENDERED_VALUES = 6
@@ -57,7 +58,8 @@ SAFETY_NOTES = (
     "No collection or network activity is performed by this summary.",
     "Titles are extracted only when visible in bounded previews.",
     "Not observed headers are evidence notes, not vulnerability findings.",
-    "No cookie values are retained or rendered.",
+    "Raw collection evidence may retain complete Set-Cookie headers and cookie values.",
+    "This derived human summary omits cookie values and shows only cookie names and relevant attributes.",
     "This stage produces static manual-review context only.",
 )
 TITLE_RE = re.compile(r"<title(?:\s[^>]*)?>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -95,6 +97,7 @@ class DeepHttpResponseFingerprint:
     interesting_headers: tuple[DeepHttpHeaderObservation, ...]
     headers_not_observed: tuple[str, ...]
     evidence_ids: tuple[str, ...]
+    cookie_summaries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,7 @@ def build_deep_http_fingerprint_summary(
             set_cookie_present=fingerprint.set_cookie_present,
             set_cookie_count=fingerprint.set_cookie_count,
             cookie_names=fingerprint.cookie_names,
+            cookie_summaries=fingerprint.cookie_summaries,
             body_sha256=fingerprint.body_sha256,
             body_bytes=fingerprint.body_bytes,
             body_empty=fingerprint.body_empty,
@@ -251,8 +255,9 @@ def render_deep_http_fingerprint_summary_markdown(
             "- Browser-oriented header notes are only attached to HTML-like "
             "responses.",
             "- Strict-Transport-Security is only checked for HTTPS responses.",
-            "- Set-Cookie is represented by presence, count, and cookie names "
-            "only; cookie values are not retained or rendered.",
+            "- Raw collection artefacts may retain complete Set-Cookie headers. "
+            "This derived summary renders cookie names and relevant attributes, "
+            "but omits cookie values.",
             "",
             "### Safety Notes",
             "",
@@ -278,6 +283,7 @@ class _PendingFingerprint:
     set_cookie_present: bool
     set_cookie_count: int
     cookie_names: tuple[str, ...]
+    cookie_summaries: tuple[str, ...]
     body_sha256: str
     body_bytes: int
     body_empty: bool
@@ -296,6 +302,7 @@ def _fingerprint_from_collected_item(
     redirect_location = _first_header(headers, "location")
     set_cookie_headers = _all_headers(headers, "set-cookie")
     cookie_names = _cookie_names(set_cookie_headers)
+    cookie_summaries = _cookie_summaries(set_cookie_headers)
     title = _title_from_preview(item.body_preview)
     return _PendingFingerprint(
         collection_section=collection_section,
@@ -311,6 +318,7 @@ def _fingerprint_from_collected_item(
         set_cookie_present=bool(set_cookie_headers),
         set_cookie_count=len(set_cookie_headers),
         cookie_names=cookie_names,
+        cookie_summaries=cookie_summaries,
         body_sha256=item.body_sha256,
         body_bytes=item.body_bytes,
         body_empty=item.body_bytes == 0,
@@ -347,6 +355,15 @@ def _all_headers(headers: tuple[tuple[str, str, str], ...], name: str) -> tuple[
         for lower_name, _original_name, value in headers
         if lower_name == wanted
     )
+
+
+def _cookie_summaries(values: tuple[str, ...]) -> tuple[str, ...]:
+    summaries = [
+        summary.compact
+        for value in values
+        if (summary := summarise_set_cookie(value)) is not None
+    ]
+    return tuple(_dedupe(summaries))
 
 
 def _interesting_header_observations(
@@ -554,7 +571,15 @@ def _render_fingerprint(fingerprint: DeepHttpResponseFingerprint) -> list[str]:
         )
     if fingerprint.set_cookie_present:
         lines.append(f"- Set-Cookie present: yes ({fingerprint.set_cookie_count} line(s))")
-        if fingerprint.cookie_names:
+        if (
+            fingerprint.cookie_summaries
+            and fingerprint.cookie_summaries != fingerprint.cookie_names
+        ):
+            lines.append(
+                "- Cookie names and relevant attributes: "
+                + _format_compact_values(fingerprint.cookie_summaries)
+            )
+        elif fingerprint.cookie_names:
             lines.append(
                 "- Cookie names: " + _format_compact_values(fingerprint.cookie_names)
             )

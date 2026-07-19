@@ -34,27 +34,29 @@ SAFETY_NOTES = (
     "This stage produces static manual-review context only.",
 )
 CATEGORY_PRIORITY = {
-    "redirect_to_login": 0,
-    "cookie_set_on_redirect": 1,
-    "auth_route_response": 2,
-    "forbidden_admin_or_status_route": 3,
-    "admin_status_route_response": 4,
-    "metadata_found": 5,
-    "metadata_redirect": 6,
-    "metadata_error": 7,
-    "metadata_client_error": 8,
-    "metadata_repeated_body": 9,
-    "repeated_body_signature": 10,
-    "route_redirect": 11,
-    "route_success": 12,
-    "empty_body_response": 13,
-    "metadata_missing": 14,
-    "metadata_skipped_policy": 15,
-    "metadata_skipped_non_metadata": 16,
-    "query_string_route_skipped": 17,
-    "metadata_request_skipped": 18,
-    "policy_blocked_skipped": 19,
-    "fetch_error_skipped": 20,
+    "structured_configuration_body": 0,
+    "structured_json_routes": 1,
+    "redirect_to_login": 2,
+    "cookie_set_on_redirect": 3,
+    "auth_route_response": 4,
+    "forbidden_admin_or_status_route": 5,
+    "admin_status_route_response": 6,
+    "metadata_found": 7,
+    "metadata_redirect": 8,
+    "metadata_error": 9,
+    "metadata_client_error": 10,
+    "metadata_repeated_body": 11,
+    "repeated_body_signature": 12,
+    "route_redirect": 13,
+    "route_success": 14,
+    "empty_body_response": 15,
+    "metadata_missing": 16,
+    "metadata_skipped_policy": 17,
+    "metadata_skipped_non_metadata": 18,
+    "query_string_route_skipped": 19,
+    "metadata_request_skipped": 20,
+    "policy_blocked_skipped": 21,
+    "fetch_error_skipped": 22,
 }
 
 
@@ -72,6 +74,10 @@ class DeepCollectionReviewPriority:
     signals: tuple[str, ...]
     suggested_manual_review: str
     safety_note: str
+    observed_values: tuple[str, ...] = ()
+    evidence_excerpt: tuple[str, ...] = ()
+    source_body_sha256: str | None = None
+    final_response_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +115,10 @@ class _PendingPriority:
     signals: tuple[str, ...]
     suggested_manual_review: str
     safety_note: str
+    observed_values: tuple[str, ...] = ()
+    evidence_excerpt: tuple[str, ...] = ()
+    source_body_sha256: str | None = None
+    final_response_urls: tuple[str, ...] = ()
 
 
 def build_deep_collection_review_bundle(
@@ -137,6 +147,10 @@ def build_deep_collection_review_bundle(
             signals=priority.signals,
             suggested_manual_review=priority.suggested_manual_review,
             safety_note=priority.safety_note,
+            observed_values=priority.observed_values,
+            evidence_excerpt=priority.evidence_excerpt,
+            source_body_sha256=priority.source_body_sha256,
+            final_response_urls=priority.final_response_urls,
         )
         for index, priority in enumerate(bounded, start=1)
     )
@@ -227,6 +241,16 @@ def render_deep_collection_review_bundle_markdown(
                     "- Related URLs: "
                     + _format_compact_values(priority.related_urls)
                 )
+            differing_final_urls = tuple(
+                url
+                for url in priority.final_response_urls
+                if url not in priority.related_urls
+            )
+            if differing_final_urls:
+                lines.append(
+                    "- Final response URLs: "
+                    + _format_compact_values(differing_final_urls)
+                )
             if priority.related_evidence_ids:
                 lines.append(
                     "- Evidence: "
@@ -234,6 +258,20 @@ def render_deep_collection_review_bundle_markdown(
                 )
             if priority.signals:
                 lines.append("- Signals: " + _format_compact_values(priority.signals))
+            if priority.observed_values:
+                lines.append(
+                    "- Directly observed values: "
+                    + _format_compact_values(priority.observed_values)
+                )
+            if priority.evidence_excerpt:
+                lines.append(
+                    "- Bounded evidence excerpt: "
+                    + _format_compact_values(priority.evidence_excerpt)
+                )
+            if priority.source_body_sha256:
+                lines.append(
+                    f"- Source body SHA-256: `{priority.source_body_sha256}`"
+                )
             lines.extend(
                 [
                     f"- Suggested manual review: {priority.suggested_manual_review}",
@@ -305,6 +343,10 @@ def _priority_from_source_route_lead(
             "not infer correlation beyond the existing review summary."
         ),
         safety_note="Review-only priority; not a confirmed finding.",
+        observed_values=lead.observed_values,
+        evidence_excerpt=lead.evidence_excerpt,
+        source_body_sha256=lead.source_body_sha256,
+        final_response_urls=lead.final_urls,
     )
 
 
@@ -352,6 +394,20 @@ def _dedupe_pending_priorities(
             signals=tuple(_dedupe([*existing.signals, *priority.signals])),
             suggested_manual_review=existing.suggested_manual_review,
             safety_note=existing.safety_note,
+            observed_values=tuple(
+                _dedupe([*existing.observed_values, *priority.observed_values])
+            ),
+            evidence_excerpt=tuple(
+                _dedupe([*existing.evidence_excerpt, *priority.evidence_excerpt])
+            ),
+            source_body_sha256=(
+                existing.source_body_sha256 or priority.source_body_sha256
+            ),
+            final_response_urls=tuple(
+                _dedupe(
+                    [*existing.final_response_urls, *priority.final_response_urls]
+                )
+            ),
         )
         by_key[key] = merged
         result[result.index(existing)] = merged

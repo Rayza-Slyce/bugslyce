@@ -942,9 +942,35 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         deep_recon_runbook_markdown="## Deep Recon Review Guide\n\nDeep runbook block.\n",
         stage_order=(),
         stage_counts=(),
+        source_route_collection_review=SimpleNamespace(
+            review_leads=(
+                SimpleNamespace(
+                    category="structured_configuration_body",
+                    title="Structured operational configuration observed in response body",
+                    evidence_excerpt=(
+                        "service_name = edge_gateway",
+                        "document_root = /srv/web/current",
+                    ),
+                    observed_values=(),
+                    urls=("https://example.test/runtime.conf",),
+                    final_urls=("https://example.test/runtime.conf",),
+                    evidence_ids=("EVID-CONFIG",),
+                ),
+                SimpleNamespace(
+                    category="structured_json_routes",
+                    title="Relative routes disclosed by structured JSON",
+                    evidence_excerpt=(),
+                    observed_values=("/v2/accounts", "/jobs/open"),
+                    urls=("https://example.test/catalogue",),
+                    final_urls=("https://example.test/catalogue.json",),
+                    evidence_ids=("EVID-JSON",),
+                ),
+            )
+        ),
     )
     identities: dict[str, object] = {}
     captured_report: list[str | None] = []
+    captured_operator_leads: list[tuple] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
     checkpoint_seen: list[dict[str, str]] = []
@@ -1010,8 +1036,16 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         fake_collect_shallow,
     )
 
-    def fake_orchestrate(source_arg, shallow_arg):
+    def fake_orchestrate(
+        source_arg,
+        shallow_arg,
+        *,
+        deep_profile_selected=False,
+        deep_collection_completed=None,
+    ):
         calls.append("deep-orchestrate")
+        assert deep_profile_selected is True
+        assert deep_collection_completed is True
         identities["orchestration_source"] = source_arg
         identities["orchestration_shallow"] = shallow_arg
         return orchestration
@@ -1021,10 +1055,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         fake_orchestrate,
     )
 
-    def fake_write_orchestration(result, output_path, *, force=False, deep_mode_enabled=False):
+    def fake_write_orchestration(result, output_path, *, force=False):
         calls.append("deep-orchestration-write")
         assert result is orchestration
-        assert deep_mode_enabled is True
         paths = (
             output_path / "deep_recon_review.md",
             output_path / "deep_recon_runbook.md",
@@ -1128,10 +1161,12 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_path,
         *,
         deep_recon_markdown=None,
+        operator_summary_leads=(),
         **kwargs,
     ):
         calls.append("deep-report-write")
         captured_report.append(deep_recon_markdown)
+        captured_operator_leads.append(operator_summary_leads)
         report_path = output_path / "report.md"
         json_path = output_path / "project_state.json"
         report_path.write_text(deep_recon_markdown or "", encoding="utf-8")
@@ -1206,6 +1241,21 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert "deep_recon_runbook.md" in captured_report[0]
     assert "deep_recon_orchestration.json" in captured_report[0]
     assert orchestration.deep_recon_markdown not in captured_report
+    assert len(captured_operator_leads) == 1
+    assert tuple(lead.title for lead in captured_operator_leads[0]) == (
+        "Structured operational configuration observed",
+        "Routes disclosed by structured JSON response",
+    )
+    assert captured_operator_leads[0][0].score > 85
+    assert captured_operator_leads[0][1].score > 85
+    assert captured_operator_leads[0][0].evidence_ids == ["EVID-CONFIG"]
+    assert captured_operator_leads[0][1].evidence_ids == ["EVID-JSON"]
+    assert captured_operator_leads[0][1].endpoints == [
+        "https://example.test/catalogue.json"
+    ]
+    assert "request began at `https://example.test/catalogue`" in (
+        captured_operator_leads[0][1].why
+    )
     assert captured_runbook == [
         orchestration.deep_recon_runbook_markdown,
         orchestration.deep_recon_runbook_markdown,
@@ -1279,7 +1329,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     monkeypatch.setattr("bugslyce.project_pipeline.collect_deep_shallow_route_followups", lambda plan, *, fetcher: SimpleNamespace())
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_deep_recon_orchestration",
-        lambda source, shallow: SimpleNamespace(
+        lambda source, shallow, **kwargs: SimpleNamespace(
             deep_recon_markdown="## Deep detail\n",
             deep_recon_runbook_markdown="## Deep guide\n",
             stage_order=(),
@@ -1700,7 +1750,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_deep_recon_orchestration",
-        lambda source, shallow: SimpleNamespace(
+        lambda source, shallow, **kwargs: SimpleNamespace(
             deep_recon_markdown="## Deep\n",
             deep_recon_runbook_markdown="## Guide\n",
         ),
@@ -3125,7 +3175,7 @@ def _patch_minimal_deep_collection(monkeypatch, calls: list[str]) -> None:
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_deep_recon_orchestration",
-        lambda source, shallow: SimpleNamespace(
+        lambda source, shallow, **kwargs: SimpleNamespace(
             deep_recon_markdown="## Deep\n",
             deep_recon_runbook_markdown="## Guide\n",
         ),

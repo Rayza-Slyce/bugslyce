@@ -109,6 +109,7 @@ from bugslyce.reports.human_triage import (
     render_readable_evidence_cards_markdown,
 )
 from bugslyce.reports.markdown import write_project_outputs
+from bugslyce.reports.operator_summary import OperatorSummaryLead
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
 
@@ -1383,12 +1384,13 @@ def _step_runners(
         orchestration = build_deep_recon_orchestration(
             current.source_collection,
             current.shallow_followups,
+            deep_profile_selected=profile == DEEP_PIPELINE_PROFILE,
+            deep_collection_completed=profile == DEEP_PIPELINE_PROFILE,
         )
         artifact_paths = write_deep_recon_orchestration_artifacts(
             orchestration,
             output_dir,
             force=resume,
-            deep_mode_enabled=profile == DEEP_PIPELINE_PROFILE,
         )
         context["deep_outputs"] = replace(
             current,
@@ -1570,7 +1572,7 @@ def _write_interpretation_report_if_needed(
         candidates,
         engagement_context=engagement_context,
     )
-    report_kwargs: dict[str, str | None] = {
+    report_kwargs: dict[str, object] = {
         "human_triage_brief_markdown": render_human_triage_brief_markdown(
             human_triage_brief,
         ),
@@ -1589,6 +1591,9 @@ def _write_interpretation_report_if_needed(
     }
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
+        report_kwargs["operator_summary_leads"] = _deep_operator_summary_leads(
+            orchestration,
+        )
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
@@ -1822,6 +1827,63 @@ def _render_deep_report_index(orchestration: DeepReconOrchestrationResult) -> st
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _deep_operator_summary_leads(
+    orchestration: DeepReconOrchestrationResult,
+) -> tuple[OperatorSummaryLead, ...]:
+    leads: list[OperatorSummaryLead] = []
+    source_review = getattr(orchestration, "source_route_collection_review", None)
+    for lead in getattr(source_review, "review_leads", ()):
+        source_urls = tuple(getattr(lead, "urls", ()))
+        final_urls = tuple(getattr(lead, "final_urls", ()))
+        differing_final_urls = tuple(
+            url for url in final_urls if url not in source_urls
+        )
+        provenance = ""
+        if differing_final_urls:
+            provenance = (
+                " The request began at "
+                + ", ".join(f"`{url}`" for url in source_urls)
+                + " and the retained body came from final response URL "
+                + ", ".join(f"`{url}`" for url in differing_final_urls)
+                + "."
+            )
+        if lead.category == "structured_configuration_body":
+            excerpt = "; ".join(lead.evidence_excerpt[:3])
+            why = (
+                "Collected plaintext contains coherent operational configuration "
+                f"structure. Bounded excerpt: `{excerpt}`.{provenance}"
+            )
+            title = "Structured operational configuration observed"
+            score = 97
+        elif lead.category == "structured_json_routes":
+            routes = ", ".join(f"`{value}`" for value in lead.observed_values[:6])
+            why = (
+                "A valid collected JSON response directly discloses relative route "
+                f"strings: {routes}. No request was generated from these values."
+                f"{provenance}"
+            )
+            title = "Routes disclosed by structured JSON response"
+            score = 94
+        else:
+            continue
+        leads.append(
+            OperatorSummaryLead(
+                title=title,
+                why=why,
+                endpoints=list(differing_final_urls or source_urls),
+                evidence_ids=list(lead.evidence_ids),
+                next_action=(
+                    "Inspect the saved response and correlate the direct values with "
+                    "existing route and service evidence. Do not treat the disclosure "
+                    "as a vulnerability or request uncollected routes automatically."
+                ),
+                signal="high",
+                score=score,
+            )
+        )
+    return tuple(leads)
 
 
 def _build_standard_investigation_runbook_section_if_needed(

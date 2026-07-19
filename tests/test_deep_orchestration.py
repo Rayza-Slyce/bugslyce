@@ -61,6 +61,10 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
     assert result.shallow_route_followup is shallow
     assert result.form_inventory is not None
     assert result.parameter_inventory is not None
+    assert result.deep_profile_selected is False
+    assert result.deep_collection_completed is None
+    assert result.deep_offline_review_completed is True
+    assert "Bounded Deep collection completion is not established." in result.deep_recon_markdown
 
 
 def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypatch) -> None:
@@ -156,7 +160,8 @@ def test_compact_runbook_contains_counts_safety_and_not_full_report() -> None:
         "No JavaScript was executed by orchestration.",
         "No parameter value was retained, replayed, guessed, or mutated by orchestration.",
         "No confirmed vulnerability claim is made by orchestration.",
-        "Deep mode was not enabled.",
+        "Deep profile selection is not established by this standalone offline orchestration.",
+        "Deep offline review orchestration completed for the supplied result.",
     ):
         assert expected in runbook
     assert len(result.safety_notes) == len(set(result.safety_notes))
@@ -192,20 +197,267 @@ def test_writer_creates_three_deterministic_artifacts(tmp_path: Path) -> None:
     assert payload["runbook_markdown_file"] == DEEP_RECON_RUNBOOK_MARKDOWN
     assert payload["no_network_requests_made"] is True
     assert payload["deep_mode_enabled"] is False
-    enabled_paths = write_deep_recon_orchestration_artifacts(
+    before = tuple(path.read_bytes() for path in paths)
+    with pytest.raises(ValueError, match="authoritative orchestration result"):
+        write_deep_recon_orchestration_artifacts(
+            result,
+            tmp_path,
+            force=True,
+            deep_mode_enabled=True,
+        )
+    assert tuple(path.read_bytes() for path in paths) == before
+    compatible_paths = write_deep_recon_orchestration_artifacts(
         result,
         tmp_path,
         force=True,
-        deep_mode_enabled=True,
+        deep_mode_enabled=False,
     )
-    enabled_payload = json.loads(enabled_paths[2].read_text(encoding="utf-8"))
-    assert enabled_payload["deep_mode_enabled"] is True
+    assert tuple(path.read_bytes() for path in compatible_paths) == before
     public_json = paths[2].read_text(encoding="utf-8")
     assert "SECRET_VALUE" not in public_json
     assert "<form" not in public_json
     assert str(tmp_path) not in public_json
     assert public_json.endswith("\n")
     assert write_deep_recon_orchestration_artifacts(result, tmp_path, force=True)[2].read_bytes() == paths[2].read_bytes()
+
+
+def test_selected_deep_profile_records_completed_collection_and_offline_review(
+    tmp_path: Path,
+) -> None:
+    body = json.dumps({"navigation": {"routes": ["/v3/records", "/v3/search"]}}).encode()
+    result = build_deep_recon_orchestration(
+        _source_result(
+            _source_item(
+                url="https://example.test/navigation.json",
+                headers=(("Content-Type", "application/json"),),
+                body=body,
+                evidence_ids=("EVID-JSON",),
+            )
+        ),
+        _shallow_result(),
+        deep_profile_selected=True,
+        deep_collection_completed=True,
+    )
+
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+
+    assert result.deep_profile_selected is True
+    assert result.deep_collection_completed is True
+    assert result.deep_offline_review_completed is True
+    assert "Deep profile selected: yes (`deep-bounded`)." in result.deep_recon_markdown
+    assert "Bounded Deep collection completed" in result.deep_recon_markdown
+    assert "Deep mode was not enabled" not in result.deep_recon_markdown
+    assert payload["deep_mode_enabled"] is True
+    assert payload["deep_profile_selected"] is True
+    assert payload["deep_collection_completed"] is True
+    assert payload["deep_offline_review_completed"] is True
+    assert payload["structured_body_disclosures"] == [
+        {
+            "category": "structured_json_routes",
+            "evidence_excerpt": [],
+            "evidence_ids": ["EVID-JSON"],
+            "final_response_urls": ["https://example.test/navigation.json"],
+            "observed_values": ["/v3/records", "/v3/search"],
+            "source_body_sha256": hashlib.sha256(body).hexdigest(),
+            "source_urls": ["https://example.test/navigation.json"],
+            "title": "Relative routes disclosed by structured JSON",
+        }
+    ]
+    assert result.deep_recon_markdown.count("`/v3/records`") == 1
+    assert result.deep_recon_markdown.count("`/v3/search`") == 1
+
+
+def test_configuration_secret_is_redacted_across_human_review_layers() -> None:
+    from bugslyce.project_pipeline import _deep_operator_summary_leads
+
+    secret = "retained-target-secret-918273"
+    body = (
+        "server_name = application.example.test\n"
+        "listen_port = 8443\n"
+        f"session_token = {secret}\n"
+        "document_root = /srv/application/current\n"
+    ).encode()
+    source_item = _source_item(
+        url="https://example.test/runtime-settings",
+        headers=(("Content-Type", "text/plain"),),
+        body=body,
+        evidence_ids=("EVID-CONFIG-SECRET",),
+    )
+    result = build_deep_recon_orchestration(
+        _source_result(source_item),
+        _shallow_result(),
+        deep_profile_selected=True,
+        deep_collection_completed=True,
+    )
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    report = render_markdown_report(
+        state,
+        generate_candidates(state),
+        operator_summary_leads=_deep_operator_summary_leads(result),
+    )
+
+    assert secret in source_item.body.decode()
+    assert secret in source_item.body_preview
+    assert secret not in result.deep_recon_markdown
+    assert secret not in report
+    assert "session_token = [REDACTED]" in result.deep_recon_markdown
+    assert "session_token = [REDACTED]" in report
+    assert "document_root = /srv/application/current" in result.deep_recon_markdown
+    assert result.deep_recon_markdown.count(
+        "`document_root = /srv/application/current`"
+    ) == 1
+
+
+def test_standalone_offline_review_does_not_claim_collection_completed(
+    tmp_path: Path,
+) -> None:
+    result = build_deep_recon_orchestration(
+        _source_result(_source_item()),
+        _shallow_result(),
+    )
+
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+
+    assert result.deep_profile_selected is False
+    assert result.deep_collection_completed is None
+    assert result.deep_offline_review_completed is True
+    assert payload["deep_mode_enabled"] is False
+    assert payload["deep_collection_completed"] is None
+    assert payload["deep_offline_review_completed"] is True
+    assert "collection completion is not established" in result.deep_recon_markdown
+
+
+def test_explicit_non_deep_incomplete_collection_state_is_rendered_consistently(
+    tmp_path: Path,
+) -> None:
+    result = build_deep_recon_orchestration(
+        _source_result(_source_item()),
+        _shallow_result(),
+        deep_profile_selected=False,
+        deep_collection_completed=False,
+    )
+
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+
+    assert payload["deep_profile_selected"] is False
+    assert payload["deep_collection_completed"] is False
+    assert payload["deep_offline_review_completed"] is True
+    assert "Bounded Deep collection is recorded as not completed." in (
+        result.deep_recon_markdown
+    )
+
+
+def test_legacy_false_flag_does_not_override_authoritative_completed_deep_state(
+    tmp_path: Path,
+) -> None:
+    result = build_deep_recon_orchestration(
+        _source_result(_source_item()),
+        _shallow_result(),
+        deep_profile_selected=True,
+        deep_collection_completed=True,
+    )
+
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    before = tuple(path.read_bytes() for path in paths)
+    with pytest.raises(ValueError, match="authoritative orchestration result"):
+        write_deep_recon_orchestration_artifacts(
+            result,
+            tmp_path,
+            force=True,
+            deep_mode_enabled=False,
+        )
+    assert tuple(path.read_bytes() for path in paths) == before
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+
+    assert payload["deep_mode_enabled"] is True
+    assert payload["deep_profile_selected"] is True
+    assert payload["deep_collection_completed"] is True
+
+
+def test_legacy_true_flag_cannot_enable_standalone_orchestration(
+    tmp_path: Path,
+) -> None:
+    result = build_deep_recon_orchestration(
+        _source_result(_source_item()),
+        _shallow_result(),
+    )
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    before = tuple(path.read_bytes() for path in paths)
+
+    with pytest.raises(ValueError, match="authoritative orchestration result"):
+        write_deep_recon_orchestration_artifacts(
+            result,
+            tmp_path,
+            force=True,
+            deep_mode_enabled=True,
+        )
+
+    assert tuple(path.read_bytes() for path in paths) == before
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+    markdown = paths[0].read_text(encoding="utf-8")
+    assert payload["deep_mode_enabled"] is False
+    assert payload["deep_profile_selected"] is False
+    assert "Deep profile selection is not established" in markdown
+
+
+def test_structured_disclosure_machine_output_keeps_redirect_provenance(
+    tmp_path: Path,
+) -> None:
+    body = json.dumps({"routes": ["/service/health"]}).encode()
+    source_item = _source_item(
+        url="https://example.test/catalogue",
+        final_url="https://example.test/catalogue/",
+        headers=(("Content-Type", "application/json"),),
+        body=body,
+        evidence_ids=("EVID-REDIRECT-JSON",),
+    )
+    result = build_deep_recon_orchestration(
+        _source_result(source_item),
+        _shallow_result(),
+        deep_profile_selected=True,
+        deep_collection_completed=True,
+    )
+
+    paths = write_deep_recon_orchestration_artifacts(result, tmp_path)
+    payload = json.loads(paths[2].read_text(encoding="utf-8"))
+    disclosure = payload["structured_body_disclosures"][0]
+
+    assert disclosure["source_urls"] == ["https://example.test/catalogue"]
+    assert disclosure["final_response_urls"] == ["https://example.test/catalogue/"]
+    assert "Final response URLs: `https://example.test/catalogue/`" in result.deep_recon_markdown
+
+
+def test_existing_shallow_json_body_is_reviewed_without_planning_more_requests() -> None:
+    body = json.dumps(
+        {"related": ["/v4/records", "/v4/summary"]},
+    ).encode()
+    shallow = _shallow_item(
+        url="https://example.test/shallow-data.json",
+        headers=(("Content-Type", "application/json"),),
+        body=body,
+        evidence_ids=("EVID-SHALLOW-JSON",),
+    )
+
+    result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(shallow),
+        deep_profile_selected=True,
+    )
+    lead = next(
+        item
+        for item in result.source_route_collection_review.review_leads
+        if item.category == "structured_json_routes"
+    )
+
+    assert lead.urls == ("https://example.test/shallow-data.json",)
+    assert lead.observed_values == ("/v4/records", "/v4/summary")
+    assert lead.evidence_ids == ("EVID-SHALLOW-JSON",)
+    assert result.source_route_collection_review.total_collected == 0
+    assert result.shallow_route_followup.summary_counts.requests_planned == 1
+    assert "not requested by this review" in lead.reason
 
 
 def test_writer_refuses_overwrite_and_validates_before_writing(tmp_path: Path) -> None:
@@ -312,14 +564,15 @@ def _source_item(
     body: bytes = b"<html><a href='/admin?token=secret'>Admin</a><script>const route='/api?token=secret';</script><form action='/login?next=secret'><input name='user' value='secret'></form></html>",
     body_preview: str = "",
     evidence_ids: tuple[str, ...] = ("EVID-SOURCE",),
+    final_url: str | None = None,
 ) -> DeepSourceRouteCollectedItem:
     return DeepSourceRouteCollectedItem(
         url=url,
         method="GET",
         status_code=200,
-        final_url=url,
+        final_url=final_url or url,
         headers=headers,
-        body_preview=body_preview,
+        body_preview=body_preview or body.decode("utf-8", errors="replace")[:500],
         body_sha256=hashlib.sha256(body).hexdigest(),
         body_bytes=len(body),
         elapsed_seconds=0.1,
@@ -349,8 +602,10 @@ def _shallow_result(*items: DeepShallowRouteFollowupCollectedItem) -> DeepShallo
 def _shallow_item(
     *,
     url: str = "http://example.test/follow",
+    headers: tuple[tuple[str, str], ...] = (("Content-Type", "text/html"),),
     body: bytes = b"<html><form action='/follow-login'><input name='shallow'></form></html>",
     evidence_ids: tuple[str, ...] = ("EVID-SHALLOW",),
+    body_preview: str = "",
 ) -> DeepShallowRouteFollowupCollectedItem:
     return DeepShallowRouteFollowupCollectedItem(
         request_id="DEEP-SHALLOW-REQ-0001",
@@ -358,8 +613,8 @@ def _shallow_item(
         method="GET",
         status_code=200,
         final_url=url,
-        headers=(("Content-Type", "text/html"),),
-        body_preview="",
+        headers=headers,
+        body_preview=body_preview or body.decode("utf-8", errors="replace")[:500],
         body_sha256=hashlib.sha256(body).hexdigest(),
         body_bytes=len(body),
         elapsed_seconds=0.2,

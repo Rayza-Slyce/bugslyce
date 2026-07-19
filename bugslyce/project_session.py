@@ -531,6 +531,33 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         )
 
     optional_actions: list[GuidedProjectAction] = []
+    for action in status.next_actions[1:]:
+        if not action.startswith("Optional additional bounded collection:"):
+            continue
+        if "`bugslyce recon content-followup`" in action:
+            optional_actions.append(
+                _live_action(
+                    "optional-content-followup",
+                    "Optional additional bounded collection from existing content-discovery results.",
+                    _input_scope_confirm_argv("content-followup", project),
+                )
+            )
+        elif "`bugslyce recon body-fetch`" in action:
+            optional_actions.append(
+                _live_action(
+                    "optional-body-fetch",
+                    "Optional bounded body collection for remaining eligible followed paths.",
+                    _input_scope_confirm_argv("body-fetch", project),
+                )
+            )
+        elif "`bugslyce recon path-followup`" in action:
+            optional_actions.append(
+                _live_action(
+                    "optional-path-followup",
+                    "Optional bounded same-origin follow-up for remaining existing evidence paths.",
+                    _input_scope_confirm_argv("path-followup", project),
+                )
+            )
     profiles = status.workflow_summary.content_discovery_profiles
     if "lab-root-tiny" in profiles and "lab-root-light" not in profiles:
         light_plan = _validated_plan_path(project, "lab-root-light")

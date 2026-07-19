@@ -7,7 +7,8 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 
-from bugslyce.core.models import HTTPArtifact
+from bugslyce.core.models import HTTPArtifact, ProjectState
+from bugslyce.recon.http_origin import http_origin_from_url
 
 
 LIKELY_SIGNAL = "likely_signal"
@@ -65,6 +66,11 @@ def classify_encoded_artifact(artifact: HTTPArtifact) -> ArtifactClassification:
     lowered = value.lower()
     if not value:
         return ArtifactClassification(LIKELY_NOISE, "Empty artefact value.")
+    if is_absolute_http_reference(value):
+        return ArtifactClassification(
+            LIKELY_NOISE,
+            "Looks like an ordinary absolute HTTP documentation or resource reference.",
+        )
     if any(marker.lower() in lowered for marker in NOISE_MARKERS):
         return ArtifactClassification(
             LIKELY_NOISE,
@@ -132,6 +138,47 @@ def classify_encoded_artifact(artifact: HTTPArtifact) -> ArtifactClassification:
     return ArtifactClassification(
         LIKELY_NOISE,
         "Value is short, low-diversity, or lacks enough context for review priority.",
+    )
+
+
+def is_generic_default_page_text(value: str | None) -> bool:
+    """Return whether text carries an established generic landing-page marker."""
+
+    lowered = (value or "").strip().lower()
+    return bool(lowered) and any(marker in lowered for marker in DEFAULT_PAGE_MARKERS)
+
+
+def has_nondefault_application_title(
+    project_state: ProjectState,
+    service_url: str,
+) -> bool:
+    """Return whether a non-root title provides application evidence on an origin."""
+
+    origin = http_origin_from_url(service_url)
+    if origin is None:
+        return False
+    return any(
+        artifact.artifact_type == "page_title"
+        and http_origin_from_url(artifact.url) == origin
+        and urlparse(artifact.url).path not in {"", "/"}
+        and not is_generic_default_page_text(artifact.value)
+        for artifact in project_state.http_artifacts
+    )
+
+
+def is_absolute_http_reference(value: str) -> bool:
+    """Recognise a complete HTTP(S) reference without interpreting its path."""
+
+    try:
+        parsed = urlparse(value.strip())
+        _port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    return (
+        parsed.scheme.lower() in {"http", "https"}
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
     )
 
 

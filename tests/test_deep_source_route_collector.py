@@ -262,6 +262,31 @@ def test_collected_item_has_bounded_preview_hash_headers_and_in_memory_body() ->
     assert item.evidence_ids == ("EVID-1", "EVID-2")
 
 
+def test_human_collection_markdown_redacts_retained_set_cookie_values() -> None:
+    request = _request(
+        "http://example.test/session",
+        source="source_route_coverage",
+    )
+    result = collect_deep_source_routes_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=_fake_fetcher(
+            [],
+            body=b"session response",
+            headers=(
+                ("Content-Type", "text/plain"),
+                ("Set-Cookie", "session_id=target-secret; Path=/; HttpOnly; SameSite=Lax"),
+            ),
+        ),
+    )
+
+    rendered = render_deep_source_route_collection_result_markdown(result)
+
+    assert result.collected[0].headers[1][1].startswith("session_id=target-secret")
+    assert "target-secret" not in rendered
+    assert "session_id=<redacted>; Path=/; HttpOnly; SameSite=Lax" in rendered
+    assert "Machine-readable collection evidence retains complete response headers" in rendered
+
+
 def test_full_body_is_available_but_not_represented_or_rendered() -> None:
     secret = "FULL_BODY_SECRET_NOT_IN_PREVIEW"
     body = ("<html>" + ("A" * 600) + secret + "</html>").encode()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -60,6 +61,24 @@ def test_result_to_dict_includes_expected_keys_without_full_body() -> None:
     ]
     assert not _contains_key(payload, "body")
     assert "full response body" not in json.dumps(payload, sort_keys=True)
+
+
+def test_machine_readable_collection_retains_complete_set_cookie_header() -> None:
+    result = _result()
+    cookie_value = "session_id=target-secret; Path=/; HttpOnly"
+    result = replace(
+        result,
+        collected=(
+            replace(
+                result.collected[0],
+                headers=(("Set-Cookie", cookie_value),),
+            ),
+        ),
+    )
+
+    payload = deep_source_route_collection_result_to_dict(result)
+
+    assert payload["collected"][0]["headers"] == [["Set-Cookie", cookie_value]]
 
 
 def test_result_from_dict_round_trips_exported_payload(tmp_path: Path) -> None:
@@ -173,6 +192,20 @@ def test_export_omits_in_memory_full_body_and_loader_rebuilds_empty_body(
     with_body["collected"][0]["body"] = secret
     with pytest.raises(ValueError, match="full body"):
         deep_source_route_collection_result_from_dict(with_body)
+
+
+def test_retained_bounded_preview_is_not_silently_redacted() -> None:
+    secret_line = "session_token = retained-target-secret-38172"
+    result = _result(body=(secret_line + "\n").encode())
+    result = replace(
+        result,
+        collected=(replace(result.collected[0], body_preview=secret_line),),
+    )
+
+    payload = deep_source_route_collection_result_to_dict(result)
+
+    assert payload["collected"][0]["body_preview"] == secret_line
+    assert "body" not in payload["collected"][0]
 
 
 def test_write_artifacts_rejects_missing_or_file_output_dir(tmp_path: Path) -> None:
