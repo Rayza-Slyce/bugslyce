@@ -73,6 +73,7 @@ class RobotsEntry:
     raw_value: str
     raw_line: str
     context: str
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ def analyse_robots_txt(source: ArtefactSource) -> RobotsAnalysis:
             service=source.service,
             field_name=entry.field_name,
             text=entry.raw_line,
+            evidence_ids=source.evidence_ids,
         )
         hashes = find_hash_artefacts(line_source)
         transforms = _find_robots_transform_artefacts(entry, line_source)
@@ -169,6 +171,7 @@ def _find_robots_transform_artefacts(
             service=line_source.service,
             field_name=line_source.field_name,
             text=segment,
+            evidence_ids=line_source.evidence_ids,
         )
         for candidate in find_transform_artefacts(segment_source):
             identity = (candidate.candidate_type, candidate.value)
@@ -225,6 +228,7 @@ def _parse_robots_entries(source: ArtefactSource) -> list[RobotsEntry]:
                 raw_value=raw_value,
                 raw_line=line,
                 context=_line_context(lines, index),
+                evidence_ids=source.evidence_ids,
             )
         )
     return entries

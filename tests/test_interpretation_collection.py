@@ -65,6 +65,24 @@ def test_collecting_generic_text_with_hash_candidate() -> None:
     assert "LEAD-0001" in (collection.manual_review_leads_markdown or "")
 
 
+def test_review_lead_retains_all_exact_source_evidence_ids() -> None:
+    source = ArtefactSource(
+        source_id="SRC-CONFIG",
+        source_kind="text",
+        source_label="saved response",
+        url="https://portal.example.test/documents/",
+        evidence_ids=("EVID-SOURCE-A", "EVID-SOURCE-B"),
+        text="flag clue abcdefabcdefabcdefabcdefabcdefab",
+    )
+
+    collection = collect_interpretation_from_sources((source,))
+
+    assert collection.review_leads[0].evidence_ids == (
+        "EVID-SOURCE-A",
+        "EVID-SOURCE-B",
+    )
+
+
 def test_collecting_generic_text_with_encoded_candidate() -> None:
     source = ArtefactSource(
         source_id="generic-transform",

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from bugslyce.core.engagement_context import engagement_context_review_guidance
-from bugslyce.core.models import Candidate, ProjectState
+from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
 from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
@@ -440,36 +440,31 @@ def _encoded_or_source_thread(
         or lead.category == "html_source"
         or lead.lead_type in {"possible_hash", "possible_transform"}
     ]
-    hidden_source_artifacts = [
-        artifact
-        for artifact in project_state.http_artifacts
-        if artifact.artifact_type == "hidden_element"
-        and classify_encoded_artifact(artifact).category != LIKELY_NOISE
-    ]
+    direct_source_artifacts = (
+        _direct_source_artifacts(project_state)
+        if not related_candidates and not related_leads
+        else ()
+    )
     evidence_ids: list[str] = []
     endpoints: list[str] = []
     for candidate in related_candidates:
         evidence_ids.extend(candidate.evidence_ids)
         endpoints.extend(candidate.affected_endpoints)
-    for artifact in project_state.http_artifacts:
-        if artifact.artifact_type in {
-            "encoded_like_artifact",
-            "hidden_element",
-            "html_comment",
-        }:
-            evidence_ids.extend(artifact.evidence_ids)
-            if artifact.url:
-                endpoints.append(artifact.url)
     for lead in related_leads:
+        evidence_ids.extend(lead.evidence_ids)
         if lead.url:
             endpoints.append(lead.url)
+    for artifact in direct_source_artifacts:
+        evidence_ids.extend(artifact.evidence_ids)
+        if artifact.url:
+            endpoints.append(artifact.url)
 
-    if not related_candidates and not related_leads and not hidden_source_artifacts:
+    if not related_candidates and not related_leads and not direct_source_artifacts:
         return None
     has_encoded_evidence = _has_encoded_thread_evidence(
-        project_state,
         related_candidates,
         related_leads,
+        direct_source_artifacts,
     )
     has_credential_candidate = any(
         item.candidate_type == "credential_like_artifact_review"
@@ -569,9 +564,9 @@ def _thread_sort_key(draft: _ThreadDraft) -> tuple[object, ...]:
 
 
 def _has_encoded_thread_evidence(
-    project_state: ProjectState,
     candidates: Sequence[Candidate],
     review_leads: Sequence[ReviewLead],
+    direct_source_artifacts: Sequence[HTTPArtifact],
 ) -> bool:
     if any(item.candidate_type == "encoded_artifact_review" for item in candidates):
         return True
@@ -588,7 +583,16 @@ def _has_encoded_thread_evidence(
     return any(
         artifact.artifact_type == "encoded_like_artifact"
         and classify_encoded_artifact(artifact).category != LIKELY_NOISE
+        for artifact in direct_source_artifacts
+    )
+
+
+def _direct_source_artifacts(project_state: ProjectState) -> tuple[HTTPArtifact, ...]:
+    return tuple(
+        artifact
         for artifact in project_state.http_artifacts
+        if artifact.artifact_type == "hidden_element"
+        and classify_encoded_artifact(artifact).category != LIKELY_NOISE
     )
 
 

@@ -30,7 +30,7 @@ def test_robots_text_already_present_becomes_robots_source() -> None:
                 artifact_type="disallow_rule",
                 value="/admin",
                 source_file="/tmp/robots-80.txt",
-                evidence_ids=["EVID-ART-0001"],
+                evidence_ids=["EVID-ART-0001", "EVID-ART-0002"],
                 tags=["robots_artifact"],
             )
         ]
@@ -39,6 +39,7 @@ def test_robots_text_already_present_becomes_robots_source() -> None:
     source = artefact_sources_from_project_state(state)[0]
 
     assert source.source_id == "EVID-ART-0001"
+    assert source.evidence_ids == ("EVID-ART-0001", "EVID-ART-0002")
     assert source.source_kind == "robots_txt"
     assert source.source_label == "http://example.test/robots.txt"
     assert source.url == "http://example.test/robots.txt"
@@ -253,6 +254,36 @@ def test_duplicate_sources_are_deduplicated_deterministically() -> None:
 
     assert len(sources) == 1
     assert sources[0].source_id == "EVID-ART-0004"
+
+
+def test_duplicate_sources_merge_exact_evidence_ids() -> None:
+    first = HTTPArtifact(
+        url="http://example.test/",
+        artifact_type="html_comment",
+        value="source clue",
+        source_file="homepage.html",
+        evidence_ids=["EVID-ART-0004", "EVID-ART-0005"],
+        tags=[],
+    )
+    second = HTTPArtifact(
+        url="http://example.test/",
+        artifact_type="html_comment",
+        value="source clue",
+        source_file="homepage.html",
+        evidence_ids=["EVID-ART-0004", "EVID-ART-0006"],
+        tags=[],
+    )
+
+    sources = artefact_sources_from_project_state(
+        _project_state(http_artifacts=[second, first])
+    )
+
+    assert len(sources) == 1
+    assert sources[0].evidence_ids == (
+        "EVID-ART-0004",
+        "EVID-ART-0005",
+        "EVID-ART-0006",
+    )
 
 
 def test_source_ordering_is_stable() -> None:

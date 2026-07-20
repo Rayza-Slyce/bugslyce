@@ -101,6 +101,7 @@ class HtmlSourceItem:
     attribute_name: str | None
     tag_name: str | None
     context: str
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,7 @@ def analyse_html_source(source: ArtefactSource) -> HtmlSourceAnalysis:
             service=source.service,
             field_name=item.item_type,
             text=item.raw_value,
+            evidence_ids=source.evidence_ids,
         )
         hashes = find_hash_artefacts(item_source)
         transforms = _find_html_transform_artefacts(item, item_source)
@@ -305,6 +307,7 @@ def _item(
         attribute_name=attribute_name,
         tag_name=tag_name,
         context=_context_window(source.text, start, end),
+        evidence_ids=source.evidence_ids,
     )
 
 
@@ -325,6 +328,7 @@ def _find_html_transform_artefacts(
             service=item_source.service,
             field_name=item_source.field_name,
             text=segment,
+            evidence_ids=item_source.evidence_ids,
         )
         for candidate in find_transform_artefacts(segment_source):
             identity = (candidate.candidate_type, candidate.value)

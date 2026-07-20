@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Iterable
 
 from bugslyce.recon.artefact_analysis import (
@@ -41,6 +41,7 @@ class ReviewLead:
     nearby_keywords: tuple[str, ...]
     related_artefact_types: tuple[str, ...]
     suggested_manual_validation: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class _ReviewLeadDraft:
     nearby_keywords: tuple[str, ...]
     related_artefact_types: tuple[str, ...]
     suggested_manual_validation: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
 
 
 def normalise_hash_artefacts(
@@ -142,6 +144,7 @@ def _hash_draft(candidate: HashArtefactCandidate) -> _ReviewLeadDraft:
         nearby_keywords=candidate.nearby_keywords,
         related_artefact_types=(candidate.candidate_type,),
         suggested_manual_validation=candidate.suggested_manual_validation,
+        evidence_ids=candidate.evidence_ids,
     )
 
 
@@ -170,6 +173,7 @@ def _transform_draft(candidate: TransformArtefactCandidate) -> _ReviewLeadDraft:
         nearby_keywords=candidate.nearby_keywords,
         related_artefact_types=(candidate.candidate_type,),
         suggested_manual_validation=candidate.suggested_manual_validation,
+        evidence_ids=candidate.evidence_ids,
     )
 
 
@@ -199,6 +203,7 @@ def _robots_draft(lead: RobotsReviewLead) -> _ReviewLeadDraft:
             lead.transform_artefacts,
         ),
         suggested_manual_validation=lead.suggested_manual_validation,
+        evidence_ids=entry.evidence_ids,
     )
 
 
@@ -228,6 +233,7 @@ def _html_source_draft(lead: HtmlSourceReviewLead) -> _ReviewLeadDraft:
             lead.transform_artefacts,
         ),
         suggested_manual_validation=lead.suggested_manual_validation,
+        evidence_ids=item.evidence_ids,
     )
 
 
@@ -262,8 +268,7 @@ def _with_review_lead_caution(explanation: str) -> str:
 
 
 def _dedupe_exact_contexts(drafts: list[_ReviewLeadDraft]) -> tuple[_ReviewLeadDraft, ...]:
-    deduped: list[_ReviewLeadDraft] = []
-    seen: set[tuple[object, ...]] = set()
+    deduped: dict[tuple[object, ...], _ReviewLeadDraft] = {}
     for draft in drafts:
         key = (
             draft.lead_type,
@@ -279,11 +284,17 @@ def _dedupe_exact_contexts(drafts: list[_ReviewLeadDraft]) -> tuple[_ReviewLeadD
             draft.raw_value,
             draft.decoded_preview,
         )
-        if key in seen:
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = draft
             continue
-        seen.add(key)
-        deduped.append(draft)
-    return tuple(deduped)
+        deduped[key] = replace(
+            existing,
+            evidence_ids=_unique_sorted(
+                (*existing.evidence_ids, *draft.evidence_ids)
+            ),
+        )
+    return tuple(deduped.values())
 
 
 def _assign_ids(drafts: Iterable[_ReviewLeadDraft]) -> tuple[ReviewLead, ...]:
@@ -311,6 +322,7 @@ def _assign_ids(drafts: Iterable[_ReviewLeadDraft]) -> tuple[ReviewLead, ...]:
             nearby_keywords=draft.nearby_keywords,
             related_artefact_types=draft.related_artefact_types,
             suggested_manual_validation=draft.suggested_manual_validation,
+            evidence_ids=_unique_sorted(draft.evidence_ids),
         )
         for index, draft in enumerate(sorted_drafts, start=1)
     )
@@ -326,3 +338,7 @@ def _sort_key(draft: _ReviewLeadDraft) -> tuple[object, ...]:
         draft.raw_value,
         draft.decoded_preview or "",
     )
+
+
+def _unique_sorted(values: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted({value for value in values if value}))

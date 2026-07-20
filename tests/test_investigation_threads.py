@@ -10,6 +10,8 @@ from bugslyce.core.models import (
     ProjectState,
 )
 from bugslyce.recon.interpretation import ReviewLead
+from bugslyce.recon.interpretation_collection import collect_interpretation_from_sources
+from bugslyce.recon.interpretation_sources import artefact_sources_from_project_state
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
     render_investigation_threads_markdown,
@@ -118,9 +120,9 @@ def test_encoded_or_source_evidence_generates_artefact_thread() -> None:
         _lead(
             "LEAD-0001",
             category="robots",
-            lead_type="robots_unusual_user_agent_artefact_review",
+            lead_type="possible_transform",
             url="http://example.test/robots.txt",
-            related_artefact_types=("possible_md5_shape",),
+            evidence_ids=("EVID-ART-ENC",),
         )
     ]
 
@@ -140,9 +142,163 @@ def test_encoded_or_source_evidence_generates_artefact_thread() -> None:
     )
 
 
+def test_encoded_artifact_alone_does_not_create_source_thread() -> None:
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/reference",
+                artifact_type="encoded_like_artifact",
+                value="L2ludGVybmFsL3JlZmVyZW5jZQ==",
+                source_file="reference.html",
+                evidence_ids=["EVID-ENCODED"],
+                tags=["encoded_or_hidden_artifact"],
+            )
+        ]
+    )
+
+    assert build_investigation_threads(state) == ()
+
+
+def test_source_thread_uses_only_the_contributing_local_reference_provenance() -> None:
+    source_endpoint = "https://portal.example.test/documents/"
+    unrelated_endpoint = "https://portal.example.test/"
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url=unrelated_endpoint,
+                artifact_type="html_comment",
+                value="Routine page annotation.",
+                source_file="homepage.html",
+                evidence_ids=["EVID-UNRELATED-COMMENT"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=source_endpoint,
+                artifact_type="link",
+                value="release-notes.txt",
+                source_file="documents.html",
+                evidence_ids=[
+                    "EVID-LOCAL-REFERENCE-A",
+                    "EVID-LOCAL-REFERENCE-B",
+                ],
+                tags=[],
+            ),
+        ]
+    )
+    collection = collect_interpretation_from_sources(
+        artefact_sources_from_project_state(state)
+    )
+    contributing_lead = next(
+        lead
+        for lead in collection.review_leads
+        if lead.raw_value == "release-notes.txt"
+    )
+
+    thread = build_investigation_threads(
+        state,
+        review_leads=[contributing_lead],
+    )[0]
+
+    assert contributing_lead.evidence_ids == (
+        "EVID-LOCAL-REFERENCE-A",
+        "EVID-LOCAL-REFERENCE-B",
+    )
+    assert thread.related_evidence_ids == (
+        "EVID-LOCAL-REFERENCE-A",
+        "EVID-LOCAL-REFERENCE-B",
+    )
+    assert thread.related_endpoints == (source_endpoint,)
+    report_markdown = render_investigation_threads_markdown((thread,))
+    runbook_markdown = render_standard_investigation_workflow_runbook_section(
+        (thread,)
+    )
+    for markdown in (report_markdown, runbook_markdown):
+        assert "EVID-LOCAL-REFERENCE-A" in markdown
+        assert "EVID-LOCAL-REFERENCE-B" in markdown
+        assert source_endpoint in markdown
+        assert "EVID-UNRELATED-COMMENT" not in markdown
+        assert f"`{unrelated_endpoint}`" not in markdown
+
+
+def test_source_thread_unions_exact_provenance_from_deliberately_grouped_leads() -> None:
+    first_endpoint = "https://portal.example.test/documents/"
+    second_endpoint = "https://portal.example.test/archive/"
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/",
+                artifact_type="html_comment",
+                value="Routine page annotation.",
+                source_file="homepage.html",
+                evidence_ids=["EVID-UNRELATED"],
+                tags=[],
+            )
+        ]
+    )
+    first = _lead(
+        "LEAD-SOURCE-A",
+        category="html_source",
+        lead_type="html_local_reference_review",
+        url=first_endpoint,
+        evidence_ids=("EVID-A", "EVID-SHARED"),
+    )
+    second = _lead(
+        "LEAD-SOURCE-B",
+        category="html_source",
+        lead_type="html_local_reference_review",
+        url=second_endpoint,
+        evidence_ids=("EVID-B", "EVID-SHARED"),
+    )
+
+    first_build = build_investigation_threads(state, review_leads=[first, second])
+    reversed_build = build_investigation_threads(state, review_leads=[second, first])
+    thread = first_build[0]
+
+    assert first_build == reversed_build
+    assert thread.related_evidence_ids == ("EVID-A", "EVID-B", "EVID-SHARED")
+    assert thread.related_endpoints == (second_endpoint, first_endpoint)
+    assert thread.related_lead_ids == ("LEAD-SOURCE-A", "LEAD-SOURCE-B")
+    assert "EVID-UNRELATED" not in thread.related_evidence_ids
+
+
+def test_source_thread_without_exact_provenance_does_not_select_fallback_evidence() -> None:
+    source_endpoint = "https://portal.example.test/documents/"
+    state = _project_state(
+        http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/",
+                artifact_type="html_comment",
+                value="Routine page annotation.",
+                source_file="homepage.html",
+                evidence_ids=["EVID-UNRELATED"],
+                tags=[],
+            )
+        ]
+    )
+    lead = _lead(
+        "LEAD-NO-PROVENANCE",
+        category="html_source",
+        lead_type="html_local_reference_review",
+        url=source_endpoint,
+    )
+
+    thread = build_investigation_threads(state, review_leads=[lead])[0]
+
+    assert thread.related_evidence_ids == ()
+    assert thread.related_endpoints == (source_endpoint,)
+
+
 def test_hidden_element_creates_source_context_without_encoded_guidance() -> None:
     state = _project_state(
         http_artifacts=[
+            HTTPArtifact(
+                url="https://portal.example.test/",
+                artifact_type="html_comment",
+                value="Review the deployment route before release",
+                source_file="homepage.html",
+                evidence_ids=["EVID-UNRELATED-COMMENT"],
+                tags=["source_comment"],
+            ),
             HTTPArtifact(
                 url="https://portal.example.test/workflow",
                 artifact_type="hidden_element",
@@ -159,7 +315,10 @@ def test_hidden_element_creates_source_context_without_encoded_guidance() -> Non
     assert len(threads) == 1
     thread = threads[0]
     assert thread.title == "Source artefact review"
-    assert "EVID-HIDDEN" in thread.related_evidence_ids
+    assert thread.related_evidence_ids == ("EVID-HIDDEN",)
+    assert thread.related_endpoints == ("https://portal.example.test/workflow",)
+    assert "EVID-UNRELATED-COMMENT" not in thread.related_evidence_ids
+    assert "https://portal.example.test/" not in thread.related_endpoints
     rendered = " ".join(
         (
             thread.title,
@@ -694,6 +853,7 @@ def _lead(
     priority: str = "medium",
     url: str | None = None,
     related_artefact_types: tuple[str, ...] = (),
+    evidence_ids: tuple[str, ...] = (),
 ) -> ReviewLead:
     return ReviewLead(
         lead_id=lead_id,
@@ -717,4 +877,5 @@ def _lead(
         nearby_keywords=(),
         related_artefact_types=related_artefact_types,
         suggested_manual_validation=("Review manually.",),
+        evidence_ids=evidence_ids,
     )

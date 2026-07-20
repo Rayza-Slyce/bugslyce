@@ -108,6 +108,7 @@ class ArtefactSource:
     port: int | None = None
     service: str | None = None
     field_name: str | None = None
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,7 @@ class HashArtefactCandidate:
     priority: str
     explanation: str
     suggested_manual_validation: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,7 @@ class TransformArtefactCandidate:
     priority: str
     explanation: str
     suggested_manual_validation: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
 
 
 def find_hash_artefacts(
@@ -315,6 +318,7 @@ def _build_candidate(
         priority=priority,
         explanation=explanation,
         suggested_manual_validation=MANUAL_VALIDATION_STEPS,
+        evidence_ids=source.evidence_ids,
     )
 
 
@@ -353,6 +357,7 @@ def _build_transform_candidate(
         priority=priority,
         explanation=explanation,
         suggested_manual_validation=TRANSFORM_MANUAL_VALIDATION_STEPS,
+        evidence_ids=source.evidence_ids,
     )
 
 

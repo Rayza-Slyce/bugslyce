@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Evidence, HTTPArtifact, ProjectState
@@ -96,6 +97,7 @@ def _source_from_http_artifact(
         service=parsed.scheme or None,
         field_name=artifact.artifact_type,
         text=text,
+        evidence_ids=_unique_sorted(artifact.evidence_ids),
     )
 
 
@@ -117,6 +119,7 @@ def _source_from_note_evidence(
         service=None,
         field_name=evidence.evidence_type,
         text=text,
+        evidence_ids=(evidence.id,) if evidence.id else (),
     )
 
 
@@ -235,7 +238,7 @@ def _default_port(scheme: str) -> int | None:
 
 def _dedupe_sources(sources: list[ArtefactSource]) -> tuple[ArtefactSource, ...]:
     deduped: list[ArtefactSource] = []
-    seen: set[tuple[object, ...]] = set()
+    indices: dict[tuple[object, ...], int] = {}
     for source in sources:
         key = (
             source.source_id,
@@ -246,8 +249,20 @@ def _dedupe_sources(sources: list[ArtefactSource]) -> tuple[ArtefactSource, ...]
             source.field_name,
             source.text,
         )
-        if key in seen:
+        index = indices.get(key)
+        if index is not None:
+            existing = deduped[index]
+            deduped[index] = replace(
+                existing,
+                evidence_ids=_unique_sorted(
+                    (*existing.evidence_ids, *source.evidence_ids)
+                ),
+            )
             continue
-        seen.add(key)
+        indices[key] = len(deduped)
         deduped.append(source)
     return tuple(deduped)
+
+
+def _unique_sorted(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return tuple(sorted({value for value in values if value}))
