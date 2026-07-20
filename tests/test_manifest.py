@@ -41,6 +41,55 @@ def test_manifest_parser_loads_valid_manifest(tmp_path: Path) -> None:
     assert manifest.artifacts[0].tags == ["lab"]
 
 
+def test_manifest_parser_retains_structured_http_status(tmp_path: Path) -> None:
+    (tmp_path / "robots.txt").write_text("Resource unavailable", encoding="utf-8")
+    manifest_path = _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "portal.example.test",
+            "artifacts": [
+                {
+                    "type": "robots",
+                    "file": "robots.txt",
+                    "url": "https://portal.example.test/robots.txt",
+                    "status_code": 404,
+                }
+            ],
+        },
+    )
+
+    manifest = parse_recon_manifest(manifest_path, tmp_path)
+
+    assert manifest is not None
+    assert manifest.artifacts[0].status_code == 404
+
+
+def test_manifest_parser_ignores_invalid_http_status(tmp_path: Path) -> None:
+    (tmp_path / "robots.txt").write_text("User-agent: *\n", encoding="utf-8")
+    manifest_path = _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "portal.example.test",
+            "artifacts": [
+                {
+                    "type": "robots",
+                    "file": "robots.txt",
+                    "url": "https://portal.example.test/robots.txt",
+                    "status_code": 700,
+                }
+            ],
+        },
+    )
+
+    with pytest.warns(RuntimeWarning, match="invalid status_code"):
+        manifest = parse_recon_manifest(manifest_path, tmp_path)
+
+    assert manifest is not None
+    assert manifest.artifacts[0].status_code is None
+
+
 def test_missing_manifest_is_not_an_error(tmp_path: Path) -> None:
     assert parse_recon_manifest(tmp_path / "recon_manifest.json", tmp_path) is None
 

@@ -128,6 +128,19 @@ def _parse_artifact(
     raw_tags = value.get("tags", [])
     tags = [item for item in raw_tags if isinstance(item, str) and item.strip()] if isinstance(raw_tags, list) else []
 
+    status_code = value.get("status_code")
+    if status_code is not None and (
+        not isinstance(status_code, int)
+        or isinstance(status_code, bool)
+        or not 100 <= status_code <= 599
+    ):
+        warnings.warn(
+            f"Ignoring invalid status_code for manifest artefact: {artifact_file}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        status_code = None
+
     return ReconManifestArtifact(
         type=artifact_type,
         file=artifact_file,
@@ -137,6 +150,7 @@ def _parse_artifact(
         port=port,
         protocol=_optional_text(value, "protocol"),
         description=_optional_text(value, "description"),
+        status_code=status_code,
         tags=tags,
     )
 

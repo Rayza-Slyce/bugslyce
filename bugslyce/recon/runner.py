@@ -348,6 +348,11 @@ class LiveHTTPMetadataRunner:
             exit_code=completed.returncode,
             stderr_path=stderr_file,
             error=error,
+            http_status_code=(
+                _parse_http_status_code(completed.stdout)
+                if command.phase == "http-robots"
+                else None
+            ),
         )
 
 
@@ -705,6 +710,7 @@ def _live_result(
     stderr_path: str | None,
     error: str | None,
     executed: bool | None = None,
+    http_status_code: int | None = None,
 ) -> ReconCommandResult:
     return ReconCommandResult(
         command_id=command.id,
@@ -719,4 +725,13 @@ def _live_result(
         executed=exit_code is not None if executed is None else executed,
         simulated=False,
         error=error,
+        http_status_code=http_status_code,
     )
+
+
+def _parse_http_status_code(value: str) -> int | None:
+    compact = value.strip()
+    if len(compact) != 3 or not compact.isdigit():
+        return None
+    status_code = int(compact)
+    return status_code if 100 <= status_code <= 599 else None

@@ -22,6 +22,7 @@ from bugslyce.recon.route_provenance import (
     canonical_route_url,
     route_evidence_provenance,
 )
+from bugslyce.recon.robots_policy import robots_policy_review_eligible
 from bugslyce.triage.workflow_leads import (
     WorkflowLead,
     build_grouped_workflow_leads,
@@ -876,6 +877,20 @@ def _add_artifact_items(
         if grouped_evidence_ids.intersection(artifact.evidence_ids):
             continue
         artifact_type = artifact.artifact_type
+        if (
+            artifact_type
+            in {
+                "robots",
+                "robots_value",
+                "user_agent",
+                "unusual_user_agent",
+                "allow_rule",
+                "disallow_rule",
+                "sitemap_rule",
+            }
+            and not robots_policy_review_eligible(project_state, artifact.url)
+        ):
+            continue
         if artifact_type in {"encoded_like_artifact", "hidden_element"}:
             classification = classify_encoded_artifact(artifact)
             if classification.category == LIKELY_NOISE:

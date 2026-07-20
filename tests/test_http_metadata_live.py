@@ -20,7 +20,17 @@ from bugslyce.recon.http_metadata_commands import (
     build_http_metadata_commands,
     validate_live_http_metadata_command,
 )
+from bugslyce.recon.interpretation_sources import artefact_sources_from_project_state
+from bugslyce.recon.robots_policy import (
+    represented_robots_status_codes,
+    robots_policy_review_eligible,
+)
 from bugslyce.recon.runner import LiveHTTPMetadataRunner
+from bugslyce.recon.standard_interpretation import (
+    assemble_standard_interpretation_from_project_state,
+)
+from bugslyce.reports.human_triage import build_human_triage_brief
+from bugslyce.triage.candidates import generate_candidates
 
 
 def test_http_metadata_builds_exact_commands_for_default_and_high_ports(
@@ -43,6 +53,18 @@ def test_http_metadata_builds_exact_commands_for_default_and_high_ports(
         "http://10.10.10.10/",
     ]
     assert commands[1].argv[-1] == "http://10.10.10.10/robots.txt"
+    assert commands[1].argv == [
+        "curl",
+        "--max-time",
+        "10",
+        "--silent",
+        "--show-error",
+        "--write-out",
+        "%{http_code}",
+        "--output",
+        str(tmp_path.resolve() / "robots-10.10.10.10-80.txt"),
+        "http://10.10.10.10/robots.txt",
+    ]
     assert commands[2].argv[-1] == "http://10.10.10.10/"
     assert commands[3].output_file.endswith("curl-headers-10.10.10.10-65524.txt")
     assert all(
@@ -79,6 +101,34 @@ def test_http_metadata_runner_uses_list_argv_and_bounded_timeout(
     assert argv == command.argv
     assert kwargs["timeout"] == 10
     assert "shell" not in kwargs
+
+
+def test_http_metadata_runner_retains_status_from_the_single_robots_request(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    origins = {"http://10.10.10.10/"}
+    command = build_http_metadata_commands(
+        list(origins),
+        "10.10.10.10",
+        tmp_path,
+    )[1]
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        Path(command.output_file).write_text("Resource unavailable", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout="404", stderr="")
+
+    monkeypatch.setattr("bugslyce.recon.runner.subprocess.run", fake_run)
+
+    result = LiveHTTPMetadataRunner(tmp_path, "10.10.10.10", origins).run(command)
+
+    assert len(calls) == 1
+    assert calls[0][0] == command.argv
+    assert result.exit_code == 0
+    assert result.http_status_code == 404
+    assert Path(result.output_file).read_text(encoding="utf-8") == "Resource unavailable"
 
 
 def test_http_metadata_runner_refuses_non_curl_tool(tmp_path: Path, monkeypatch) -> None:
@@ -228,6 +278,94 @@ def test_http_metadata_workflow_writes_artifacts_manifest_and_recon_pack(
     )
 
 
+def test_http_metadata_workflow_retains_robots_404_status_end_to_end(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _nmap_service_directory(
+        tmp_path,
+        include_high_port_http=False,
+    )
+    runner = _StatusHTTPMetadataRunner(
+        robots_status=404,
+        robots_body="<!doctype html><title>Resource unavailable</title>",
+    )
+
+    result = run_http_metadata_workflow(input_dir, scope, runner=runner)
+    state = build_project_state(input_dir)
+    robots_url = "http://10.10.10.10/robots.txt"
+
+    assert result.execution_count == 3
+    assert len(runner.calls) == 3
+    assert sum(command.phase == "http-robots" for command in runner.calls) == 1
+    assert represented_robots_status_codes(state, robots_url) == (404,)
+    assert robots_policy_review_eligible(state, robots_url) is False
+    assert all(
+        candidate.candidate_type != "robots_artifact"
+        for candidate in generate_candidates(state)
+    )
+    assert all(
+        source.url != robots_url
+        for source in artefact_sources_from_project_state(state)
+    )
+    assert assemble_standard_interpretation_from_project_state(
+        state
+    ).review_lead_count == 0
+    brief = build_human_triage_brief(state, generate_candidates(state))
+    assert all("robots" not in item.title.lower() for item in brief.start_here)
+    assert all("robots" not in card.title.lower() for card in brief.evidence_cards)
+    robots_evidence = [
+        evidence
+        for evidence in state.evidence
+        if evidence.evidence_type == "robots"
+        and evidence.context.get("url") == robots_url
+    ]
+    assert len(robots_evidence) == 1
+    assert robots_evidence[0].context["status_code"] == 404
+    assert (input_dir / "robots-10.10.10.10-80.txt").read_text(
+        encoding="utf-8"
+    ) == "<!doctype html><title>Resource unavailable</title>"
+
+
+def test_http_metadata_workflow_preserves_successful_robots_policy(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _nmap_service_directory(
+        tmp_path,
+        include_high_port_http=False,
+    )
+    runner = _StatusHTTPMetadataRunner(
+        robots_status=200,
+        robots_body="User-agent: *\nDisallow: /hidden-area/\n",
+    )
+
+    run_http_metadata_workflow(input_dir, scope, runner=runner)
+    state = build_project_state(input_dir)
+    robots_url = "http://10.10.10.10/robots.txt"
+    candidates = generate_candidates(state)
+    robots_candidate = next(
+        candidate
+        for candidate in candidates
+        if candidate.candidate_type == "robots_artifact"
+    )
+    interpretation = assemble_standard_interpretation_from_project_state(state)
+
+    assert sum(command.phase == "http-robots" for command in runner.calls) == 1
+    assert represented_robots_status_codes(state, robots_url) == (200,)
+    assert robots_policy_review_eligible(state, robots_url) is True
+    assert robots_candidate.priority == "low"
+    assert robots_candidate.affected_endpoints == [robots_url]
+    assert robots_candidate.evidence_ids
+    assert any(
+        artefact.artifact_type == "disallow_rule"
+        and artefact.value == "/hidden-area/"
+        for artefact in state.http_artifacts
+    )
+    assert interpretation.review_lead_count == 1
+    assert interpretation.review_leads[0].category == "robots"
+    report = (input_dir / "report.md").read_text(encoding="utf-8")
+    assert "Robots artefact review for 10.10.10.10" in report
+
+
 def test_http_metadata_workflow_refuses_missing_input(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Input directory does not exist"):
         run_http_metadata_workflow(
@@ -293,6 +431,7 @@ def _scope(tmp_path: Path) -> Path:
 def _nmap_service_directory(
     tmp_path: Path,
     include_http: bool = True,
+    include_high_port_http: bool = True,
 ) -> tuple[Path, Path]:
     input_dir = tmp_path / "output"
     input_dir.mkdir()
@@ -311,12 +450,9 @@ def _nmap_service_directory(
         "6498/tcp  open  ssh     OpenSSH 7.6p1",
     ]
     if include_http:
-        service_lines.extend(
-            [
-                "80/tcp    open  http    nginx 1.16.1",
-                "65524/tcp open  http    Apache httpd 2.4.43",
-            ]
-        )
+        service_lines.append("80/tcp    open  http    nginx 1.16.1")
+        if include_high_port_http:
+            service_lines.append("65524/tcp open  http    Apache httpd 2.4.43")
     (input_dir / "nmap-services-all.txt").write_text(
         "\n".join(service_lines) + "\n",
         encoding="utf-8",
@@ -376,4 +512,45 @@ class _MockHTTPMetadataRunner:
             executed=True,
             simulated=False,
             error=None,
+        )
+
+
+class _StatusHTTPMetadataRunner:
+    def __init__(self, *, robots_status: int, robots_body: str) -> None:
+        self.robots_status = robots_status
+        self.robots_body = robots_body
+        self.calls = []
+
+    def run(self, command):
+        self.calls.append(command)
+        output = Path(command.output_file)
+        if command.phase == "http-headers":
+            output.write_text(
+                "HTTP/1.1 200 OK\nContent-Type: text/html\n\n",
+                encoding="utf-8",
+            )
+            status = 200
+        elif command.phase == "http-robots":
+            output.write_text(self.robots_body, encoding="utf-8")
+            status = self.robots_status
+        else:
+            output.write_text(
+                "<html><title>Synthetic service</title></html>",
+                encoding="utf-8",
+            )
+            status = 200
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-01-01T00:00:00+00:00",
+            ended_at="2026-01-01T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+            http_status_code=status,
         )

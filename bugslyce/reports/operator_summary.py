@@ -20,6 +20,7 @@ from bugslyce.recon.route_provenance import (
     canonical_route_url,
     route_evidence_provenance,
 )
+from bugslyce.recon.robots_policy import robots_policy_review_eligible
 
 
 REVIEW_TYPE_ORDER = (
@@ -293,6 +294,7 @@ def _unusual_robots_lead(project_state: ProjectState) -> OperatorSummaryLead | N
         artifact
         for artifact in project_state.http_artifacts
         if artifact.artifact_type == "unusual_user_agent"
+        and robots_policy_review_eligible(project_state, artifact.url)
     ]
     evidence_ids = _dedupe(
         evidence_id for artifact in artifacts for evidence_id in artifact.evidence_ids

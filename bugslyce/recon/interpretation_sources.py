@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from bugslyce.core.models import Evidence, HTTPArtifact, ProjectState
 from bugslyce.recon.artefact_analysis import ArtefactSource
+from bugslyce.recon.robots_policy import robots_policy_review_eligible
 
 
 DEFAULT_MAX_SOURCE_CHARS = 12_000
@@ -51,6 +52,11 @@ def artefact_sources_from_project_state(
 
     sources: list[ArtefactSource] = []
     for index, artifact in enumerate(project_state.http_artifacts, start=1):
+        if (
+            _infer_source_kind(artifact) == "robots_txt"
+            and not robots_policy_review_eligible(project_state, artifact.url)
+        ):
+            continue
         source = _source_from_http_artifact(artifact, index, max_source_chars)
         if source is not None:
             sources.append(source)

@@ -509,10 +509,13 @@ def _metadata_base_url(metadata: ReconManifestArtifact, host: str) -> str:
 def _manifest_context(metadata: ReconManifestArtifact | None) -> dict[str, object]:
     if metadata is None:
         return {}
-    return {
+    context: dict[str, object] = {
         "manifest_description": metadata.description,
         "manifest_tags": metadata.tags,
     }
+    if metadata.status_code is not None:
+        context["status_code"] = metadata.status_code
+    return context
 
 
 def _metadata_tags(metadata: ReconManifestArtifact | None) -> list[str]:

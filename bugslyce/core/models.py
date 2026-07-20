@@ -196,6 +196,7 @@ class ReconManifestArtifact:
     port: int | None = None
     protocol: str | None = None
     description: str | None = None
+    status_code: int | None = None
     tags: list[str] = field(default_factory=list)
 
 
@@ -389,6 +390,7 @@ class ReconCommandResult:
     executed: bool
     simulated: bool
     error: str | None
+    http_status_code: int | None = None
 
 
 @dataclass(frozen=True)

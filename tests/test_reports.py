@@ -20,6 +20,7 @@ from bugslyce.reports.markdown import (
     write_project_outputs,
 )
 from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.reports.standard_interpretation import render_standard_interpretation_report
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -1311,6 +1312,149 @@ def test_operator_summary_keeps_robots_response_as_access_control_context() -> N
     assert access_context.endpoints == [url]
     assert access_context.evidence_ids == ["EVID-ROBOTS-403"]
     assert all(lead.endpoints != [url] for lead in summary.review_first)
+
+
+def test_missing_robots_response_remains_raw_without_policy_promotion() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://portal.example-bounty.test/robots.txt"
+    state = replace(
+        state,
+        evidence=[
+            Evidence(
+                id="EVID-ROBOTS-404",
+                source_file="robots-portal.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 404},
+            ),
+            Evidence(
+                id="EVID-ROBOTS-ARTEFACT",
+                source_file="robots-portal.txt",
+                evidence_type="robots",
+                value="<!doctype html><title>Resource unavailable</title>",
+                context={"url": url, "status_code": 404},
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example-bounty.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=["EVID-ROBOTS-404", "EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=404,
+                content_length=128,
+                redirect_location=None,
+                source="robots-portal.txt",
+                evidence_ids=["EVID-ROBOTS-404"],
+                tags=["dead_path"],
+            )
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="robots",
+                value="/tmp/robots-negative-response/robots-portal.txt",
+                source_file="robots-portal.txt",
+                evidence_ids=["EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+    )
+    candidates = generate_candidates(state)
+
+    rendered = render_standard_interpretation_report(state, candidates)
+    primary = rendered.markdown.split("## Scope Summary", 1)[0]
+    raw = rendered.markdown.split("## Evidence Summary", 1)[1]
+
+    assert all(candidate.candidate_type != "robots_artifact" for candidate in candidates)
+    assert rendered.interpretation_assembly.review_lead_count == 0
+    assert "Robots artefact review" not in primary
+    assert "robots.txt or metadata clue observed" not in primary
+    assert "robots.txt clue-like value observed" not in primary
+    assert "EVID-ROBOTS-404" in raw
+    assert "EVID-ROBOTS-ARTEFACT" in raw
+    assert "| 404 |" in raw
+    assert "<!doctype html><title>Resource unavailable</title>" in raw
+
+
+def test_successful_robots_response_preserves_policy_review_output() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/robots.txt"
+    state = replace(
+        state,
+        evidence=[
+            Evidence(
+                id="EVID-ROBOTS-200",
+                source_file="robots-app.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 200},
+            ),
+            Evidence(
+                id="EVID-ROBOTS-DIRECTIVE",
+                source_file="robots-app.txt",
+                evidence_type="disallow_rule",
+                value="/hidden-area/",
+                context={"url": url},
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=["EVID-ROBOTS-200", "EVID-ROBOTS-DIRECTIVE"],
+                tags=["robots_artifact"],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=200,
+                content_length=32,
+                redirect_location=None,
+                source="robots-app.txt",
+                evidence_ids=["EVID-ROBOTS-200"],
+                tags=[],
+            )
+        ],
+        http_artifacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="disallow_rule",
+                value="/hidden-area/",
+                source_file="robots-app.txt",
+                evidence_ids=["EVID-ROBOTS-DIRECTIVE"],
+                tags=["robots_artifact"],
+            )
+        ],
+    )
+
+    candidates = generate_candidates(state)
+    robots_candidate = next(
+        candidate for candidate in candidates if candidate.candidate_type == "robots_artifact"
+    )
+    rendered = render_standard_interpretation_report(state, candidates)
+
+    assert robots_candidate.priority == "low"
+    assert robots_candidate.evidence_ids == [
+        "EVID-ROBOTS-200",
+        "EVID-ROBOTS-DIRECTIVE",
+    ]
+    assert robots_candidate.affected_endpoints == [url]
+    assert rendered.interpretation_assembly.review_lead_count == 1
+    assert rendered.interpretation_assembly.review_leads[0].category == "robots"
+    assert "Robots artefact review for app.example-bounty.test" in rendered.markdown
+    assert "robots.txt or metadata clue observed" in rendered.markdown
+    assert "Disallowed path contains high-signal wording. Manual review recommended." in rendered.markdown
 
 
 def test_primary_report_non_forbidden_admin_route_can_still_promote() -> None:

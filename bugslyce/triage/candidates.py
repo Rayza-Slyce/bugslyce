@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from bugslyce.core.models import Asset, Candidate, Endpoint, ProjectState
 from bugslyce.reports.artifact_classifier import classify_http_service_priority
+from bugslyce.recon.robots_policy import robots_policy_review_eligible
 from bugslyce.triage.classify import (
     ADMIN_SURFACE,
     API_SURFACE,
@@ -191,7 +192,10 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
                     "Record request/response evidence before escalating this lead.",
                 ],
             )
-        if endpoint.path.lower().endswith("/robots.txt") or endpoint.path.lower() == "/robots.txt":
+        if (
+            endpoint.path.lower().endswith("/robots.txt")
+            or endpoint.path.lower() == "/robots.txt"
+        ) and robots_policy_review_eligible(project_state, endpoint.url):
             _record_endpoint_group(
                 endpoint_groups,
                 endpoint_group_order,
@@ -423,7 +427,10 @@ def generate_candidates(project_state: ProjectState) -> list[Candidate]:
         host = normalise_artifact_host(artifact.url)
         if not host:
             continue
-        if "robots_artifact" in artifact.tags:
+        if (
+            "robots_artifact" in artifact.tags
+            and robots_policy_review_eligible(project_state, artifact.url)
+        ):
             artifact_groups.setdefault((ROBOTS_ARTIFACT, host), []).append(artifact)
         if "encoded_or_hidden_artifact" in artifact.tags:
             artifact_groups.setdefault((ENCODED_ARTIFACT_REVIEW, host), []).append(artifact)

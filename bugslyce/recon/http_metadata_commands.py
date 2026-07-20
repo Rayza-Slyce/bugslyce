@@ -60,6 +60,8 @@ def build_http_metadata_commands(
                         str(HTTP_METADATA_TIMEOUT_SECONDS),
                         "--silent",
                         "--show-error",
+                        "--write-out",
+                        "%{http_code}",
                         "--output",
                         str(output_dir / f"robots-{safe_host}-{port}.txt"),
                         urljoin(normalized_origin, "robots.txt"),
@@ -194,11 +196,22 @@ def _command_shape(argv: list[str]) -> tuple[int, int, str] | None:
         "--show-error",
         "--output",
     ]
+    robots_prefix = [
+        "curl",
+        "--max-time",
+        str(HTTP_METADATA_TIMEOUT_SECONDS),
+        "--silent",
+        "--show-error",
+        "--write-out",
+        "%{http_code}",
+        "--output",
+    ]
     if len(argv) == 9 and argv[:7] == header_prefix:
         return 7, 8, "headers"
+    if len(argv) == 10 and argv[:8] == robots_prefix:
+        return 8, 9, "robots"
     if len(argv) == 8 and argv[:6] == get_prefix:
-        artifact_type = "robots" if Path(argv[6]).name.startswith("robots-") else "homepage"
-        return 6, 7, artifact_type
+        return 6, 7, "homepage"
     return None
 
 

@@ -5,12 +5,222 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from bugslyce.core.models import Endpoint, HTTPArtifact
+from bugslyce.core.models import DiscoveredPath, Endpoint, Evidence, HTTPArtifact, ProjectState
 from bugslyce.core.project import build_project_state
+from bugslyce.recon.robots_policy import (
+    represented_robots_status_codes,
+    robots_policy_review_eligible,
+)
+from bugslyce.reports.human_triage import build_human_triage_brief
 from bugslyce.triage.candidates import generate_candidates
 
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
+
+
+def _robots_response_state(
+    *,
+    status_code: int | None,
+    artefacts: list[HTTPArtifact] | None = None,
+) -> ProjectState:
+    url = "https://portal.example.test/robots.txt"
+    robots_artefacts = artefacts or [
+        HTTPArtifact(
+            url=url,
+            artifact_type="robots",
+            value="/tmp/robots-negative-response/robots-portal.txt",
+            source_file="/tmp/robots-negative-response/robots-portal.txt",
+            evidence_ids=["EVID-ROBOTS-ARTEFACT"],
+            tags=["robots_artifact"],
+        )
+    ]
+    evidence = [
+        Evidence(
+            id="EVID-ROBOTS-ARTEFACT",
+            source_file="robots-portal.txt",
+            evidence_type="robots",
+            value="retained robots response",
+            context={"url": url, "status_code": status_code},
+        )
+    ]
+    discovered_paths = []
+    path_evidence_ids: list[str] = []
+    if status_code is not None:
+        path_evidence_ids.append("EVID-ROBOTS-STATUS")
+        discovered_paths.append(
+            DiscoveredPath(
+                url=url,
+                status_code=status_code,
+                content_length=128,
+                redirect_location=None,
+                source="robots-portal.txt",
+                evidence_ids=path_evidence_ids,
+                tags=["dead_path"] if status_code == 404 else [],
+            )
+        )
+        evidence.insert(
+            0,
+            Evidence(
+                id="EVID-ROBOTS-STATUS",
+                source_file="robots-portal.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": status_code},
+            ),
+        )
+    return ProjectState(
+        project_name="robots-negative-response",
+        input_dir="/tmp/robots-negative-response",
+        processed_files=["robots-portal.txt"],
+        scope_summary="Synthetic authorised scope.",
+        assets=[],
+        http_services=[],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=[*path_evidence_ids, "EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+        port_services=[],
+        http_artifacts=robots_artefacts,
+        discovered_paths=discovered_paths,
+        recon_summary=None,
+        recon_manifest=None,
+        evidence=evidence,
+        warnings=[],
+        generated_at="2026-07-20T00:00:00Z",
+    )
+
+
+def test_missing_robots_response_does_not_create_policy_review_candidate() -> None:
+    state = _robots_response_state(status_code=404)
+
+    candidates = generate_candidates(state)
+    brief = build_human_triage_brief(state, candidates)
+
+    assert all(candidate.candidate_type != "robots_artifact" for candidate in candidates)
+    assert all("robots" not in item.title.lower() for item in brief.start_here)
+    assert all("robots" not in item.lower() for item in brief.review_next)
+    assert all("robots" not in card.title.lower() for card in brief.evidence_cards)
+    assert {item.id for item in state.evidence} == {
+        "EVID-ROBOTS-STATUS",
+        "EVID-ROBOTS-ARTEFACT",
+    }
+    assert state.discovered_paths[0].status_code == 404
+
+
+def test_missing_plaintext_robots_value_does_not_create_policy_review() -> None:
+    url = "https://portal.example.test/robots.txt"
+    state = _robots_response_state(
+        status_code=404,
+        artefacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="robots_value",
+                value="Resource unavailable",
+                source_file="robots-portal.txt",
+                evidence_ids=["EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+    )
+
+    candidates = generate_candidates(state)
+    brief = build_human_triage_brief(state, candidates)
+
+    assert all(candidate.candidate_type != "robots_artifact" for candidate in candidates)
+    assert not brief.start_here
+    assert not brief.evidence_cards
+
+
+def test_successful_robots_directives_preserve_candidate_and_triage() -> None:
+    url = "https://portal.example.test/robots.txt"
+    state = _robots_response_state(
+        status_code=200,
+        artefacts=[
+            HTTPArtifact(
+                url=url,
+                artifact_type="disallow_rule",
+                value="/private-area/",
+                source_file="robots-portal.txt",
+                evidence_ids=["EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+    )
+
+    candidates = generate_candidates(state)
+    brief = build_human_triage_brief(state, candidates)
+    robots_candidate = next(
+        candidate for candidate in candidates if candidate.candidate_type == "robots_artifact"
+    )
+
+    assert robots_candidate.evidence_ids == [
+        "EVID-ROBOTS-STATUS",
+        "EVID-ROBOTS-ARTEFACT",
+    ]
+    assert robots_candidate.priority == "kill_switch"
+    assert any("robots.txt or metadata clue observed" in item.title for item in brief.start_here)
+
+
+def test_unknown_robots_status_preserves_legacy_candidate_behaviour() -> None:
+    state = _robots_response_state(status_code=None)
+
+    candidates = generate_candidates(state)
+
+    assert any(candidate.candidate_type == "robots_artifact" for candidate in candidates)
+
+
+def test_missing_robots_classification_is_order_deterministic() -> None:
+    state = _robots_response_state(status_code=404)
+    reversed_state = replace(
+        state,
+        evidence=list(reversed(state.evidence)),
+        endpoints=[
+            replace(
+                state.endpoints[0],
+                evidence_ids=list(reversed(state.endpoints[0].evidence_ids)),
+            )
+        ],
+        discovered_paths=list(reversed(state.discovered_paths)),
+        http_artifacts=list(reversed(state.http_artifacts)),
+    )
+
+    assert generate_candidates(state) == generate_candidates(reversed_state)
+    assert build_human_triage_brief(state, []) == build_human_triage_brief(
+        reversed_state,
+        [],
+    )
+
+
+def test_mixed_and_duplicate_robots_statuses_are_deterministic() -> None:
+    state = _robots_response_state(status_code=404)
+    mixed_paths = [
+        *state.discovered_paths,
+        replace(
+            state.discovered_paths[0],
+            status_code=200,
+            evidence_ids=["EVID-ROBOTS-SECOND"],
+        ),
+        replace(state.discovered_paths[0]),
+    ]
+    mixed_state = replace(state, discovered_paths=mixed_paths)
+    reversed_state = replace(mixed_state, discovered_paths=list(reversed(mixed_paths)))
+
+    assert represented_robots_status_codes(mixed_state, state.endpoints[0].url) == (
+        200,
+        404,
+    )
+    assert represented_robots_status_codes(
+        reversed_state,
+        state.endpoints[0].url,
+    ) == (200, 404)
+    assert robots_policy_review_eligible(mixed_state, state.endpoints[0].url) is True
+    assert generate_candidates(mixed_state) == generate_candidates(reversed_state)
 
 
 def test_generate_candidates_basic_saas() -> None:

@@ -259,14 +259,16 @@ def _updated_manifest(
         ]
         for artifact_type, filename, url, description in entries:
             if filename in results_by_name:
-                artifacts.append(
-                    {
-                        "type": artifact_type,
-                        "file": filename,
-                        "url": url,
-                        "description": description,
-                    }
-                )
+                entry = {
+                    "type": artifact_type,
+                    "file": filename,
+                    "url": url,
+                    "description": description,
+                }
+                status_code = results_by_name[filename].http_status_code
+                if isinstance(status_code, int):
+                    entry["status_code"] = status_code
+                artifacts.append(entry)
 
     original_profile = payload.get("profile")
     base_profile = (
