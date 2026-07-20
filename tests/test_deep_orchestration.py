@@ -68,7 +68,35 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
     assert result.deep_profile_selected is False
     assert result.deep_collection_completed is None
     assert result.deep_offline_review_completed is True
+    assert tuple(
+        item.canonical_url for item in result.successful_content_reviews
+    ) == ("http://example.test/source",)
     assert "Bounded Deep collection completion is not established." in result.deep_recon_markdown
+
+
+def test_successful_content_reviews_are_built_from_persisted_collection_fields() -> None:
+    item = _source_item(
+        url="https://portal.example.test/public/notice.txt",
+        headers=(("Content-Type", "text/plain"),),
+        body=b"Retained release notice.",
+        evidence_ids=("EVID-DEEP-NOTICE",),
+    )
+
+    result = build_deep_recon_orchestration(
+        _source_result(item),
+        _shallow_result(),
+    )
+
+    assert len(result.successful_content_reviews) == 1
+    review = result.successful_content_reviews[0]
+    assert review.canonical_url == item.url
+    assert review.status_code == 200
+    assert review.content_type == "text/plain"
+    assert review.body_preview == "Retained release notice."
+    assert review.evidence_ids == ("EVID-DEEP-NOTICE",)
+    assert review.artefact_references == (
+        "deep_source_route_collection.json",
+    )
 
 
 def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypatch) -> None:

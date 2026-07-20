@@ -56,6 +56,9 @@ from bugslyce.recon.deep_orchestration import (
     build_deep_recon_orchestration,
     write_deep_recon_orchestration_artifacts,
 )
+from bugslyce.recon.deep_successful_content import (
+    render_successful_deep_content_runbook,
+)
 from bugslyce.recon.deep_shallow_route_followup import (
     DeepShallowRouteFollowupResult,
     build_deep_shallow_route_followup_plan,
@@ -1899,6 +1902,57 @@ def _deep_operator_summary_leads(
                 score=score,
             )
         )
+    successful_content_reviews = tuple(
+        getattr(orchestration, "successful_content_reviews", ())
+    )
+    if successful_content_reviews:
+        endpoints = sorted(
+            {
+                review.canonical_url
+                for review in successful_content_reviews
+                if review.canonical_url
+            }
+        )
+        evidence_ids = sorted(
+            {
+                evidence_id
+                for review in successful_content_reviews
+                for evidence_id in review.evidence_ids
+                if evidence_id
+            }
+        )
+        artefact_references = sorted(
+            {
+                reference
+                for review in successful_content_reviews
+                for reference in review.artefact_references
+                if reference
+            }
+        )
+        response_count = len(successful_content_reviews)
+        leads.append(
+            OperatorSummaryLead(
+                title="Successfully collected Deep content available offline",
+                why=(
+                    f"{response_count} successfully retained Deep "
+                    f"response{'s' if response_count != 1 else ''} are available "
+                    "for offline review in "
+                    + ", ".join(
+                        f"`{reference}`" for reference in artefact_references
+                    )
+                    + "."
+                ),
+                endpoints=endpoints,
+                evidence_ids=evidence_ids,
+                next_action=(
+                    "Use the detailed Human Triage and runbook entries for per-response "
+                    "offline review. Do not re-fetch these URLs or treat successful "
+                    "collection as a confirmed finding."
+                ),
+                signal="direct retained response",
+                score=72,
+            )
+        )
     return tuple(leads)
 
 
@@ -1925,9 +1979,19 @@ def _build_standard_investigation_runbook_section_if_needed(
         assembly.review_leads,
         workflow_leads=workflow_leads,
     )
-    return render_standard_investigation_workflow_runbook_section(
+    investigation_section = render_standard_investigation_workflow_runbook_section(
         threads,
         engagement_context=engagement_context,
+    )
+    successful_content_section = render_successful_deep_content_runbook(
+        tuple(getattr(orchestration, "successful_content_reviews", ()))
+    )
+    if not successful_content_section:
+        return investigation_section
+    return "\n\n".join(
+        section.strip()
+        for section in (investigation_section, successful_content_section)
+        if section and section.strip()
     )
 
 

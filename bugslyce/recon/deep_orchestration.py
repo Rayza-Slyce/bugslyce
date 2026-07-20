@@ -65,6 +65,10 @@ from bugslyce.recon.deep_source_route_collection_review import (
     DeepSourceRouteCollectionReviewSummary,
     build_deep_source_route_collection_review,
 )
+from bugslyce.recon.deep_successful_content import (
+    SuccessfulDeepContentReview,
+    build_successful_deep_content_reviews,
+)
 from bugslyce.recon.deep_source_route_collector import DeepSourceRouteCollectionResult
 
 
@@ -109,6 +113,7 @@ class DeepReconOrchestrationResult:
     shallow_route_followup: DeepShallowRouteFollowupResult
     form_inventory: DeepFormInventoryResult
     parameter_inventory: DeepParameterInventoryResult
+    successful_content_reviews: tuple[SuccessfulDeepContentReview, ...]
     stage_order: tuple[str, ...]
     stage_counts: tuple[tuple[str, int], ...]
     deep_recon_markdown: str
@@ -154,6 +159,9 @@ def build_deep_recon_orchestration(
         shallow_followups,
         html_routes,
         javascript_routes,
+    )
+    successful_content_reviews = build_successful_deep_content_reviews(
+        source_collection
     )
     stage_counts = _stage_counts(
         collection_bundle,
@@ -230,6 +238,7 @@ def build_deep_recon_orchestration(
         shallow_route_followup=shallow_followups,
         form_inventory=form_inventory,
         parameter_inventory=parameter_inventory,
+        successful_content_reviews=successful_content_reviews,
         stage_order=STAGE_ORDER,
         stage_counts=stage_counts,
         deep_recon_markdown=report_markdown,

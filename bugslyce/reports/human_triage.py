@@ -16,6 +16,7 @@ from bugslyce.reports.artifact_classifier import (
     classify_encoded_artifact,
     classify_http_service_priority,
 )
+from bugslyce.recon.deep_successful_content import SuccessfulDeepContentReview
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.route_provenance import (
     RouteEvidenceProvenance,
@@ -266,6 +267,7 @@ class HumanTriageBrief:
     ignore_for_now: tuple[HumanTriageItem, ...]
     raw_evidence_pointers: tuple[str, ...]
     evidence_cards: tuple[ReadableEvidenceCard, ...]
+    successful_deep_content: tuple[SuccessfulDeepContentReview, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,6 +305,9 @@ def build_human_triage_brief(
         workflow_leads
         if workflow_leads is not None
         else build_grouped_workflow_leads(project_state, deep_orchestration)
+    )
+    successful_deep_content = tuple(
+        getattr(deep_orchestration, "successful_content_reviews", ())
     )
     grouped_account_urls = {
         url
@@ -359,17 +364,27 @@ def build_human_triage_brief(
     return HumanTriageBrief(
         start_here=tuple(start),
         evidence_values=tuple(values),
-        review_next=tuple(_review_next_lines(start, values)),
+        review_next=tuple(
+            _review_next_lines(start, values, successful_deep_content)
+        ),
         ignore_for_now=tuple(ignore),
         raw_evidence_pointers=tuple(_raw_evidence_pointers(project_state, candidates)),
         evidence_cards=tuple(_build_cards(start, values, project_state)[:MAX_CARDS]),
+        successful_deep_content=successful_deep_content,
     )
 
 
 def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
     """Render the compact Standard Human Triage Brief section."""
 
-    if not brief.start_here and not brief.evidence_values:
+    successful_deep_content = tuple(
+        getattr(brief, "successful_deep_content", ())
+    )
+    if (
+        not brief.start_here
+        and not brief.evidence_values
+        and not successful_deep_content
+    ):
         return "\n".join(
             [
                 "## Human Triage Brief",
@@ -417,6 +432,10 @@ def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
                 "",
             ]
         )
+
+    if successful_deep_content:
+        lines.extend(["### Successfully Collected Deep Content", ""])
+        lines.extend(_render_successful_deep_content(successful_deep_content))
 
     lines.extend(["### Review Next", ""])
     if brief.review_next:
@@ -1293,6 +1312,7 @@ def _has_http_service_card(
 def _review_next_lines(
     start: list[HumanTriageItem],
     values: list[HumanTriageItem],
+    successful_deep_content: tuple[SuccessfulDeepContentReview, ...] = (),
 ) -> list[str]:
     lines: list[str] = []
     for item in start[:3]:
@@ -1300,8 +1320,47 @@ def _review_next_lines(
         lines.append(f"Review {item.title.lower()} at {location} in collected evidence context.")
     if values:
         lines.append("Validate notable source or metadata values locally before escalating.")
+    for review in successful_deep_content:
+        artefact = review.artefact_references[0]
+        lines.append(
+            f"Review the retained HTTP {review.status_code} response for "
+            f"{review.canonical_url} offline in {artefact}."
+        )
     lines.append("Record request/response evidence and stop if the evidence remains generic or default-page noise.")
     return _dedupe(lines)
+
+
+def _render_successful_deep_content(
+    reviews: tuple[SuccessfulDeepContentReview, ...],
+) -> list[str]:
+    lines: list[str] = [
+        (
+            "These bounded same-origin responses completed successfully and have "
+            "inspectable retained content. They require manual review and are not "
+            "confirmed findings."
+        ),
+        "",
+    ]
+    for review in reviews:
+        lines.extend(
+            [
+                f"- **Successfully collected Deep content**: {_code(review.canonical_url)}",
+                f"  - Review ID: {_code(review.review_id)}",
+                f"  - Response: `HTTP {review.status_code}`; content type: "
+                f"{_code(review.content_type or 'not recorded')}; bytes: `{review.body_bytes}`",
+                f"  - Evidence: {format_evidence_ids(review.evidence_ids)}",
+                "  - Retained artefact: "
+                + ", ".join(_code(value) for value in review.artefact_references),
+                f"  - Bounded preview: {_code(review.body_preview)}",
+                (
+                    "  - Suggested manual action: inspect the retained artefact locally "
+                    "and correlate the preview with existing evidence; do not re-fetch "
+                    "the URL."
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _raw_evidence_pointers(project_state: ProjectState, candidates: list[Candidate]) -> list[str]:

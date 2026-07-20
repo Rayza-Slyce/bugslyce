@@ -967,6 +967,20 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
                 ),
             )
         ),
+        successful_content_reviews=(
+            SimpleNamespace(
+                review_id="DEEP-CONTENT-0001",
+                canonical_url="https://example.test/public/notice.txt",
+                requested_urls=("https://example.test/public/notice.txt",),
+                status_code=200,
+                content_type="text/plain",
+                body_bytes=28,
+                body_sha256="c" * 64,
+                body_preview="Retained notice for review.",
+                evidence_ids=("EVID-DEEP-CONTENT",),
+                artefact_references=("deep_source_route_collection.json",),
+            ),
+        ),
     )
     identities: dict[str, object] = {}
     captured_report: list[str | None] = []
@@ -1255,15 +1269,17 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert tuple(lead.title for lead in captured_operator_leads[0]) == (
         "Structured operational configuration observed",
         "Routes disclosed by structured JSON response",
+        "Successfully collected Deep content available offline",
     )
     assert captured_operator_leads[0][0].score > 85
     assert captured_operator_leads[0][1].score > 85
+    assert captured_operator_leads[0][2].score == 72
     assert captured_operator_leads[0][0].evidence_ids == ["EVID-CONFIG"]
     assert captured_operator_leads[0][1].evidence_ids == ["EVID-JSON"]
     assert captured_operator_leads[0][1].endpoints == [
         "https://example.test/catalogue.json"
     ]
-    assert 2 in referenced_direct_counts
+    assert 3 in referenced_direct_counts
     assert "No interpretation review leads" not in (captured_manual_review[0] or "")
     assert "listed once in the Operator Summary" in (captured_manual_review[0] or "")
     assert "request began at `https://example.test/catalogue`" in (
@@ -1275,9 +1291,17 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     ]
     assert checkpoint_seen
     assert final_status_seen[-1] == "completed"
-    assert identities["runbook_standard"] == (
-        "## Standard Investigation Workflow\n\nStandard guidance.\n"
+    runbook_standard = identities["runbook_standard"]
+    assert runbook_standard is not None
+    assert runbook_standard.startswith(
+        "## Standard Investigation Workflow\n\nStandard guidance."
     )
+    assert "## Successful Deep Content Review" in runbook_standard
+    assert "https://example.test/public/notice.txt" in runbook_standard
+    assert "HTTP 200" in runbook_standard
+    assert "EVID-DEEP-CONTENT" in runbook_standard
+    assert "deep_source_route_collection.json" in runbook_standard
+    assert "curl " not in runbook_standard
     expected_deep_paths = (
         output_dir / "deep_source_route_collection.md",
         output_dir / "deep_source_route_collection.json",

@@ -1340,6 +1340,90 @@ def test_structured_configuration_suppresses_duplicate_test_route_prompt() -> No
     assert direct_lead.evidence_ids == ["EVID-CONFIG"]
 
 
+def test_successful_deep_text_response_is_available_for_primary_offline_review() -> None:
+    url = "https://portal.example.test/public/notice.txt"
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=(
+            SimpleNamespace(
+                review_id="DEEP-CONTENT-0001",
+                canonical_url=url,
+                requested_urls=(url,),
+                status_code=200,
+                content_type="text/plain",
+                body_bytes=42,
+                body_sha256="a" * 64,
+                body_preview="Scheduled maintenance starts at 18:00.",
+                evidence_ids=("EVID-DEEP-TEXT",),
+                artefact_references=("deep_source_route_collection.json",),
+            ),
+        ),
+    )
+
+    brief = build_human_triage_brief(
+        _project_state(),
+        [],
+        deep_orchestration=orchestration,
+        workflow_leads=(),
+    )
+    rendered = render_human_triage_brief_markdown(brief)
+
+    assert "Successfully collected Deep content" in rendered
+    assert url in rendered
+    assert "HTTP 200" in rendered
+    assert "Scheduled maintenance starts at 18:00." in rendered
+    assert "EVID-DEEP-TEXT" in rendered
+    assert "deep_source_route_collection.json" in rendered
+
+
+def test_existing_primary_route_and_deep_response_remain_complementary() -> None:
+    url = "https://portal.example.test/review/item"
+    candidate = Candidate(
+        id="CAND-ROUTE",
+        candidate_type="hidden_path_review",
+        title="Application route review",
+        priority="medium",
+        rationale="A directly observed application route warrants manual review.",
+        affected_assets=["portal.example.test"],
+        affected_endpoints=[url],
+        evidence_ids=["EVID-ROUTE"],
+        suggested_manual_validation=["Review the retained route evidence."],
+        kill_switch_guidance=None,
+    )
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=(
+            SimpleNamespace(
+                review_id="DEEP-CONTENT-0001",
+                canonical_url=url,
+                requested_urls=(url,),
+                status_code=200,
+                content_type="text/plain",
+                body_bytes=19,
+                body_sha256="d" * 64,
+                body_preview="Retained route body.",
+                evidence_ids=("EVID-DEEP-RESPONSE",),
+                artefact_references=("deep_source_route_collection.json",),
+            ),
+        ),
+    )
+
+    rendered = render_human_triage_brief_markdown(
+        build_human_triage_brief(
+            _project_state(),
+            [candidate],
+            deep_orchestration=orchestration,
+            workflow_leads=(),
+        )
+    )
+
+    assert rendered.count("Application route review") == 1
+    assert rendered.count("**Successfully collected Deep content**") == 1
+    assert "EVID-ROUTE" in rendered
+    assert "EVID-DEEP-RESPONSE" in rendered
+    assert "not confirmed findings" in rendered
+
+
 def _project_state(
     *,
     http_services: list[HTTPService] | None = None,

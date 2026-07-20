@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, Evidence, HTTPArtifact, HTTPService
 from bugslyce.core.project import build_project_state
@@ -20,6 +21,10 @@ from bugslyce.reports.markdown import (
     write_project_outputs,
 )
 from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.recon.deep_successful_content import (
+    SuccessfulDeepContentReview,
+    render_successful_deep_content_runbook,
+)
 from bugslyce.reports.standard_interpretation import render_standard_interpretation_report
 from bugslyce.triage.candidates import generate_candidates
 
@@ -102,6 +107,54 @@ def test_default_report_does_not_include_manual_review_leads_section() -> None:
     assert "## Manual Review Leads" not in report
     assert "## Human Triage Brief" not in report
     assert "## Readable Evidence Cards" not in report
+
+
+def test_successful_deep_content_relationship_matches_primary_report_and_runbook() -> None:
+    _report, state, candidates = _basic_saas_report()
+    url = "https://portal.example.test/public/notice.txt"
+    review = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url=url,
+        requested_urls=(url,),
+        status_code=200,
+        content_type="text/plain",
+        body_bytes=36,
+        body_sha256="b" * 64,
+        body_preview="Offline operational notice for review.",
+        evidence_ids=("EVID-DEEP-NOTICE",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=(review,),
+    )
+    brief = build_human_triage_brief(
+        state,
+        candidates,
+        deep_orchestration=orchestration,
+        workflow_leads=(),
+    )
+    from bugslyce.project_pipeline import _deep_operator_summary_leads
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        human_triage_brief_markdown=render_human_triage_brief_markdown(brief),
+        operator_summary_leads=_deep_operator_summary_leads(orchestration),
+    )
+    runbook = render_successful_deep_content_runbook((review,))
+
+    for rendered in (report, runbook):
+        assert "DEEP-CONTENT-0001" in rendered
+        assert url in rendered
+        assert "HTTP 200" in rendered
+        assert "EVID-DEEP-NOTICE" in rendered
+        assert "deep_source_route_collection.json" in rendered
+        assert "confirmed finding" in rendered
+    assert "Offline operational notice for review." in report
+    assert "curl " not in runbook
+    assert "wget " not in runbook
+    assert "re-fetch" in runbook
 
 
 def test_report_can_include_prerendered_human_triage_and_cards_sections() -> None:
@@ -918,6 +971,175 @@ def test_operator_summary_promotes_generic_body_fetched_200_path(tmp_path: Path)
     assert "Signal: `medium`" in review_first
 
 
+def test_successful_deep_content_uses_one_operator_summary_slot(
+    tmp_path: Path,
+) -> None:
+    state = _fetched_page_project_state(tmp_path)
+    candidates = generate_candidates(state)
+    fetched_url = "https://portal.example.test/public/"
+    reviews = tuple(
+        SuccessfulDeepContentReview(
+            review_id=f"DEEP-CONTENT-{index:04d}",
+            canonical_url=url,
+            requested_urls=(url,),
+            status_code=200,
+            content_type="text/plain" if url.endswith(".txt") else "text/html",
+            body_bytes=20 + index,
+            body_sha256=str(index) * 64,
+            body_preview=f"Retained response {index}.",
+            evidence_ids=("EVID-DEEP-SHARED", f"EVID-DEEP-{index}"),
+            artefact_references=(
+                "deep_source_route_collection.md",
+                "deep_source_route_collection.json",
+            ),
+        )
+        for index, url in enumerate(
+            (
+                fetched_url,
+                "https://portal.example.test/public/notice.txt",
+                "https://portal.example.test/public/archive/",
+            ),
+            start=1,
+        )
+    )
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=reviews,
+    )
+    from bugslyce.project_pipeline import _deep_operator_summary_leads
+
+    deep_leads = _deep_operator_summary_leads(orchestration)
+    unrelated = tuple(
+        OperatorSummaryLead(
+            title=f"Unrelated retained lead {index}",
+            why="Independent retained evidence.",
+            endpoints=[f"https://service-{index}.example.test/"],
+            evidence_ids=[f"EVID-UNRELATED-{index}"],
+            next_action="Review the retained evidence locally.",
+            signal="medium",
+            score=71 - index,
+        )
+        for index in range(6)
+    )
+    summary = build_operator_summary(
+        state,
+        candidates,
+        additional_leads=(*deep_leads, *unrelated),
+    )
+
+    assert len(deep_leads) == 1
+    aggregate = deep_leads[0]
+    assert aggregate.title == "Successfully collected Deep content available offline"
+    assert "3 successfully retained Deep responses" in aggregate.why
+    assert aggregate.endpoints == sorted(review.canonical_url for review in reviews)
+    assert aggregate.evidence_ids == [
+        "EVID-DEEP-1",
+        "EVID-DEEP-2",
+        "EVID-DEEP-3",
+        "EVID-DEEP-SHARED",
+    ]
+    assert aggregate.why.count("deep_source_route_collection.json") == 1
+    assert aggregate.why.count("deep_source_route_collection.md") == 1
+    reversed_orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=tuple(
+            replace(
+                review,
+                evidence_ids=tuple(reversed(review.evidence_ids)),
+                artefact_references=tuple(reversed(review.artefact_references)),
+            )
+            for review in reversed(reviews)
+        ),
+    )
+    assert _deep_operator_summary_leads(reversed_orchestration) == deep_leads
+    assert sum(
+        lead.title == "Successfully collected Deep content available offline"
+        for lead in summary.review_first
+    ) == 1
+    assert any(
+        lead.title == "Fetched application page: /public/"
+        and lead.endpoints == [fetched_url]
+        for lead in summary.review_first
+    )
+    assert all(lead in summary.review_first for lead in unrelated)
+
+    brief = build_human_triage_brief(
+        state,
+        candidates,
+        deep_orchestration=orchestration,
+        workflow_leads=(),
+    )
+    human_triage = render_human_triage_brief_markdown(brief)
+    runbook = render_successful_deep_content_runbook(reviews)
+    assert human_triage.count("**Successfully collected Deep content**") == 3
+    assert runbook.count("DEEP-CONTENT-") == 3
+    for review in reviews:
+        for rendered in (human_triage, runbook):
+            assert review.review_id in rendered
+            assert review.canonical_url in rendered
+            assert "HTTP 200" in rendered
+            assert "deep_source_route_collection.json" in rendered
+            assert all(evidence_id in rendered for evidence_id in review.evidence_ids)
+        assert review.body_preview in human_triage
+
+
+def test_many_successful_deep_responses_cannot_consume_multiple_summary_slots(
+    tmp_path: Path,
+) -> None:
+    state = _fetched_page_project_state(tmp_path)
+    candidates = generate_candidates(state)
+    reviews = tuple(
+        SuccessfulDeepContentReview(
+            review_id=f"DEEP-CONTENT-{index:04d}",
+            canonical_url=f"https://portal.example.test/retained/{index}",
+            requested_urls=(f"https://portal.example.test/retained/{index}",),
+            status_code=200,
+            content_type="text/plain",
+            body_bytes=index,
+            body_sha256=f"{index:064x}",
+            body_preview=f"Retained item {index}.",
+            evidence_ids=(f"EVID-MANY-{index:02d}",),
+            artefact_references=("deep_source_route_collection.json",),
+        )
+        for index in range(1, 11)
+    )
+    from bugslyce.project_pipeline import _deep_operator_summary_leads
+
+    deep_leads = _deep_operator_summary_leads(
+        SimpleNamespace(
+            source_route_collection_review=SimpleNamespace(review_leads=()),
+            successful_content_reviews=reviews,
+        )
+    )
+    unrelated = tuple(
+        OperatorSummaryLead(
+            title=f"Capacity lead {index}",
+            why="Independent retained evidence.",
+            endpoints=[f"https://capacity-{index}.example.test/"],
+            evidence_ids=[f"EVID-CAPACITY-{index}"],
+            next_action="Review locally.",
+            signal="medium",
+            score=71 - index,
+        )
+        for index in range(6)
+    )
+
+    summary = build_operator_summary(
+        state,
+        candidates,
+        additional_leads=(*deep_leads, *unrelated),
+    )
+
+    assert len(deep_leads) == 1
+    assert "10 successfully retained Deep responses" in deep_leads[0].why
+    assert len(summary.review_first) == 8
+    assert sum(
+        lead.title == "Successfully collected Deep content available offline"
+        for lead in summary.review_first
+    ) == 1
+    assert all(lead in summary.review_first for lead in unrelated)
+
+
 def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:
     state = build_project_state(FIXTURES_ROOT / "lab_raw_recon_pack")
     state = replace(
@@ -1540,3 +1762,35 @@ def test_raw_recon_pack_json_preserves_manifest_metadata() -> None:
     assert manifest["created_by"] == "manual"
     assert manifest["profile"] == "manual-import"
     assert len(manifest["artifacts"]) == 14
+
+
+def _fetched_page_project_state(tmp_path: Path):
+    url = "https://portal.example.test/public/"
+    (tmp_path / "scope.md").write_text(
+        "# Scope\n\n## In Scope\n\n- portal.example.test\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "body-fetch-portal-public.html").write_text(
+        "<html><head><title>Public Application</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "portal.example.test",
+                "scope_file": "scope.md",
+                "profile": "synthetic-offline",
+                "artifacts": [
+                    {
+                        "type": "html",
+                        "file": "body-fetch-portal-public.html",
+                        "url": url,
+                        "description": "Bounded saved body for offline review",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return build_project_state(tmp_path)
