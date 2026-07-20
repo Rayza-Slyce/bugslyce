@@ -9,11 +9,13 @@ from bugslyce.core.models import (
     Candidate,
     DiscoveredPath,
     Endpoint,
+    Evidence,
     HTTPArtifact,
     HTTPService,
     PortService,
     ProjectState,
 )
+from bugslyce.recon.route_provenance import route_evidence_provenance
 from bugslyce.reports.human_triage import (
     build_human_triage_brief,
     render_human_triage_brief_markdown,
@@ -878,6 +880,353 @@ def test_endpoint_and_discovered_forbidden_route_have_one_access_boundary_prompt
     assert "Admin/hidden path discovered" not in before_pointers
 
 
+def test_repeated_forbidden_collection_observations_are_not_independent() -> None:
+    url = "https://portal.example.test/restricted-area"
+    discovery = DiscoveredPath(
+        url=url,
+        status_code=403,
+        content_length=24,
+        redirect_location=None,
+        source="bounded-discovery.txt",
+        evidence_ids=["EVID-DISCOVERY"],
+        tags=[],
+    )
+    followup = DiscoveredPath(
+        url=url,
+        status_code=403,
+        content_length=24,
+        redirect_location=None,
+        source="bounded-header-followup.txt",
+        evidence_ids=["EVID-FOLLOWUP"],
+        tags=[],
+    )
+    endpoint = Endpoint(
+        url=url,
+        hostname="portal.example.test",
+        path="/restricted-area",
+        query_params=[],
+        evidence_ids=["EVID-FOLLOWUP", "EVID-DISCOVERY"],
+        tags=[],
+    )
+
+    first = build_human_triage_brief(
+        _project_state(endpoints=[endpoint], discovered_paths=[discovery, followup]),
+        [],
+    )
+    reversed_input = build_human_triage_brief(
+        _project_state(
+            endpoints=[replace(endpoint, evidence_ids=list(reversed(endpoint.evidence_ids)))],
+            discovered_paths=[followup, discovery],
+        ),
+        [],
+    )
+
+    assert first.start_here == reversed_input.start_here == ()
+    assert first.review_next == reversed_input.review_next
+    assert all(url not in item for item in first.review_next)
+    assert first.evidence_cards == reversed_input.evidence_cards == ()
+    assert "Independently referenced access-boundary route" not in (
+        render_human_triage_brief_markdown(first)
+    )
+
+
+def test_repeated_unauthorised_collection_observations_are_not_independent() -> None:
+    url = "https://portal.example.test/member-area"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/member-area",
+                query_params=[],
+                evidence_ids=["EVID-HEADERS-401", "EVID-DISCOVERY-401"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=401,
+                content_length=20,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY-401"],
+                tags=[],
+            ),
+            DiscoveredPath(
+                url=url,
+                status_code=401,
+                content_length=20,
+                redirect_location=None,
+                source="bounded-header-followup.txt",
+                evidence_ids=["EVID-HEADERS-401"],
+                tags=[],
+            ),
+        ],
+    )
+
+    brief = build_human_triage_brief(state, [])
+
+    assert all(item.url != url for item in brief.start_here)
+    assert all(item.url != url for item in brief.evidence_cards)
+    assert "Independently referenced access-boundary route" not in (
+        render_human_triage_brief_markdown(brief)
+    )
+
+
+def test_endpoint_only_header_request_is_not_an_independent_reference() -> None:
+    url = "https://portal.example.test/"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/",
+                query_params=[],
+                evidence_ids=["EVID-DISCOVERY", "EVID-HEADERS"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-DISCOVERY",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-HEADERS",
+                source_file="saved-headers.txt",
+                evidence_type="http_headers",
+                value=url,
+                context={"status_code": 403},
+            ),
+        ],
+    )
+
+    provenance = route_evidence_provenance(state, url)
+    brief = build_human_triage_brief(state, [])
+
+    assert provenance.request_evidence_ids == (
+        "EVID-DISCOVERY",
+        "EVID-HEADERS",
+    )
+    assert provenance.independent_reference_evidence_ids == ()
+    assert all(item.url != url for item in brief.start_here)
+    assert all(url not in item for item in brief.review_next)
+    assert all(item.url != url for item in brief.evidence_cards)
+
+
+def test_html_reference_remains_independent_from_forbidden_response() -> None:
+    url = "https://portal.example.test/restricted-area"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-RESPONSE", "EVID-HTML-LINK"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-RESPONSE"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-RESPONSE",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-HTML-LINK",
+                source_file="saved-page.html",
+                evidence_type="link",
+                value="/restricted-area",
+                context={"url": "https://portal.example.test/"},
+            ),
+        ],
+    )
+
+    provenance = route_evidence_provenance(state, url)
+    brief = build_human_triage_brief(state, [])
+    promoted = next(item for item in brief.start_here if item.url == url)
+
+    assert provenance.request_evidence_ids == ("EVID-RESPONSE",)
+    assert provenance.independent_reference_evidence_ids == ("EVID-HTML-LINK",)
+    assert promoted.title == "Independently referenced access-boundary route"
+    assert promoted.evidence_ids == ("EVID-HTML-LINK", "EVID-RESPONSE")
+
+
+def test_parsed_url_inventory_reference_remains_independent() -> None:
+    url = "https://portal.example.test/restricted-area"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-RESPONSE", "EVID-URL-INVENTORY"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-RESPONSE"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-RESPONSE",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-URL-INVENTORY",
+                source_file="urls.txt",
+                evidence_type="endpoint",
+                value=url,
+                context={"path": "/restricted-area"},
+            ),
+        ],
+    )
+
+    provenance = route_evidence_provenance(state, url)
+
+    assert provenance.request_evidence_ids == ("EVID-RESPONSE",)
+    assert provenance.independent_reference_evidence_ids == (
+        "EVID-URL-INVENTORY",
+    )
+
+
+def test_unknown_endpoint_evidence_is_not_assumed_independent() -> None:
+    url = "https://portal.example.test/restricted-area"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-RESPONSE", "EVID-UNKNOWN"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-RESPONSE"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-RESPONSE",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            )
+        ],
+    )
+
+    provenance = route_evidence_provenance(state, url)
+
+    assert provenance.request_evidence_ids == ("EVID-RESPONSE",)
+    assert provenance.independent_reference_evidence_ids == ()
+
+
+def test_robots_response_artefact_is_not_an_independent_route_reference() -> None:
+    url = "https://portal.example.test/robots.txt"
+    state = _project_state(
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=["EVID-ROBOTS-403", "EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-ROBOTS-403"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-ROBOTS-403",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-ROBOTS-ARTEFACT",
+                source_file="/tmp/saved-robots.txt",
+                evidence_type="robots",
+                value="/tmp/saved-robots.txt",
+                context={"url": url, "tags": ["robots_artifact"]},
+            ),
+        ],
+    )
+
+    provenance = route_evidence_provenance(state, url)
+    brief = build_human_triage_brief(state, [])
+
+    assert provenance.request_evidence_ids == (
+        "EVID-ROBOTS-403",
+        "EVID-ROBOTS-ARTEFACT",
+    )
+    assert provenance.independent_reference_evidence_ids == ()
+    assert all(item.url != url for item in brief.start_here)
+    assert all(url not in item for item in brief.review_next)
+    assert all(item.url != url for item in brief.evidence_cards)
+
+
 def test_correlated_admin_route_without_forbidden_boundary_can_still_promote() -> None:
     state = _project_state(
         endpoints=[
@@ -998,6 +1347,7 @@ def _project_state(
     port_services: list[PortService] | None = None,
     http_artifacts: list[HTTPArtifact] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
+    evidence: list[Evidence] | None = None,
 ) -> ProjectState:
     return ProjectState(
         project_name="human-triage-test",
@@ -1012,7 +1362,7 @@ def _project_state(
         discovered_paths=discovered_paths or [],
         recon_summary=None,
         recon_manifest=None,
-        evidence=[],
+        evidence=evidence or [],
         warnings=[],
         generated_at="2026-07-01T00:00:00Z",
         engagement_context="unknown",

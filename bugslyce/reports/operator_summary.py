@@ -16,6 +16,10 @@ from bugslyce.reports.artifact_classifier import (
     is_generic_default_page_text,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.route_provenance import (
+    canonical_route_url,
+    route_evidence_provenance,
+)
 
 
 REVIEW_TYPE_ORDER = (
@@ -478,33 +482,16 @@ def _coverage_lines(project_state: ProjectState) -> list[str]:
 
 
 def _has_independent_endpoint_reference(project_state: ProjectState, path) -> bool:
-    canonical = _canonical_summary_url(path.url)
-    boundary_ids = {value for value in path.evidence_ids if value}
-    for endpoint in project_state.endpoints:
-        if _canonical_summary_url(endpoint.url) != canonical:
-            continue
-        endpoint_ids = {value for value in endpoint.evidence_ids if value}
-        if endpoint_ids - boundary_ids:
-            return True
-    return False
+    return bool(
+        route_evidence_provenance(
+            project_state,
+            path.url,
+        ).independent_reference_evidence_ids
+    )
 
 
 def _canonical_summary_url(value: str | None) -> str:
-    if not value:
-        return ""
-    parsed = urlparse(value)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if not scheme or not host:
-        return value.rstrip("/")
-    try:
-        port = parsed.port
-    except ValueError:
-        return value.rstrip("/")
-    default_port = 80 if scheme == "http" else 443 if scheme == "https" else None
-    netloc = host if port in {None, default_port} else f"{host}:{port}"
-    path = parsed.path or "/"
-    return f"{scheme}://{netloc}{path.rstrip('/') or '/'}"
+    return canonical_route_url(value)
 
 
 def _interesting_path(path: str) -> bool:

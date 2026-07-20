@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import ProjectState
 from bugslyce.recon.artefact_analysis import ArtefactSource
+from bugslyce.recon.route_provenance import route_evidence_provenance
 
 
 MAX_ROUTE_LENGTH = 160
@@ -123,26 +124,41 @@ def build_route_source_review(
 
     for endpoint in project_state.endpoints:
         source_order += 1
-        observations.extend(
-            _observations_from_route(
-                endpoint.url,
-                "endpoint",
-                endpoint.evidence_ids[0] if endpoint.evidence_ids else None,
-                source_order,
-                allowed_hosts,
+        provenance = route_evidence_provenance(project_state, endpoint.url)
+        if provenance.access_boundary_status_codes:
+            endpoint_evidence_ids = provenance.independent_reference_evidence_ids
+        else:
+            endpoint_evidence_ids = tuple(endpoint.evidence_ids[:1])
+        if provenance.access_boundary_status_codes and not endpoint_evidence_ids:
+            continue
+        for evidence_id in endpoint_evidence_ids or (None,):
+            observations.extend(
+                _observations_from_route(
+                    endpoint.url,
+                    "endpoint",
+                    evidence_id,
+                    source_order,
+                    allowed_hosts,
+                )
             )
-        )
     for path in project_state.discovered_paths:
         source_order += 1
-        observations.extend(
-            _observations_from_route(
-                path.url,
-                "discovered_path",
-                path.evidence_ids[0] if path.evidence_ids else None,
-                source_order,
-                allowed_hosts,
-            )
+        provenance = route_evidence_provenance(project_state, path.url)
+        evidence_ids = (
+            provenance.request_evidence_ids
+            if provenance.access_boundary_status_codes
+            else tuple(path.evidence_ids[:1])
         )
+        for evidence_id in evidence_ids or (None,):
+            observations.extend(
+                _observations_from_route(
+                    path.url,
+                    "discovered_path",
+                    evidence_id,
+                    source_order,
+                    allowed_hosts,
+                )
+            )
     for source in sources:
         source_order += 1
         observations.extend(_observations_from_source(source, source_order, allowed_hosts))

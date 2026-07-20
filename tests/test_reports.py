@@ -6,7 +6,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
-from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, HTTPArtifact, HTTPService
+from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, Evidence, HTTPArtifact, HTTPService
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.human_triage import (
     build_human_triage_brief,
@@ -19,7 +19,7 @@ from bugslyce.reports.markdown import (
     render_markdown_report,
     write_project_outputs,
 )
-from bugslyce.reports.operator_summary import OperatorSummaryLead
+from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -1072,6 +1072,22 @@ def test_primary_report_independent_forbidden_route_evidence_merges_operator_pro
     url = "https://app.example-bounty.test/management"
     state = replace(
         state,
+        evidence=[
+            Evidence(
+                id="EVID-HTTP-MGMT403",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-SOURCE-MGMT",
+                source_file="saved-page.html",
+                evidence_type="link",
+                value="/management",
+                context={"url": "https://app.example-bounty.test/"},
+            ),
+        ],
         endpoints=[
             Endpoint(
                 url=url,
@@ -1109,6 +1125,192 @@ def test_primary_report_independent_forbidden_route_evidence_merges_operator_pro
     assert "vulnerable" not in lowered
     assert "authentication bypass" not in lowered
     assert "exposed" not in lowered
+
+
+def test_primary_report_keeps_repeated_forbidden_observations_as_low_signal() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/restricted-area"
+    evidence = [
+        Evidence(
+            id="EVID-DISCOVERY-403",
+            source_file="bounded-discovery.txt",
+            evidence_type="discovered_path",
+            value=url,
+            context={"status_code": 403},
+        ),
+        Evidence(
+            id="EVID-FOLLOWUP-403",
+            source_file="bounded-header-followup.txt",
+            evidence_type="http_headers",
+            value=url,
+            context={"status_code": 403},
+        ),
+    ]
+    state = replace(
+        state,
+        evidence=evidence,
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-FOLLOWUP-403", "EVID-DISCOVERY-403"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY-403"],
+                tags=[],
+            ),
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-header-followup.txt",
+                evidence_ids=["EVID-FOLLOWUP-403"],
+                tags=[],
+            ),
+        ],
+    )
+    triage_brief = build_human_triage_brief(state, [])
+    triage = render_human_triage_brief_markdown(triage_brief)
+    report = render_markdown_report(state, [], human_triage_brief_markdown=triage)
+    primary = report.split("## Scope Summary", 1)[0]
+
+    assert "Independently referenced access-boundary route" not in primary
+    assert url not in "\n".join(triage_brief.review_next)
+    assert all(card.url != url for card in triage_brief.evidence_cards)
+    assert "Access-controlled path context" in primary
+    assert url in primary
+    assert "No structured low-signal items were identified for this dataset." not in primary
+    raw_evidence = report.split("### Raw Evidence References", 1)[1]
+    assert "EVID-DISCOVERY-403" in raw_evidence
+    assert "EVID-FOLLOWUP-403" in raw_evidence
+
+
+def test_primary_report_keeps_endpoint_header_request_as_low_signal() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/"
+    state = replace(
+        state,
+        evidence=[
+            Evidence(
+                id="EVID-DISCOVERY-ORIGIN",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-HEADERS-ORIGIN",
+                source_file="saved-headers.txt",
+                evidence_type="http_headers",
+                value=url,
+                context={"status_code": 403},
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/",
+                query_params=[],
+                evidence_ids=["EVID-HEADERS-ORIGIN", "EVID-DISCOVERY-ORIGIN"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY-ORIGIN"],
+                tags=[],
+            )
+        ],
+    )
+    triage_brief = build_human_triage_brief(state, [])
+    triage = render_human_triage_brief_markdown(triage_brief)
+    report = render_markdown_report(state, [], human_triage_brief_markdown=triage)
+    primary = report.split("## Scope Summary", 1)[0]
+
+    assert "Independently referenced access-boundary route" not in primary
+    assert all(
+        "independently referenced access-boundary" not in item.lower()
+        for item in triage_brief.review_next
+    )
+    assert all(
+        card.title != "Independently referenced access-boundary route"
+        for card in triage_brief.evidence_cards
+    )
+    assert "Access-controlled path context" in primary
+    raw_evidence = report.split("### Raw Evidence References", 1)[1]
+    assert "EVID-DISCOVERY-ORIGIN" in raw_evidence
+    assert "EVID-HEADERS-ORIGIN" in raw_evidence
+
+
+def test_operator_summary_keeps_robots_response_as_access_control_context() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/robots.txt"
+    state = replace(
+        state,
+        evidence=[
+            Evidence(
+                id="EVID-ROBOTS-403",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-ROBOTS-ARTEFACT",
+                source_file="/tmp/saved-robots.txt",
+                evidence_type="robots",
+                value="/tmp/saved-robots.txt",
+                context={"url": url, "tags": ["robots_artifact"]},
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="app.example-bounty.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=["EVID-ROBOTS-403", "EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-ROBOTS-403"],
+                tags=[],
+            )
+        ],
+    )
+
+    summary = build_operator_summary(state, [])
+    access_context = next(
+        item for item in summary.low_signal if item.title == "Access-controlled path context"
+    )
+
+    assert access_context.endpoints == [url]
+    assert access_context.evidence_ids == ["EVID-ROBOTS-403"]
+    assert all(lead.endpoints != [url] for lead in summary.review_first)
 
 
 def test_primary_report_non_forbidden_admin_route_can_still_promote() -> None:

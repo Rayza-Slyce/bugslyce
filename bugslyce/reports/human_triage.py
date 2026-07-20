@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 import re
 from urllib.parse import urlparse
 
-from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, HTTPArtifact, ProjectState
+from bugslyce.core.models import Candidate, Endpoint, HTTPArtifact, ProjectState
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
@@ -17,6 +17,11 @@ from bugslyce.reports.artifact_classifier import (
     classify_http_service_priority,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.route_provenance import (
+    RouteEvidenceProvenance,
+    canonical_route_url,
+    route_evidence_provenance,
+)
 from bugslyce.triage.workflow_leads import (
     WorkflowLead,
     build_grouped_workflow_leads,
@@ -648,7 +653,7 @@ def _add_endpoint_items(
     start: list[HumanTriageItem],
     ignore: list[HumanTriageItem],
     project_state: ProjectState,
-    access_boundary_paths: dict[str, DiscoveredPath],
+    access_boundary_paths: dict[str, RouteEvidenceProvenance],
     grouped_account_urls: set[str],
     direct_structured_urls: set[str],
 ) -> None:
@@ -657,7 +662,7 @@ def _add_endpoint_items(
             continue
         access_boundary = access_boundary_paths.get(_canonical_triage_url(endpoint.url))
         if access_boundary is not None:
-            if _has_independent_endpoint_evidence(endpoint, access_boundary):
+            if access_boundary.independent_reference_evidence_ids:
                 start.append(_independent_access_boundary_item(endpoint, access_boundary))
             continue
         if _canonical_triage_url(endpoint.url) in direct_structured_urls:
@@ -791,31 +796,32 @@ def _workflow_triage_item(lead: WorkflowLead) -> HumanTriageItem:
     )
 
 
-def _access_boundary_paths_by_url(project_state: ProjectState) -> dict[str, DiscoveredPath]:
-    result: dict[str, DiscoveredPath] = {}
+def _access_boundary_paths_by_url(
+    project_state: ProjectState,
+) -> dict[str, RouteEvidenceProvenance]:
+    result: dict[str, RouteEvidenceProvenance] = {}
     for path in project_state.discovered_paths:
         if path.status_code not in {401, 403}:
             continue
         canonical = _canonical_triage_url(path.url)
         if canonical and canonical not in result:
-            result[canonical] = path
+            result[canonical] = route_evidence_provenance(project_state, path.url)
     return result
-
-
-def _has_independent_endpoint_evidence(
-    endpoint: Endpoint,
-    access_boundary: DiscoveredPath,
-) -> bool:
-    endpoint_ids = {value for value in endpoint.evidence_ids if value}
-    boundary_ids = {value for value in access_boundary.evidence_ids if value}
-    return bool(endpoint_ids - boundary_ids)
 
 
 def _independent_access_boundary_item(
     endpoint: Endpoint,
-    access_boundary: DiscoveredPath,
+    access_boundary: RouteEvidenceProvenance,
 ) -> HumanTriageItem:
-    evidence_ids = tuple(_dedupe([*endpoint.evidence_ids, *access_boundary.evidence_ids]))
+    evidence_ids = tuple(
+        _dedupe(
+            [
+                *access_boundary.independent_reference_evidence_ids,
+                *access_boundary.access_boundary_evidence_ids,
+            ]
+        )
+    )
+    status = "/".join(str(value) for value in access_boundary.access_boundary_status_codes)
     return HumanTriageItem(
         title="Independently referenced access-boundary route",
         priority="medium",
@@ -824,7 +830,7 @@ def _independent_access_boundary_item(
         value=endpoint.url,
         why_it_matters=(
             f"Saved source or route evidence references {endpoint.url}, and a bounded request "
-            f"returned HTTP {access_boundary.status_code}. This is access-control context, "
+            f"returned HTTP {status}. This is access-control context, "
             "not a confirmed weakness."
         ),
         suggested_manual_action=(
@@ -833,12 +839,12 @@ def _independent_access_boundary_item(
         ),
         evidence_ids=evidence_ids,
         url=endpoint.url,
-        signal=f"independent route reference + HTTP {access_boundary.status_code}",
+        signal=f"independent route reference + HTTP {status}",
     )
 
 
 def _canonical_triage_url(value: str | None) -> str:
-    return canonical_workflow_url(value)
+    return canonical_route_url(value)
 
 
 def _direct_structured_review_urls(deep_orchestration: object | None) -> set[str]:

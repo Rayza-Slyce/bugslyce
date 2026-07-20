@@ -6,6 +6,7 @@ from bugslyce.core.models import (
     Asset,
     DiscoveredPath,
     Endpoint,
+    Evidence,
     HTTPArtifact,
     HTTPService,
     ProjectState,
@@ -15,6 +16,7 @@ from bugslyce.recon.route_source_review import (
     build_route_source_review,
     render_route_source_review_markdown,
 )
+from bugslyce.recon.route_provenance import canonical_route_url
 
 
 def test_extracts_and_buckets_route_references_from_local_source_text() -> None:
@@ -189,6 +191,267 @@ def test_confirmed_endpoint_and_discovered_paths_preserve_source_noise_patterns(
     assert "/photo/2016/12/24/11/48/lost" in all_routes
 
 
+def test_successful_route_preserves_endpoint_and_discovered_path_sources() -> None:
+    url = "https://example.test/application-area"
+    state = _project_state(
+        http_services=[_service("https://example.test/")],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/application-area",
+                query_params=[],
+                evidence_ids=["EVID-FOLLOWUP", "EVID-DISCOVERY"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=200,
+                content_length=240,
+                redirect_location=None,
+                source="bounded-successful-response.txt",
+                evidence_ids=["EVID-DISCOVERY", "EVID-FOLLOWUP"],
+                tags=[],
+            )
+        ],
+    )
+
+    lead = build_route_source_review(state, ())[0]
+
+    assert lead.route_references == ("/application-area",)
+    assert lead.source_kinds == ("discovered_path", "endpoint")
+    assert lead.source_ids == ("EVID-DISCOVERY", "EVID-FOLLOWUP")
+    assert lead.priority == "medium"
+
+
+def test_derived_endpoint_does_not_create_an_independent_route_source_kind() -> None:
+    url = "https://example.test/restricted-area"
+    state = _project_state(
+        http_services=[_service("https://example.test/")],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-FOLLOWUP", "EVID-DISCOVERY"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-header-followup.txt",
+                evidence_ids=["EVID-FOLLOWUP"],
+                tags=[],
+            ),
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY"],
+                tags=[],
+            ),
+        ],
+    )
+
+    lead = build_route_source_review(state, ())[0]
+    reversed_state = _project_state(
+        http_services=[_service("https://example.test/")],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-DISCOVERY", "EVID-FOLLOWUP"],
+                tags=[],
+            )
+        ],
+        discovered_paths=list(reversed(state.discovered_paths)),
+    )
+
+    assert lead.route_references == ("/restricted-area",)
+    assert lead.source_kinds == ("discovered_path",)
+    assert lead.source_ids == ("EVID-DISCOVERY", "EVID-FOLLOWUP")
+    assert lead.priority == "low"
+    assert build_route_source_review(reversed_state, ()) == (lead,)
+
+
+def test_independent_source_reference_remains_a_distinct_route_source_kind() -> None:
+    url = "https://example.test/restricted-area"
+    state = _project_state(
+        http_services=[_service("https://example.test/")],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/restricted-area",
+                query_params=[],
+                evidence_ids=["EVID-RESPONSE", "EVID-SOURCE-REFERENCE"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-RESPONSE"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-RESPONSE",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-SOURCE-REFERENCE",
+                source_file="saved-page.html",
+                evidence_type="link",
+                value="/restricted-area",
+                context={"url": "https://example.test/"},
+            ),
+        ],
+    )
+
+    lead = build_route_source_review(state, ())[0]
+
+    assert lead.route_references == ("/restricted-area",)
+    assert lead.source_kinds == ("discovered_path", "endpoint")
+    assert lead.source_ids == ("EVID-RESPONSE", "EVID-SOURCE-REFERENCE")
+    assert lead.priority == "medium"
+
+
+def test_endpoint_header_request_remains_request_route_source_evidence() -> None:
+    url = "https://example.test/gateway"
+    state = _project_state(
+        http_services=[_service(url)],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/gateway",
+                query_params=[],
+                evidence_ids=["EVID-DISCOVERY", "EVID-HEADERS"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-DISCOVERY"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-DISCOVERY",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-HEADERS",
+                source_file="saved-headers.txt",
+                evidence_type="http_headers",
+                value=url,
+                context={"status_code": 403},
+            ),
+        ],
+    )
+
+    lead = build_route_source_review(state, ())[0]
+
+    assert lead.route_references == ("/gateway",)
+    assert lead.source_kinds == ("discovered_path",)
+    assert lead.source_ids == ("EVID-DISCOVERY", "EVID-HEADERS")
+    assert lead.priority == "low"
+
+
+def test_robots_response_artefact_remains_request_route_source_evidence() -> None:
+    url = "https://example.test/robots.txt"
+    state = _project_state(
+        http_services=[_service("https://example.test/")],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="example.test",
+                path="/robots.txt",
+                query_params=[],
+                evidence_ids=["EVID-ROBOTS-403", "EVID-ROBOTS-ARTEFACT"],
+                tags=["robots_artifact"],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=403,
+                content_length=24,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-ROBOTS-403"],
+                tags=[],
+            )
+        ],
+        evidence=[
+            Evidence(
+                id="EVID-ROBOTS-403",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 403},
+            ),
+            Evidence(
+                id="EVID-ROBOTS-ARTEFACT",
+                source_file="/tmp/saved-robots.txt",
+                evidence_type="robots",
+                value="/tmp/saved-robots.txt",
+                context={"url": url, "tags": ["robots_artifact"]},
+            ),
+        ],
+    )
+
+    lead = build_route_source_review(state, ())[0]
+
+    assert lead.route_references == ("/robots.txt",)
+    assert lead.source_kinds == ("discovered_path",)
+    assert lead.source_ids == ("EVID-ROBOTS-403", "EVID-ROBOTS-ARTEFACT")
+    assert lead.priority == "low"
+
+
+def test_canonical_route_url_normalises_equivalent_http_routes() -> None:
+    expected = "https://portal.example.test/restricted-area"
+    equivalents = (
+        "https://PORTAL.EXAMPLE.TEST/restricted-area",
+        "https://portal.example.test:443/restricted-area",
+        "https://portal.example.test/restricted-area?view=compact",
+        "https://portal.example.test/restricted-area#details",
+        "https://portal.example.test/restricted-area/",
+    )
+
+    assert {canonical_route_url(value) for value in equivalents} == {expected}
+    assert canonical_route_url("https://portal.example.test:8443/restricted-area") != expected
+
+
 def test_cross_origin_absolute_links_are_not_flattened_into_target_routes() -> None:
     external_http = "http://docs.external.test/reference/server-guide.html"
     external_https = "https://issues.external.test/project/runtime"
@@ -300,6 +563,7 @@ def _project_state(
     endpoints: list[Endpoint] | None = None,
     discovered_paths: list[DiscoveredPath] | None = None,
     http_artifacts: list[HTTPArtifact] | None = None,
+    evidence: list[Evidence] | None = None,
     engagement_context: str = "unknown",
 ) -> ProjectState:
     return ProjectState(
@@ -315,7 +579,7 @@ def _project_state(
         discovered_paths=discovered_paths or [],
         recon_summary=None,
         recon_manifest=None,
-        evidence=[],
+        evidence=evidence or [],
         warnings=[],
         generated_at="2026-06-26T00:00:00Z",
         engagement_context=engagement_context,
