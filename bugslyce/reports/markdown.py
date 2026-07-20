@@ -47,6 +47,7 @@ def render_markdown_report(
     manual_review_leads_markdown: str | None = None,
     deep_recon_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
+    http_route_relationships_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
@@ -76,6 +77,7 @@ def render_markdown_report(
     # as manual-review content, immediately after Manual Review Leads when present.
     _optional_prerendered_section(lines, deep_recon_markdown)
     _investigation_threads_section(lines, investigation_threads_markdown)
+    _optional_prerendered_section(lines, http_route_relationships_markdown)
     _route_source_review_section(lines, route_source_review_markdown)
     _optional_prerendered_section(lines, readable_evidence_cards_markdown)
     _scope_summary(lines, project_state)
@@ -163,6 +165,7 @@ def write_project_outputs(
     manual_review_leads_markdown: str | None = None,
     deep_recon_markdown: str | None = None,
     investigation_threads_markdown: str | None = None,
+    http_route_relationships_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
@@ -181,6 +184,7 @@ def write_project_outputs(
             manual_review_leads_markdown=manual_review_leads_markdown,
             deep_recon_markdown=deep_recon_markdown,
             investigation_threads_markdown=investigation_threads_markdown,
+            http_route_relationships_markdown=http_route_relationships_markdown,
             route_source_review_markdown=route_source_review_markdown,
             readable_evidence_cards_markdown=readable_evidence_cards_markdown,
             operator_summary_leads=operator_summary_leads,

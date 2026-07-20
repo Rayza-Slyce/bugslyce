@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
+from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
+from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
 from bugslyce.project_session import (
     build_project_runbook,
     load_project,
@@ -77,6 +78,12 @@ from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
     write_http_metadata_execution_result,
+)
+from bugslyce.recon.http_route_relationships import (
+    HttpRouteRelationshipCluster,
+    build_http_route_relationship_clusters,
+    render_http_route_relationship_clusters_markdown,
+    render_http_route_relationship_clusters_runbook,
 )
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
@@ -1591,6 +1598,13 @@ def _write_interpretation_report_if_needed(
         deep_orchestration=orchestration,
         workflow_leads=workflow_leads,
     )
+    relationship_markdown = render_http_route_relationship_clusters_markdown(
+        _http_route_relationship_clusters_if_available(
+            profile,
+            project_state,
+            context,
+        )
+    )
     report_kwargs: dict[str, object] = {
         "human_triage_brief_markdown": render_human_triage_brief_markdown(
             human_triage_brief,
@@ -1608,6 +1622,8 @@ def _write_interpretation_report_if_needed(
             human_triage_brief,
         ),
     }
+    if relationship_markdown:
+        report_kwargs["http_route_relationships_markdown"] = relationship_markdown
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
         report_kwargs["operator_summary_leads"] = operator_summary_leads
@@ -1986,12 +2002,45 @@ def _build_standard_investigation_runbook_section_if_needed(
     successful_content_section = render_successful_deep_content_runbook(
         tuple(getattr(orchestration, "successful_content_reviews", ()))
     )
-    if not successful_content_section:
+    relationship_section = render_http_route_relationship_clusters_runbook(
+        _http_route_relationship_clusters_if_available(
+            profile,
+            project_state,
+            context,
+        )
+    )
+    if not relationship_section and not successful_content_section:
         return investigation_section
     return "\n\n".join(
         section.strip()
-        for section in (investigation_section, successful_content_section)
+        for section in (
+            investigation_section,
+            relationship_section,
+            successful_content_section,
+        )
         if section and section.strip()
+    )
+
+
+def _http_route_relationship_clusters_if_available(
+    profile: str,
+    project_state: ProjectState,
+    context: dict[str, object] | None,
+) -> tuple[HttpRouteRelationshipCluster, ...]:
+    if profile != DEEP_PIPELINE_PROFILE or context is None:
+        return ()
+    outputs = context.get("deep_outputs")
+    if not isinstance(outputs, DeepPipelineOutputs):
+        return ()
+    orchestration = outputs.orchestration
+    if not isinstance(outputs.source_collection, DeepSourceRouteCollectionResult):
+        return ()
+    if not isinstance(orchestration, DeepReconOrchestrationResult):
+        return ()
+    return build_http_route_relationship_clusters(
+        project_state,
+        source_collection=outputs.source_collection,
+        successful_reviews=orchestration.successful_content_reviews,
     )
 
 
