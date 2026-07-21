@@ -50,6 +50,7 @@ def render_markdown_report(
     http_route_relationships_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
+    collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> str:
     """Render a cautious deterministic triage report."""
@@ -71,6 +72,7 @@ def render_markdown_report(
         candidates,
         additional_leads=operator_summary_leads,
     )
+    _optional_prerendered_section(lines, collection_confidence_markdown)
     _optional_prerendered_section(lines, human_triage_brief_markdown)
     _manual_review_leads_section(lines, manual_review_leads_markdown)
     # Phase 93A: already-rendered Deep Markdown belongs at the same report seam
@@ -168,6 +170,7 @@ def write_project_outputs(
     http_route_relationships_markdown: str | None = None,
     route_source_review_markdown: str | None = None,
     readable_evidence_cards_markdown: str | None = None,
+    collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
@@ -187,6 +190,7 @@ def write_project_outputs(
             http_route_relationships_markdown=http_route_relationships_markdown,
             route_source_review_markdown=route_source_review_markdown,
             readable_evidence_cards_markdown=readable_evidence_cards_markdown,
+            collection_confidence_markdown=collection_confidence_markdown,
             operator_summary_leads=operator_summary_leads,
         ),
         encoding="utf-8",

@@ -95,6 +95,30 @@ def test_markdown_report_includes_required_sections() -> None:
         assert section in report
 
 
+def test_collection_confidence_renders_after_operator_summary_before_triage() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    confidence = (
+        "## Collection Confidence\n\n"
+        "### CONFIDENCE-TEST: Intentionally bounded collection\n"
+    )
+    triage = "## Human Triage Brief\n\nReview evidence.\n"
+
+    report = render_markdown_report(
+        state,
+        generate_candidates(state),
+        collection_confidence_markdown=confidence,
+        human_triage_brief_markdown=triage,
+    )
+
+    assert report.count("## Collection Confidence") == 1
+    assert report.index("## Operator Summary") < report.index(
+        "## Collection Confidence"
+    )
+    assert report.index("## Collection Confidence") < report.index(
+        "## Human Triage Brief"
+    )
+
+
 def test_operator_summary_appears_before_scope_summary() -> None:
     report, _state, _candidates = _basic_saas_report()
 

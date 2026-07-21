@@ -935,7 +935,17 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
 
-    source_collection = SimpleNamespace(kind="source-collection")
+    source_collection = SimpleNamespace(
+        kind="source-collection",
+        total_considered=3,
+        total_collected=1,
+        total_skipped=2,
+        collected=(SimpleNamespace(evidence_ids=("EVID-COLLECTED",)),),
+        skipped=(
+            SimpleNamespace(evidence_ids=("EVID-SKIPPED-A",)),
+            SimpleNamespace(evidence_ids=("EVID-SKIPPED-B",)),
+        ),
+    )
     shallow_followups = SimpleNamespace(kind="shallow-followups")
     orchestration = SimpleNamespace(
         deep_recon_markdown="## Deep Collection Review\n\nDeep report block.\n",
@@ -986,6 +996,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     captured_report: list[str | None] = []
     captured_operator_leads: list[tuple] = []
     captured_manual_review: list[str | None] = []
+    captured_confidence: list[str | None] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
     captured_reference_requirements: list[tuple] = []
@@ -1192,6 +1203,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         captured_report.append(deep_recon_markdown)
         captured_operator_leads.append(operator_summary_leads)
         captured_manual_review.append(kwargs.get("manual_review_leads_markdown"))
+        captured_confidence.append(kwargs.get("collection_confidence_markdown"))
         report_path = output_path / "report.md"
         json_path = output_path / "project_state.json"
         report_path.write_text(deep_recon_markdown or "", encoding="utf-8")
@@ -1289,6 +1301,21 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert "request began at `https://example.test/catalogue`" in (
         captured_operator_leads[0][1].why
     )
+    assert captured_confidence == [
+        "## Collection Confidence\n\n"
+        "Absence of a notice does not prove exhaustive coverage.\n\n"
+        "### CONFIDENCE-DEEP-SOURCE-ROUTES: Intentionally bounded Deep "
+        "source-route collection\n\n"
+        "- Category: `intentionally_bounded`\n"
+        "- Direct fact: Deep source-route collection considered 3 requests, "
+        "collected 1, and intentionally skipped 2 under its bounded policy.\n"
+        "- Operator implication: Review covers only policy-allowed retained "
+        "requests; skipped or unconsidered routes remain unknown.\n"
+        "- Stage/tool: `deep_source_route_collection`\n"
+        "- Counts: considered `3`; collected `1`; skipped `2`\n"
+        "- Evidence: `EVID-COLLECTED`, `EVID-SKIPPED-A`, `EVID-SKIPPED-B`\n"
+        "- Retained artefact: `deep_source_route_collection.json`\n"
+    ]
     assert captured_runbook == [
         orchestration.deep_recon_runbook_markdown,
         orchestration.deep_recon_runbook_markdown,
@@ -1305,6 +1332,10 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert "HTTP 200" in runbook_standard
     assert "EVID-DEEP-CONTENT" in runbook_standard
     assert "deep_source_route_collection.json" in runbook_standard
+    assert "## Collection Confidence Review" in runbook_standard
+    assert "CONFIDENCE-DEEP-SOURCE-ROUTES" in runbook_standard
+    assert "considered 3 requests, collected 1" in runbook_standard
+    assert "intentionally skipped 2" in runbook_standard
     assert "curl " not in runbook_standard
     expected_deep_paths = (
         output_dir / "deep_source_route_collection.md",

@@ -7,7 +7,18 @@ from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath
 
-from bugslyce.core.models import DiscoveredPath, Evidence, HTTPArtifact, ProjectState
+from bugslyce.core.models import (
+    DiscoveredPath,
+    Evidence,
+    HTTPArtifact,
+    ProjectState,
+    ReconManifest,
+    ReconManifestArtifact,
+)
+from bugslyce.recon.collection_confidence import (
+    CollectionConfidenceNotice,
+    build_collection_confidence_notices_from_project,
+)
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
     DEEP_RECON_REVIEW_MARKDOWN,
@@ -65,6 +76,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "deep_output",
         "successful_deep_content",
         "http_route_relationship_edge",
+        "collection_confidence_notice",
     }
 )
 
@@ -237,6 +249,7 @@ def discover_evidence_pack_references(
 
     references.extend(_deep_output_references(root))
     references.extend(_deep_relationship_references(root))
+    references.extend(_collection_confidence_references(root))
     return tuple(
         sorted(
             references,
@@ -304,6 +317,7 @@ def discover_expected_pack_references(
         )
     references.extend(_deep_output_references(root))
     references.extend(_deep_relationship_references(root))
+    references.extend(_collection_confidence_references(root))
     return tuple(
         sorted(
             references,
@@ -352,6 +366,33 @@ def evidence_pack_references_from_deep_models(
     return tuple(
         sorted(
             references,
+            key=lambda item: (
+                item.portable_path,
+                item.owner_kind,
+                item.owner_id,
+                item.evidence_ids,
+            ),
+        )
+    )
+
+
+def evidence_pack_references_from_collection_confidence(
+    notices: tuple[CollectionConfidenceNotice, ...],
+) -> tuple[EvidencePackReference, ...]:
+    """Convert confidence notices into exact portable closure ownership."""
+
+    return tuple(
+        sorted(
+            (
+                EvidencePackReference(
+                    portable_path=portable_path,
+                    owner_kind="collection_confidence_notice",
+                    owner_id=notice.notice_id,
+                    evidence_ids=notice.evidence_ids,
+                )
+                for notice in notices
+                for portable_path in notice.artefact_references
+            ),
             key=lambda item: (
                 item.portable_path,
                 item.owner_kind,
@@ -936,6 +977,126 @@ def _collect_portability_errors(
             candidate.resolve().relative_to(root)
         except (OSError, RuntimeError, ValueError):
             errors.add(f"portable_recon_manifest_artifact_invalid:{index}")
+    _collect_confidence_metadata_errors(root, errors)
+
+
+def _collect_confidence_metadata_errors(root: Path, errors: set[str]) -> None:
+    pipeline_path = root / "project_pipeline.json"
+    if pipeline_path.exists() or pipeline_path.is_symlink():
+        _validate_portable_confidence_pipeline(root, pipeline_path, errors)
+    for path in sorted(root.glob("recon_execution*.json")):
+        _validate_portable_confidence_commands(root, path, errors)
+
+
+def _validate_portable_confidence_pipeline(
+    root: Path,
+    path: Path,
+    errors: set[str],
+) -> None:
+    prefix = "portable_confidence_pipeline_metadata_invalid:"
+    try:
+        payload = _load_structured_json_object(
+            root, path, required=True, label="project_pipeline.json"
+        )
+    except ValueError:
+        errors.add(prefix + "document")
+        return
+    if payload.get("portable_confidence_schema") != 1:
+        errors.add(prefix + "portable_confidence_schema")
+    if payload.get("generated_by") != "bugslyce.collection_confidence.pipeline":
+        errors.add(prefix + "generated_by")
+    for field in (
+        "project_file",
+        "scope_file",
+        "output_dir",
+        "report_path",
+        "runbook_path",
+        "export_path",
+    ):
+        if field in payload:
+            errors.add(prefix + field)
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        errors.add(prefix + "steps")
+        return
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            errors.add(prefix + f"steps[{index}]")
+            continue
+        for field in ("step_id", "name", "command_kind", "status", "message"):
+            if not isinstance(step.get(field), str) or not step[field].strip():
+                errors.add(prefix + f"steps[{index}].{field}")
+        for field in ("started_at", "completed_at"):
+            if field in step and (
+                not isinstance(step[field], str) or not step[field].strip()
+            ):
+                errors.add(prefix + f"steps[{index}].{field}")
+        if "output_paths" in step:
+            errors.add(prefix + f"steps[{index}].output_paths")
+
+
+def _validate_portable_confidence_commands(
+    root: Path,
+    path: Path,
+    errors: set[str],
+) -> None:
+    prefix = f"portable_confidence_command_metadata_invalid:{path.name}:"
+    try:
+        payload = _load_structured_json_object(root, path, required=True, label=path.name)
+    except ValueError:
+        errors.add(prefix + "document")
+        return
+    if payload.get("portable_confidence_schema") != 1:
+        errors.add(prefix + "portable_confidence_schema")
+    if (
+        payload.get("generated_by")
+        != "bugslyce.collection_confidence.command_execution"
+    ):
+        errors.add(prefix + "generated_by")
+    for field in (
+        "input_dir",
+        "manifest_path",
+        "project_state_path",
+        "report_path",
+        "scope_file",
+        "output_dir",
+        "plan_path",
+        "generated_paths",
+    ):
+        if field in payload:
+            errors.add(prefix + field)
+    results = payload.get("command_results")
+    if not isinstance(results, list):
+        errors.add(prefix + "command_results")
+        return
+    for index, result in enumerate(results):
+        if not isinstance(result, dict):
+            errors.add(prefix + f"command_results[{index}]")
+            continue
+        for field in ("command_id", "tool"):
+            if not isinstance(result.get(field), str) or not result[field].strip():
+                errors.add(prefix + f"command_results[{index}].{field}")
+        if result.get("executed") is not None and type(result.get("executed")) is not bool:
+            errors.add(prefix + f"command_results[{index}].executed")
+        if result.get("exit_code") is not None and type(result.get("exit_code")) is not int:
+            errors.add(prefix + f"command_results[{index}].exit_code")
+        if result.get("error") is not None and not isinstance(result.get("error"), str):
+            errors.add(prefix + f"command_results[{index}].error")
+        for field in ("started_at", "ended_at"):
+            if field in result and (
+                not isinstance(result[field], str) or not result[field].strip()
+            ):
+                errors.add(prefix + f"command_results[{index}].{field}")
+        for field in ("duration_seconds", "http_status_code"):
+            value = result.get(field)
+            if field in result and value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+            ):
+                errors.add(prefix + f"command_results[{index}].{field}")
+        if "simulated" in result and result.get("simulated") is not None and type(result.get("simulated")) is not bool:
+            errors.add(prefix + f"command_results[{index}].simulated")
+        if "output_file" in result:
+            errors.add(prefix + f"command_results[{index}].output_file")
 
 
 def _collect_project_state_file_errors(
@@ -1382,11 +1543,23 @@ def _deep_relationship_references(root: Path) -> tuple[EvidencePackReference, ..
     return evidence_pack_references_from_deep_models(reviews, clusters)
 
 
+def _collection_confidence_references(
+    root: Path,
+) -> tuple[EvidencePackReference, ...]:
+    project_state = _load_relationship_project_state(root)
+    if project_state is None:
+        return ()
+    notices = build_collection_confidence_notices_from_project(project_state, root)
+    return evidence_pack_references_from_collection_confidence(notices)
+
+
 def _load_relationship_project_state(root: Path) -> ProjectState | None:
     payload = _load_structured_json_object(
         root, root / "project_state.json", required=True, label="project_state.json"
     )
     raw_state = payload.get("project_state")
+    if raw_state is None:
+        return None
     if not isinstance(raw_state, dict):
         raise ValueError("project state relationship payload must be an object")
     raw_artifacts = raw_state.get("http_artifacts", [])
@@ -1394,6 +1567,18 @@ def _load_relationship_project_state(root: Path) -> ProjectState | None:
     raw_evidence = raw_state.get("evidence", [])
     if not all(isinstance(value, list) for value in (raw_artifacts, raw_paths, raw_evidence)):
         raise ValueError("project state relationship collections must be lists")
+    manifest_payload = _load_structured_json_object(
+        root, root / "recon_manifest.json", required=True, label="recon_manifest.json"
+    )
+    raw_manifest_artifacts = manifest_payload.get("artifacts")
+    if not isinstance(raw_manifest_artifacts, list):
+        raise ValueError("recon manifest artefacts must be a list")
+    manifest_artifacts = [
+        _recon_manifest_artifact_from_dict(item) for item in raw_manifest_artifacts
+    ]
+    raw_warnings = raw_state.get("warnings", [])
+    if not isinstance(raw_warnings, list):
+        raise ValueError("project state warnings must be a list")
     return ProjectState(
         project_name=str(raw_state.get("project_name") or root.name),
         input_dir=str(root),
@@ -1406,11 +1591,75 @@ def _load_relationship_project_state(root: Path) -> ProjectState | None:
         http_artifacts=[_http_artifact_from_dict(item) for item in raw_artifacts],
         discovered_paths=[_discovered_path_from_dict(item) for item in raw_paths],
         recon_summary=None,
-        recon_manifest=None,
+        recon_manifest=ReconManifest(
+            schema_version=str(manifest_payload.get("schema_version") or ""),
+            target=str(manifest_payload.get("target") or ""),
+            artifacts=manifest_artifacts,
+            scope_file=(
+                str(manifest_payload["scope_file"])
+                if isinstance(manifest_payload.get("scope_file"), str)
+                else None
+            ),
+            created_by=(
+                str(manifest_payload["created_by"])
+                if isinstance(manifest_payload.get("created_by"), str)
+                else None
+            ),
+            profile=(
+                str(manifest_payload["profile"])
+                if isinstance(manifest_payload.get("profile"), str)
+                else None
+            ),
+            notes=(
+                str(manifest_payload["notes"])
+                if isinstance(manifest_payload.get("notes"), str)
+                else None
+            ),
+            source_file=str(root / "recon_manifest.json"),
+        ),
         evidence=[_evidence_from_dict(item) for item in raw_evidence],
-        warnings=[],
+        warnings=[str(item) for item in raw_warnings],
         generated_at=str(raw_state.get("generated_at") or "not recorded"),
         engagement_context=str(raw_state.get("engagement_context") or "unknown"),
+    )
+
+
+def _recon_manifest_artifact_from_dict(value: object) -> ReconManifestArtifact:
+    if not isinstance(value, dict):
+        raise ValueError("recon manifest artefact must be an object")
+    return ReconManifestArtifact(
+        type=_required_text(value.get("type"), "recon manifest artefact type"),
+        file=_required_text(value.get("file"), "recon manifest artefact file"),
+        url=str(value["url"]) if isinstance(value.get("url"), str) else None,
+        base_url=(
+            str(value["base_url"])
+            if isinstance(value.get("base_url"), str)
+            else None
+        ),
+        host=str(value["host"]) if isinstance(value.get("host"), str) else None,
+        port=(
+            value["port"]
+            if isinstance(value.get("port"), int)
+            and not isinstance(value.get("port"), bool)
+            else None
+        ),
+        protocol=(
+            str(value["protocol"])
+            if isinstance(value.get("protocol"), str)
+            else None
+        ),
+        description=(
+            str(value["description"])
+            if isinstance(value.get("description"), str)
+            else None
+        ),
+        status_code=(
+            value["status_code"]
+            if isinstance(value.get("status_code"), int)
+            and not isinstance(value.get("status_code"), bool)
+            else None
+        ),
+        tags=list(_string_sequence(value.get("tags"))),
     )
 
 

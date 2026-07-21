@@ -451,6 +451,14 @@ def _portable_pack_content(
 ) -> bytes:
     content = source_path.read_bytes()
     preferred_paths = _preferred_portable_paths(included)
+    if archive_name == "project_pipeline.json":
+        return _portable_confidence_pipeline_content(content)
+    if (
+        archive_name.startswith("recon_execution")
+        and archive_name.endswith(".json")
+        and "/" not in archive_name
+    ):
+        return _portable_confidence_command_content(content)
     if archive_name == "bugslyce_project.json":
         try:
             payload = json.loads(content.decode("utf-8"))
@@ -531,6 +539,136 @@ def _portable_pack_content(
     )
     rendered = rendered.replace(str(input_dir), ".")
     return rendered.encode("utf-8")
+
+
+def _portable_confidence_pipeline_content(content: bytes) -> bytes:
+    payload = _json_object(content, "pipeline confidence metadata")
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError("Pipeline confidence metadata steps must be a list.")
+    portable_steps = []
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            raise ValueError(f"Pipeline confidence step #{index} must be an object.")
+        portable_step: dict[str, object] = {
+            field: _required_json_text(
+                step.get(field), f"pipeline confidence step #{index} {field}"
+            )
+            for field in ("step_id", "name", "command_kind", "status", "message")
+        }
+        for field in ("started_at", "completed_at"):
+            value = step.get(field)
+            if value is not None:
+                portable_step[field] = _required_json_text(
+                    value, f"pipeline confidence step #{index} {field}"
+                )
+        portable_steps.append(portable_step)
+    portable_steps.sort(
+        key=lambda item: (
+            item["step_id"],
+            item["status"],
+            item["command_kind"],
+            item["name"],
+            item["message"],
+        )
+    )
+    portable = {
+        "portable_confidence_schema": 1,
+        "generated_by": "bugslyce.collection_confidence.pipeline",
+        "steps": portable_steps,
+    }
+    return (json.dumps(portable, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _portable_confidence_command_content(content: bytes) -> bytes:
+    payload = _json_object(content, "command confidence metadata")
+    results = payload.get("command_results")
+    if not isinstance(results, list):
+        raise ValueError("Command confidence metadata command_results must be a list.")
+    portable_results = []
+    for index, result in enumerate(results, start=1):
+        if not isinstance(result, dict):
+            raise ValueError(f"Command confidence result #{index} must be an object.")
+        portable_result: dict[str, object] = {
+            "command_id": _required_json_text(
+                result.get("command_id"),
+                f"command confidence result #{index} command_id",
+            ),
+            "tool": _required_json_text(
+                result.get("tool"), f"command confidence result #{index} tool"
+            ),
+        }
+        executed = result.get("executed")
+        if executed is not None and type(executed) is not bool:
+            raise ValueError(
+                f"Command confidence result #{index} executed must be boolean or null."
+            )
+        portable_result["executed"] = executed
+        exit_code = result.get("exit_code")
+        if exit_code is not None and type(exit_code) is not int:
+            raise ValueError(
+                f"Command confidence result #{index} exit_code must be integer or null."
+            )
+        portable_result["exit_code"] = exit_code
+        error = result.get("error")
+        if error is not None and not isinstance(error, str):
+            raise ValueError(
+                f"Command confidence result #{index} error must be text or null."
+            )
+        portable_result["error"] = error
+        for field in ("started_at", "ended_at"):
+            value = result.get(field)
+            if value is not None:
+                portable_result[field] = _required_json_text(
+                    value, f"command confidence result #{index} {field}"
+                )
+        for field in ("duration_seconds", "http_status_code"):
+            value = result.get(field)
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(
+                        f"Command confidence result #{index} {field} must be numeric or null."
+                    )
+                portable_result[field] = value
+        simulated = result.get("simulated")
+        if simulated is not None:
+            if type(simulated) is not bool:
+                raise ValueError(
+                    f"Command confidence result #{index} simulated must be boolean or null."
+                )
+            portable_result["simulated"] = simulated
+        portable_results.append(portable_result)
+    portable_results.sort(
+        key=lambda item: (
+            item["command_id"],
+            item["tool"],
+            item["executed"] is not True,
+            item["exit_code"] if item["exit_code"] is not None else -1,
+            item["error"] or "",
+        )
+    )
+    portable = {
+        "portable_confidence_schema": 1,
+        "generated_by": "bugslyce.collection_confidence.command_execution",
+        "command_results": portable_results,
+    }
+    return (json.dumps(portable, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _json_object(content: bytes, label: str) -> dict[str, object]:
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not parse {label}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label.capitalize()} must contain a JSON object.")
+    return payload
+
+
+def _required_json_text(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label.capitalize()} must be non-empty text.")
+    return value
 
 
 def _preferred_portable_paths(included: dict[str, Path]) -> dict[Path, str]:

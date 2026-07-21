@@ -2597,6 +2597,552 @@ def test_missing_manifest_artefact_is_recorded_once_as_portable_path(
     assert str(input_dir) not in json.dumps(packed_manifest)
 
 
+def test_export_reconstructs_bounded_and_deep_confidence_owners(tmp_path: Path) -> None:
+    input_dir = _deep_relationship_export_input(tmp_path)
+    discovery = input_dir / "gobuster-deep-bounded-core.txt"
+    discovery.write_text("/library/\n", encoding="utf-8")
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"].append(
+        {"type": "gobuster", "file": discovery.name}
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    state_path = input_dir / "project_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["project_state"]["evidence"].append(
+        {
+            "id": "EVID-DISCOVERY",
+            "source_file": str(discovery),
+            "evidence_type": "discovered_path",
+            "value": "/library/",
+            "context": {},
+        }
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    output_path = tmp_path / "confidence-owners.zip"
+
+    export_recon_evidence_pack(input_dir, output_path)
+
+    with zipfile.ZipFile(output_path) as archive:
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        members = set(archive.namelist())
+    owners = _closure_owner_associations(closure)
+    assert (
+        "recon_manifest.json",
+        "collection_confidence_notice",
+        "CONFIDENCE-BOUNDED-CONTENT-DISCOVERY",
+        ("EVID-DISCOVERY",),
+    ) in owners
+    deep_owner = next(
+        owner
+        for owner in owners
+        if owner[0] == "deep_source_route_collection.json"
+        and owner[1] == "collection_confidence_notice"
+        and owner[2] == "CONFIDENCE-DEEP-SOURCE-ROUTES"
+    )
+    assert deep_owner[3] == (
+        "EVID-LINK-NOTICE",
+        "EVID-LINK-README",
+        "EVID-REDIRECT",
+    )
+    assert "recon_manifest.json" in members
+    assert "deep_source_route_collection.json" in members
+
+
+def test_failed_pipeline_notice_is_portable_and_required_by_closure(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    pipeline_path = input_dir / "project_pipeline.json"
+    pipeline_payload = {
+        "project_file": str(input_dir / "bugslyce_project.json"),
+        "scope_file": str(input_dir / "scope.md"),
+        "output_dir": str(input_dir),
+        "report_path": str(input_dir / "report.md"),
+        "runbook_path": str(input_dir / "runbook.md"),
+        "export_path": str(tmp_path / "pack.zip"),
+        "final_status": "failed",
+        "steps": [
+            {
+                "step_id": "PIPELINE-STEP-FAILED",
+                "name": "bounded collector",
+                "command_kind": "content-run",
+                "status": "failed",
+                "message": "collector failed while reviewing /api/login",
+                "started_at": "2026-07-21T12:00:00Z",
+                "completed_at": "2026-07-21T12:00:01Z",
+                "output_paths": [str(input_dir / "partial-output.txt")],
+            }
+        ],
+    }
+    source_bytes = json.dumps(pipeline_payload).encode("utf-8")
+    pipeline_path.write_bytes(source_bytes)
+    output_path = tmp_path / "failed-stage.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / "failed-stage"
+    with zipfile.ZipFile(output_path) as archive:
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        packed_pipeline = json.loads(archive.read("project_pipeline.json"))
+        archive.extractall(extracted)
+
+    assert pipeline_path.read_bytes() == source_bytes
+    assert packed_pipeline["portable_confidence_schema"] == 1
+    assert packed_pipeline["generated_by"] == "bugslyce.collection_confidence.pipeline"
+    assert packed_pipeline["steps"][0]["status"] == "failed"
+    assert packed_pipeline["steps"][0]["message"] == (
+        "collector failed while reviewing /api/login"
+    )
+    for field in (
+        "project_file",
+        "scope_file",
+        "output_dir",
+        "report_path",
+        "runbook_path",
+        "export_path",
+    ):
+        assert field not in packed_pipeline
+    assert "output_paths" not in packed_pipeline["steps"][0]
+    assert "project_pipeline.json" in {
+        record[0]
+        for record in _closure_owner_associations(closure)
+        if record[1] == "collection_confidence_notice"
+        and record[2] == "CONFIDENCE-STAGE-PIPELINE-STEP-FAILED"
+    }
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+    closure_path = extracted / REFERENCE_CLOSURE_FILENAME
+    packed_closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    pipeline_record = next(
+        record
+        for record in packed_closure["references"]
+        if record["portable_path"] == "project_pipeline.json"
+    )
+    pipeline_record["owners"] = [
+        owner
+        for owner in pipeline_record["owners"]
+        if owner["owner_kind"] != "collection_confidence_notice"
+    ]
+    closure_path.write_text(json.dumps(packed_closure), encoding="utf-8")
+    owner_validation = validate_evidence_pack_root(extracted)
+    assert owner_validation.validation_status == "incomplete"
+    assert any(
+        record.portable_path == "project_pipeline.json"
+        for record in owner_validation.owner_association_errors
+    )
+
+    closure_path.write_text(json.dumps(closure), encoding="utf-8")
+    (extracted / "project_pipeline.json").unlink()
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "incomplete"
+    assert "project_pipeline.json" in validation.missing_declared_member_paths
+
+
+def test_failed_command_notice_uses_included_portable_member(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    execution = input_dir / "recon_execution_content_run.json"
+    command_payload = {
+        "input_dir": str(input_dir),
+        "manifest_path": str(input_dir / "recon_manifest.json"),
+        "project_state_path": str(input_dir / "project_state.json"),
+        "report_path": str(input_dir / "report.md"),
+        "scope_file": str(input_dir / "scope.md"),
+        "output_dir": str(tmp_path / "plan-output"),
+        "plan_path": str(tmp_path / "plan-output/content_discovery_plan.json"),
+        "generated_paths": [str(tmp_path / "plan-output/result.txt")],
+        "command_results": [
+            {
+                "command_id": "CONTENT-COMMAND-FAILED",
+                "tool": "bounded-collector",
+                "executed": True,
+                "exit_code": 2,
+                "error": "structured failure mentioning /tmp/example but not a field",
+                "output_file": str(tmp_path / "plan-output/result.txt"),
+                "started_at": "2026-07-21T12:00:00Z",
+                "ended_at": "2026-07-21T12:00:01Z",
+            }
+        ],
+    }
+    source_bytes = json.dumps(command_payload).encode("utf-8")
+    execution.write_bytes(source_bytes)
+    output_path = tmp_path / "failed-command.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / "failed-command"
+    with zipfile.ZipFile(output_path) as archive:
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        packed_command = json.loads(archive.read("recon_execution_content_run.json"))
+        historical_command = archive.read(
+            "metadata/recon_execution_content_run.json"
+        )
+        archive.extractall(extracted)
+
+    assert execution.read_bytes() == source_bytes
+    assert historical_command == source_bytes
+    assert packed_command["portable_confidence_schema"] == 1
+    assert packed_command["generated_by"] == (
+        "bugslyce.collection_confidence.command_execution"
+    )
+    packed_result = packed_command["command_results"][0]
+    assert packed_result["command_id"] == "CONTENT-COMMAND-FAILED"
+    assert packed_result["tool"] == "bounded-collector"
+    assert packed_result["executed"] is True
+    assert packed_result["exit_code"] == 2
+    assert packed_result["error"] == (
+        "structured failure mentioning /tmp/example but not a field"
+    )
+    assert "output_file" not in packed_result
+    for field in (
+        "input_dir",
+        "manifest_path",
+        "project_state_path",
+        "report_path",
+        "scope_file",
+        "output_dir",
+        "plan_path",
+        "generated_paths",
+    ):
+        assert field not in packed_command
+    owner = next(
+        record
+        for record in _closure_owner_associations(closure)
+        if record[1] == "collection_confidence_notice"
+        and record[2] == "CONFIDENCE-COMMAND-CONTENT-COMMAND-FAILED"
+    )
+    assert owner[0] == "recon_execution_content_run.json"
+    assert (extracted / owner[0]).is_file()
+    assert (extracted / "metadata/recon_execution_content_run.json").is_file()
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+    (extracted / owner[0]).unlink()
+    assert validate_evidence_pack_root(extracted).validation_status == "incomplete"
+
+
+def test_portable_confidence_projections_preserve_skipped_unavailable_states(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "project_pipeline.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "step_id": "PIPELINE-STEP-SKIPPED",
+                        "name": "profile stage",
+                        "command_kind": "optional-stage",
+                        "status": "skipped",
+                        "message": "excluded by profile /api/login",
+                    },
+                    {
+                        "step_id": "PIPELINE-STEP-UNAVAILABLE",
+                        "name": "local helper",
+                        "command_kind": "local-helper",
+                        "status": "unavailable",
+                        "message": "dependency unavailable",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "recon_execution_optional.json").write_text(
+        json.dumps(
+            {
+                "command_results": [
+                    {
+                        "command_id": "COMMAND-NOT-EXECUTED",
+                        "tool": "optional-collector",
+                        "executed": False,
+                        "exit_code": None,
+                        "error": None,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "skipped-unavailable.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / "skipped-unavailable"
+    with zipfile.ZipFile(output_path) as archive:
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        pipeline = json.loads(archive.read("project_pipeline.json"))
+        commands = json.loads(archive.read("recon_execution_optional.json"))
+        archive.extractall(extracted)
+
+    owners = _closure_owner_associations(closure)
+    assert {
+        owner[2]
+        for owner in owners
+        if owner[1] == "collection_confidence_notice"
+    } == {
+        "CONFIDENCE-COMMAND-COMMAND-NOT-EXECUTED",
+        "CONFIDENCE-STAGE-PIPELINE-STEP-SKIPPED",
+        "CONFIDENCE-STAGE-PIPELINE-STEP-UNAVAILABLE",
+    }
+    assert [step["status"] for step in pipeline["steps"]] == [
+        "skipped",
+        "unavailable",
+    ]
+    assert commands["command_results"][0]["executed"] is False
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+@pytest.mark.parametrize(
+    ("member", "field", "value", "expected_error"),
+    (
+        (
+            "project_pipeline.json",
+            "portable_confidence_schema",
+            2,
+            "portable_confidence_pipeline_metadata_invalid:portable_confidence_schema",
+        ),
+        (
+            "project_pipeline.json",
+            "steps",
+            {},
+            "portable_confidence_pipeline_metadata_invalid:steps",
+        ),
+        (
+            "recon_execution_content_run.json",
+            "portable_confidence_schema",
+            "1",
+            (
+                "portable_confidence_command_metadata_invalid:"
+                "recon_execution_content_run.json:portable_confidence_schema"
+            ),
+        ),
+        (
+            "recon_execution_content_run.json",
+            "command_results",
+            {},
+            (
+                "portable_confidence_command_metadata_invalid:"
+                "recon_execution_content_run.json:command_results"
+            ),
+        ),
+    ),
+)
+def test_validator_rejects_malformed_confidence_projection_schema(
+    tmp_path: Path,
+    member: str,
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    if member == "project_pipeline.json":
+        (input_dir / member).write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "PIPELINE-STEP-FAILED",
+                            "name": "collector",
+                            "command_kind": "content-run",
+                            "status": "failed",
+                            "message": "failed at /api/login",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+    else:
+        (input_dir / member).write_text(
+            json.dumps(
+                {
+                    "command_results": [
+                        {
+                            "command_id": "COMMAND-FAILED",
+                            "tool": "collector",
+                            "executed": True,
+                            "exit_code": 2,
+                            "error": "failed at https://example.test/path",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+    output_path = tmp_path / f"malformed-{field}.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / f"malformed-{field}"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+    path = extracted / member
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[field] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert expected_error in validation.metadata_consistency_errors
+
+
+def test_portable_confidence_projection_is_deterministic_under_reversed_order(
+    tmp_path: Path,
+) -> None:
+    outputs = []
+    steps = [
+        {
+            "step_id": "PIPELINE-STEP-B",
+            "name": "second",
+            "command_kind": "collector",
+            "status": "failed",
+            "message": "failed at /api/login",
+        },
+        {
+            "step_id": "PIPELINE-STEP-A",
+            "name": "first",
+            "command_kind": "collector",
+            "status": "skipped",
+            "message": "see https://example.test/path",
+        },
+    ]
+    commands = [
+        {
+            "command_id": "COMMAND-B",
+            "tool": "collector",
+            "executed": True,
+            "exit_code": 2,
+            "error": "failed /tmp/text only",
+        },
+        {
+            "command_id": "COMMAND-A",
+            "tool": "collector",
+            "executed": False,
+            "exit_code": None,
+            "error": None,
+        },
+    ]
+    for index, reverse in enumerate((False, True)):
+        root = tmp_path / f"case-{index}"
+        root.mkdir()
+        input_dir = _export_input(root)
+        (input_dir / "project_pipeline.json").write_text(
+            json.dumps({"steps": list(reversed(steps)) if reverse else steps}),
+            encoding="utf-8",
+        )
+        (input_dir / "recon_execution_content_run.json").write_text(
+            json.dumps(
+                {"command_results": list(reversed(commands)) if reverse else commands}
+            ),
+            encoding="utf-8",
+        )
+        output_path = root / "pack.zip"
+        export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+        with zipfile.ZipFile(output_path) as archive:
+            outputs.append(
+                (
+                    archive.read("project_pipeline.json"),
+                    archive.read("recon_execution_content_run.json"),
+                    _closure_owner_associations(
+                        json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+                    ),
+                )
+            )
+
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "unsafe_value", "expected_error"),
+    (
+        (
+            "pipeline",
+            "output_dir",
+            "/host/project",
+            "portable_confidence_pipeline_metadata_invalid:output_dir",
+        ),
+        (
+            "pipeline_step",
+            "output_paths",
+            ["../outside"],
+            "portable_confidence_pipeline_metadata_invalid:steps[0].output_paths",
+        ),
+        (
+            "command",
+            "input_dir",
+            "/host/project",
+            (
+                "portable_confidence_command_metadata_invalid:"
+                "recon_execution_content_run.json:input_dir"
+            ),
+        ),
+        (
+            "command_result",
+            "output_file",
+            "../outside",
+            (
+                "portable_confidence_command_metadata_invalid:"
+                "recon_execution_content_run.json:command_results[0].output_file"
+            ),
+        ),
+    ),
+)
+def test_validator_rejects_nonportable_confidence_metadata_fields(
+    tmp_path: Path,
+    kind: str,
+    field: str,
+    unsafe_value: object,
+    expected_error: str,
+) -> None:
+    if kind.startswith("pipeline"):
+        input_dir = _export_input(tmp_path)
+        (input_dir / "project_pipeline.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "PIPELINE-STEP-FAILED",
+                            "name": "collector",
+                            "command_kind": "content-run",
+                            "status": "failed",
+                            "message": "failed at /api/login",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        member = "project_pipeline.json"
+    else:
+        input_dir = _export_input(tmp_path)
+        (input_dir / "recon_execution_content_run.json").write_text(
+            json.dumps(
+                {
+                    "command_results": [
+                        {
+                            "command_id": "COMMAND-FAILED",
+                            "tool": "collector",
+                            "executed": True,
+                            "exit_code": 2,
+                            "error": "failed at https://example.test/path",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        member = "recon_execution_content_run.json"
+    output_path = tmp_path / f"{kind}.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / f"{kind}-root"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+    member_path = extracted / member
+    payload = json.loads(member_path.read_text(encoding="utf-8"))
+    target = payload["steps"][0] if kind == "pipeline_step" else payload
+    if kind == "command_result":
+        target = payload["command_results"][0]
+    target[field] = unsafe_value
+    member_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert expected_error in validation.metadata_consistency_errors
+
+
 def _deep_relationship_export_input(tmp_path: Path) -> Path:
     input_dir = _export_input(tmp_path)
     parent_url = "https://portal.example.test/library/"

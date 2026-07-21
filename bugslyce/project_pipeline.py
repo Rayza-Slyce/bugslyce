@@ -41,6 +41,11 @@ from bugslyce.recon.content_run import (
     run_content_discovery_workflow,
     write_content_discovery_execution_result,
 )
+from bugslyce.recon.collection_confidence import (
+    build_collection_confidence_notices_from_project,
+    render_collection_confidence_markdown,
+    render_collection_confidence_runbook,
+)
 from bugslyce.recon.deep_collection_request_plan import (
     build_deep_collection_request_plan_from_project_state,
 )
@@ -1581,6 +1586,11 @@ def _write_interpretation_report_if_needed(
         deep_recon_markdown = _render_deep_report_index(orchestration)
         operator_summary_leads = _deep_operator_summary_leads(orchestration)
     project_state = build_project_state(output_dir)
+    confidence_notices = build_collection_confidence_notices_from_project(
+        project_state,
+        output_dir,
+        source_collection=_deep_source_collection_if_available(profile, context),
+    )
     candidates = generate_candidates(project_state)
     workflow_leads = build_grouped_workflow_leads(project_state, orchestration)
     assembly = (
@@ -1633,6 +1643,9 @@ def _write_interpretation_report_if_needed(
             human_triage_brief,
         ),
     }
+    confidence_markdown = render_collection_confidence_markdown(confidence_notices)
+    if confidence_markdown:
+        report_kwargs["collection_confidence_markdown"] = confidence_markdown
     if relationship_markdown:
         report_kwargs["http_route_relationships_markdown"] = relationship_markdown
     if deep_recon_markdown is not None:
@@ -2027,17 +2040,39 @@ def _build_standard_investigation_runbook_section_if_needed(
             context,
         )
     )
-    if not relationship_section and not successful_content_section:
+    confidence_section = render_collection_confidence_runbook(
+        build_collection_confidence_notices_from_project(
+            project_state,
+            output_dir,
+            source_collection=_deep_source_collection_if_available(profile, context),
+        )
+    )
+    if (
+        not relationship_section
+        and not successful_content_section
+        and not confidence_section
+    ):
         return investigation_section
     return "\n\n".join(
         section.strip()
         for section in (
             investigation_section,
+            confidence_section,
             relationship_section,
             successful_content_section,
         )
         if section and section.strip()
     )
+
+
+def _deep_source_collection_if_available(
+    profile: str,
+    context: dict[str, object] | None,
+) -> object | None:
+    if profile != DEEP_PIPELINE_PROFILE or context is None:
+        return None
+    outputs = context.get("deep_outputs")
+    return outputs.source_collection if isinstance(outputs, DeepPipelineOutputs) else None
 
 
 def _http_route_relationship_clusters_if_available(

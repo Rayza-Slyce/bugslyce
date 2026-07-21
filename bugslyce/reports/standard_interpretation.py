@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from bugslyce.core.models import Candidate, ProjectState
+from bugslyce.recon.collection_confidence import (
+    CollectionConfidenceNotice,
+    build_collection_confidence_notices_from_project,
+    render_collection_confidence_markdown,
+)
 from bugslyce.recon.investigation_threads import (
     InvestigationThread,
     build_investigation_threads,
@@ -44,6 +50,8 @@ class StandardInterpretationReport:
     route_source_review_leads: tuple[RouteSourceLead, ...]
     route_source_review_markdown: str | None
     readable_evidence_cards_markdown: str | None
+    collection_confidence_notices: tuple[CollectionConfidenceNotice, ...]
+    collection_confidence_markdown: str | None
     review_lead_count: int
     investigation_thread_count: int
     route_source_review_count: int
@@ -85,6 +93,11 @@ def render_standard_interpretation_report(
     )
     human_triage_markdown = render_human_triage_brief_markdown(human_triage_brief)
     evidence_cards_markdown = render_readable_evidence_cards_markdown(human_triage_brief)
+    confidence_notices = build_collection_confidence_notices_from_project(
+        project_state,
+        Path(project_state.input_dir),
+    )
+    confidence_markdown = render_collection_confidence_markdown(confidence_notices)
     markdown = render_markdown_report(
         project_state,
         candidates_list,
@@ -93,6 +106,7 @@ def render_standard_interpretation_report(
         investigation_threads_markdown=threads_markdown,
         route_source_review_markdown=route_source_markdown,
         readable_evidence_cards_markdown=evidence_cards_markdown,
+        collection_confidence_markdown=confidence_markdown,
     )
     return StandardInterpretationReport(
         markdown=markdown,
@@ -105,6 +119,8 @@ def render_standard_interpretation_report(
         route_source_review_leads=route_source_leads,
         route_source_review_markdown=route_source_markdown,
         readable_evidence_cards_markdown=evidence_cards_markdown,
+        collection_confidence_notices=confidence_notices,
+        collection_confidence_markdown=confidence_markdown,
         review_lead_count=assembly.review_lead_count,
         investigation_thread_count=len(threads),
         route_source_review_count=len(route_source_leads),
