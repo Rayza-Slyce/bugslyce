@@ -74,6 +74,10 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectionResult,
     collect_deep_source_routes_from_plan,
 )
+from bugslyce.recon.evidence_pack_closure import (
+    EvidencePackReference,
+    evidence_pack_references_from_deep_models,
+)
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
@@ -1463,11 +1467,17 @@ def _step_runners(
 
     def export():
         deep_evidence_paths = _deep_evidence_paths_required(profile, context)
+        reference_requirements = _evidence_pack_reference_requirements(
+            profile,
+            output_dir,
+            context,
+        )
         if deep_evidence_paths is None:
             result = export_recon_evidence_pack(
                 output_dir,
                 export_path,
                 clock=clock,
+                reference_requirements=reference_requirements,
             )
         else:
             result = export_recon_evidence_pack(
@@ -1475,6 +1485,7 @@ def _step_runners(
                 export_path,
                 clock=clock,
                 deep_evidence_paths=deep_evidence_paths,
+                reference_requirements=reference_requirements,
             )
         context["published_export_path"] = Path(result.output_path)
         return (
@@ -1667,6 +1678,13 @@ def _refresh_final_pipeline_outputs(
         deep_paths = _deep_evidence_paths_for_final_export(result.profile, output_dir)
         if deep_paths is not None:
             export_kwargs["deep_evidence_paths"] = deep_paths
+        export_kwargs["reference_requirements"] = (
+            _evidence_pack_reference_requirements(
+                result.profile,
+                output_dir,
+                context,
+            )
+        )
         export_recon_evidence_pack(
             output_dir,
             Path(result.export_path),
@@ -2041,6 +2059,30 @@ def _http_route_relationship_clusters_if_available(
         project_state,
         source_collection=outputs.source_collection,
         successful_reviews=orchestration.successful_content_reviews,
+    )
+
+
+def _evidence_pack_reference_requirements(
+    profile: str,
+    output_dir: Path,
+    context: dict[str, object] | None,
+) -> tuple[EvidencePackReference, ...]:
+    if profile != DEEP_PIPELINE_PROFILE or context is None:
+        return ()
+    outputs = context.get("deep_outputs")
+    if not isinstance(outputs, DeepPipelineOutputs):
+        return ()
+    orchestration = outputs.orchestration
+    if orchestration is None:
+        return ()
+    project_state = build_project_state(output_dir)
+    return evidence_pack_references_from_deep_models(
+        tuple(getattr(orchestration, "successful_content_reviews", ())),
+        _http_route_relationship_clusters_if_available(
+            profile,
+            project_state,
+            context,
+        ),
     )
 
 

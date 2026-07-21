@@ -193,6 +193,12 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
         packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
         packed_status_markdown = archive.read("recon_status.md").decode("utf-8")
         packed_runbook = archive.read("runbook.md").decode("utf-8")
+        packed_export_manifest = json.loads(
+            archive.read("bugslyce_export_manifest.json").decode("utf-8")
+        )
+        packed_closure = json.loads(
+            archive.read("bugslyce_reference_closure.json").decode("utf-8")
+        )
         packed_orchestration = json.loads(
             archive.read("raw/deep_recon_orchestration.json").decode("utf-8")
         )
@@ -205,6 +211,21 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
         packed_source = json.loads(
             archive.read("raw/deep_source_route_collection.json").decode("utf-8")
         )
+        packed_names = set(archive.namelist())
+    deep_detail_paths = {
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    }
+    closure_paths = {
+        item["portable_path"] for item in packed_closure["references"]
+    }
+    assert deep_detail_paths <= packed_names
+    assert deep_detail_paths <= closure_paths
+    assert packed_export_manifest["reference_closure"] == (
+        "bugslyce_reference_closure.json"
+    )
+    assert packed_export_manifest["reference_closure_status"] == "complete"
     assert packed_report.count(REPORT_SENSITIVE_EVIDENCE_NOTICE[0]) == 1
     assert sum(
         packed_readme.count(paragraph) for paragraph in PACK_SENSITIVE_EVIDENCE_NOTICE
@@ -212,7 +233,13 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert packed_readme.count("This archive may contain sensitive recon evidence") == 1
     assert packed_status["latest_execution"]["pipeline_final_status"] == "completed"
     assert packed_status_markdown == local_status
-    assert packed_runbook == local_runbook
+    assert packed_runbook != local_runbook
+    assert str(output_dir) not in packed_runbook
+    assert "* Scope file: `scope.md`" in packed_runbook
+    assert "* Output directory: `.`" in packed_runbook
+    assert "* Project file: `bugslyce_project.json`" in packed_runbook
+    assert "Pipeline steps satisfied: 14/14" in packed_runbook
+    assert "Review the Operator Summary and raw evidence manually." in packed_runbook
     assert "review the Operator Summary in `report.md`" in packed_status_markdown
     assert "Optional additional bounded collection:" in packed_status_markdown
     assert "Pipeline steps satisfied: 14/14" in packed_runbook

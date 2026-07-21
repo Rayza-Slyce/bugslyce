@@ -988,6 +988,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     captured_manual_review: list[str | None] = []
     captured_runbook: list[str | None] = []
     captured_evidence_paths: list[tuple[Path, ...] | None] = []
+    captured_reference_requirements: list[tuple] = []
     checkpoint_seen: list[dict[str, str]] = []
     final_status_seen: list[str] = []
     referenced_direct_counts: list[int] = []
@@ -1218,6 +1219,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     def fake_export(input_dir, output_path, **kwargs):
         calls.append("export")
         captured_evidence_paths.append(kwargs.get("deep_evidence_paths"))
+        captured_reference_requirements.append(
+            tuple(kwargs.get("reference_requirements", ()))
+        )
         with zipfile.ZipFile(output_path, "w") as archive:
             archive.write(input_dir / "recon_status.md", "recon_status.md")
             archive.write(input_dir / "recon_status.json", "recon_status.json")
@@ -1310,6 +1314,13 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_dir / "deep_recon_orchestration.json",
     )
     assert captured_evidence_paths == [expected_deep_paths, expected_deep_paths]
+    assert len(captured_reference_requirements) == 2
+    for requirements in captured_reference_requirements:
+        assert len(requirements) == 1
+        assert requirements[0].portable_path == "deep_source_route_collection.json"
+        assert requirements[0].owner_kind == "successful_deep_content"
+        assert requirements[0].owner_id == "DEEP-CONTENT-0001"
+        assert requirements[0].evidence_ids == ("EVID-DEEP-CONTENT",)
     assert calls.index("body-fetch") < calls.index("deep-source-collect")
     assert calls.index("deep-shallow-collect") < calls.index("deep-orchestrate")
     assert calls.index("deep-orchestration-write") < calls.index("deep-report-write")
