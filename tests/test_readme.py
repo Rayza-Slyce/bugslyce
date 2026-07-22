@@ -139,8 +139,8 @@ def test_release_notes_document_current_scope() -> None:
         "Quick Recon using `lab-safe-tiny`",
         "Standard Recon using `standard-bounded`",
         "Deep Recon using `deep-bounded`",
-        "prepared for final release",
-        "has not yet been tagged or published",
+        "technical acceptance is complete",
+        "has not yet created the final tag, GitHub release or PyPI publication",
     ):
         assert expected in compact
 

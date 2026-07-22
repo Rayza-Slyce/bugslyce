@@ -37,6 +37,11 @@ RC2_WORDLIST_FILES = (
     "standard-bounded-core.txt",
     "deep-bounded-core.txt",
 )
+FINAL_WHEEL_FILENAME = "bugslyce-1.0.0-py3-none-any.whl"
+FINAL_WHEEL_SHA256 = "e29346eda47bd37d166612bee775e231a48b79749696a1a66aaeb7e499860f63"
+FINAL_BUILD_EVIDENCE_SHA256 = "7ef3d9ffd6385b70adf33a31935e3248f8ba70a3cbd917a62c5787256f7668c2"
+FINAL_MINT_ACCEPTANCE_SHA256 = "40f487df5eb676b49e8509485be99e289067a0ae0bbb222d72bd60b822f68820"
+FINAL_KALI_ACCEPTANCE_SHA256 = "23e68a4ca031dd7585118d6f93232a4658149f65c65d985a16106c69222013af"
 
 
 def test_current_checkout_uses_final_v1_version() -> None:
@@ -142,29 +147,51 @@ def test_final_release_documents_preserve_historical_rc2_evidence() -> None:
 
 def test_final_release_checklist_keeps_publication_pending() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md")
+    compact_notes = " ".join(_read("docs/RELEASE_NOTES.md").split())
 
-    assert "Current 1.0.0 finalisation checks" in checklist
+    assert "Final technical acceptance" in checklist
     for completed in (
-        "- [x] Final version alignment in the working tree.",
-        "- [x] Final checkout wheel and source-distribution build.",
-        "- [x] Source-distribution wheel rebuild.",
-        "- [x] Local temporary-venv installation and semantic wheel comparison.",
-        "- [x] All four runtime resources verified from the final wheel.",
+        "Accepted source commit: `32bfd20f78cda81e22241bb73836038defac0504`.",
+        "Full suite: `1,983 passed`",
+        "Technical GO: GO to tag and publish.",
     ):
         assert completed in checklist
     for pending in (
-        "Review and commit the finalisation change.",
-        "Push the committed finalisation state.",
-        "Pull and verify the committed finalisation state on Kali.",
-        "Final clean build from the committed release state.",
-        "Exact final-wheel temporary pipx acceptance on Mint.",
-        "Exact same final-wheel temporary pipx acceptance on Kali.",
-        "Final `v1.0.0` tag.",
+        "Review and commit this final release-record amendment.",
+        "Push and verify the final release-record commit on Kali.",
+        "Fresh source distribution from the final release-record commit.",
+        "Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.",
+        "Annotated `v1.0.0` tag.",
         "GitHub release.",
         "PyPI publication.",
     ):
         assert pending in checklist
     assert "final v1 publication remains pending" in checklist
+    for value in (
+        "32bfd20f78cda81e22241bb73836038defac0504",
+        FINAL_WHEEL_FILENAME,
+        FINAL_WHEEL_SHA256,
+        FINAL_BUILD_EVIDENCE_SHA256,
+        FINAL_MINT_ACCEPTANCE_SHA256,
+        FINAL_KALI_ACCEPTANCE_SHA256,
+        "pipx 1.4.3",
+        "Python 3.12.3",
+        "pipx 1.8.0",
+        "Python 3.13.11",
+        "1,983 passed",
+        "Technical GO: GO to tag and publish.",
+        "SOURCE_DATE_EPOCH=1784728149",
+    ):
+        assert value in checklist
+    assert "Mint final-wheel temporary pipx acceptance: completed" in checklist
+    assert "Kali same-wheel temporary pipx acceptance: completed" in checklist
+    assert "Doctor exit `2`" in checklist
+    assert "occurred because Gobuster was absent" in checklist
+    assert "doctor exit `0`" in checklist
+    assert "exact same wheel was accepted through isolated temporary pipx acceptance on Mint and Kali" in compact_notes
+    assert "approved to tag and publish" in compact_notes
+    assert "Final `v1.0.0` tag has been created" not in checklist
+    assert "PyPI publication completed" not in checklist
 
 
 def test_final_package_filename_contract() -> None:
@@ -183,16 +210,14 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
 
     assert "Historical rc1 acceptance" in checklist
     assert "Historical rc2 release-candidate acceptance" in checklist
-    assert "Current 1.0.0 finalisation checks" in checklist
-    assert "Still pending for final publication" in checklist
+    assert "Final technical acceptance" in checklist
+    assert "Still pending before public release" in checklist
     for pending in (
-        "Review and commit the finalisation change.",
-        "Push the committed finalisation state.",
-        "Pull and verify the committed finalisation state on Kali.",
-        "Final clean build from the committed release state.",
-        "Exact final-wheel temporary pipx acceptance on Mint.",
-        "Exact same final-wheel temporary pipx acceptance on Kali.",
-        "Final `v1.0.0` tag.",
+        "Review and commit this final release-record amendment.",
+        "Push and verify the final release-record commit on Kali.",
+        "Fresh source distribution from the final release-record commit.",
+        "Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.",
+        "Annotated `v1.0.0` tag.",
         "GitHub release.",
         "PyPI publication.",
     ):

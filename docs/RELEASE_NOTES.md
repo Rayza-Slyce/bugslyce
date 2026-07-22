@@ -2,9 +2,10 @@
 
 ## 1.0.0
 
-BugSlyce `1.0.0` is prepared for final release. It has not yet been tagged or
-published. The final wheel still requires exact-wheel temporary pipx acceptance
-on Mint and Kali before a final release decision.
+BugSlyce `1.0.0` technical acceptance is complete. The exact same wheel was
+accepted through isolated temporary pipx acceptance on Mint and Kali and is
+approved to tag and publish. This repository state has not yet created the final tag, GitHub
+release or PyPI publication.
 
 The accepted v1 scope provides bounded Manual Setup Only, Quick, Standard and
 Deep workflows, local evidence artefacts, reports, runbooks and portable,

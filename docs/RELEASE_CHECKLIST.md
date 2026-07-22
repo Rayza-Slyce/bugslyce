@@ -161,22 +161,47 @@ Release blockers include:
 - Completed Deep no-op and hash stability passed.
 - Evidence ZIP content review passed.
 
-### Current 1.0.0 finalisation checks
+### Final technical acceptance
 
-- [x] Final version alignment in the working tree.
-- [x] Final checkout wheel and source-distribution build.
-- [x] Source-distribution wheel rebuild.
-- [x] Local temporary-venv installation and semantic wheel comparison.
-- [x] All four runtime resources verified from the final wheel.
+- Accepted source commit: `32bfd20f78cda81e22241bb73836038defac0504`.
+- Committed-build evidence bundle SHA-256:
+  `7ef3d9ffd6385b70adf33a31935e3248f8ba70a3cbd917a62c5787256f7668c2`.
+- Exact accepted wheel: `bugslyce-1.0.0-py3-none-any.whl`.
+- Exact accepted wheel SHA-256:
+  `e29346eda47bd37d166612bee775e231a48b79749696a1a66aaeb7e499860f63`.
+- The accepted committed-tree build used `SOURCE_DATE_EPOCH=1784728149`.
+- Full suite: `1,983 passed`; compileall, wheel RECORD and distribution hygiene
+  checks passed. The wheel has 131 members and the source distribution has 238.
+- Checkout and source-distribution-built wheels were semantically identical;
+  temporary-venv installation outside the checkout, help and safe launcher
+  exit all passed.
+- Mint final-wheel temporary pipx acceptance: completed with pipx 1.4.3 and
+  Python 3.12.3. Mint acceptance bundle SHA-256:
+  `40f487df5eb676b49e8509485be99e289067a0ae0bbb222d72bd60b822f68820`.
+  The isolated command and module resolved from temporary pipx paths; installed
+  version, help and launcher exits were `1.0.0`, `0` and `0`. Doctor exit `2`
+  occurred because Gobuster was absent; package and resources were otherwise
+  ready. The exact local wheel was installed with dependencies disabled and no
+  BugSlyce target contact occurred.
+- Kali same-wheel temporary pipx acceptance: completed with pipx 1.8.0 and
+  Python 3.13.11. Kali acceptance bundle SHA-256:
+  `23e68a4ca031dd7585118d6f93232a4658149f65c65d985a16106c69222013af`.
+  The isolated command and module resolved from temporary pipx paths; installed
+  version, help and launcher exits were `1.0.0`, `0` and `0`; doctor exit `0`
+  confirmed full local readiness.
+  The exact same local wheel was installed with dependencies disabled and no
+  BugSlyce target contact occurred.
+- Final runtime resources verified on both systems: `lab-root-tiny.txt` (25),
+  `standard-auth-core.txt` (15), `standard-bounded-core.txt` (220) and
+  `deep-bounded-core.txt` (1,753).
+- Technical GO: GO to tag and publish.
 
-### Still pending for final publication
+### Still pending before public release
 
-- Review and commit the finalisation change.
-- Push the committed finalisation state.
-- Pull and verify the committed finalisation state on Kali.
-- Final clean build from the committed release state.
-- Exact final-wheel temporary pipx acceptance on Mint.
-- Exact same final-wheel temporary pipx acceptance on Kali.
-- Final `v1.0.0` tag.
+- Review and commit this final release-record amendment.
+- Push and verify the final release-record commit on Kali.
+- Fresh source distribution from the final release-record commit.
+- Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.
+- Annotated `v1.0.0` tag.
 - GitHub release.
 - PyPI publication.
