@@ -1,16 +1,18 @@
 # Release Notes
 
-## Unreleased
+## 1.0.0rc2
 
-After `1.0.0rc1`, Deep content discovery now uses a distinct bundled
-`deep-bounded-core` resource. The accepted `1.0.0rc1` candidate used
-`standard-bounded-core` for both Standard and Deep.
+BugSlyce `1.0.0rc2` is the current v1 release candidate. It is not the final
+`1.0.0` release and has not been tagged or published. Since `1.0.0rc1`, Deep
+content discovery uses a distinct bundled `deep-bounded-core` resource; the
+tagged `1.0.0rc1` release candidate used `standard-bounded-core` for both
+Standard and Deep.
 
 ## 1.0.0rc1
 
-BugSlyce `1.0.0rc1` is the first v1 release candidate. It is not the final
-`1.0.0` release, and this document does not create a Git tag or publish a
-package.
+BugSlyce `1.0.0rc1` is the first v1 release candidate. It was tagged as
+`v1.0.0rc1`, was not published as a package and was not the final `1.0.0`
+release.
 
 ### Release State
 
@@ -20,8 +22,7 @@ Standard and Deep were smoke-tested against an authorised private lab target.
 Completed Deep resume, canonical hash stability and evidence-pack containment
 were verified.
 
-This candidate is approved for tagging as `v1.0.0rc1`. The tag has not yet
-been created, no GitHub release exists and no package has been published.
+This candidate was tagged as `v1.0.0rc1`. No package was published.
 
 ### Operator Workflow
 

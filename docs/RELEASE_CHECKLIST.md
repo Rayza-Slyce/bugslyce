@@ -1,22 +1,21 @@
 # Release Checklist
 
-This checklist prepares BugSlyce `1.0.0rc1` for release-candidate acceptance.
+This checklist prepares BugSlyce `1.0.0rc2` for release-candidate acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **GO for v1.0.0rc1 tagging**.
+Current decision: **rc2 package build and exact-wheel temporary pipx acceptance completed on Mint and Kali; final v1 release remains pending**.
 
-All local and Kali release-candidate blockers have passed for accepted source
-commit `e4c8fba`. The final documentation-only acceptance-record commit will
-follow that tested source commit so the public record can be tagged
-truthfully. The Git tag has not yet been created, nothing has been published,
-and this remains release candidate `1.0.0rc1`, not final `1.0.0`.
+The earlier `1.0.0rc1` acceptance covered source commit `e4c8fba`, and that
+release candidate was subsequently tagged as `v1.0.0rc1`. No package was
+published. The current checkout remains pre-release `1.0.0rc2`, not final
+`1.0.0`.
 
 ## A. Source Integrity
 
 - [x] Working tree is clean.
 - [x] Expected base commit is recorded.
 - [x] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
-      report `1.0.0rc1`.
+      report `1.0.0rc2`.
 - [x] No stale current-version references remain.
 - [x] No generated target evidence is tracked.
 - [x] No secrets, `.env` files, provider configuration or private project
@@ -81,14 +80,15 @@ git diff --check
 - [x] Install only the built local artefact, without dependency downloads.
 - [x] Run `python -m pip check`.
 - [x] Import `bugslyce`.
-- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0rc1`.
+- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0rc2`.
 - [x] Run `bugslyce doctor`.
 - [x] Confirm bundled wordlists are present and non-empty:
-      `lab-root-tiny.txt` and `standard-bounded-core.txt`.
+      `lab-root-tiny.txt`, `standard-auth-core.txt`,
+      `standard-bounded-core.txt` and `deep-bounded-core.txt`.
 - [x] Confirm documentation files are present in the source repository.
 - [x] Confirm no unrelated files are installed as package data.
 
-## E. Kali Acceptance
+## E. Historical rc1 Acceptance
 
 - [x] Clean source pull or clean clone.
 - [x] Fresh virtual environment.
@@ -126,14 +126,30 @@ Release blockers include:
 
 ## Current Status
 
-### Locally Completed
+### Current rc2 completed checks
 
-- Version alignment is expected to be validated by tests.
-- Source audit and static safety checks are expected to run locally.
-- Unit, integration and documentation checks are expected to run locally.
-- Source package-data configuration is expected to be validated locally.
+- rc2 package/version alignment, local build, wheel and source-distribution
+  inspection, source-distribution wheel rebuild and temporary-venv acceptance
+  completed on Mint.
+- Exact accepted wheel: `bugslyce-1.0.0rc2-py3-none-any.whl`.
+- Exact accepted wheel SHA-256:
+  `24ecc358ed6b4e3db9213e7142637fade953b30744fb11fa613c050f1ae6a441`.
+- Mint temporary pipx acceptance: completed with pipx 1.4.3. The installed
+  command and module resolved inside the temporary pipx environment; help and
+  launcher exit were `0`. Doctor exit `2` was caused by missing `gobuster`, an
+  external-tool readiness result; package, core components and all four
+  bundled wordlists were ready.
+- Kali temporary pipx acceptance: completed with pipx 1.8.0 and Python 3.13.11.
+  The same exact wheel SHA-256 was installed; command and module
+  resolved inside the temporary pipx environment; help, launcher and doctor
+  exits were `0`; all four bundled wordlists were ready.
+- Mint's shared-pip bootstrap upgrade failed under `PIP_NO_INDEX=1`, but pipx
+  continued and installed the exact local wheel successfully. Kali permitted
+  network access only for pipx's temporary packaging bootstrap. Neither
+  acceptance involved BugSlyce target contact; BugSlyce used the verified local
+  wheel with dependencies disabled.
 
-### Kali Acceptance Completed
+### Historical rc1 acceptance
 
 - Fresh clean installation passed.
 - Doctor exit `0` passed.
@@ -144,9 +160,11 @@ Release blockers include:
 - Completed Deep no-op and hash stability passed.
 - Evidence ZIP content review passed.
 
-### Still Not Performed
+### Still pending for rc2
 
-- Git tag creation.
-- Package publication.
-- GitHub release creation.
-- Final `1.0.0` release.
+- Commit and push the rc2 release-hardening changes.
+- Final clean build from the committed rc2 release state.
+- Final `1.0.0` release decision and version bump.
+- Final release tag.
+- GitHub release.
+- PyPI publication.

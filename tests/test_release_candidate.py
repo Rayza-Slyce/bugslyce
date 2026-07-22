@@ -26,7 +26,26 @@ from bugslyce.recon.modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RC_VERSION = "1.0.0rc1"
+RC_VERSION = "1.0.0rc2"
+PREVIOUS_RC_VERSION = "1.0.0rc1"
+RC2_WHEEL_FILENAME = "bugslyce-1.0.0rc2-py3-none-any.whl"
+RC2_WHEEL_SHA256 = "24ecc358ed6b4e3db9213e7142637fade953b30744fb11fa613c050f1ae6a441"
+RC2_WORDLIST_FILES = (
+    "lab-root-tiny.txt",
+    "standard-auth-core.txt",
+    "standard-bounded-core.txt",
+    "deep-bounded-core.txt",
+)
+
+
+def test_current_checkout_uses_next_prerelease_after_rc1() -> None:
+    readme = _read("README.md")
+    notes = _read("docs/RELEASE_NOTES.md")
+
+    assert _pyproject()["project"]["version"] == RC_VERSION
+    assert bugslyce.__version__ == RC_VERSION
+    assert f"Current package version: `{RC_VERSION}`" in readme
+    assert f"## {RC_VERSION}" in notes
 
 
 def test_package_metadata_version_is_release_candidate() -> None:
@@ -57,7 +76,7 @@ def test_readme_states_release_candidate_version_not_final_release() -> None:
     compact = " ".join(readme.split())
 
     assert f"Current package version: `{RC_VERSION}`" in readme
-    assert "first BugSlyce v1 release candidate" in compact
+    assert "a BugSlyce v1 release candidate" in compact
     assert "not the final `1.0.0` release" in compact
 
 
@@ -76,7 +95,7 @@ def test_release_documents_record_completed_acceptance_state() -> None:
     acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
     combined = "\n".join((notes, checklist, acceptance))
 
-    assert "GO for v1.0.0rc1 tagging" in checklist
+    assert "exact-wheel temporary pipx acceptance completed on Mint and Kali" in checklist
     assert "2026-07-16" in acceptance
     assert "e4c8fba" in combined
     for workflow in ("Manual Setup Only", "Quick", "Standard", "Deep"):
@@ -86,9 +105,59 @@ def test_release_documents_record_completed_acceptance_state() -> None:
     assert "Canonical Deep hash stability | passed" in acceptance
     assert "Evidence-pack review | passed" in acceptance
     assert "authorised private lab/CTF target, identifier withheld" in acceptance
-    assert "tag has not yet been created" in combined
-    assert "nothing has been published" in combined
+    assert "subsequently tagged as `v1.0.0rc1`" in combined
+    assert "No package was published" in combined
     assert "not final `1.0.0`" in combined
+
+
+def test_release_checklist_records_exact_rc2_pipx_acceptance() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+
+    assert "pending exact-wheel pipx acceptance" not in checklist
+    assert RC2_WHEEL_FILENAME in checklist
+    assert RC2_WHEEL_SHA256 in checklist
+    assert "Mint temporary pipx acceptance: completed" in checklist
+    assert "Kali temporary pipx acceptance: completed" in checklist
+    assert "pipx 1.4.3" in checklist
+    assert "pipx 1.8.0" in checklist
+    assert "Python 3.13.11" in checklist
+    assert "Doctor exit `2` was caused by missing `gobuster`" in checklist
+    for wordlist in RC2_WORDLIST_FILES:
+        assert wordlist in checklist
+
+
+def test_release_documents_distinguish_current_rc2_and_historical_rc1() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+    acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
+
+    assert "Historical rc1 acceptance" in checklist
+    assert "Current rc2 completed checks" in checklist
+    assert "Still pending for rc2" in checklist
+    for pending in (
+        "Commit and push the rc2 release-hardening changes.",
+        "Final clean build from the committed rc2 release state.",
+        "Final `1.0.0` release decision and version bump.",
+        "Final release tag.",
+        "GitHub release.",
+        "PyPI publication.",
+    ):
+        assert pending in checklist
+    assert "completed public record below documents the earlier `1.0.0rc1` acceptance" in acceptance
+
+
+def test_release_acceptance_documents_exact_wheel_pipx_contract() -> None:
+    acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
+
+    assert "all four files must exist and be non-empty" in acceptance.lower()
+    assert "exact-wheel SHA-256 equality between Mint and Kali" in acceptance
+    assert "outside the source checkout" in acceptance
+    assert "installed distribution version" in acceptance
+    assert "missing external tooling" in acceptance
+    assert "pipx bootstrap network" in acceptance
+    assert "BugSlyce target contact" in acceptance
+    assert "installed with `--no-deps`" in acceptance
+    for wordlist in RC2_WORDLIST_FILES:
+        assert wordlist in acceptance
 
 
 def test_release_documents_preserve_rc1_wordlist_history() -> None:
@@ -97,14 +166,14 @@ def test_release_documents_preserve_rc1_wordlist_history() -> None:
     acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
     rc1_notes = notes.split("## 1.0.0rc1", 1)[1]
 
-    assert "After `1.0.0rc1`, Deep content discovery now uses a distinct bundled" in notes
-    assert "The accepted `1.0.0rc1` candidate used" in notes
-    assert "`standard-bounded-core` for both Standard and Deep" in notes
+    assert "Since `1.0.0rc1`, Deep" in notes
+    assert "tagged `1.0.0rc1` release candidate used" in notes
+    assert "`standard-bounded-core` for both" in notes
+    assert "Standard and Deep" in notes
     assert "`deep-bounded-core` gates" not in rc1_notes
     assert "standard-bounded-core` gates Standard and Deep Recon" in rc1_notes
-    assert "deep-bounded-core.txt" not in checklist
-    assert '("lab-root-tiny.txt", "standard-bounded-core.txt")' in acceptance
-    assert "deep-bounded-core.txt" not in acceptance
+    assert "deep-bounded-core.txt" in checklist
+    assert "deep-bounded-core.txt" in acceptance
 
 
 def test_completed_public_acceptance_record_preserves_privacy() -> None:

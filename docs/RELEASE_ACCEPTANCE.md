@@ -1,6 +1,7 @@
 # Release Acceptance
 
-This guide is the final acceptance procedure for BugSlyce `1.0.0rc1`.
+This guide is the current acceptance procedure for BugSlyce `1.0.0rc2`. The
+completed public record below documents the earlier `1.0.0rc1` acceptance.
 
 Do not run live recon against any system unless you own it or are explicitly
 authorised to assess it. A generated `scope.md` is a local safety aid, not
@@ -27,12 +28,14 @@ authorisation.
 | Target description | authorised private lab/CTF target, identifier withheld |
 | Release outcome | GO for tagging `v1.0.0rc1` |
 
-The Git tag has not yet been created, nothing has been published, and this is
-still release candidate `1.0.0rc1`, not final `1.0.0`.
+The `v1.0.0rc1` tag was subsequently created. No package was published, and
+`1.0.0rc1` was not final `1.0.0`.
 
-## Part 1: Local Non-Network Acceptance
+## Part 1: Local Package Acceptance
 
-Run these checks from a clean source checkout without contacting a target.
+Run these checks from a clean source checkout without contacting a target. A
+pipx implementation may bootstrap its own temporary packaging environment;
+record that separately from BugSlyce target contact.
 
 ### 1. Checkout Verification
 
@@ -53,8 +56,8 @@ PY
 python -m bugslyce.cli --version
 ```
 
-Both commands must report `1.0.0rc1`; the CLI form must print
-`bugslyce 1.0.0rc1`.
+Both commands must report `1.0.0rc2`; the CLI form must print
+`bugslyce 1.0.0rc2`.
 
 ### 3. Test Groups
 
@@ -143,15 +146,47 @@ Verify the installed package has all bundled wordlists:
 import importlib.resources
 
 base = importlib.resources.files("bugslyce").joinpath("wordlists")
-for name in ("lab-root-tiny.txt", "standard-bounded-core.txt"):
+for name in (
+    "lab-root-tiny.txt",
+    "standard-auth-core.txt",
+    "standard-bounded-core.txt",
+    "deep-bounded-core.txt",
+):
     path = base.joinpath(name)
     print(name, path.is_file(), len(path.read_text(encoding="utf-8")))
 PY
 ```
 
-Both files must exist and be non-empty.
+All four files must exist and be non-empty.
 
-### 8. CLI and Doctor Verification
+### 8. Exact-Wheel Temporary pipx Acceptance
+
+Mint and Kali must install the same exact local wheel. Record its filename and
+SHA-256 before either installation, then verify exact-wheel SHA-256 equality between Mint and Kali.
+
+```bash
+WHEEL=/absolute/path/to/bugslyce-1.0.0rc2-py3-none-any.whl
+sha256sum "$WHEEL"
+PIPX_HOME=$(mktemp -d)
+PIPX_BIN_DIR=$(mktemp -d)
+export PIPX_HOME PIPX_BIN_DIR
+pipx install --pip-args="--no-deps" "$WHEEL"
+"$PIPX_BIN_DIR/bugslyce" --version
+"$PIPX_BIN_DIR/bugslyce" --help
+```
+
+Verify the installed command and module path are outside the source checkout,
+and record the installed distribution version. Use the temporary pipx
+environment's Python to repeat the four-file resource check above.
+
+Run `bugslyce doctor`. Exit `0` is expected on a fully ready host. Exit `2` is acceptable only when the output clearly attributes it to missing external tooling and confirms the package, core components and bundled resources are otherwise ready.
+
+pipx bootstrap network activity, if any, is packaging bootstrap only. Record
+it separately from BugSlyce target contact. The BugSlyce package itself must be
+the exact verified local wheel and installed with `--no-deps`; no BugSlyce
+target contact is permitted during this acceptance.
+
+### 9. CLI and Doctor Verification
 
 ```bash
 bugslyce --help
@@ -160,15 +195,15 @@ bugslyce project run --help
 bugslyce doctor
 ```
 
-Expected version: `bugslyce 1.0.0rc1`.
+Expected version: `bugslyce 1.0.0rc2`.
 
-### 9. Markdown Link Validation
+### 10. Markdown Link Validation
 
 ```bash
 python -m pytest -q tests/test_documentation.py tests/test_readme.py
 ```
 
-### 10. Clean Tree and Diff Checks
+### 11. Clean Tree and Diff Checks
 
 ```bash
 git diff --check
@@ -299,4 +334,4 @@ Keep private target details out of commits and public tickets.
 
 | Date | Commit | Package version | Kali version | Python version | Private target identifier | Mode | Result | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|  |  | `1.0.0rc1` |  |  |  |  |  |  |
+|  |  | `1.0.0rc2` |  |  |  |  |  |  |
