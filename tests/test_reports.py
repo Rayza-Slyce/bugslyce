@@ -125,6 +125,19 @@ def test_operator_summary_appears_before_scope_summary() -> None:
     assert report.index("## Operator Summary") < report.index("## Scope Summary")
 
 
+def test_prebuilt_operator_summary_preserves_report_content() -> None:
+    report, state, candidates = _basic_saas_report()
+    summary = build_operator_summary(state, candidates)
+
+    rendered = render_markdown_report(
+        state,
+        candidates,
+        operator_summary=summary,
+    )
+
+    assert rendered == report
+
+
 def test_default_report_does_not_include_manual_review_leads_section() -> None:
     report, _state, _candidates = _basic_saas_report()
 

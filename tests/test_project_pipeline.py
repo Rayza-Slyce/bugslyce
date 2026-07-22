@@ -14,6 +14,14 @@ import pytest
 
 from bugslyce import __version__
 from bugslyce.cli import main
+from bugslyce.core.models import (
+    DiscoveredPath,
+    Evidence,
+    HTTPArtifact,
+    ProjectState,
+    ReconManifest,
+    ReconManifestArtifact,
+)
 from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
@@ -22,10 +30,15 @@ from bugslyce.project_pipeline import (
     PIPELINE_MARKDOWN_FILENAME,
     PARTIAL_DEEP_RESUME_MESSAGE,
     PIPELINE_PROFILE,
+    PipelineCompletionSummary,
+    PipelineResult,
+    PipelineStep,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
     format_exception_diagnostic,
+    render_project_pipeline_summary,
     run_project_pipeline,
+    write_project_pipeline_result,
 )
 from bugslyce.project_session import scaffold_project
 from bugslyce.recon.body_fetch import BodyFetchNoWork
@@ -35,8 +48,15 @@ from bugslyce.recon.content_plan import (
     DEEP_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_PROFILE,
 )
+from bugslyce.recon.collection_confidence import CollectionConfidenceNotice
 from bugslyce.recon.path_followup import PathFollowupNoWork
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
+from bugslyce.reports.markdown import render_markdown_report
+from bugslyce.reports.operator_summary import (
+    OperatorSummary,
+    OperatorSummaryLead,
+    build_operator_summary,
+)
 
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -137,6 +157,418 @@ def test_cli_project_run_forwards_resume(
     assert "* No-op: 0" in captured.out
     assert "Final outputs:" in captured.out
     assert f"less {output_dir / 'report.md'}" in captured.out
+
+
+def test_cli_project_run_prints_compact_structured_run_summary(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    confidence_notices = tuple(
+        CollectionConfidenceNotice(
+            notice_id=f"CONFIDENCE-{index}",
+            category="intentionally_bounded",
+            title=f"Bounded collection {index}",
+            direct_fact=f"Collection bound {index} was retained.",
+            operator_implication="Coverage beyond this bound remains unknown.",
+            stage_or_tool=f"stage-{index}",
+        )
+        for index in range(1, 3)
+    )
+    review_first = [
+        OperatorSummaryLead(
+            title=f"Review item {index}",
+            why=f"Structured reason {index}.",
+            endpoints=[f"https://portal.example.test/item-{index}"],
+            evidence_ids=[f"EVID-{index}"],
+            next_action="Inspect the retained evidence offline.",
+            signal="medium",
+            score=100 - index,
+        )
+        for index in range(1, 7)
+    ]
+
+    monkeypatch.setattr(
+        "bugslyce.cli.run_project_pipeline",
+        lambda **kwargs: SimpleNamespace(
+            project_name="pipeline-test",
+            target="portal.example.test",
+            profile=STANDARD_PIPELINE_PROFILE,
+            project_file=str(project_file),
+            output_dir=str(output_dir),
+            resume_requested=False,
+            completed_steps=12,
+            skipped_steps=0,
+            no_op_steps=1,
+            final_status="completed",
+            steps=[
+                SimpleNamespace(step_id="PIPELINE-STEP-010", status="completed")
+            ],
+            report_path=str(output_dir / "report.md"),
+            runbook_path=str(output_dir / "runbook.md"),
+            export_path=f"{output_dir}-evidence-pack.zip",
+            completion_summary=SimpleNamespace(
+                collection_confidence_notices=confidence_notices,
+                operator_summary=OperatorSummary(
+                    review_first=review_first,
+                    low_signal=[],
+                    coverage=[],
+                ),
+            ),
+        ),
+    )
+
+    exit_code = main(
+        [
+            "project",
+            "run",
+            "--project",
+            str(project_file),
+            "--profile",
+            STANDARD_PIPELINE_PROFILE,
+            "--confirm",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert output.count("BugSlyce Run Summary") == 1
+    assert "Collection confidence:" in output
+    assert "Bounded collection 1: Collection bound 1 was retained." in output
+    assert "Bounded collection 2: Collection bound 2 was retained." in output
+    assert "Review first:" in output
+    for index in range(1, 6):
+        assert f"Review item {index}: Structured reason {index}." in output
+    assert "Review item 6" not in output
+    assert "... and 1 more prioritised item in the full report." in output
+    assert "Step summary:" in output
+    assert "Final outputs:" in output
+    assert f"* Report: {output_dir / 'report.md'}" in output
+    assert f"* Runbook: {output_dir / 'runbook.md'}" in output
+    assert f"* Evidence pack: {output_dir}-evidence-pack.zip" in output
+
+
+def test_compact_run_summary_bounds_notices_and_preserves_structured_order() -> None:
+    notices = tuple(
+        CollectionConfidenceNotice(
+            notice_id=f"CONFIDENCE-{index}",
+            category="partial_or_degraded",
+            title=f"Confidence notice {index}",
+            direct_fact=f"Direct fact {index}.",
+            operator_implication="Some results may remain unknown.",
+            stage_or_tool=f"stage-{index}",
+        )
+        for index in range(1, 8)
+    )
+    leads = [
+        OperatorSummaryLead(
+            title=f"Lead {index}",
+            why=f"Reason {index}.",
+            endpoints=[],
+            evidence_ids=[f"EVID-{index}"],
+            next_action="Review offline.",
+            signal="medium",
+            score=100 - index,
+        )
+        for index in range(1, 8)
+    ]
+    completion = PipelineCompletionSummary(
+        collection_confidence_notices=notices,
+        operator_summary=OperatorSummary(
+            review_first=leads,
+            low_signal=[],
+            coverage=[],
+        ),
+    )
+
+    rendered = render_project_pipeline_summary(
+        _summary_result(completion_summary=completion)
+    )
+
+    for index in range(1, 6):
+        assert rendered.index(f"Confidence notice {index}") < rendered.index(
+            f"Lead {index}"
+        )
+    assert "Confidence notice 6" not in rendered
+    assert "Confidence notice 7" not in rendered
+    assert "... and 2 more confidence notices in the full report." in rendered
+    assert "Lead 6" not in rendered
+    assert "Lead 7" not in rendered
+    assert "... and 2 more prioritised items in the full report." in rendered
+    assert completion.collection_confidence_notices == notices
+    assert completion.operator_summary.review_first == leads
+
+
+def test_compact_run_summary_uses_conservative_empty_states() -> None:
+    completion = PipelineCompletionSummary(
+        collection_confidence_notices=(),
+        operator_summary=OperatorSummary(review_first=[], low_signal=[], coverage=[]),
+    )
+
+    rendered = render_project_pipeline_summary(
+        _summary_result(completion_summary=completion)
+    )
+
+    assert "No material collection-confidence notice was recorded." in rendered
+    assert "This does not prove exhaustive coverage." in " ".join(rendered.split())
+    assert "No prioritised review item was produced." in rendered
+    assert "Review the full report and retained evidence." in rendered
+
+
+def test_compact_run_summary_retains_failed_notice_fact_without_success_wording() -> None:
+    notice = CollectionConfidenceNotice(
+        notice_id="CONFIDENCE-FAILED-COLLECTION",
+        category="failed",
+        title="Collection stage failed",
+        direct_fact="The retained execution record reports exit code 2.",
+        operator_implication="No result should be inferred for this stage.",
+        stage_or_tool="content_collection",
+    )
+    completion = PipelineCompletionSummary(
+        collection_confidence_notices=(notice,),
+        operator_summary=OperatorSummary(review_first=[], low_signal=[], coverage=[]),
+    )
+
+    rendered = render_project_pipeline_summary(
+        _summary_result(completion_summary=completion)
+    )
+
+    assert "Collection stage failed" in rendered
+    assert "reports exit code 2" in rendered
+    assert "collection succeeded" not in rendered.lower()
+
+
+def test_pipeline_summary_unavailable_preserves_existing_completion_output() -> None:
+    rendered = render_project_pipeline_summary(
+        _summary_result(completion_summary=SimpleNamespace(unexpected=True))
+    )
+
+    assert "BugSlyce Run Summary" not in rendered
+    assert "Step summary:" in rendered
+    assert "Final outputs:" in rendered
+    assert "Recommended next action:" in rendered
+    assert "Optional:" in rendered
+    assert "No NSE scripts" in rendered
+
+
+def test_in_memory_completion_summary_is_not_persisted_in_pipeline_metadata(
+    tmp_path: Path,
+) -> None:
+    completion = PipelineCompletionSummary(
+        collection_confidence_notices=(),
+        operator_summary=OperatorSummary(review_first=[], low_signal=[], coverage=[]),
+    )
+    result = _summary_result(
+        output_dir=str(tmp_path),
+        completion_summary=completion,
+        concrete=True,
+    )
+
+    json_path, markdown_path = write_project_pipeline_result(result)
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert "completion_summary" not in payload
+    assert "BugSlyce Run Summary" not in markdown_path.read_text(encoding="utf-8")
+
+
+def test_fresh_quick_pipeline_builds_compact_summary_without_rerendering_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    state = _quick_completion_state(output_dir)
+    candidates = []
+    report_path = output_dir / "report.md"
+    report_path.write_text(
+        render_markdown_report(state, candidates),
+        encoding="utf-8",
+    )
+    report_before = report_path.read_bytes()
+    expected_summary = build_operator_summary(state, candidates)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: state,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        lambda *args, **kwargs: pytest.fail("Quick completion must not rerender report.md"),
+    )
+
+    result = run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+    rendered = render_project_pipeline_summary(result)
+
+    assert rendered.count("BugSlyce Run Summary") == 1
+    assert "Collection confidence:" in rendered
+    assert "Intentionally bounded content discovery" in rendered
+    assert "Review first:" in rendered
+    assert result.completion_summary is not None
+    assert result.completion_summary.operator_summary.review_first == expected_summary.review_first
+    normalised = " ".join(rendered.split())
+    for lead in expected_summary.review_first:
+        assert f"{lead.title}: {lead.why}" in normalised
+    assert "Final outputs:" in rendered
+    assert "No NSE scripts" in rendered
+    assert report_path.read_bytes() == report_before
+    pipeline_payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert "completion_summary" not in pipeline_payload
+
+
+def test_quick_pipeline_noop_body_fetch_still_builds_compact_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    state = _quick_completion_state(output_dir)
+    report_path = output_dir / "report.md"
+    report_path.write_text(render_markdown_report(state, []), encoding="utf-8")
+    report_before = report_path.read_bytes()
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_body_fetch_workflow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BodyFetchNoWork("No eligible response bodies were available.")
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda path: state,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_outputs",
+        lambda *args, **kwargs: pytest.fail("Quick completion must not rerender report.md"),
+    )
+
+    result = run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+    rendered = render_project_pipeline_summary(result)
+
+    assert result.no_op_steps == 1
+    assert "* No-op: 1" in rendered
+    assert rendered.count("BugSlyce Run Summary") == 1
+    assert "Intentionally bounded content discovery" in rendered
+    assert "exhaustive coverage" not in rendered.lower()
+    assert report_path.read_bytes() == report_before
+
+
+def _summary_result(
+    *,
+    output_dir: str = "/tmp/bugslyce-summary-output",
+    completion_summary: object,
+    concrete: bool = False,
+):
+    values = {
+        "project_name": "summary-project",
+        "target": "portal.example.test",
+        "profile": STANDARD_PIPELINE_PROFILE,
+        "project_file": "/tmp/summary-project/bugslyce_project.json",
+        "scope_file": "/tmp/summary-project/scope.md",
+        "output_dir": output_dir,
+        "started_at": "2026-07-22T10:00:00+00:00",
+        "completed_at": "2026-07-22T10:05:00+00:00",
+        "final_status": "completed",
+        "resume_requested": False,
+        "reused_existing_evidence": False,
+        "skipped_steps": 0,
+        "no_op_steps": 1,
+        "completed_steps": 12,
+        "failed_step": None,
+        "steps": [
+            PipelineStep(
+                step_id="PIPELINE-STEP-010",
+                name="Build report",
+                command_kind="offline",
+                status="completed",
+            )
+        ],
+        "report_path": f"{output_dir}/report.md",
+        "runbook_path": f"{output_dir}/runbook.md",
+        "export_path": f"{output_dir}-evidence-pack.zip",
+        "no_unapproved_actions": True,
+        "completion_summary": completion_summary,
+    }
+    if concrete:
+        return PipelineResult(**values)
+    return SimpleNamespace(**values)
+
+
+def _quick_completion_state(output_dir: Path) -> ProjectState:
+    gobuster_name = "gobuster-lab-root-tiny-10.10.10.10-80-root.txt"
+    first_url = "http://10.10.10.10/portal"
+    second_url = "http://10.10.10.10/admin"
+    return ProjectState(
+        project_name="quick-summary",
+        input_dir=str(output_dir),
+        processed_files=[gobuster_name],
+        scope_summary="Synthetic local scope.",
+        assets=[],
+        http_services=[],
+        endpoints=[],
+        port_services=[],
+        http_artifacts=[
+            HTTPArtifact(
+                url=first_url,
+                artifact_type="page_title",
+                value="Portal",
+                source_file="body-fetch-portal.html",
+                evidence_ids=["EVID-PORTAL"],
+                tags=[],
+            ),
+            HTTPArtifact(
+                url=second_url,
+                artifact_type="page_title",
+                value="Admin portal",
+                source_file="body-fetch-admin.html",
+                evidence_ids=["EVID-ADMIN"],
+                tags=[],
+            ),
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=first_url,
+                status_code=200,
+                content_length=100,
+                redirect_location=None,
+                source="body-fetch-portal.html",
+                evidence_ids=["EVID-PORTAL"],
+                tags=[],
+            ),
+            DiscoveredPath(
+                url=second_url,
+                status_code=200,
+                content_length=100,
+                redirect_location=None,
+                source="body-fetch-admin.html",
+                evidence_ids=["EVID-ADMIN"],
+                tags=[],
+            ),
+        ],
+        recon_summary=None,
+        recon_manifest=ReconManifest(
+            schema_version="1.0",
+            target="10.10.10.10",
+            artifacts=[
+                ReconManifestArtifact(
+                    type="gobuster",
+                    file=gobuster_name,
+                )
+            ],
+            source_file="recon_manifest.json",
+        ),
+        evidence=[
+            Evidence(
+                id="EVID-DISCOVERY",
+                source_file=gobuster_name,
+                evidence_type="gobuster",
+                value="/portal",
+                context={},
+            )
+        ],
+        warnings=[],
+        generated_at="2026-07-22T10:00:00+00:00",
+    )
 
 
 def test_cli_project_run_handles_finalisation_failure_without_failed_ordinary_step(
@@ -2019,6 +2451,8 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     assert result.export_path == str(export_path)
     assert result.completed_steps == 1
     assert result.skipped_steps == 13
+    assert result.completion_summary is None
+    assert "BugSlyce Run Summary" not in render_project_pipeline_summary(result)
     markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
     assert f"- Report: `{output_dir / 'report.md'}`" in markdown
     assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown

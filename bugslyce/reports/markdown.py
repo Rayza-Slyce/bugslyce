@@ -18,7 +18,11 @@ from bugslyce.reports.artifact_classifier import (
     classify_encoded_artifact,
     effective_candidate_priority,
 )
-from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.reports.operator_summary import (
+    OperatorSummary,
+    OperatorSummaryLead,
+    build_operator_summary,
+)
 from bugslyce.reports.provenance import build_workflow_provenance
 
 
@@ -52,6 +56,7 @@ def render_markdown_report(
     readable_evidence_cards_markdown: str | None = None,
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
+    operator_summary: OperatorSummary | None = None,
 ) -> str:
     """Render a cautious deterministic triage report."""
 
@@ -71,6 +76,7 @@ def render_markdown_report(
         project_state,
         candidates,
         additional_leads=operator_summary_leads,
+        summary=operator_summary,
     )
     _optional_prerendered_section(lines, collection_confidence_markdown)
     _optional_prerendered_section(lines, human_triage_brief_markdown)
@@ -106,12 +112,14 @@ def _operator_summary(
     candidates: list[Candidate],
     *,
     additional_leads: tuple[OperatorSummaryLead, ...] = (),
+    summary: OperatorSummary | None = None,
 ) -> None:
-    summary = build_operator_summary(
-        project_state,
-        candidates,
-        additional_leads=additional_leads,
-    )
+    if summary is None:
+        summary = build_operator_summary(
+            project_state,
+            candidates,
+            additional_leads=additional_leads,
+        )
     lines.extend(["## Operator Summary", "", "### Review First", ""])
     if not summary.review_first:
         lines.extend(
@@ -172,6 +180,7 @@ def write_project_outputs(
     readable_evidence_cards_markdown: str | None = None,
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
+    operator_summary: OperatorSummary | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -192,6 +201,7 @@ def write_project_outputs(
             readable_evidence_cards_markdown=readable_evidence_cards_markdown,
             collection_confidence_markdown=collection_confidence_markdown,
             operator_summary_leads=operator_summary_leads,
+            operator_summary=operator_summary,
         ),
         encoding="utf-8",
     )

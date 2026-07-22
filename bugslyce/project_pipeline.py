@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import json
 from pathlib import Path
+import textwrap
 from typing import Callable
 
 from bugslyce.core.models import ProjectState
@@ -42,6 +43,7 @@ from bugslyce.recon.content_run import (
     write_content_discovery_execution_result,
 )
 from bugslyce.recon.collection_confidence import (
+    CollectionConfidenceNotice,
     build_collection_confidence_notices_from_project,
     render_collection_confidence_markdown,
     render_collection_confidence_runbook,
@@ -128,7 +130,11 @@ from bugslyce.reports.human_triage import (
     render_readable_evidence_cards_markdown,
 )
 from bugslyce.reports.markdown import write_project_outputs
-from bugslyce.reports.operator_summary import OperatorSummaryLead
+from bugslyce.reports.operator_summary import (
+    OperatorSummary,
+    OperatorSummaryLead,
+    build_operator_summary,
+)
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
 from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
@@ -228,6 +234,14 @@ class PipelineStep:
 
 
 @dataclass(frozen=True)
+class PipelineCompletionSummary:
+    """Structured report models retained only for terminal completion output."""
+
+    collection_confidence_notices: tuple[CollectionConfidenceNotice, ...]
+    operator_summary: OperatorSummary
+
+
+@dataclass(frozen=True)
 class PipelineResult:
     """Serializable result for one project pipeline execution."""
 
@@ -251,6 +265,11 @@ class PipelineResult:
     runbook_path: str | None
     export_path: str | None
     no_unapproved_actions: bool
+    completion_summary: PipelineCompletionSummary | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
 
 class ProjectPipelineFailed(ValueError):
@@ -576,6 +595,9 @@ def run_project_pipeline(
                 cleanup_errors,
             )
             raise ProjectPipelineFailed(diagnostic, result) from exc
+    completion_summary = context.get("completion_summary")
+    if isinstance(completion_summary, PipelineCompletionSummary):
+        result = replace(result, completion_summary=completion_summary)
     return result
 
 
@@ -594,8 +616,10 @@ def write_project_pipeline_result(result: PipelineResult) -> tuple[Path, Path]:
     output_dir = Path(result.output_dir).expanduser().resolve()
     json_path = output_dir / PIPELINE_JSON_FILENAME
     markdown_path = output_dir / PIPELINE_MARKDOWN_FILENAME
+    payload = asdict(result)
+    payload.pop("completion_summary", None)
     json_path.write_text(
-        json.dumps(asdict(result), indent=2, sort_keys=True) + "\n",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     markdown_path.write_text(render_project_pipeline_markdown(result), encoding="utf-8")
@@ -684,21 +708,27 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
 
     outputs = _final_output_paths(result)
     failed_count = sum(step.status == "failed" for step in result.steps)
-    return "\n".join(
+    lines = [
+        "BugSlyce project pipeline complete",
+        f"Project: {result.project_name}",
+        f"Target: {result.target}",
+        f"Profile: {result.profile}",
+        f"Resume: {str(result.resume_requested).lower()}",
+        f"Final status: {result.final_status}",
+        "",
+        "Step summary:",
+        f"* Completed: {result.completed_steps}",
+        f"* Skipped existing: {result.skipped_steps}",
+        f"* No-op: {result.no_op_steps}",
+        f"* Failed: {failed_count}",
+        "",
+    ]
+    completion_summary = getattr(result, "completion_summary", None)
+    compact_summary = _render_compact_run_summary(completion_summary)
+    if compact_summary is not None:
+        lines.extend([*compact_summary, ""])
+    lines.extend(
         [
-            "BugSlyce project pipeline complete",
-            f"Project: {result.project_name}",
-            f"Target: {result.target}",
-            f"Profile: {result.profile}",
-            f"Resume: {str(result.resume_requested).lower()}",
-            f"Final status: {result.final_status}",
-            "",
-            "Step summary:",
-            f"* Completed: {result.completed_steps}",
-            f"* Skipped existing: {result.skipped_steps}",
-            f"* No-op: {result.no_op_steps}",
-            f"* Failed: {failed_count}",
-            "",
             "Final outputs:",
             f"* Report: {outputs['report']}",
             f"* Status: {outputs['status']}",
@@ -716,6 +746,85 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
             "",
             "No NSE scripts, UDP scans, brute force, exploitation, recursive discovery, form submission, authentication testing, or arbitrary commands were run.",
         ]
+    )
+    return "\n".join(lines)
+
+
+def _render_compact_run_summary(
+    summary: object,
+) -> tuple[str, ...] | None:
+    notices = getattr(summary, "collection_confidence_notices", None)
+    operator_summary = getattr(summary, "operator_summary", None)
+    if not isinstance(notices, tuple) or not isinstance(
+        operator_summary,
+        OperatorSummary,
+    ):
+        return None
+    if not all(isinstance(notice, CollectionConfidenceNotice) for notice in notices):
+        return None
+    if not all(
+        isinstance(lead, OperatorSummaryLead)
+        for lead in operator_summary.review_first
+    ):
+        return None
+
+    lines = ["BugSlyce Run Summary", "", "Collection confidence:"]
+    if notices:
+        for notice in notices[:5]:
+            lines.extend(_terminal_bullet(f"{notice.title}: {notice.direct_fact}"))
+        remaining = len(notices) - 5
+        if remaining > 0:
+            noun = "notice" if remaining == 1 else "notices"
+            lines.append(
+                f"... and {remaining} more confidence {noun} in the full report."
+            )
+    else:
+        lines.extend(
+            _terminal_bullet(
+                "No material collection-confidence notice was recorded. "
+                "This does not prove exhaustive coverage."
+            )
+        )
+
+    lines.extend(["", "Review first:"])
+    review_first = operator_summary.review_first
+    if review_first:
+        for lead in review_first[:5]:
+            lines.extend(_terminal_bullet(f"{lead.title}: {lead.why}"))
+        remaining = len(review_first) - 5
+        if remaining > 0:
+            noun = "item" if remaining == 1 else "items"
+            lines.append(
+                f"... and {remaining} more prioritised {noun} in the full report."
+            )
+    else:
+        lines.extend(
+            _terminal_bullet(
+                "No prioritised review item was produced. Review the full report and "
+                "retained evidence."
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "This is a compact overview. The full report contains complete evidence "
+            "and provenance.",
+        ]
+    )
+    return tuple(lines)
+
+
+def _terminal_bullet(text: str) -> tuple[str, ...]:
+    return tuple(
+        textwrap.wrap(
+            text,
+            width=88,
+            initial_indent="* ",
+            subsequent_indent="  ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
     )
 
 
@@ -1431,6 +1540,10 @@ def _step_runners(
             output_dir,
             context,
         )
+        if "completion_summary" not in context:
+            completion_summary = _build_completion_summary_from_project(output_dir)
+            if completion_summary is not None:
+                context["completion_summary"] = completion_summary
         result = build_recon_status(output_dir, scope_file, clock=clock)
         json_path, markdown_path = write_recon_status(result, output_dir)
         output_paths = [*report_paths, str(json_path), str(markdown_path)]
@@ -1651,13 +1764,47 @@ def _write_interpretation_report_if_needed(
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
         report_kwargs["operator_summary_leads"] = operator_summary_leads
+    operator_summary = None
+    if isinstance(project_state, ProjectState):
+        operator_summary = build_operator_summary(
+            project_state,
+            candidates,
+            additional_leads=operator_summary_leads,
+        )
+        report_kwargs["operator_summary"] = operator_summary
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,
         output_dir,
         **report_kwargs,
     )
+    if operator_summary is not None:
+        context["completion_summary"] = PipelineCompletionSummary(
+            collection_confidence_notices=confidence_notices,
+            operator_summary=operator_summary,
+        )
     return [str(report_path), str(json_path)]
+
+
+def _build_completion_summary_from_project(
+    output_dir: Path,
+) -> PipelineCompletionSummary | None:
+    """Build terminal-only models from final local state without rerendering output."""
+
+    try:
+        project_state = build_project_state(output_dir)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(project_state, ProjectState):
+        return None
+    candidates = generate_candidates(project_state)
+    return PipelineCompletionSummary(
+        collection_confidence_notices=build_collection_confidence_notices_from_project(
+            project_state,
+            output_dir,
+        ),
+        operator_summary=build_operator_summary(project_state, candidates),
+    )
 
 
 def _refresh_final_pipeline_outputs(
