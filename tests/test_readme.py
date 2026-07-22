@@ -55,8 +55,10 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     compact = " ".join(readme.split())
 
     assert "Current package version: `1.0.0`" in readme
-    assert "prepared for final release" in compact
-    assert "has not yet been tagged or published" in compact
+    assert "BugSlyce v1.0.0 is the current stable release" in compact
+    assert "has not yet been tagged or published" not in compact
+    assert "pipx install bugslyce" in readme
+    assert "bugslyce-interactive-menu.png" in readme
     assert "validated on Kali Linux and Linux Mint" in readme
     assert "not currently part of the directly validated host set" in compact
     assert "validated on Debian-derived systems such as Kali, Ubuntu and Linux Mint" not in readme

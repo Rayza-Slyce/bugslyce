@@ -10,9 +10,8 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-Current package version: `1.0.0`. This final release state is prepared for
-final release. It has not yet been tagged or published from this development
-phase.
+Current package version: `1.0.0`. BugSlyce v1.0.0 is the current stable
+release.
 
 ## Authorised Use
 
@@ -48,33 +47,41 @@ claimed.
 | Standard Recon | `standard-bounded` | Bounded collection plus offline interpretation using `standard-bounded-core`. |
 | Deep Recon | `deep-bounded` | Bounded same-origin Deep collection and offline review orchestration using `deep-bounded-core`. |
 
-## Minimal Install
+## Install from PyPI
+
+Install BugSlyce as an isolated command-line application with `pipx`:
+
+```bash
+sudo apt update
+sudo apt install pipx nmap curl gobuster
+pipx ensurepath
+pipx install bugslyce
+```
+
+Open a new terminal if `pipx ensurepath` asks you to refresh your shell, then
+run the doctor before recon:
+
+```bash
+bugslyce doctor
+```
+
+## Source Install
 
 For a source install on a Debian-derived workstation:
 
 ```bash
+sudo apt update
+sudo apt install git python3 python3-venv nmap curl gobuster
 git clone https://github.com/Rayza-Slyce/bugslyce.git
 cd bugslyce
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install .
-```
-
-BugSlyce also requires local external tools for executable recon:
-
-```bash
-sudo apt update
-sudo apt install git python3 python3-venv nmap curl gobuster
-```
-
-Run the doctor before recon:
-
-```bash
 bugslyce doctor
 ```
 
-If your virtual environment is not active, use:
+If the virtual environment is not active, use:
 
 ```bash
 ./.venv/bin/bugslyce doctor
@@ -93,6 +100,8 @@ bugslyce
 The launcher can create a project, ask for engagement context, choose a mode,
 show the exact command that will run and require an exact `YES` confirmation
 before live recon starts.
+
+![BugSlyce interactive launcher](https://raw.githubusercontent.com/Rayza-Slyce/bugslyce/main/docs/images/bugslyce-interactive-menu.png)
 
 ## Output Overview
 

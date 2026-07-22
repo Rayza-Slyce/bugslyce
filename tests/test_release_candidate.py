@@ -77,13 +77,15 @@ def test_cli_version_prints_final_v1(capsys) -> None:
     assert captured.out.strip() == f"bugslyce {FINAL_VERSION}"
 
 
-def test_readme_states_final_version_prepared_but_not_published() -> None:
+def test_readme_states_current_stable_release_and_install_path() -> None:
     readme = _read("README.md")
     compact = " ".join(readme.split())
 
     assert f"Current package version: `{FINAL_VERSION}`" in readme
-    assert "prepared for final release" in compact
-    assert "has not yet been tagged or published" in compact
+    assert "BugSlyce v1.0.0 is the current stable release" in compact
+    assert "has not yet been tagged or published" not in compact
+    assert "pipx install bugslyce" in readme
+    assert "bugslyce-interactive-menu.png" in readme
 
 
 def test_release_notes_have_current_final_v1_section() -> None:
