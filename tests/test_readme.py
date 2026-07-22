@@ -54,10 +54,9 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     )
     compact = " ".join(readme.split())
 
-    assert "Current package version: `1.0.0rc2`" in readme
-    assert "a BugSlyce v1 release candidate" in compact
-    assert "not the final `1.0.0` release" in compact
-    assert "not been tagged or published" in compact
+    assert "Current package version: `1.0.0`" in readme
+    assert "prepared for final release" in compact
+    assert "has not yet been tagged or published" in compact
     assert "validated on Kali Linux and Linux Mint" in readme
     assert "not currently part of the directly validated host set" in compact
     assert "validated on Debian-derived systems such as Kali, Ubuntu and Linux Mint" not in readme
@@ -107,7 +106,7 @@ def test_release_checklist_documents_current_release_gate() -> None:
     compact_lower = compact.lower()
     lowered = checklist.lower()
     for expected in (
-        "1.0.0rc2",
+        "1.0.0",
         "lab-safe-tiny",
         "standard-bounded",
         "deep-bounded",
@@ -121,7 +120,7 @@ def test_release_checklist_documents_current_release_gate() -> None:
     assert "brute force" in lowered
     assert "exploitation" in lowered
     assert "does not create a git tag" in compact_lower
-    assert "exact-wheel temporary pipx acceptance completed on Mint and Kali" in checklist
+    assert "Historical rc2 release-candidate acceptance" in checklist
 
     assert "Deep Recon remains unavailable" not in checklist
     assert "git tag v0.3.0" not in checklist
@@ -133,16 +132,17 @@ def test_release_notes_document_current_scope() -> None:
     assert notes_path.is_file()
 
     notes = notes_path.read_text(encoding="utf-8")
+    compact = " ".join(notes.split())
     for expected in (
-        "1.0.0rc2",
+        "1.0.0",
         "Manual Setup Only",
         "Quick Recon using `lab-safe-tiny`",
         "Standard Recon using `standard-bounded`",
         "Deep Recon using `deep-bounded`",
-        "current v1 release candidate",
-        "has not been tagged or published",
+        "prepared for final release",
+        "has not yet been tagged or published",
     ):
-        assert expected in notes
+        assert expected in compact
 
     assert "Deep Recon remains unavailable" not in notes
 

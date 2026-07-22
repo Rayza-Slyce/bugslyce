@@ -1,9 +1,24 @@
 # Release Notes
 
+## 1.0.0
+
+BugSlyce `1.0.0` is prepared for final release. It has not yet been tagged or
+published. The final wheel still requires exact-wheel temporary pipx acceptance
+on Mint and Kali before a final release decision.
+
+The accepted v1 scope provides bounded Manual Setup Only, Quick, Standard and
+Deep workflows, local evidence artefacts, reports, runbooks and portable,
+self-validating evidence packs. BugSlyce remains outside exploitation and
+active vulnerability testing; its reports preserve observed evidence and
+manual-review leads rather than confirmed vulnerability claims.
+
 ## 1.0.0rc2
 
-BugSlyce `1.0.0rc2` is the current v1 release candidate. It is not the final
-`1.0.0` release and has not been tagged or published. Since `1.0.0rc1`, Deep
+BugSlyce `1.0.0rc2` is a historical v1 release candidate prepared at commit
+`113494f3c727c4543ca87e9be37b64c8c1858dbe`. Its exact wheel,
+`bugslyce-1.0.0rc2-py3-none-any.whl`, SHA-256
+`24ecc358ed6b4e3db9213e7142637fade953b30744fb11fa613c050f1ae6a441`,
+passed temporary pipx acceptance on Mint and Kali. Since `1.0.0rc1`, Deep
 content discovery uses a distinct bundled `deep-bounded-core` resource; the
 tagged `1.0.0rc1` release candidate used `standard-bounded-core` for both
 Standard and Deep.

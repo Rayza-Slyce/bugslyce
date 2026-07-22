@@ -1,21 +1,21 @@
 # Release Checklist
 
-This checklist prepares BugSlyce `1.0.0rc2` for release-candidate acceptance.
+This checklist prepares BugSlyce `1.0.0` for final release.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **rc2 package build and exact-wheel temporary pipx acceptance completed on Mint and Kali; final v1 release remains pending**.
+Current decision: **final `1.0.0` release state is prepared locally; final v1 publication remains pending**.
 
-The earlier `1.0.0rc1` acceptance covered source commit `e4c8fba`, and that
-release candidate was subsequently tagged as `v1.0.0rc1`. No package was
-published. The current checkout remains pre-release `1.0.0rc2`, not final
-`1.0.0`.
+The earlier `1.0.0rc1` and `1.0.0rc2` acceptances remain historical
+release-candidate evidence. `v1.0.0rc1` points to commit `96ad586`; no package
+was published from either release candidate. The current checkout is prepared
+as `1.0.0`, but no final tag or publication exists.
 
 ## A. Source Integrity
 
 - [x] Working tree is clean.
 - [x] Expected base commit is recorded.
 - [x] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
-      report `1.0.0rc2`.
+      report `1.0.0`.
 - [x] No stale current-version references remain.
 - [x] No generated target evidence is tracked.
 - [x] No secrets, `.env` files, provider configuration or private project
@@ -80,7 +80,7 @@ git diff --check
 - [x] Install only the built local artefact, without dependency downloads.
 - [x] Run `python -m pip check`.
 - [x] Import `bugslyce`.
-- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0rc2`.
+- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0`.
 - [x] Run `bugslyce doctor`.
 - [x] Confirm bundled wordlists are present and non-empty:
       `lab-root-tiny.txt`, `standard-auth-core.txt`,
@@ -126,8 +126,9 @@ Release blockers include:
 
 ## Current Status
 
-### Current rc2 completed checks
+### Historical rc2 release-candidate acceptance
 
+- rc2 baseline commit: `113494f3c727c4543ca87e9be37b64c8c1858dbe`.
 - rc2 package/version alignment, local build, wheel and source-distribution
   inspection, source-distribution wheel rebuild and temporary-venv acceptance
   completed on Mint.
@@ -160,11 +161,22 @@ Release blockers include:
 - Completed Deep no-op and hash stability passed.
 - Evidence ZIP content review passed.
 
-### Still pending for rc2
+### Current 1.0.0 finalisation checks
 
-- Commit and push the rc2 release-hardening changes.
-- Final clean build from the committed rc2 release state.
-- Final `1.0.0` release decision and version bump.
-- Final release tag.
+- [x] Final version alignment in the working tree.
+- [x] Final checkout wheel and source-distribution build.
+- [x] Source-distribution wheel rebuild.
+- [x] Local temporary-venv installation and semantic wheel comparison.
+- [x] All four runtime resources verified from the final wheel.
+
+### Still pending for final publication
+
+- Review and commit the finalisation change.
+- Push the committed finalisation state.
+- Pull and verify the committed finalisation state on Kali.
+- Final clean build from the committed release state.
+- Exact final-wheel temporary pipx acceptance on Mint.
+- Exact same final-wheel temporary pipx acceptance on Kali.
+- Final `v1.0.0` tag.
 - GitHub release.
 - PyPI publication.

@@ -26,7 +26,8 @@ from bugslyce.recon.modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RC_VERSION = "1.0.0rc2"
+FINAL_VERSION = "1.0.0"
+RC2_VERSION = "1.0.0rc2"
 PREVIOUS_RC_VERSION = "1.0.0rc1"
 RC2_WHEEL_FILENAME = "bugslyce-1.0.0rc2-py3-none-any.whl"
 RC2_WHEEL_SHA256 = "24ecc358ed6b4e3db9213e7142637fade953b30744fb11fa613c050f1ae6a441"
@@ -38,52 +39,52 @@ RC2_WORDLIST_FILES = (
 )
 
 
-def test_current_checkout_uses_next_prerelease_after_rc1() -> None:
+def test_current_checkout_uses_final_v1_version() -> None:
     readme = _read("README.md")
     notes = _read("docs/RELEASE_NOTES.md")
 
-    assert _pyproject()["project"]["version"] == RC_VERSION
-    assert bugslyce.__version__ == RC_VERSION
-    assert f"Current package version: `{RC_VERSION}`" in readme
-    assert f"## {RC_VERSION}" in notes
+    assert _pyproject()["project"]["version"] == FINAL_VERSION
+    assert bugslyce.__version__ == FINAL_VERSION
+    assert f"Current package version: `{FINAL_VERSION}`" in readme
+    assert f"## {FINAL_VERSION}" in notes
 
 
-def test_package_metadata_version_is_release_candidate() -> None:
+def test_package_metadata_version_is_final_v1() -> None:
     pyproject = _pyproject()
 
-    assert pyproject["project"]["version"] == RC_VERSION
+    assert pyproject["project"]["version"] == FINAL_VERSION
 
 
-def test_runtime_version_is_release_candidate() -> None:
-    assert bugslyce.__version__ == RC_VERSION
+def test_runtime_version_is_final_v1() -> None:
+    assert bugslyce.__version__ == FINAL_VERSION
 
 
 def test_package_metadata_and_runtime_version_agree() -> None:
     assert _pyproject()["project"]["version"] == bugslyce.__version__
 
 
-def test_cli_version_prints_release_candidate(capsys) -> None:
+def test_cli_version_prints_final_v1(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--version"])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
-    assert captured.out.strip() == f"bugslyce {RC_VERSION}"
+    assert captured.out.strip() == f"bugslyce {FINAL_VERSION}"
 
 
-def test_readme_states_release_candidate_version_not_final_release() -> None:
+def test_readme_states_final_version_prepared_but_not_published() -> None:
     readme = _read("README.md")
     compact = " ".join(readme.split())
 
-    assert f"Current package version: `{RC_VERSION}`" in readme
-    assert "a BugSlyce v1 release candidate" in compact
-    assert "not the final `1.0.0` release" in compact
+    assert f"Current package version: `{FINAL_VERSION}`" in readme
+    assert "prepared for final release" in compact
+    assert "has not yet been tagged or published" in compact
 
 
-def test_release_notes_have_current_release_candidate_section() -> None:
+def test_release_notes_have_current_final_v1_section() -> None:
     notes = _read("docs/RELEASE_NOTES.md")
 
-    assert f"## {RC_VERSION}" in notes
+    assert f"## {FINAL_VERSION}" in notes
     assert "Manual Setup Only" in notes
     assert "same-origin" in notes
     assert "Known Limitations" in notes
@@ -95,7 +96,7 @@ def test_release_documents_record_completed_acceptance_state() -> None:
     acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
     combined = "\n".join((notes, checklist, acceptance))
 
-    assert "exact-wheel temporary pipx acceptance completed on Mint and Kali" in checklist
+    assert "Historical rc2 release-candidate acceptance" in checklist
     assert "2026-07-16" in acceptance
     assert "e4c8fba" in combined
     for workflow in ("Manual Setup Only", "Quick", "Standard", "Deep"):
@@ -105,7 +106,7 @@ def test_release_documents_record_completed_acceptance_state() -> None:
     assert "Canonical Deep hash stability | passed" in acceptance
     assert "Evidence-pack review | passed" in acceptance
     assert "authorised private lab/CTF target, identifier withheld" in acceptance
-    assert "subsequently tagged as `v1.0.0rc1`" in combined
+    assert "The `v1.0.0rc1` tag was subsequently created." in combined
     assert "No package was published" in combined
     assert "not final `1.0.0`" in combined
 
@@ -126,18 +127,72 @@ def test_release_checklist_records_exact_rc2_pipx_acceptance() -> None:
         assert wordlist in checklist
 
 
-def test_release_documents_distinguish_current_rc2_and_historical_rc1() -> None:
+def test_final_release_documents_preserve_historical_rc2_evidence() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+    notes = _read("docs/RELEASE_NOTES.md")
+
+    assert "Historical rc2 release-candidate acceptance" in checklist
+    assert "113494f3c727c4543ca87e9be37b64c8c1858dbe" in checklist
+    assert RC2_VERSION in notes
+    assert RC2_WHEEL_FILENAME in checklist
+    assert RC2_WHEEL_SHA256 in checklist
+    assert "Mint temporary pipx acceptance: completed" in checklist
+    assert "Kali temporary pipx acceptance: completed" in checklist
+
+
+def test_final_release_checklist_keeps_publication_pending() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+
+    assert "Current 1.0.0 finalisation checks" in checklist
+    for completed in (
+        "- [x] Final version alignment in the working tree.",
+        "- [x] Final checkout wheel and source-distribution build.",
+        "- [x] Source-distribution wheel rebuild.",
+        "- [x] Local temporary-venv installation and semantic wheel comparison.",
+        "- [x] All four runtime resources verified from the final wheel.",
+    ):
+        assert completed in checklist
+    for pending in (
+        "Review and commit the finalisation change.",
+        "Push the committed finalisation state.",
+        "Pull and verify the committed finalisation state on Kali.",
+        "Final clean build from the committed release state.",
+        "Exact final-wheel temporary pipx acceptance on Mint.",
+        "Exact same final-wheel temporary pipx acceptance on Kali.",
+        "Final `v1.0.0` tag.",
+        "GitHub release.",
+        "PyPI publication.",
+    ):
+        assert pending in checklist
+    assert "final v1 publication remains pending" in checklist
+
+
+def test_final_package_filename_contract() -> None:
+    distribution_name = _pyproject()["project"]["name"]
+
+    assert distribution_name == "bugslyce"
+    assert f"{distribution_name}-{FINAL_VERSION}-py3-none-any.whl" == (
+        "bugslyce-1.0.0-py3-none-any.whl"
+    )
+    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.0.0.tar.gz"
+
+
+def test_release_documents_distinguish_current_final_state_and_history() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md")
     acceptance = _read("docs/RELEASE_ACCEPTANCE.md")
 
     assert "Historical rc1 acceptance" in checklist
-    assert "Current rc2 completed checks" in checklist
-    assert "Still pending for rc2" in checklist
+    assert "Historical rc2 release-candidate acceptance" in checklist
+    assert "Current 1.0.0 finalisation checks" in checklist
+    assert "Still pending for final publication" in checklist
     for pending in (
-        "Commit and push the rc2 release-hardening changes.",
-        "Final clean build from the committed rc2 release state.",
-        "Final `1.0.0` release decision and version bump.",
-        "Final release tag.",
+        "Review and commit the finalisation change.",
+        "Push the committed finalisation state.",
+        "Pull and verify the committed finalisation state on Kali.",
+        "Final clean build from the committed release state.",
+        "Exact final-wheel temporary pipx acceptance on Mint.",
+        "Exact same final-wheel temporary pipx acceptance on Kali.",
+        "Final `v1.0.0` tag.",
         "GitHub release.",
         "PyPI publication.",
     ):

@@ -10,9 +10,9 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-Current package version: `1.0.0rc2`. This is a BugSlyce v1 release candidate,
-not the final `1.0.0` release. It has not been tagged or published
-from this development phase.
+Current package version: `1.0.0`. This final release state is prepared for
+final release. It has not yet been tagged or published from this development
+phase.
 
 ## Authorised Use
 
@@ -142,7 +142,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.0.0rc2`. The deterministic test suite mocks live
+The package version is `1.0.0`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash
