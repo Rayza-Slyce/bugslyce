@@ -211,6 +211,7 @@ from bugslyce.recon.status import (
     render_recon_status_summary,
     write_recon_status,
 )
+from bugslyce.reports.html import write_html_report
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 from bugslyce.wizard import render_wizard
@@ -241,6 +242,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _config(args)
     if args.command == "project":
         return _project(args)
+    if args.command == "report":
+        return _report(args)
     if args.command == "recon":
         return _recon(args)
     if args.command == "wizard":
@@ -445,6 +448,32 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Path to bugslyce_project.json.",
+    )
+
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Render presentation formats from existing local BugSlyce artefacts.",
+    )
+    report_subparsers = report_parser.add_subparsers(dest="report_command")
+    report_html_parser = report_subparsers.add_parser(
+        "html",
+        help="Write one self-contained offline HTML evidence report.",
+        description=(
+            "Write one self-contained HTML report from an existing local BugSlyce "
+            "evidence pack or run artefact directory. No network requests are made."
+        ),
+    )
+    report_html_parser.add_argument(
+        "--input-dir",
+        required=True,
+        type=Path,
+        help="Existing extracted evidence pack or run artefact directory.",
+    )
+    report_html_parser.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        help="Requested self-contained .html output file.",
     )
 
     recon_parser = subparsers.add_parser(
@@ -1169,6 +1198,22 @@ def _run(input_dir: Path, output_dir: Path) -> int:
     else:
         print(f"LLM provider: {provider.name}")
 
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    if args.report_command != "html":
+        print("Error: report command required", file=sys.stderr)
+        return 2
+    try:
+        output = write_html_report(args.input_dir, args.output)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print("No network requests were made.", file=sys.stderr)
+        return 2
+    print("BugSlyce HTML evidence report written")
+    print(f"Output: {output}")
+    print("No network requests were made.")
     return 0
 
 
