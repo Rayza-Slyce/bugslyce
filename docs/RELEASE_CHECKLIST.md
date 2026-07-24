@@ -1,15 +1,14 @@
 # Release Checklist
 
-This checklist prepares BugSlyce `1.1.0` for review and release.
+This checklist records the completed BugSlyce `1.1.0` release.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **`1.1.0` release preparation is in progress; tagging and
-publication remain pending**.
+Current decision: **`1.1.0` release is complete.**
 
 The `1.0.0rc1`, `1.0.0rc2` and final `1.0.0` acceptance records below remain
 historical evidence. `v1.0.0rc1` points to commit `96ad586`; no package was
-published from either release candidate. The current checkout is prepared as
-`1.1.0`, but no `v1.1.0` tag or publication exists.
+published from either release candidate. The annotated `v1.1.0` tag points to
+release commit `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`.
 
 ## A. Source Integrity
 
@@ -132,19 +131,37 @@ Release blockers include:
 
 ## Current Status
 
-### 1.1.0 release preparation
+### 1.1.0 release record
 
-- Base commit: `ed1f6f7becf0014ba41d64d2f4dc1799e4353724`.
+- Accepted release commit: `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`.
+- Annotated tag: `v1.1.0`, created and pushed to GitHub.
+- GitHub release published: <https://github.com/Rayza-Slyce/bugslyce/releases/tag/v1.1.0>.
+  It contains `bugslyce-1.1.0-py3-none-any.whl`, `bugslyce-1.1.0.tar.gz` and
+  `SHA256SUMS`.
+- PyPI publication: completed.
+- Published wheel: `bugslyce-1.1.0-py3-none-any.whl` (SHA-256
+  `8765dcfeeb9fa9f43de154f54d13049c46d7fa7c241cb8e9b759da620a1c6a87`).
+- Published source distribution: `bugslyce-1.1.0.tar.gz` (SHA-256
+  `bec36c61f618f5ed2a85e1b38b01bc515965495efc5d91354eb3bbe04849c477`).
+- Kali pipx upgraded BugSlyce from `1.0.0` to `1.1.0` successfully.
+  Post-publication verification used the environment
+  `/home/rayza/.local/share/pipx/venvs/bugslyce`; installed package metadata
+  reports `1.1.0`, no runtime dependencies are installed, and the published
+  package imports from pipx site-packages.
+- `v1.1.0` remains permanently attached to release commit
+  `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`. Any later checklist-record
+  commit belongs to `main` and is not part of the tagged release artefacts.
+- Pre-release development baseline: `ed1f6f7becf0014ba41d64d2f4dc1799e4353724`.
 - Current version aligned to `1.1.0` in package metadata, runtime metadata and
   release-facing documentation.
 - User-facing scope: self-contained offline HTML evidence reports and bounded
   presentation improvements over existing deterministic evidence and review
   models.
 - No reconnaissance, collection, ranking, evidence or vulnerability semantics
-  changed for this release preparation.
+  changed for the release.
 - Focused documentation/release tests: `42 passed`; affected release,
   packaging, CLI, HTML and report tests: `311 passed`; full suite: `2,015 passed`.
-- Local build completed: `bugslyce-1.1.0-py3-none-any.whl` (438,399 bytes;
+- Pre-publication local build completed: `bugslyce-1.1.0-py3-none-any.whl` (438,399 bytes;
   133 members; SHA-256
   `d0c53f369b8305f4c4448b234bf4d8cd606e6096dd7481059394ad4bfdf76b5d`)
   and `bugslyce-1.1.0.tar.gz` (659,345 bytes; 241 members; SHA-256
@@ -232,13 +249,3 @@ Release blockers include:
   `standard-auth-core.txt` (15), `standard-bounded-core.txt` (220) and
   `deep-bounded-core.txt` (1,753).
 - Technical GO: GO to tag and publish.
-
-### 1.1.0 actions still pending
-
-- Review and commit the `1.1.0` release-preparation changes.
-- Push and verify the committed state.
-- Build final release artefacts from the committed release state.
-- Complete any required cross-platform acceptance of the exact final wheel.
-- Annotated `v1.1.0` tag.
-- GitHub release.
-- PyPI publication.

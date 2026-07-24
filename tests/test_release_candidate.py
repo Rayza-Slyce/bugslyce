@@ -43,6 +43,11 @@ FINAL_WHEEL_SHA256 = "e29346eda47bd37d166612bee775e231a48b79749696a1a66aaeb7e499
 FINAL_BUILD_EVIDENCE_SHA256 = "7ef3d9ffd6385b70adf33a31935e3248f8ba70a3cbd917a62c5787256f7668c2"
 FINAL_MINT_ACCEPTANCE_SHA256 = "40f487df5eb676b49e8509485be99e289067a0ae0bbb222d72bd60b822f68820"
 FINAL_KALI_ACCEPTANCE_SHA256 = "23e68a4ca031dd7585118d6f93232a4658149f65c65d985a16106c69222013af"
+V11_RELEASE_COMMIT = "a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c"
+V11_WHEEL_FILENAME = "bugslyce-1.1.0-py3-none-any.whl"
+V11_WHEEL_SHA256 = "8765dcfeeb9fa9f43de154f54d13049c46d7fa7c241cb8e9b759da620a1c6a87"
+V11_SDIST_FILENAME = "bugslyce-1.1.0.tar.gz"
+V11_SDIST_SHA256 = "bec36c61f618f5ed2a85e1b38b01bc515965495efc5d91354eb3bbe04849c477"
 
 
 def test_current_checkout_uses_final_v1_version() -> None:
@@ -158,7 +163,7 @@ def test_final_release_documents_preserve_historical_rc2_evidence() -> None:
     assert "Kali temporary pipx acceptance: completed" in checklist
 
 
-def test_release_checklist_preserves_v1_acceptance_and_keeps_v11_publication_pending() -> None:
+def test_release_checklist_preserves_v1_acceptance_and_records_v11_publication() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md")
     compact_checklist = " ".join(checklist.split())
     compact_notes = " ".join(_read("docs/RELEASE_NOTES.md").split())
@@ -170,17 +175,22 @@ def test_release_checklist_preserves_v1_acceptance_and_keeps_v11_publication_pen
         "Technical GO: GO to tag and publish.",
     ):
         assert completed in checklist
-    for pending in (
-        "Review and commit the `1.1.0` release-preparation changes.",
-        "Push and verify the committed state.",
-        "Build final release artefacts from the committed release state.",
-        "Complete any required cross-platform acceptance of the exact final wheel.",
-        "Annotated `v1.1.0` tag.",
-        "GitHub release.",
-        "PyPI publication.",
+    assert "### 1.1.0 release record" in checklist
+    for released in (
+        f"Accepted release commit: `{V11_RELEASE_COMMIT}`.",
+        "Annotated tag: `v1.1.0`, created and pushed to GitHub.",
+        "GitHub release published:",
+        "https://github.com/Rayza-Slyce/bugslyce/releases/tag/v1.1.0",
+        V11_WHEEL_FILENAME,
+        V11_WHEEL_SHA256,
+        V11_SDIST_FILENAME,
+        V11_SDIST_SHA256,
+        "Kali pipx upgraded BugSlyce from `1.0.0` to `1.1.0` successfully.",
+        "permanently attached to release commit",
+        "not part of the tagged release artefacts",
     ):
-        assert pending in checklist
-    assert "tagging and publication remain pending" in compact_checklist
+        assert released in compact_checklist
+    assert "tagging and publication remain pending" not in compact_checklist
     for value in (
         "32bfd20f78cda81e22241bb73836038defac0504",
         V1_WHEEL_FILENAME,
@@ -204,8 +214,7 @@ def test_release_checklist_preserves_v1_acceptance_and_keeps_v11_publication_pen
     assert "doctor exit `0`" in checklist
     assert "exact same wheel was accepted through isolated temporary pipx acceptance on Mint and Kali" in compact_notes
     assert "approved to tag and publish" in compact_notes
-    assert "Final `v1.1.0` tag has been created" not in checklist
-    assert "PyPI publication completed" not in checklist
+    assert "PyPI publication: completed." in checklist
     assert "Focused documentation/release tests: `42 passed`" in compact_checklist
     assert "affected release, packaging, CLI, HTML and report tests: `311 passed`" in compact_checklist
     assert "full suite: `2,015 passed`" in compact_checklist
@@ -228,17 +237,9 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
     assert "Historical rc1 acceptance" in checklist
     assert "Historical rc2 release-candidate acceptance" in checklist
     assert "Historical 1.0.0 final technical acceptance" in checklist
-    assert "1.1.0 actions still pending" in checklist
-    for pending in (
-        "Review and commit the `1.1.0` release-preparation changes.",
-        "Push and verify the committed state.",
-        "Build final release artefacts from the committed release state.",
-        "Complete any required cross-platform acceptance of the exact final wheel.",
-        "Annotated `v1.1.0` tag.",
-        "GitHub release.",
-        "PyPI publication.",
-    ):
-        assert pending in checklist
+    assert "1.1.0 release record" in checklist
+    assert "1.1.0 actions still pending" not in checklist
+    assert "tagging and publication remain pending" not in " ".join(checklist.split())
     assert "completed public record below documents the earlier `1.0.0rc1` acceptance" in acceptance
 
 
