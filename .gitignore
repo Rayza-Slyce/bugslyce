@@ -8,6 +8,7 @@ bugslyce-output/
 *.db
 *.log
 *.png
+!docs/images/bugslyce-html-evidence-report.png
 *.jpg
 *.jpeg
 *.webp

@@ -164,6 +164,7 @@ def test_command_examples_use_recognised_commands() -> None:
         "config",
         "project",
         "recon",
+        "report",
         "--help",
     }
     recognised_project = {
@@ -181,6 +182,9 @@ def test_command_examples_use_recognised_commands() -> None:
         "export",
         "status",
     }
+    recognised_report = {
+        "html",
+    }
 
     for command in _documented_bugslyce_commands():
         parts = command.split()
@@ -192,6 +196,8 @@ def test_command_examples_use_recognised_commands() -> None:
             assert parts[2] in recognised_project, command
         if parts[1] == "recon" and len(parts) > 2:
             assert parts[2] in recognised_recon, command
+        if parts[1] == "report" and len(parts) > 2:
+            assert parts[2] in recognised_report, command
 
 
 def _combined_public_docs() -> str:

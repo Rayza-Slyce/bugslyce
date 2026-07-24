@@ -1,25 +1,31 @@
 # Release Checklist
 
-This checklist prepares BugSlyce `1.0.0` for final release.
+This checklist prepares BugSlyce `1.1.0` for review and release.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **final `1.0.0` release state is prepared locally; final v1 publication remains pending**.
+Current decision: **`1.1.0` release preparation is in progress; tagging and
+publication remain pending**.
 
-The earlier `1.0.0rc1` and `1.0.0rc2` acceptances remain historical
-release-candidate evidence. `v1.0.0rc1` points to commit `96ad586`; no package
-was published from either release candidate. The current checkout is prepared
-as `1.0.0`, but no final tag or publication exists.
+The `1.0.0rc1`, `1.0.0rc2` and final `1.0.0` acceptance records below remain
+historical evidence. `v1.0.0rc1` points to commit `96ad586`; no package was
+published from either release candidate. The current checkout is prepared as
+`1.1.0`, but no `v1.1.0` tag or publication exists.
 
 ## A. Source Integrity
 
 - [x] Working tree is clean.
 - [x] Expected base commit is recorded.
 - [x] `pyproject.toml`, `bugslyce.__version__` and `bugslyce --version` all
-      report `1.0.0`.
+      report `1.1.0`.
 - [x] No stale current-version references remain.
-- [x] No generated target evidence is tracked.
-- [x] No secrets, `.env` files, provider configuration or private project
-      directories are tracked.
+- [x] No raw or private evidence pack is tracked.
+- [x] No generated HTML evidence report is tracked.
+- [x] No unapproved target artefact is tracked.
+- [x] No private credentials, secrets or private engagement material is tracked.
+- [x] The sole intentional lab-derived documentation artefact added for 1.1.0
+      is `docs/images/bugslyce-html-evidence-report.png`, an approved
+      authorised-lab screenshot with SHA-256
+      `6ca7366d4faaedba817248727107693e12b3917555664bf86594022f1673957c`.
 - [x] No temporary build output is committed.
 
 ## B. Static Safety
@@ -80,7 +86,7 @@ git diff --check
 - [x] Install only the built local artefact, without dependency downloads.
 - [x] Run `python -m pip check`.
 - [x] Import `bugslyce`.
-- [x] Verify `bugslyce --version` prints `bugslyce 1.0.0`.
+- [x] Verify `bugslyce --version` prints `bugslyce 1.1.0`.
 - [x] Run `bugslyce doctor`.
 - [x] Confirm bundled wordlists are present and non-empty:
       `lab-root-tiny.txt`, `standard-auth-core.txt`,
@@ -126,6 +132,37 @@ Release blockers include:
 
 ## Current Status
 
+### 1.1.0 release preparation
+
+- Base commit: `ed1f6f7becf0014ba41d64d2f4dc1799e4353724`.
+- Current version aligned to `1.1.0` in package metadata, runtime metadata and
+  release-facing documentation.
+- User-facing scope: self-contained offline HTML evidence reports and bounded
+  presentation improvements over existing deterministic evidence and review
+  models.
+- No reconnaissance, collection, ranking, evidence or vulnerability semantics
+  changed for this release preparation.
+- Focused documentation/release tests: `42 passed`; affected release,
+  packaging, CLI, HTML and report tests: `311 passed`; full suite: `2,015 passed`.
+- Local build completed: `bugslyce-1.1.0-py3-none-any.whl` (438,399 bytes;
+  133 members; SHA-256
+  `d0c53f369b8305f4c4448b234bf4d8cd606e6096dd7481059394ad4bfdf76b5d`)
+  and `bugslyce-1.1.0.tar.gz` (659,345 bytes; 241 members; SHA-256
+  `fe2116dea824fd720669a05b2c5e8d3e622e4c384183700156f2ed43beb191ff`).
+- The fresh source-distribution rebuild produced a 133-member wheel (SHA-256
+  `4269347ca7d92ada28c189b6aba6bfaae7b9a77ad7cdc45a8b69a85848d6fc4e`).
+- Wheel and source-distribution metadata report `1.1.0`; wheel RECORD,
+  path-safety, duplicate-member and distribution-hygiene checks passed.
+- Temporary-venv installation from the local wheel with `--no-index --no-deps`
+  passed outside the checkout. CLI version/help, HTML-report help, imports,
+  package metadata and all four bundled wordlists passed.
+- Offline RecruitX HTML acceptance passed with unchanged input hashes, seven
+  existing Operator Summary items, complete structured Deep inputs, route
+  counts `47` assessed / `2` external / `0` unclassified and no network
+  requests.
+- Approved HTML-report screenshot SHA-256:
+  `6ca7366d4faaedba817248727107693e12b3917555664bf86594022f1673957c`.
+
 ### Historical rc2 release-candidate acceptance
 
 - rc2 baseline commit: `113494f3c727c4543ca87e9be37b64c8c1858dbe`.
@@ -161,7 +198,7 @@ Release blockers include:
 - Completed Deep no-op and hash stability passed.
 - Evidence ZIP content review passed.
 
-### Final technical acceptance
+### Historical 1.0.0 final technical acceptance
 
 - Accepted source commit: `32bfd20f78cda81e22241bb73836038defac0504`.
 - Committed-build evidence bundle SHA-256:
@@ -196,12 +233,12 @@ Release blockers include:
   `deep-bounded-core.txt` (1,753).
 - Technical GO: GO to tag and publish.
 
-### Still pending before public release
+### 1.1.0 actions still pending
 
-- Review and commit this final release-record amendment.
-- Push and verify the final release-record commit on Kali.
-- Fresh source distribution from the final release-record commit.
-- Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.
-- Annotated `v1.0.0` tag.
+- Review and commit the `1.1.0` release-preparation changes.
+- Push and verify the committed state.
+- Build final release artefacts from the committed release state.
+- Complete any required cross-platform acceptance of the exact final wheel.
+- Annotated `v1.1.0` tag.
 - GitHub release.
 - PyPI publication.

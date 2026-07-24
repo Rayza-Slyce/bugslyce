@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
@@ -54,10 +55,13 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     )
     compact = " ".join(readme.split())
 
-    assert "Current package version: `1.0.0`" in readme
-    assert "BugSlyce v1.0.0 is the current stable release" in compact
+    assert "Current package version: `1.1.0`" in readme
+    assert "BugSlyce v1.1.0 is prepared for review and release" not in compact
+    assert "PyPI may continue to provide v1.0.0 until v1.1.0 is published" not in compact
+    assert "BugSlyce v1.1.0 has already been published" not in compact
     assert "has not yet been tagged or published" not in compact
     assert "pipx install bugslyce" in readme
+    assert "pipx upgrade bugslyce" in readme
     assert "bugslyce-interactive-menu.png" in readme
     assert "validated on Kali Linux and Linux Mint" in readme
     assert "not currently part of the directly validated host set" in compact
@@ -66,6 +70,32 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     assert "Deep Recon | `deep-bounded`" in readme
     assert "interactive resume preview is read-only" in readme.lower()
     assert "not proof that a vulnerability exists" in compact
+
+
+def test_readme_documents_offline_html_evidence_report_and_approved_screenshot() -> None:
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    compact = " ".join(readme.split())
+    screenshot = root / "docs" / "images" / "bugslyce-html-evidence-report.png"
+
+    assert "bugslyce report html" in readme
+    assert "--input-dir ./path/to/extracted-evidence-pack" in readme
+    assert "--output ./bugslyce-evidence-report.html" in readme
+    assert "existing local evidence-pack directory" in compact
+    assert "makes no network requests" in compact
+    assert "performs no additional reconnaissance or testing" in compact
+    assert "review leads are observations, not confirmed vulnerabilities" in compact.lower()
+    assert screenshot.is_file()
+    assert screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert (
+        "https://raw.githubusercontent.com/Rayza-Slyce/bugslyce/main/"
+        "docs/images/bugslyce-html-evidence-report.png"
+    ) in readme
+    assert "authorised lab example" in readme.lower()
+    assert "contains authorised lab-scoped evidence" in compact.lower()
+    assert sha256(screenshot.read_bytes()).hexdigest() == (
+        "6ca7366d4faaedba817248727107693e12b3917555664bf86594022f1673957c"
+    )
 
 
 def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:

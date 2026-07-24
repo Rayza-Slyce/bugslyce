@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+from hashlib import sha256
 import re
 from pathlib import Path
 import tomllib
@@ -26,7 +27,7 @@ from bugslyce.recon.modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FINAL_VERSION = "1.0.0"
+FINAL_VERSION = "1.1.0"
 RC2_VERSION = "1.0.0rc2"
 PREVIOUS_RC_VERSION = "1.0.0rc1"
 RC2_WHEEL_FILENAME = "bugslyce-1.0.0rc2-py3-none-any.whl"
@@ -37,7 +38,7 @@ RC2_WORDLIST_FILES = (
     "standard-bounded-core.txt",
     "deep-bounded-core.txt",
 )
-FINAL_WHEEL_FILENAME = "bugslyce-1.0.0-py3-none-any.whl"
+V1_WHEEL_FILENAME = "bugslyce-1.0.0-py3-none-any.whl"
 FINAL_WHEEL_SHA256 = "e29346eda47bd37d166612bee775e231a48b79749696a1a66aaeb7e499860f63"
 FINAL_BUILD_EVIDENCE_SHA256 = "7ef3d9ffd6385b70adf33a31935e3248f8ba70a3cbd917a62c5787256f7668c2"
 FINAL_MINT_ACCEPTANCE_SHA256 = "40f487df5eb676b49e8509485be99e289067a0ae0bbb222d72bd60b822f68820"
@@ -77,21 +78,31 @@ def test_cli_version_prints_final_v1(capsys) -> None:
     assert captured.out.strip() == f"bugslyce {FINAL_VERSION}"
 
 
-def test_readme_states_current_stable_release_and_install_path() -> None:
+def test_readme_states_current_release_preparation_and_install_path() -> None:
     readme = _read("README.md")
     compact = " ".join(readme.split())
 
     assert f"Current package version: `{FINAL_VERSION}`" in readme
-    assert "BugSlyce v1.0.0 is the current stable release" in compact
-    assert "has not yet been tagged or published" not in compact
+    assert "BugSlyce v1.1.0 is prepared for review and release" not in compact
+    assert "PyPI may continue to provide v1.0.0 until v1.1.0 is published" not in compact
+    assert "BugSlyce v1.1.0 has already been published" not in compact
     assert "pipx install bugslyce" in readme
+    assert "pipx upgrade bugslyce" in readme
     assert "bugslyce-interactive-menu.png" in readme
+    assert "bugslyce-html-evidence-report.png" in readme
 
 
 def test_release_notes_have_current_final_v1_section() -> None:
     notes = _read("docs/RELEASE_NOTES.md")
+    compact = " ".join(notes.split())
 
     assert f"## {FINAL_VERSION}" in notes
+    assert (
+        "BugSlyce `1.1.0` adds a self-contained offline HTML evidence report "
+        "and improves presentation of existing deterministic evidence and review models."
+    ) in compact
+    assert "prepared for review and release" not in compact
+    assert "not been tagged or published" not in compact
     assert "Manual Setup Only" in notes
     assert "same-origin" in notes
     assert "Known Limitations" in notes
@@ -147,11 +158,12 @@ def test_final_release_documents_preserve_historical_rc2_evidence() -> None:
     assert "Kali temporary pipx acceptance: completed" in checklist
 
 
-def test_final_release_checklist_keeps_publication_pending() -> None:
+def test_release_checklist_preserves_v1_acceptance_and_keeps_v11_publication_pending() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md")
+    compact_checklist = " ".join(checklist.split())
     compact_notes = " ".join(_read("docs/RELEASE_NOTES.md").split())
 
-    assert "Final technical acceptance" in checklist
+    assert "Historical 1.0.0 final technical acceptance" in checklist
     for completed in (
         "Accepted source commit: `32bfd20f78cda81e22241bb73836038defac0504`.",
         "Full suite: `1,983 passed`",
@@ -159,19 +171,19 @@ def test_final_release_checklist_keeps_publication_pending() -> None:
     ):
         assert completed in checklist
     for pending in (
-        "Review and commit this final release-record amendment.",
-        "Push and verify the final release-record commit on Kali.",
-        "Fresh source distribution from the final release-record commit.",
-        "Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.",
-        "Annotated `v1.0.0` tag.",
+        "Review and commit the `1.1.0` release-preparation changes.",
+        "Push and verify the committed state.",
+        "Build final release artefacts from the committed release state.",
+        "Complete any required cross-platform acceptance of the exact final wheel.",
+        "Annotated `v1.1.0` tag.",
         "GitHub release.",
         "PyPI publication.",
     ):
         assert pending in checklist
-    assert "final v1 publication remains pending" in checklist
+    assert "tagging and publication remain pending" in compact_checklist
     for value in (
         "32bfd20f78cda81e22241bb73836038defac0504",
-        FINAL_WHEEL_FILENAME,
+        V1_WHEEL_FILENAME,
         FINAL_WHEEL_SHA256,
         FINAL_BUILD_EVIDENCE_SHA256,
         FINAL_MINT_ACCEPTANCE_SHA256,
@@ -192,8 +204,11 @@ def test_final_release_checklist_keeps_publication_pending() -> None:
     assert "doctor exit `0`" in checklist
     assert "exact same wheel was accepted through isolated temporary pipx acceptance on Mint and Kali" in compact_notes
     assert "approved to tag and publish" in compact_notes
-    assert "Final `v1.0.0` tag has been created" not in checklist
+    assert "Final `v1.1.0` tag has been created" not in checklist
     assert "PyPI publication completed" not in checklist
+    assert "Focused documentation/release tests: `42 passed`" in compact_checklist
+    assert "affected release, packaging, CLI, HTML and report tests: `311 passed`" in compact_checklist
+    assert "full suite: `2,015 passed`" in compact_checklist
 
 
 def test_final_package_filename_contract() -> None:
@@ -201,9 +216,9 @@ def test_final_package_filename_contract() -> None:
 
     assert distribution_name == "bugslyce"
     assert f"{distribution_name}-{FINAL_VERSION}-py3-none-any.whl" == (
-        "bugslyce-1.0.0-py3-none-any.whl"
+        "bugslyce-1.1.0-py3-none-any.whl"
     )
-    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.0.0.tar.gz"
+    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.1.0.tar.gz"
 
 
 def test_release_documents_distinguish_current_final_state_and_history() -> None:
@@ -212,14 +227,14 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
 
     assert "Historical rc1 acceptance" in checklist
     assert "Historical rc2 release-candidate acceptance" in checklist
-    assert "Final technical acceptance" in checklist
-    assert "Still pending before public release" in checklist
+    assert "Historical 1.0.0 final technical acceptance" in checklist
+    assert "1.1.0 actions still pending" in checklist
     for pending in (
-        "Review and commit this final release-record amendment.",
-        "Push and verify the final release-record commit on Kali.",
-        "Fresh source distribution from the final release-record commit.",
-        "Confirm the fixed-epoch checkout build reproduces the exact accepted wheel SHA-256.",
-        "Annotated `v1.0.0` tag.",
+        "Review and commit the `1.1.0` release-preparation changes.",
+        "Push and verify the committed state.",
+        "Build final release artefacts from the committed release state.",
+        "Complete any required cross-platform acceptance of the exact final wheel.",
+        "Annotated `v1.1.0` tag.",
         "GitHub release.",
         "PyPI publication.",
     ):
@@ -256,6 +271,35 @@ def test_release_documents_preserve_rc1_wordlist_history() -> None:
     assert "standard-bounded-core` gates Standard and Deep Recon" in rc1_notes
     assert "deep-bounded-core.txt" in checklist
     assert "deep-bounded-core.txt" in acceptance
+
+
+def test_release_checklist_records_the_approved_lab_screenshot_exception() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md")
+    compact = " ".join(checklist.split())
+    screenshot = ROOT / "docs" / "images" / "bugslyce-html-evidence-report.png"
+
+    assert "No generated target evidence is tracked." not in checklist
+    for expected in (
+        "No raw or private evidence pack is tracked.",
+        "No generated HTML evidence report is tracked.",
+        "No unapproved target artefact is tracked.",
+        "No private credentials, secrets or private engagement material is tracked.",
+        "docs/images/bugslyce-html-evidence-report.png",
+        "approved authorised-lab screenshot",
+        "6ca7366d4faaedba817248727107693e12b3917555664bf86594022f1673957c",
+    ):
+        assert expected in compact
+    assert sha256(screenshot.read_bytes()).hexdigest() in compact
+    release_files = "\n".join(
+        _read(path)
+        for path in (
+            "docs/RELEASE_NOTES.md",
+            "docs/RELEASE_CHECKLIST.md",
+            "docs/RELEASE_ACCEPTANCE.md",
+        )
+    )
+    assert "bugslyce-v11-recruitx-baseline" not in release_files
+    assert "recruitx-1.1.0.html" not in release_files
 
 
 def test_completed_public_acceptance_record_preserves_privacy() -> None:

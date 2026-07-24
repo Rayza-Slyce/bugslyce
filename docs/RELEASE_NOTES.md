@@ -1,5 +1,28 @@
 # Release Notes
 
+## 1.1.0
+
+BugSlyce `1.1.0` adds a self-contained offline HTML evidence report and
+improves presentation of existing deterministic evidence and review models.
+
+- Added self-contained HTML evidence reports generated locally from existing
+  extracted evidence-pack directories without network requests.
+- Preserved the complete existing Operator Summary assembled from structured
+  Deep artefacts, with explicit partial-input notices for older or incomplete
+  packs.
+- Presented existing structured Deep interpretations as searchable records,
+  without adding collection, ranking or vulnerability conclusions.
+- Consolidated exact matching URL strings for presentation while preserving
+  every underlying status, redirect, source and evidence ID.
+- Separated assessed-origin URLs, external references and unclassified values
+  using the existing strict HTTP-origin contract.
+- Added expandable evidence collections, concise artefact paths and
+  human-readable display labels while retaining original structured values.
+
+HTML report generation remains local-first and presentation-only. Review leads
+are observations requiring operator validation, and BugSlyce remains outside
+exploitation and active vulnerability testing.
+
 ## 1.0.0
 
 BugSlyce `1.0.0` technical acceptance is complete. The exact same wheel was

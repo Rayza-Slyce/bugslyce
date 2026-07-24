@@ -10,8 +10,7 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-Current package version: `1.0.0`. BugSlyce v1.0.0 is the current stable
-release.
+Current package version: `1.1.0`.
 
 ## Authorised Use
 
@@ -63,6 +62,12 @@ run the doctor before recon:
 
 ```bash
 bugslyce doctor
+```
+
+Upgrade an existing pipx installation with:
+
+```bash
+pipx upgrade bugslyce
 ```
 
 ## Source Install
@@ -128,6 +133,31 @@ The evidence pack may contain target identifiers, service banners, headers,
 HTML and discovered paths. Store and share it carefully. It is not proof that a
 vulnerability exists.
 
+## Offline HTML Evidence Report
+
+Convert an existing local extracted evidence-pack directory into one
+self-contained HTML report for offline review:
+
+```bash
+bugslyce report html \
+  --input-dir ./path/to/extracted-evidence-pack \
+  --output ./bugslyce-evidence-report.html
+```
+
+The input is an existing local evidence-pack directory, not a target. The
+command reads existing local collection artefacts, writes only the requested
+HTML output, makes no network requests and performs no additional
+reconnaissance or testing. The self-contained report opens in a normal browser
+and presents existing Operator Summary reasoning, Deep interpretations, route
+provenance, HTTP evidence, manual review leads, collection-confidence
+boundaries and searchable evidence records. Review leads are observations, not
+confirmed vulnerabilities.
+
+The screenshot below is from an authorised lab example and contains authorised
+lab-scoped evidence.
+
+![Self-contained BugSlyce HTML evidence report from an authorised lab example](https://raw.githubusercontent.com/Rayza-Slyce/bugslyce/main/docs/images/bugslyce-html-evidence-report.png)
+
 ## Resume Summary
 
 Completed Quick, Standard and Deep projects may be resumed as verified reuse.
@@ -151,7 +181,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.0.0`. The deterministic test suite mocks live
+The package version is `1.1.0`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash
