@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 from bugslyce.core.models import (
     Asset,
@@ -55,10 +56,63 @@ from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
     build_http_route_relationship_clusters,
 )
-from bugslyce.reports.operator_summary import OperatorSummary, build_operator_summary
+from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
+from bugslyce.reports.operator_summary import (
+    OperatorSummary,
+    build_deep_operator_summary_leads,
+    build_operator_summary,
+)
 
 
 _T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class PersistedDeepDisclosure:
+    """One existing Deep interpretation retained by orchestration metadata."""
+
+    category: str
+    title: str
+    urls: tuple[str, ...]
+    final_urls: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    observed_values: tuple[str, ...]
+    evidence_excerpt: tuple[str, ...]
+    source_body_sha256: str
+
+
+@dataclass(frozen=True)
+class HtmlRouteObservation:
+    """One unchanged endpoint or discovered-path observation."""
+
+    record_kind: str
+    path: str
+    status_code: int | None
+    redirect_location: str | None
+    query_params: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    source: str
+
+
+@dataclass(frozen=True)
+class HtmlRouteGroup:
+    """Presentation-only grouping for one exact URL string."""
+
+    url: str
+    origin_group: str
+    observations: tuple[HtmlRouteObservation, ...]
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    evidence_id
+                    for observation in self.observations
+                    for evidence_id in observation.evidence_ids
+                }
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -76,6 +130,12 @@ class HtmlReportModel:
     source_collection: DeepSourceRouteCollectionResult
     successful_content: tuple[SuccessfulDeepContentReview, ...]
     relationship_clusters: tuple[HttpRouteRelationshipCluster, ...]
+    deep_disclosures: tuple[PersistedDeepDisclosure, ...]
+    deep_summary_complete: bool
+    operator_summary_fallback: str | None
+    missing_deep_summary_inputs: tuple[str, ...]
+    assessed_origins: tuple[HttpOrigin, ...]
+    route_groups: tuple[HtmlRouteGroup, ...]
     available_artefacts: tuple[str, ...]
 
 
@@ -102,6 +162,14 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     redirects = build_deep_redirect_auth_flow_review(fingerprints)
     similarities = build_deep_response_similarity_review(fingerprints, redirects)
     successful_content = build_successful_deep_content_reviews(source_collection)
+    deep_disclosures, deep_mode_enabled = _load_deep_disclosures(root)
+    deep_summary_complete, summary_fallback, missing_deep_inputs = (
+        _deep_summary_input_status(root, project_state, deep_mode_enabled)
+    )
+    deep_summary_leads = build_deep_operator_summary_leads(
+        deep_disclosures,
+        successful_content,
+    )
     relationships = build_http_route_relationship_clusters(
         project_state,
         source_collection=source_collection,
@@ -115,7 +183,11 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     return HtmlReportModel(
         project_state=project_state,
         candidates=tuple(candidates),
-        operator_summary=build_operator_summary(project_state, candidates),
+        operator_summary=build_operator_summary(
+            project_state,
+            candidates,
+            additional_leads=deep_summary_leads,
+        ),
         confidence_notices=notices,
         http_fingerprints=fingerprints,
         redirect_review=redirects,
@@ -124,12 +196,188 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         source_collection=source_collection,
         successful_content=successful_content,
         relationship_clusters=relationships,
+        deep_disclosures=deep_disclosures,
+        deep_summary_complete=deep_summary_complete,
+        operator_summary_fallback=summary_fallback,
+        missing_deep_summary_inputs=missing_deep_inputs,
+        assessed_origins=_assessed_origins(project_state),
+        route_groups=_route_groups(project_state),
         available_artefacts=tuple(
             path.name
             for path in sorted(root.iterdir(), key=lambda value: value.name)
             if path.is_file() and not path.is_symlink()
         ),
     )
+
+
+def _load_deep_disclosures(
+    root: Path,
+) -> tuple[tuple[PersistedDeepDisclosure, ...], bool]:
+    path = root / "deep_recon_orchestration.json"
+    if not path.exists():
+        return (), False
+    payload = _read_json_object(root, path.name, required=True)
+    if payload.get("schema_version") != "1.0":
+        raise ValueError("deep_recon_orchestration.json has an unsupported schema_version")
+    raw_disclosures = payload.get("structured_body_disclosures")
+    if not isinstance(raw_disclosures, list):
+        raise ValueError(
+            "deep_recon_orchestration.json field 'structured_body_disclosures' must be a list"
+        )
+    deep_mode_enabled = payload.get("deep_mode_enabled") is True
+    disclosures = tuple(
+        _persisted_deep_disclosure(item, index)
+        for index, item in enumerate(raw_disclosures)
+    )
+    return disclosures, deep_mode_enabled
+
+
+def _deep_summary_input_status(
+    root: Path,
+    project_state: ProjectState,
+    deep_mode_enabled: bool,
+) -> tuple[bool, str | None, tuple[str, ...]]:
+    """Describe whether persisted Deep inputs can reproduce the production summary."""
+
+    profile = (
+        project_state.recon_manifest.profile
+        if project_state.recon_manifest is not None
+        else None
+    )
+    pipeline_profile = _deep_pipeline_profile(root)
+    orchestration = root / "deep_recon_orchestration.json"
+    source_collection = root / DEEP_SOURCE_ROUTE_COLLECTION_JSON
+    applicable = (
+        profile == "deep-bounded"
+        or pipeline_profile == "deep-bounded"
+        or deep_mode_enabled
+        or source_collection.is_file()
+    )
+    if not applicable:
+        return False, None, ()
+    missing = tuple(
+        name
+        for name, path in (
+            ("deep_recon_orchestration.json", orchestration),
+            (DEEP_SOURCE_ROUTE_COLLECTION_JSON, source_collection),
+        )
+        if not path.is_file() or path.is_symlink()
+    )
+    if not missing:
+        return True, None, ()
+    return (
+        False,
+        "Operator summary reconstructed from available structured inputs. "
+        "Some Deep summary inputs were unavailable, so this view may be incomplete.",
+        missing,
+    )
+
+
+def _deep_pipeline_profile(root: Path) -> str | None:
+    """Read the existing local run profile when status metadata is available."""
+
+    path = root / "recon_status.json"
+    if not path.exists():
+        return None
+    payload = _read_json_object(root, path.name, required=False)
+    latest = payload.get("latest_execution")
+    if not isinstance(latest, dict):
+        return None
+    profile = latest.get("pipeline_profile")
+    return profile if isinstance(profile, str) else None
+
+
+def _persisted_deep_disclosure(value: object, index: int) -> PersistedDeepDisclosure:
+    label = f"deep_recon_orchestration.structured_body_disclosures[{index}]"
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    return PersistedDeepDisclosure(
+        category=_required_string(value, "category", label),
+        title=_required_string(value, "title", label),
+        urls=tuple(_string_list(value, "source_urls", label)),
+        final_urls=tuple(_string_list(value, "final_response_urls", label)),
+        evidence_ids=tuple(_string_list(value, "evidence_ids", label)),
+        observed_values=tuple(_string_list(value, "observed_values", label)),
+        evidence_excerpt=tuple(_string_list(value, "evidence_excerpt", label)),
+        source_body_sha256=_required_string(value, "source_body_sha256", label),
+    )
+
+
+def _assessed_origins(project_state: ProjectState) -> tuple[HttpOrigin, ...]:
+    return tuple(
+        sorted(
+            {
+                origin
+                for service in project_state.http_services
+                if (origin := http_origin_from_url(service.url)) is not None
+            }
+        )
+    )
+
+
+def _route_groups(project_state: ProjectState) -> tuple[HtmlRouteGroup, ...]:
+    observations: dict[str, list[HtmlRouteObservation]] = {}
+    for endpoint in project_state.endpoints:
+        observations.setdefault(endpoint.url, []).append(
+            HtmlRouteObservation(
+                record_kind="endpoint",
+                path=endpoint.path,
+                status_code=None,
+                redirect_location=None,
+                query_params=tuple(endpoint.query_params),
+                evidence_ids=tuple(endpoint.evidence_ids),
+                source="project_state.json",
+            )
+        )
+    for route in project_state.discovered_paths:
+        observations.setdefault(route.url, []).append(
+            HtmlRouteObservation(
+                record_kind="discovered_path",
+                path=_url_path(route.url),
+                status_code=route.status_code,
+                redirect_location=route.redirect_location,
+                query_params=(),
+                evidence_ids=tuple(route.evidence_ids),
+                source=route.source,
+            )
+        )
+    assessed = set(_assessed_origins(project_state))
+    groups = []
+    for url in sorted(observations):
+        origin = http_origin_from_url(url)
+        origin_group = (
+            "assessed"
+            if origin in assessed
+            else "external"
+            if assessed and origin is not None
+            else "relative"
+        )
+        groups.append(
+            HtmlRouteGroup(
+                url=url,
+                origin_group=origin_group,
+                observations=tuple(
+                    sorted(
+                        observations[url],
+                        key=lambda item: (
+                            item.record_kind,
+                            item.status_code if item.status_code is not None else -1,
+                            item.redirect_location or "",
+                            item.source,
+                            item.evidence_ids,
+                        ),
+                    )
+                ),
+            )
+        )
+    return tuple(groups)
+
+
+def _url_path(url: str) -> str:
+    try:
+        return urlsplit(url).path or "/"
+    except ValueError:
+        return ""
 
 
 def _project_state_from_payload(

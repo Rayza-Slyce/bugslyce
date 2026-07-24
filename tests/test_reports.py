@@ -20,7 +20,11 @@ from bugslyce.reports.markdown import (
     render_markdown_report,
     write_project_outputs,
 )
-from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.reports.operator_summary import (
+    OperatorSummaryLead,
+    build_deep_operator_summary_leads,
+    build_operator_summary,
+)
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     render_successful_deep_content_runbook,
@@ -1175,6 +1179,30 @@ def test_many_successful_deep_responses_cannot_consume_multiple_summary_slots(
         for lead in summary.review_first
     ) == 1
     assert all(lead in summary.review_first for lead in unrelated)
+
+
+def test_successful_deep_content_summary_uses_singular_and_plural_grammar() -> None:
+    review = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url="https://portal.example.test/retained",
+        requested_urls=("https://portal.example.test/retained",),
+        status_code=200,
+        content_type="text/plain",
+        body_bytes=8,
+        body_sha256="a" * 64,
+        body_preview="retained",
+        evidence_ids=("EVID-DEEP-0001",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+
+    singular = build_deep_operator_summary_leads((), (review,))[0].why
+    plural = build_deep_operator_summary_leads(
+        (),
+        (review, replace(review, review_id="DEEP-CONTENT-0002")),
+    )[0].why
+
+    assert "1 successfully retained Deep response is available" in singular
+    assert "2 successfully retained Deep responses are available" in plural
 
 
 def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:

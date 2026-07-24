@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from base64 import b64encode
+from dataclasses import dataclass
 from hashlib import sha256
 from html import escape
 import json
@@ -10,7 +11,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
-from bugslyce.reports.html_model import HtmlReportModel, build_html_report_model
+from bugslyce.reports.html_model import (
+    HtmlReportModel,
+    HtmlRouteGroup,
+    build_html_report_model,
+)
 
 
 _SOURCE_ARTEFACT_TYPES = frozenset(
@@ -35,6 +40,24 @@ _SUCCESSFUL_DEEP_CONTENT_CATEGORY = "successful_deep_content"
 _HTTP_RELATIONSHIP_CATEGORY = "http_route_relationship"
 _REDIRECT_CATEGORY = "redirect_auth_flow"
 _FORM_PARAMETER_CATEGORY = "form_or_parameter"
+_DEEP_INTERPRETATION_CATEGORY = "deep_interpretation"
+_ROBOTS_CATEGORY = "robots"
+_ROUTE_CATEGORY = "route"
+_ACRONYMS = {
+    "api": "API",
+    "html": "HTML",
+    "http": "HTTP",
+    "json": "JSON",
+    "ssh": "SSH",
+    "tcp": "TCP",
+    "url": "URL",
+}
+_DISPLAY_WORDS = {"artifact": "artefact"}
+
+
+@dataclass(frozen=True)
+class _HtmlValue:
+    value: str
 
 
 def render_html_report(model: HtmlReportModel) -> str:
@@ -125,6 +148,15 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
         ("routes", "Routes and provenance", _routes_section(model)),
         ("http-evidence", "HTTP evidence", _http_section(model)),
     ]
+    if model.deep_disclosures:
+        sections.insert(
+            2,
+            (
+                "deep-interpretations",
+                "Deep interpretations",
+                _deep_interpretation_section(model),
+            ),
+        )
     if (
         model.project_state.warnings
         or model.metadata_collection.skipped
@@ -154,6 +186,13 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
     )
     if source_items:
         sections.append(("source-evidence", "Source evidence", _source_section(source_items)))
+    robots_items = tuple(
+        item
+        for item in model.project_state.http_artifacts
+        if item.artifact_type in {"robots", "robots_value"}
+    )
+    if robots_items:
+        sections.append(("robots", "Robots evidence", _robots_section(robots_items)))
     sections.extend(
         [
             ("evidence", "Evidence records", _evidence_section(model)),
@@ -174,13 +213,16 @@ def _overview_section(model: HtmlReportModel) -> str:
         ("Engagement", state.engagement_context),
         ("Assets", str(len(state.assets))),
         (
-            "Unique route URLs",
-            str(
-                len(
-                    {item.url for item in state.endpoints}
-                    | {item.url for item in state.discovered_paths}
-                )
-            ),
+            "Assessed-origin URLs",
+            str(sum(group.origin_group == "assessed" for group in model.route_groups)),
+        ),
+        (
+            "External references",
+            str(sum(group.origin_group == "external" for group in model.route_groups)),
+        ),
+        (
+            "Relative / unclassified",
+            str(sum(group.origin_group == "relative" for group in model.route_groups)),
         ),
         ("Evidence records", str(len(state.evidence))),
         ("Review leads", str(len(model.candidates))),
@@ -206,10 +248,10 @@ def _operator_summary_section(model: HtmlReportModel) -> str:
                 lead.title,
                 (
                     ("Why", lead.why),
-                    ("Endpoint(s)", _joined(lead.endpoints)),
-                    ("Evidence", _joined(lead.evidence_ids)),
+                    ("Endpoint(s)", _compact_list(lead.endpoints, "endpoints")),
+                    ("Evidence", _compact_list(lead.evidence_ids, "evidence IDs")),
                     ("Next", lead.next_action),
-                    ("Signal", lead.signal),
+                    ("Signal", _human_label(lead.signal)),
                 ),
                 category=_OPERATOR_SUMMARY_CATEGORY,
             )
@@ -217,22 +259,71 @@ def _operator_summary_section(model: HtmlReportModel) -> str:
         )
     else:
         review = _empty("No evidence-backed leads met the existing summary threshold.")
+    fallback = ""
+    if model.operator_summary_fallback:
+        fallback = (
+            f'<p class="fallback searchable"><strong>{_h(model.operator_summary_fallback)}</strong></p>'
+            + (
+                '<details class="fallback-details"><summary>Unavailable Deep summary inputs</summary><ul>'
+                + "".join(
+                    f"<li><code>{_h(name)}</code></li>"
+                    for name in model.missing_deep_summary_inputs
+                )
+                + "</ul></details>"
+                if model.missing_deep_summary_inputs
+                else ""
+            )
+        )
+    elif model.deep_summary_complete:
+        fallback = (
+            '<p class="model-status searchable">Operator summary reconstructed from '
+            "complete structured Deep inputs.</p>"
+        )
     low_signal = "".join(
         f'<li class="searchable"><strong>{_h(item.title)}</strong>: {_h(item.reason)} '
-        f'<span class="provenance">Evidence: {_h(_joined(item.evidence_ids))}</span></li>'
+        f'<div class="provenance">Endpoints: {_render_value(_compact_list(item.endpoints, "endpoints"))}</div>'
+        f'<div class="provenance">Evidence: {_render_value(_compact_list(item.evidence_ids, "evidence IDs"))}</div></li>'
         for item in summary.low_signal
     ) or "<li>No structured low-signal items were identified.</li>"
     coverage = "".join(f'<li class="searchable">{_h(item)}</li>' for item in summary.coverage)
     return _section(
         "operator-summary",
         "Operator summary",
-        '<h3>Review first</h3>' + review
+        fallback + '<h3>Review first</h3>' + review
         + '<details><summary>Low-signal / avoid rabbit holes</summary><ul>'
         + low_signal
         + "</ul></details>"
         + '<details><summary>Current coverage</summary><ul>'
         + coverage
         + "</ul></details>",
+    )
+
+
+def _deep_interpretation_section(model: HtmlReportModel) -> str:
+    return _section(
+        "deep-interpretations",
+        "Existing structured Deep interpretations",
+        '<p class="section-note">These are existing deterministic interpretations retained by Deep orchestration. Disclosed route values were not requested by this report.</p>'
+        + "".join(
+            _detail_card(
+                disclosure.title,
+                (
+                    ("Category", _human_label(disclosure.category)),
+                    ("Source URL(s)", _compact_list(disclosure.urls, "URLs")),
+                    ("Final response URL(s)", _compact_list(disclosure.final_urls, "URLs")),
+                    ("Observed values", _compact_list(disclosure.observed_values, "values")),
+                    ("Bounded excerpt", _compact_list(disclosure.evidence_excerpt, "lines")),
+                    ("Evidence", _compact_list(disclosure.evidence_ids, "evidence IDs")),
+                    ("Body SHA-256", disclosure.source_body_sha256),
+                    (
+                        "Collection boundary",
+                        "No request was generated from these disclosed values.",
+                    ),
+                ),
+                category=_DEEP_INTERPRETATION_CATEGORY,
+            )
+            for disclosure in model.deep_disclosures
+        ),
     )
 
 
@@ -247,13 +338,13 @@ def _confidence_section(model: HtmlReportModel) -> str:
                 notice.title,
                 (
                     ("Notice ID", notice.notice_id),
-                    ("Category", notice.category),
+                    ("Category", _human_label(notice.category)),
                     ("Direct fact", notice.direct_fact),
                     ("What remains unknown", notice.operator_implication),
-                    ("Stage or tool", notice.stage_or_tool),
+                    ("Stage or tool", _human_label(notice.stage_or_tool)),
                     ("Counts", _counts(notice.counts)),
-                    ("Evidence", _joined(notice.evidence_ids)),
-                    ("Retained artefact", _joined(notice.artefact_references)),
+                    ("Evidence", _compact_list(notice.evidence_ids, "evidence IDs")),
+                    ("Retained artefact", _path_list(notice.artefact_references)),
                 ),
                 category=notice.category,
             )
@@ -276,12 +367,12 @@ def _candidate_section(model: HtmlReportModel) -> str:
                 candidate.title,
                 (
                     ("Lead ID", candidate.id),
-                    ("Type", candidate.candidate_type),
-                    ("Manual attention", candidate.priority),
+                    ("Type", _human_label(candidate.candidate_type)),
+                    ("Manual attention", _human_label(candidate.priority)),
                     ("Existing rationale", candidate.rationale),
-                    ("Assets", _joined(candidate.affected_assets)),
-                    ("Endpoints", _joined(candidate.affected_endpoints)),
-                    ("Evidence", _joined(candidate.evidence_ids)),
+                    ("Assets", _compact_list(candidate.affected_assets, "assets")),
+                    ("Endpoints", _compact_list(candidate.affected_endpoints, "endpoints")),
+                    ("Evidence", _compact_list(candidate.evidence_ids, "evidence IDs")),
                     ("Suggested manual validation", _joined(candidate.suggested_manual_validation)),
                 ),
                 category=candidate.candidate_type,
@@ -306,9 +397,9 @@ def _limitations_section(model: HtmlReportModel) -> str:
             (
                 "Deep metadata collection",
                 item.url,
-                item.reason,
-                item.source,
-                _joined(item.evidence_ids),
+                _human_label(item.reason),
+                _human_label(item.source),
+                _compact_list(item.evidence_ids, "evidence IDs"),
                 "deep_metadata_collection.json",
             ),
             category=_SKIPPED_COLLECTION_CATEGORY,
@@ -320,9 +411,9 @@ def _limitations_section(model: HtmlReportModel) -> str:
             (
                 "Deep source/route collection",
                 item.url,
-                item.reason,
-                item.source,
-                _joined(item.evidence_ids),
+                _human_label(item.reason),
+                _human_label(item.source),
+                _compact_list(item.evidence_ids, "evidence IDs"),
                 "deep_source_route_collection.json",
             ),
             category=_SKIPPED_COLLECTION_CATEGORY,
@@ -345,45 +436,92 @@ def _limitations_section(model: HtmlReportModel) -> str:
 
 
 def _routes_section(model: HtmlReportModel) -> str:
-    rows: list[str] = []
-    for endpoint in model.project_state.endpoints:
-        rows.append(
-            _row(
-                (
-                    endpoint.url,
-                    endpoint.path,
-                    "Not recorded",
-                    _joined(endpoint.query_params),
-                    _joined(endpoint.evidence_ids),
-                    "project_state.json",
-                ),
-                category=_ENDPOINT_CATEGORY,
-            )
-        )
-    for route in model.project_state.discovered_paths:
-        rows.append(
-            _row(
-                (
-                    route.url,
-                    _url_path(route.url),
-                    _status(route.status_code),
-                    route.redirect_location or "None recorded",
-                    _joined(route.evidence_ids),
-                    route.source,
-                ),
-                status=route.status_code,
-                category=_DISCOVERED_PATH_CATEGORY,
-            )
-        )
-    content = (
-        _table(
-            ("URL", "Path", "Status", "Parameters / redirect", "Evidence", "Source artefact"),
-            rows,
-        )
-        if rows
-        else _empty("No structured route records are available.")
+    labels = (
+        ("assessed", "Assessed-origin URLs"),
+        ("external", "External references"),
+        ("relative", "Relative or unclassified values"),
     )
+    content = ""
+    for group_id, label in labels:
+        groups = tuple(group for group in model.route_groups if group.origin_group == group_id)
+        if not groups:
+            continue
+        content += f"<h3>{_h(label)} <span class=\"count\">({len(groups)})</span></h3>"
+        content += "".join(_route_group_card(group) for group in groups)
+    if not content:
+        content = _empty("No structured route records are available.")
     return _section("routes", "Routes and provenance", content)
+
+
+def _route_group_card(group: HtmlRouteGroup) -> str:
+    statuses = tuple(
+        str(value)
+        for value in sorted(
+            {
+                item.status_code
+                for item in group.observations
+                if item.status_code is not None
+            }
+        )
+    )
+    redirects = tuple(
+        sorted(
+            {
+                item.redirect_location
+                for item in group.observations
+                if item.redirect_location
+            }
+        )
+    )
+    sources = tuple(sorted({item.source for item in group.observations if item.source}))
+    observation_rows = [
+        _row(
+            (
+                _human_label(item.record_kind),
+                item.path,
+                _status(item.status_code),
+                item.redirect_location or "None recorded",
+                _joined(item.query_params),
+                _compact_list(item.evidence_ids, "evidence IDs"),
+                _path_value(item.source),
+            ),
+            status=item.status_code,
+            category=item.record_kind,
+        )
+        for item in group.observations
+    ]
+    details = (
+        '<dl class="route-summary">'
+        f"<dt>Statuses</dt><dd>{_render_value(_compact_list(statuses, 'statuses'))}</dd>"
+        f"<dt>Redirects</dt><dd>{_render_value(_compact_list(redirects, 'redirects'))}</dd>"
+        f"<dt>Evidence</dt><dd>{_render_value(_compact_list(group.evidence_ids, 'evidence IDs'))}</dd>"
+        f"<dt>Sources</dt><dd>{_render_value(_path_list(sources))}</dd>"
+        "</dl>"
+        '<details class="observation-list"><summary>All underlying observations '
+        f"({len(group.observations)})</summary>"
+        + _table(
+            (
+                "Record kind",
+                "Path",
+                "Status",
+                "Redirect",
+                "Parameters",
+                "Evidence",
+                "Source artefact",
+            ),
+            observation_rows,
+        )
+        + "</details>"
+    )
+    route_statuses = " ".join(statuses)
+    route_categories = " ".join(
+        sorted({item.record_kind for item in group.observations})
+    )
+    return (
+        f'<details class="record searchable route-group" data-category="{_ROUTE_CATEGORY}" '
+        f'data-categories="{_a(route_categories)}" data-status="{_a(route_statuses)}">'
+        f'<summary class="route-url">{_h(group.url)}</summary>{details}</details>'
+    )
 
 
 def _http_section(model: HtmlReportModel) -> str:
@@ -397,7 +535,7 @@ def _http_section(model: HtmlReportModel) -> str:
                     service.title or "Not recorded",
                     _joined(service.technologies),
                     "Not recorded",
-                    _joined(service.evidence_ids),
+                    _compact_list(service.evidence_ids, "evidence IDs"),
                 ),
                 status=service.status_code,
                 category=_HTTP_SERVICE_CATEGORY,
@@ -420,8 +558,8 @@ def _http_section(model: HtmlReportModel) -> str:
                     str(item.status_code),
                     item.title_observed_in_bounded_preview or "Not observed",
                     fingerprint,
-                    item.collection_section,
-                    _joined(item.evidence_ids),
+                    _human_label(item.collection_section),
+                    _compact_list(item.evidence_ids, "evidence IDs"),
                 ),
                 status=item.status_code,
                 category=_HTTP_FINGERPRINT_CATEGORY,
@@ -441,8 +579,8 @@ def _http_section(model: HtmlReportModel) -> str:
                     ("Response", f"HTTP {review.status_code}; {review.body_bytes} bytes"),
                     ("Content type", review.content_type or "Not recorded"),
                     ("Bounded preview", review.body_preview),
-                    ("Evidence", _joined(review.evidence_ids)),
-                    ("Retained artefact", _joined(review.artefact_references)),
+                    ("Evidence", _compact_list(review.evidence_ids, "evidence IDs")),
+                    ("Retained artefact", _path_list(review.artefact_references)),
                 ),
                 status=review.status_code,
                 category=_SUCCESSFUL_DEEP_CONTENT_CATEGORY,
@@ -465,8 +603,8 @@ def _relationship_section(model: HtmlReportModel) -> str:
                     ("Existing summary", cluster.summary),
                     ("Routes", _joined(cluster.route_nodes)),
                     ("Manual review order", _joined(cluster.manual_review_order)),
-                    ("Evidence", _joined(cluster.evidence_ids)),
-                    ("Retained artefacts", _joined(cluster.artefact_references)),
+                    ("Evidence", _compact_list(cluster.evidence_ids, "evidence IDs")),
+                    ("Retained artefacts", _path_list(cluster.artefact_references)),
                     (
                         "Edges",
                         _joined(
@@ -493,10 +631,10 @@ def _redirect_section(model: HtmlReportModel) -> str:
                 item.safe_source_url,
                 str(item.redirect_status_code),
                 item.safe_resolved_target_url or "Not recorded",
-                item.origin_relationship,
-                item.auth_path_transition,
+                _human_label(item.origin_relationship),
+                _human_label(item.auth_path_transition),
                 item.interpretation_note,
-                _joined(item.evidence_ids),
+                _compact_list(item.evidence_ids, "evidence IDs"),
             ),
             status=item.redirect_status_code,
             category=_REDIRECT_CATEGORY,
@@ -524,12 +662,12 @@ def _similarity_section(model: HtmlReportModel) -> str:
                 group.title,
                 (
                     ("Group ID", group.group_id),
-                    ("Category", group.category),
+                    ("Category", _human_label(group.category)),
                     ("Reason", group.reason),
                     ("URLs", _joined(group.requested_urls)),
                     ("Statuses", _joined(tuple(str(value) for value in group.status_codes))),
                     ("Existing interpretation", group.interpretation),
-                    ("Evidence", _joined(group.evidence_ids)),
+                    ("Evidence", _compact_list(group.evidence_ids, "evidence IDs")),
                 ),
                 category=group.category,
             )
@@ -538,7 +676,7 @@ def _similarity_section(model: HtmlReportModel) -> str:
     )
 
 
-def _forms_section(rows: tuple[tuple[str, ...], ...]) -> str:
+def _forms_section(rows: tuple[tuple[object, ...], ...]) -> str:
     rendered = [
         _row(row, category=_FORM_PARAMETER_CATEGORY)
         for row in rows
@@ -555,11 +693,15 @@ def _source_section(items: tuple[HTTPArtifact, ...]) -> str:
     rows = [
         _row(
             (
-                item.artifact_type,
+                _human_label(item.artifact_type),
                 item.url,
                 item.value,
-                _joined(item.evidence_ids),
-                item.source_file,
+                _compact_list(item.evidence_ids, "evidence IDs"),
+                _path_value(item.source_file),
+                _compact_list(
+                    [_human_label(value) for value in item.tags],
+                    "tags",
+                ),
             ),
             category=item.artifact_type,
         )
@@ -568,7 +710,33 @@ def _source_section(items: tuple[HTTPArtifact, ...]) -> str:
     return _section(
         "source-evidence",
         "Source and JavaScript-derived evidence",
-        _table(("Type", "URL", "Observed value", "Evidence", "Source artefact"), rows),
+        _table(("Type", "URL", "Observed value", "Evidence", "Source artefact", "Tags"), rows),
+    )
+
+
+def _robots_section(items: tuple[HTTPArtifact, ...]) -> str:
+    rows = [
+        _row(
+            (
+                _human_label(item.artifact_type),
+                item.url,
+                item.value,
+                _compact_list(item.evidence_ids, "evidence IDs"),
+                _path_value(item.source_file),
+                _compact_list(
+                    [_human_label(value) for value in item.tags],
+                    "tags",
+                ),
+            ),
+            category=_ROBOTS_CATEGORY,
+        )
+        for item in items
+    ]
+    return _section(
+        "robots",
+        "Robots evidence",
+        '<p class="section-note">Already-collected robots entries are reconnaissance context only.</p>'
+        + _table(("Type", "URL", "Directive / value", "Evidence", "Source artefact", "Tags"), rows),
     )
 
 
@@ -577,9 +745,9 @@ def _evidence_section(model: HtmlReportModel) -> str:
         _row(
             (
                 item.id,
-                item.evidence_type,
+                _human_label(item.evidence_type),
                 item.value,
-                item.source_file,
+                _path_value(item.source_file),
                 json.dumps(item.context, sort_keys=True, ensure_ascii=True),
             ),
             category=item.evidence_type,
@@ -602,8 +770,8 @@ def _artefact_section(model: HtmlReportModel) -> str:
         rows.extend(
             _row(
                 (
-                    item.file,
-                    item.type,
+                    _path_value(item.file),
+                    _human_label(item.type),
                     item.description or "Not recorded",
                     item.url or item.base_url or "Not recorded",
                     _status(item.status_code),
@@ -635,13 +803,13 @@ def _section(section_id: str, title: str, content: str) -> str:
 
 def _detail_card(
     title: str,
-    fields: tuple[tuple[str, str], ...],
+    fields: tuple[tuple[str, object], ...],
     *,
     category: str,
     status: int | None = None,
 ) -> str:
     details = "".join(
-        f'<dt>{_h(label)}</dt><dd>{_h(value or "Not recorded")}</dd>'
+        f'<dt>{_h(label)}</dt><dd>{_render_value(value)}</dd>'
         for label, value in fields
         if value
     )
@@ -664,42 +832,50 @@ def _table(headers: tuple[str, ...], rows: list[str]) -> str:
 
 
 def _row(
-    values: tuple[str, ...],
+    values: tuple[object, ...],
     *,
     status: int | None = None,
     category: str,
 ) -> str:
-    cells = "".join(f"<td>{_h(value or 'Not recorded')}</td>" for value in values)
+    cells = "".join(f"<td>{_render_value(value)}</td>" for value in values)
     return (
         f'<tr class="record searchable" data-category="{_a(category)}" '
         f'data-status="{_a(str(status) if status is not None else "")}">{cells}</tr>'
     )
 
 
-def _form_and_parameter_rows(state: ProjectState) -> tuple[tuple[str, ...], ...]:
+def _form_and_parameter_rows(state: ProjectState) -> tuple[tuple[object, ...], ...]:
     rows = [
         (
-            item.artifact_type,
+            _human_label(item.artifact_type),
             item.url,
             item.value,
-            _joined(item.evidence_ids),
-            item.source_file,
+            _compact_list(item.evidence_ids, "evidence IDs"),
+            _path_value(item.source_file),
         )
         for item in state.http_artifacts
         if item.artifact_type in {"form", "input"}
     ]
     rows.extend(
         (
-            "query_parameter_names",
+            _human_label("query_parameter_names"),
             endpoint.url,
             _joined(endpoint.query_params),
-            _joined(endpoint.evidence_ids),
+            _compact_list(endpoint.evidence_ids, "evidence IDs"),
             "project_state.json",
         )
         for endpoint in state.endpoints
         if endpoint.query_params
     )
-    return tuple(sorted(rows))
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: tuple(
+                item.value if isinstance(item, _HtmlValue) else str(item)
+                for item in row
+            ),
+        )
+    )
 
 
 def _status_options(model: HtmlReportModel) -> str:
@@ -717,7 +893,7 @@ def _status_options(model: HtmlReportModel) -> str:
 
 def _category_options(model: HtmlReportModel) -> str:
     return "".join(
-        f'<option value="{_a(value)}">{_h(value.replace("_", " "))}</option>'
+        f'<option value="{_a(value)}">{_h(_human_label(value))}</option>'
         for value in _category_values(model)
     )
 
@@ -759,6 +935,15 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
         values.add(_REDIRECT_CATEGORY)
     if _form_and_parameter_rows(state):
         values.add(_FORM_PARAMETER_CATEGORY)
+    if model.deep_disclosures:
+        values.add(_DEEP_INTERPRETATION_CATEGORY)
+    if model.route_groups:
+        values.add(_ROUTE_CATEGORY)
+    if any(
+        item.artifact_type in {"robots", "robots_value"}
+        for item in state.http_artifacts
+    ):
+        values.add(_ROBOTS_CATEGORY)
     return tuple(sorted(value for value in values if value))
 
 
@@ -772,6 +957,72 @@ def _a(value: object) -> str:
 
 def _joined(values: tuple[str, ...] | list[str]) -> str:
     return ", ".join(values) if values else "None recorded"
+
+
+def _render_value(value: object) -> str:
+    if isinstance(value, _HtmlValue):
+        return value.value
+    return _h(value or "Not recorded")
+
+
+def _compact_list(
+    values: tuple[str, ...] | list[str],
+    noun: str,
+    *,
+    visible_count: int = 4,
+) -> _HtmlValue:
+    items = tuple(str(value) for value in values if value)
+    if not items:
+        return _HtmlValue("None recorded")
+    if len(items) <= visible_count:
+        return _HtmlValue(_h(", ".join(items)))
+    visible = ", ".join(items[:visible_count])
+    complete = "".join(f"<li>{_h(item)}</li>" for item in items)
+    return _HtmlValue(
+        f'<span class="compact-list">{_h(str(len(items)))} {_h(noun)}: '
+        f'{_h(visible)} ... +{len(items) - visible_count} more</span>'
+        f'<details class="complete-list"><summary>Show all {len(items)}</summary>'
+        f"<ul>{complete}</ul></details>"
+    )
+
+
+def _path_value(value: str) -> _HtmlValue:
+    path = Path(value)
+    concise = value if not path.is_absolute() else path.name
+    if concise == value:
+        return _HtmlValue(f"<code>{_h(concise)}</code>")
+    return _HtmlValue(
+        f"<code>{_h(concise)}</code>"
+        '<details class="full-path"><summary>Full original path</summary>'
+        f"<code>{_h(value)}</code></details>"
+    )
+
+
+def _path_list(values: tuple[str, ...] | list[str]) -> _HtmlValue:
+    if not values:
+        return _HtmlValue("None recorded")
+    return _HtmlValue(
+        '<ul class="path-list">'
+        + "".join(f"<li>{_path_value(value).value}</li>" for value in values)
+        + "</ul>"
+    )
+
+
+def _human_label(value: str) -> str:
+    words = value.split("_")
+    rendered = [
+        _ACRONYMS.get(
+            word.lower(),
+            _DISPLAY_WORDS.get(
+                word.lower(),
+                word.lower() if index else word.lower().capitalize(),
+            ),
+        )
+        for index, word in enumerate(words)
+    ]
+    if rendered and rendered[0] in _ACRONYMS.values():
+        return " ".join(rendered)
+    return " ".join(rendered)
 
 
 def _counts(values: tuple[tuple[str, int], ...]) -> str:
@@ -820,10 +1071,14 @@ button { cursor: pointer; font-weight: 700; } #filter-result { grid-column: 1 / 
 .report-section { margin: 30px 0; scroll-margin-top: 12px; }.report-section > h2 { margin: 0 0 13px; font-size: 23px; border-bottom: 2px solid var(--line); padding-bottom: 7px; }
 h3 { font-size: 17px; margin: 18px 0 10px; }.section-note, .scope { color: var(--muted); }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; }
-.metric { background: var(--panel); border: 1px solid var(--line); padding: 12px; }.metric span { display: block; color: var(--muted); font-size: 12px; }.metric strong { font-size: 18px; overflow-wrap: anywhere; }
+.metric { background: var(--panel); border: 1px solid var(--line); padding: 12px; }.metric span { display: block; color: var(--muted); font-size: 12px; }.metric strong { font-size: 18px; white-space: nowrap; }
 details { background: var(--panel); border: 1px solid var(--line); margin: 8px 0; } summary { cursor: pointer; font-weight: 700; padding: 11px 13px; }
 details > dl, details > ul { margin: 0; padding: 3px 18px 15px; } dl { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 6px 14px; }
 dt { color: var(--muted); font-weight: 700; } dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.fallback { border-left: 4px solid var(--warning); background: #fff7ed; padding: 10px 13px; }.model-status { color: var(--muted); }
+.count { color: var(--muted); font-weight: 400; white-space: nowrap; }.route-summary { padding: 3px 18px 12px; }
+.observation-list, .complete-list, .full-path { margin: 7px 12px 12px; background: #f9fbfb; }.complete-list summary, .full-path summary { padding: 5px 8px; font-size: 12px; }
+.path-list { margin: 0; padding-left: 18px; }.path-list .full-path { margin-left: 0; }.route-url { overflow-wrap: anywhere; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); } table { border-collapse: collapse; min-width: 100%; }
 th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 8px 10px; overflow-wrap: anywhere; max-width: 420px; }
 th { position: sticky; top: 0; background: #eef2f2; font-size: 12px; } tbody tr:last-child td { border-bottom: 0; }
@@ -849,8 +1104,10 @@ _JAVASCRIPT = """
     let visible = 0;
     records.forEach((record) => {
       const matchesText = !query || record.textContent.toLocaleLowerCase('en-GB').includes(query);
-      const matchesStatus = !status.value || record.dataset.status === status.value;
-      const matchesCategory = !category.value || record.dataset.category === category.value;
+      const statuses = (record.dataset.status || '').split(/\\s+/);
+      const categories = [record.dataset.category || '', ...((record.dataset.categories || '').split(/\\s+/))];
+      const matchesStatus = !status.value || statuses.includes(status.value);
+      const matchesCategory = !category.value || categories.includes(category.value);
       record.hidden = !(matchesText && matchesStatus && matchesCategory);
       if (!record.hidden) visible += 1;
     });

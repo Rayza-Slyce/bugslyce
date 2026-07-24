@@ -81,6 +81,16 @@ def test_html_report_rejects_malformed_required_and_present_deep_artefacts(
     with pytest.raises(ValueError, match="deep source/route collection payload"):
         build_html_report_model(malformed_deep)
 
+    malformed_orchestration = _write_deep_interpretation_pack(
+        tmp_path / "malformed-orchestration"
+    )
+    (malformed_orchestration / "deep_recon_orchestration.json").write_text(
+        "{\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="could not parse deep_recon_orchestration.json"):
+        build_html_report_model(malformed_orchestration)
+
 
 def test_html_report_escapes_hostile_target_controlled_values(tmp_path: Path) -> None:
     pack = _write_current_pack(tmp_path / "pack")
@@ -223,7 +233,7 @@ def test_html_report_rebuilds_existing_deep_review_models(tmp_path: Path) -> Non
     assert "Exact repeated non-empty body hash" in html
     assert "EVID-REDIRECT-0001" in html
     assert "Warnings and skipped collection" in html
-    assert "policy_blocked" in html
+    assert "Policy blocked" in html
     assert "EVID-SKIPPED-0001" in html
     _assert_category_filter_complete(html)
 
@@ -338,7 +348,14 @@ def test_html_report_overview_counts_unique_exact_route_urls(tmp_path: Path) -> 
     html = render_html_report(model)
 
     assert expected < record_sum
-    assert f"<span>Unique route URLs</span><strong>{expected}</strong>" in html
+    grouped_count = sum(
+        group.origin_group in {"assessed", "external", "relative"}
+        for group in model.route_groups
+    )
+    assert grouped_count == expected
+    assert "<span>Assessed-origin URLs</span>" in html
+    assert "<span>External references</span>" in html
+    assert "<span>Relative / unclassified</span>" in html
     assert f"<span>Routes</span><strong>{record_sum}</strong>" not in html
 
 
@@ -353,6 +370,583 @@ def test_html_report_category_filter_covers_every_rendered_record(tmp_path: Path
         "nmap",
         "operator_summary",
     } <= option_categories
+
+
+def test_html_report_reconstructs_persisted_deep_operator_summary_and_disclosures(
+    tmp_path: Path,
+) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "pack")
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+
+    titles = [lead.title for lead in model.operator_summary.review_first]
+    assert titles[:2] == [
+        "Structured operational configuration observed",
+        "Routes disclosed by structured JSON response",
+    ]
+    assert "Successfully collected Deep content available offline" in titles
+    assert "Structured operational configuration observed in response body" in html
+    assert "Relative routes disclosed by structured JSON" in html
+    for route in ("/api/user", "/api/jobs", "/api/applications"):
+        assert route in html
+    assert "No request was generated from these values." in html
+    assert "1 successfully retained Deep response is available" in html
+    assert "Operator summary reconstructed from complete structured Deep inputs" in html
+
+
+def test_html_report_marks_missing_deep_orchestration_as_partial(tmp_path: Path) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "pack")
+    (pack / "deep_recon_orchestration.json").unlink()
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "Operator summary reconstructed from available structured inputs" in html
+    assert "deep_recon_orchestration.json" in html
+    assert "complete structured Deep inputs" not in html
+
+
+def test_html_report_marks_missing_deep_source_collection_as_partial(tmp_path: Path) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "pack")
+    (pack / "deep_source_route_collection.json").unlink()
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+
+    assert "Operator summary reconstructed from available structured inputs" in html
+    assert "deep_source_route_collection.json" in html
+    assert "complete structured Deep inputs" not in html
+    assert "Successfully collected Deep content available offline" not in {
+        lead.title for lead in model.operator_summary.review_first
+    }
+
+
+def test_html_report_marks_both_missing_deep_inputs_as_partial(tmp_path: Path) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "pack")
+    state_path = pack / "project_state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["project_state"]["recon_manifest"]["profile"] = "full-profile"
+    state_path.write_text(
+        json.dumps(state_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (pack / "deep_recon_orchestration.json").unlink()
+    (pack / "deep_source_route_collection.json").unlink()
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "Operator summary reconstructed from available structured inputs" in html
+    assert "deep_recon_orchestration.json" in html
+    assert "deep_source_route_collection.json" in html
+    assert "complete structured Deep inputs" not in html
+
+
+def test_html_report_non_deep_pack_does_not_require_deep_summary_inputs(
+    tmp_path: Path,
+) -> None:
+    html = render_html_report(build_html_report_model(_write_current_pack(tmp_path / "pack")))
+
+    assert "Operator summary reconstructed from available structured inputs" not in html
+    assert "complete structured Deep inputs" not in html
+
+
+def test_html_report_marks_older_partial_summary_fallback_explicitly(tmp_path: Path) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    state_path = pack / "project_state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["project_state"]["recon_manifest"].pop("profile")
+    state_path.write_text(
+        json.dumps(state_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/retained",
+                200,
+                "c" * 64,
+                evidence_ids=("EVID-OLDER-DEEP",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "Operator summary reconstructed from available structured inputs" in html
+    assert "deep_recon_orchestration.json" in html
+
+
+def test_html_report_groups_exact_route_observations_by_origin_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state = payload["project_state"]
+    state["http_services"] = [
+        {
+            "url": "http://192.0.2.10/",
+            "hostname": "192.0.2.10",
+            "status_code": 200,
+            "title": "Primary",
+            "technologies": [],
+            "content_length": 10,
+            "evidence_ids": ["EVID-SVC-80"],
+            "tags": [],
+        },
+        {
+            "url": "http://192.0.2.10:8080/",
+            "hostname": "192.0.2.10",
+            "status_code": 200,
+            "title": "Secondary",
+            "technologies": [],
+            "content_length": 10,
+            "evidence_ids": ["EVID-SVC-8080"],
+            "tags": [],
+        },
+    ]
+    state["endpoints"] = [
+        {
+            "url": "http://192.0.2.10/shared",
+            "hostname": "192.0.2.10",
+            "path": "/shared",
+            "query_params": [],
+            "evidence_ids": ["EVID-ENDPOINT"],
+            "tags": [],
+        },
+        {
+            "url": "http://192.0.2.10:8080/admin",
+            "hostname": "192.0.2.10",
+            "path": "/admin",
+            "query_params": [],
+            "evidence_ids": ["EVID-8080"],
+            "tags": [],
+        },
+        {
+            "url": "https://external.example.test/reference",
+            "hostname": "external.example.test",
+            "path": "/reference",
+            "query_params": [],
+            "evidence_ids": ["EVID-EXTERNAL"],
+            "tags": [],
+        },
+        {
+            "url": "/relative/value",
+            "hostname": "",
+            "path": "/relative/value",
+            "query_params": [],
+            "evidence_ids": ["EVID-RELATIVE"],
+            "tags": [],
+        },
+    ]
+    state["discovered_paths"] = [
+        {
+            "url": "http://192.0.2.10/shared",
+            "status_code": 200,
+            "content_length": 20,
+            "redirect_location": None,
+            "source": "/tmp/source-a.txt",
+            "evidence_ids": [f"EVID-SHARED-{index:02d}" for index in range(1, 12)],
+            "tags": [],
+        },
+        {
+            "url": "http://192.0.2.10/shared",
+            "status_code": 302,
+            "content_length": 0,
+            "redirect_location": "/login",
+            "source": "/var/review/source-a.txt",
+            "evidence_ids": ["EVID-REDIRECT"],
+            "tags": [],
+        },
+    ]
+    state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert html.count('<summary class="route-url">http://192.0.2.10/shared</summary>') == 1
+    assert 'data-categories="discovered_path endpoint" data-status="200 302"' in html
+    assert "Assessed-origin URLs" in html
+    assert "http://192.0.2.10:8080/admin" in html
+    assert "External references" in html
+    assert "https://external.example.test/reference" in html
+    assert "Relative or unclassified values" in html
+    assert "/relative/value" in html
+    assert "200" in html and "302" in html and "/login" in html
+    for evidence_id in ["EVID-ENDPOINT", "EVID-REDIRECT", "EVID-SHARED-11"]:
+        assert evidence_id in html
+    assert "13 evidence IDs" in html
+    assert "source-a.txt" in html
+    assert "/tmp/source-a.txt" in html
+    assert "/var/review/source-a.txt" in html
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://unknown.example.test/application",
+        "https://unknown.example.test/application",
+    ),
+)
+def test_html_report_does_not_classify_absolute_urls_without_assessed_origins_as_external(
+    tmp_path: Path,
+    url: str,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    _write_route_records(
+        pack,
+        http_services=[],
+        urls=(url,),
+    )
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+
+    assert _route_group_counts(model) == {"assessed": 0, "external": 0, "relative": 1}
+    assert f'<summary class="route-url">{url}</summary>' in html
+    assert "<h3>Relative or unclassified values <span class=\"count\">(1)</span></h3>" in html
+    assert "<h3>External references" not in html
+
+
+def test_html_report_keeps_relative_and_malformed_values_unclassified_without_origins(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    urls = ("/relative/value", "https://[not-an-ipv6-address")
+    _write_route_records(pack, http_services=[], urls=urls)
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+
+    assert _route_group_counts(model) == {"assessed": 0, "external": 0, "relative": 2}
+    for url in urls:
+        assert url in html
+
+
+def test_html_report_classifies_origins_only_when_assessed_origins_exist(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    urls = (
+        "http://192.0.2.10/matching-default",
+        "http://192.0.2.10:80/matching-explicit",
+        "https://192.0.2.10/other-scheme",
+        "http://192.0.2.10:8080/other-port",
+        "https://external.example.test/reference",
+    )
+    _write_route_records(
+        pack,
+        http_services=(
+            _http_service_payload("http://192.0.2.10/"),
+            _http_service_payload("http://192.0.2.10:8080/"),
+            _http_service_payload("https://192.0.2.10:443/"),
+        ),
+        urls=urls,
+    )
+
+    model = build_html_report_model(pack)
+
+    groups = {group.url: group.origin_group for group in model.route_groups}
+    assert groups == {
+        "http://192.0.2.10/matching-default": "assessed",
+        "http://192.0.2.10:80/matching-explicit": "assessed",
+        "https://192.0.2.10/other-scheme": "assessed",
+        "http://192.0.2.10:8080/other-port": "assessed",
+        "https://external.example.test/reference": "external",
+    }
+    assert _route_group_counts(model) == {"assessed": 4, "external": 1, "relative": 0}
+
+
+def test_html_report_origin_classification_keeps_scheme_and_port_matching_strict(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    urls = (
+        "http://192.0.2.10:80/matching-default-port",
+        "https://192.0.2.10/scheme-mismatch",
+        "http://192.0.2.10:8080/non-default-port",
+        "https://192.0.2.10:443/explicit-https-default",
+    )
+    _write_route_records(
+        pack,
+        http_services=(
+            _http_service_payload("http://192.0.2.10/"),
+            _http_service_payload("https://192.0.2.10/"),
+        ),
+        urls=urls,
+    )
+
+    model = build_html_report_model(pack)
+    groups = {group.url: group.origin_group for group in model.route_groups}
+
+    assert groups == {
+        "http://192.0.2.10:80/matching-default-port": "assessed",
+        "https://192.0.2.10/scheme-mismatch": "assessed",
+        "http://192.0.2.10:8080/non-default-port": "external",
+        "https://192.0.2.10:443/explicit-https-default": "assessed",
+    }
+
+    http_only_pack = _write_current_pack(tmp_path / "http-only-pack")
+    _write_route_records(
+        http_only_pack,
+        http_services=(_http_service_payload("http://192.0.2.10/"),),
+        urls=("https://192.0.2.10/scheme-mismatch",),
+    )
+    http_only_model = build_html_report_model(http_only_pack)
+    assert http_only_model.route_groups[0].origin_group == "external"
+
+
+def test_html_report_humanises_labels_keeps_raw_values_and_renders_robots(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state = payload["project_state"]
+    state["http_artifacts"].extend(
+        [
+            {
+                "url": "https://example.test/robots.txt",
+                "artifact_type": "robots_value",
+                "value": "Disallow: /private",
+                "source_file": "/tmp/evidence/robots.txt",
+                "evidence_ids": ["EVID-ROBOTS-0001"],
+                "tags": ["source_route_collection"],
+            },
+            {
+                "url": "https://example.test/app.js",
+                "artifact_type": "script_or_asset",
+                "value": '<script onload="alert(1)">',
+                "source_file": "raw/app.js",
+                "evidence_ids": ["EVID-JS-0001"],
+                "tags": [
+                    "candidate_default_template_group",
+                    "credential_like_artifact_review",
+                    "hidden_element",
+                    "kill_switch",
+                ],
+            },
+        ]
+    )
+    state["evidence"].append(
+        {
+            "id": "EVID-LABEL-0001",
+            "source_file": "raw/labels.txt",
+            "evidence_type": "http_json_api_url",
+            "value": "label presentation",
+            "context": {},
+        }
+    )
+    state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert 'data-category="script_or_asset"' in html
+    assert "Script or asset" in html
+    assert "Robots value" in html
+    assert "Source route collection" in html
+    assert "Candidate default template group" in html
+    assert "Credential like artefact review" in html
+    assert "Hidden element" in html
+    assert "Kill switch" in html
+    assert "HTTP JSON API URL" in html
+    assert 'data-category="http_json_api_url"' in html
+    assert "Disallow: /private" in html
+    assert "EVID-ROBOTS-0001" in html
+    assert "robots.txt" in html and "/tmp/evidence/robots.txt" in html
+    assert "Show all 1</summary>" not in html
+    assert '<script onload="alert(1)">' not in html
+
+
+def test_html_report_humanises_visible_identifier_fields_without_changing_raw_values(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["candidates"][0]["priority"] = "kill_switch"
+    payload["project_state"]["endpoints"][0]["query_params"] = ["page"]
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/old",
+                302,
+                "a" * 64,
+                headers=(("Location", "/login"),),
+                evidence_ids=("EVID-REDIRECT-LABEL",),
+            ),
+        ),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/search?query=bounded",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-SKIPPED-LABEL",),
+            ),
+        ),
+        total_considered=2,
+        total_collected=1,
+        total_skipped=1,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    html = render_html_report(build_html_report_model(pack))
+
+    for label in (
+        "Kill switch",
+        "Deep source route collection",
+        "Source route collection",
+        "Query string not allowed",
+        "Source route coverage",
+        "Same origin",
+        "Redirect to auth path",
+        "Query parameter names",
+    ):
+        assert label in html
+    assert 'data-category="form_or_parameter"' in html
+    assert 'data-category="redirect_auth_flow"' in html
+    assert 'data-category="intentionally_bounded"' in html
+    assert '<option value="intentionally_bounded">Intentionally bounded</option>' in html
+    assert '<option value="form_or_parameter">Form or parameter</option>' in html
+    assert "https://portal.example.test/search?query=bounded" in html
+    assert "EVID-REDIRECT-LABEL" in html
+
+
+def _write_deep_interpretation_pack(root: Path) -> Path:
+    pack = _write_current_pack(root)
+    state_path = pack / "project_state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["project_state"]["recon_manifest"]["profile"] = "deep-bounded"
+    state_path.write_text(
+        json.dumps(state_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/api/",
+                200,
+                "a" * 64,
+                headers=(("Content-Type", "application/json"),),
+                preview='{"routes":["/api/user","/api/jobs","/api/applications"]}',
+                evidence_ids=("EVID-PATH-JSON",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
+        encoding="utf-8",
+    )
+    (pack / "deep_recon_orchestration.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "deep_mode_enabled": True,
+                "structured_body_disclosures": [
+                    {
+                        "category": "structured_configuration_body",
+                        "title": "Structured operational configuration observed in response body",
+                        "source_urls": ["https://portal.example.test/config"],
+                        "final_response_urls": ["https://portal.example.test/config"],
+                        "evidence_ids": ["EVID-CONFIG"],
+                        "observed_values": [],
+                        "evidence_excerpt": ["<VirtualHost *:80>", "ServerName portal.example.test"],
+                        "source_body_sha256": "b" * 64,
+                    },
+                    {
+                        "category": "structured_json_routes",
+                        "title": "Relative routes disclosed by structured JSON",
+                        "source_urls": ["https://portal.example.test/api/"],
+                        "final_response_urls": ["https://portal.example.test/api/"],
+                        "evidence_ids": ["EVID-PATH-JSON"],
+                        "observed_values": ["/api/user", "/api/jobs", "/api/applications"],
+                        "evidence_excerpt": [],
+                        "source_body_sha256": "a" * 64,
+                    },
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (pack / "recon_status.json").write_text(
+        json.dumps(
+            {"latest_execution": {"pipeline_profile": "deep-bounded"}},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return pack
+
+
+def _write_route_records(
+    pack: Path,
+    *,
+    http_services: list[dict[str, object]] | tuple[dict[str, object], ...],
+    urls: tuple[str, ...],
+) -> None:
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state = payload["project_state"]
+    state["http_services"] = list(http_services)
+    state["endpoints"] = [
+        {
+            "url": url,
+            "hostname": "",
+            "path": url,
+            "query_params": [],
+            "evidence_ids": [f"EVID-ROUTE-{index:04d}"],
+            "tags": [],
+        }
+        for index, url in enumerate(urls, start=1)
+    ]
+    state["discovered_paths"] = []
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _http_service_payload(url: str) -> dict[str, object]:
+    return {
+        "url": url,
+        "hostname": "192.0.2.10",
+        "status_code": 200,
+        "title": "Synthetic",
+        "technologies": [],
+        "content_length": 0,
+        "evidence_ids": ["EVID-SERVICE"],
+        "tags": [],
+    }
+
+
+def _route_group_counts(model: object) -> dict[str, int]:
+    return {
+        group: sum(route.origin_group == group for route in model.route_groups)
+        for group in ("assessed", "external", "relative")
+    }
 
 
 def _assert_category_filter_complete(html: str) -> set[str]:

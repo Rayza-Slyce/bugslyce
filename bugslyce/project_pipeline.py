@@ -133,6 +133,7 @@ from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
     OperatorSummaryLead,
+    build_deep_operator_summary_leads,
     build_operator_summary,
 )
 from bugslyce.time_utils import Clock, utc_now_iso
@@ -2045,109 +2046,11 @@ def _render_deep_report_index(orchestration: DeepReconOrchestrationResult) -> st
 def _deep_operator_summary_leads(
     orchestration: DeepReconOrchestrationResult,
 ) -> tuple[OperatorSummaryLead, ...]:
-    leads: list[OperatorSummaryLead] = []
     source_review = getattr(orchestration, "source_route_collection_review", None)
-    for lead in getattr(source_review, "review_leads", ()):
-        source_urls = tuple(getattr(lead, "urls", ()))
-        final_urls = tuple(getattr(lead, "final_urls", ()))
-        differing_final_urls = tuple(
-            url for url in final_urls if url not in source_urls
-        )
-        provenance = ""
-        if differing_final_urls:
-            provenance = (
-                " The request began at "
-                + ", ".join(f"`{url}`" for url in source_urls)
-                + " and the retained body came from final response URL "
-                + ", ".join(f"`{url}`" for url in differing_final_urls)
-                + "."
-            )
-        if lead.category == "structured_configuration_body":
-            excerpt = "; ".join(lead.evidence_excerpt[:3])
-            why = (
-                "Collected plaintext contains coherent operational configuration "
-                f"structure. Bounded excerpt: `{excerpt}`.{provenance}"
-            )
-            title = "Structured operational configuration observed"
-            score = 97
-        elif lead.category == "structured_json_routes":
-            routes = ", ".join(f"`{value}`" for value in lead.observed_values[:6])
-            why = (
-                "A valid collected JSON response directly discloses relative route "
-                f"strings: {routes}. No request was generated from these values."
-                f"{provenance}"
-            )
-            title = "Routes disclosed by structured JSON response"
-            score = 94
-        else:
-            continue
-        leads.append(
-            OperatorSummaryLead(
-                title=title,
-                why=why,
-                endpoints=list(differing_final_urls or source_urls),
-                evidence_ids=list(lead.evidence_ids),
-                next_action=(
-                    "Inspect the saved response and correlate the direct values with "
-                    "existing route and service evidence. Do not treat the disclosure "
-                    "as a vulnerability or request uncollected routes automatically."
-                ),
-                signal="high",
-                score=score,
-            )
-        )
-    successful_content_reviews = tuple(
-        getattr(orchestration, "successful_content_reviews", ())
+    return build_deep_operator_summary_leads(
+        tuple(getattr(source_review, "review_leads", ())),
+        tuple(getattr(orchestration, "successful_content_reviews", ())),
     )
-    if successful_content_reviews:
-        endpoints = sorted(
-            {
-                review.canonical_url
-                for review in successful_content_reviews
-                if review.canonical_url
-            }
-        )
-        evidence_ids = sorted(
-            {
-                evidence_id
-                for review in successful_content_reviews
-                for evidence_id in review.evidence_ids
-                if evidence_id
-            }
-        )
-        artefact_references = sorted(
-            {
-                reference
-                for review in successful_content_reviews
-                for reference in review.artefact_references
-                if reference
-            }
-        )
-        response_count = len(successful_content_reviews)
-        leads.append(
-            OperatorSummaryLead(
-                title="Successfully collected Deep content available offline",
-                why=(
-                    f"{response_count} successfully retained Deep "
-                    f"response{'s' if response_count != 1 else ''} are available "
-                    "for offline review in "
-                    + ", ".join(
-                        f"`{reference}`" for reference in artefact_references
-                    )
-                    + "."
-                ),
-                endpoints=endpoints,
-                evidence_ids=evidence_ids,
-                next_action=(
-                    "Use the detailed Human Triage and runbook entries for per-response "
-                    "offline review. Do not re-fetch these URLs or treat successful "
-                    "collection as a confirmed finding."
-                ),
-                signal="direct retained response",
-                score=72,
-            )
-        )
-    return tuple(leads)
 
 
 def _build_standard_investigation_runbook_section_if_needed(

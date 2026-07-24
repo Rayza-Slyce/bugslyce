@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, Sequence
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
@@ -16,6 +17,7 @@ from bugslyce.reports.artifact_classifier import (
     is_generic_default_page_text,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.deep_successful_content import SuccessfulDeepContentReview
 from bugslyce.recon.route_provenance import (
     canonical_route_url,
     route_evidence_provenance,
@@ -79,6 +81,117 @@ class OperatorSummary:
     review_first: list[OperatorSummaryLead]
     low_signal: list[OperatorSummaryNoise]
     coverage: list[str]
+
+
+class DeepSummaryDisclosure(Protocol):
+    """Structured Deep disclosure fields used by shared summary assembly."""
+
+    category: str
+    urls: Sequence[str]
+    final_urls: Sequence[str]
+    evidence_ids: Sequence[str]
+    observed_values: Sequence[str]
+    evidence_excerpt: Sequence[str]
+
+
+def build_deep_operator_summary_leads(
+    disclosures: Sequence[DeepSummaryDisclosure],
+    successful_content_reviews: Sequence[SuccessfulDeepContentReview],
+) -> tuple[OperatorSummaryLead, ...]:
+    """Build the existing deterministic Deep additions to Operator Summary."""
+
+    leads: list[OperatorSummaryLead] = []
+    for disclosure in disclosures:
+        source_urls = tuple(disclosure.urls)
+        final_urls = tuple(disclosure.final_urls)
+        differing_final_urls = tuple(url for url in final_urls if url not in source_urls)
+        provenance = ""
+        if differing_final_urls:
+            provenance = (
+                " The request began at "
+                + ", ".join(f"`{url}`" for url in source_urls)
+                + " and the retained body came from final response URL "
+                + ", ".join(f"`{url}`" for url in differing_final_urls)
+                + "."
+            )
+        if disclosure.category == "structured_configuration_body":
+            excerpt = "; ".join(disclosure.evidence_excerpt[:3])
+            why = (
+                "Collected plaintext contains coherent operational configuration "
+                f"structure. Bounded excerpt: `{excerpt}`.{provenance}"
+            )
+            title = "Structured operational configuration observed"
+            score = 97
+        elif disclosure.category == "structured_json_routes":
+            routes = ", ".join(f"`{value}`" for value in disclosure.observed_values[:6])
+            why = (
+                "A valid collected JSON response directly discloses relative route "
+                f"strings: {routes}. No request was generated from these values."
+                f"{provenance}"
+            )
+            title = "Routes disclosed by structured JSON response"
+            score = 94
+        else:
+            continue
+        leads.append(
+            OperatorSummaryLead(
+                title=title,
+                why=why,
+                endpoints=list(differing_final_urls or source_urls),
+                evidence_ids=list(disclosure.evidence_ids),
+                next_action=(
+                    "Inspect the saved response and correlate the direct values with "
+                    "existing route and service evidence. Do not treat the disclosure "
+                    "as a vulnerability or request uncollected routes automatically."
+                ),
+                signal="high",
+                score=score,
+            )
+        )
+    if successful_content_reviews:
+        endpoints = sorted(
+            {review.canonical_url for review in successful_content_reviews if review.canonical_url}
+        )
+        evidence_ids = sorted(
+            {
+                evidence_id
+                for review in successful_content_reviews
+                for evidence_id in review.evidence_ids
+                if evidence_id
+            }
+        )
+        artefact_references = sorted(
+            {
+                reference
+                for review in successful_content_reviews
+                for reference in review.artefact_references
+                if reference
+            }
+        )
+        response_count = len(successful_content_reviews)
+        verb = "is" if response_count == 1 else "are"
+        leads.append(
+            OperatorSummaryLead(
+                title="Successfully collected Deep content available offline",
+                why=(
+                    f"{response_count} successfully retained Deep "
+                    f"response{'s' if response_count != 1 else ''} {verb} available "
+                    "for offline review in "
+                    + ", ".join(f"`{reference}`" for reference in artefact_references)
+                    + "."
+                ),
+                endpoints=endpoints,
+                evidence_ids=evidence_ids,
+                next_action=(
+                    "Use the detailed Human Triage and runbook entries for per-response "
+                    "offline review. Do not re-fetch these URLs or treat successful "
+                    "collection as a confirmed finding."
+                ),
+                signal="direct retained response",
+                score=72,
+            )
+        )
+    return tuple(leads)
 
 
 def build_operator_summary(
