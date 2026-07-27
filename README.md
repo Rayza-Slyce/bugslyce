@@ -10,7 +10,26 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-Current package version: `1.1.0`.
+## Temporary production bug bounty warning
+
+BugSlyce `1.1.1` is a documentation-only safety advisory release. It does
+not change live reconnaissance behaviour.
+
+Controlled testing against a local HTTP capture server found that Standard
+Recon peaked at **154 requests per second** and Deep Recon peaked at **450
+requests per second**. The current implementation also cannot consistently
+apply programme-required researcher-identification headers across every
+HTTP request path.
+
+**Do not use Standard or Deep Recon against production bug bounty targets
+until request pacing and identification-header support have been added and
+verified. Do not use any live mode where required traffic-identification
+rules cannot be honoured.**
+
+BugSlyce remains suitable for CTFs and controlled authorised labs. No
+production target was involved in discovering these issues.
+
+Current package version: `1.1.1`.
 
 ## Authorised Use
 
@@ -181,7 +200,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.1.0`. The deterministic test suite mocks live
+The package version is `1.1.1`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash

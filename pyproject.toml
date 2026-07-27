@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bugslyce"
-version = "1.1.0"
-description = "A local-first CLI recon triage assistant for authorised bug bounty workflows."
+version = "1.1.1"
+description = "A local-first evidence-led recon triage tool for authorised labs, CTFs and scoped assessments."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

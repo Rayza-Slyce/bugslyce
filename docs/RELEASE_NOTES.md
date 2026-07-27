@@ -1,5 +1,33 @@
 # Release Notes
 
+## 1.1.1
+
+BugSlyce `1.1.1` is a documentation-only safety advisory release. It does
+not change live reconnaissance behaviour.
+
+Controlled local traffic capture of BugSlyce `1.1.0` identified the
+following production bug bounty readiness gaps:
+
+- Standard Recon peaked at 154 requests per second.
+- Deep Recon peaked at 450 requests per second.
+- Programme-required researcher-identification headers cannot currently be
+  applied consistently across every HTTP request path.
+
+The measured rates came from a controlled local capture server and may vary
+by environment. They nevertheless demonstrate that the current release does
+not provide suitably conservative production traffic pacing.
+
+Until pacing and identification-header support are implemented and
+verified:
+
+- Do not use Standard or Deep Recon against production bug bounty targets.
+- Do not use any live mode where programme-required traffic identification
+  cannot be honoured.
+- Continue using BugSlyce only in CTFs and controlled authorised labs.
+
+No production target was involved in discovering these issues.
+
+
 ## 1.1.0
 
 BugSlyce `1.1.0` adds a self-contained offline HTML evidence report and
