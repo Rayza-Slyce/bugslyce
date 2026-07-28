@@ -18,10 +18,11 @@ Before typing `YES` to run recon, verify:
 
 BugSlyce safety controls do not replace external rules.
 
-### R0A bug bounty engagement policy
+### R0B1 bug bounty engagement policy and internal HTTP enforcement
 
-R0A records a local, versioned traffic and identification policy for bug bounty
-projects. Configuration is platform-neutral: copy the exact limits and
+R0B1 retains the local, versioned traffic and identification policy for bug
+bounty projects and applies it to migrated internal Python HTTP requests.
+Configuration remains platform-neutral: copy the exact limits and
 researcher-identification requirements from the current programme brief. No
 platform preset overrides those current rules.
 
@@ -39,11 +40,12 @@ View the redacted policy without displaying configured identification values:
 bugslyce project policy --project ./bugslyce_project.json
 ```
 
-Policy capture is preparatory. R0A does not enforce aggregate request rates,
-concurrency or identification values across every network component. Live bug
-bounty reconnaissance therefore remains blocked, even when policy setup is
-complete. CTFs and controlled authorised labs remain the supported live-testing
-context while R0B implements and verifies component enforcement.
+The internal executor enforces steady aggregate request starts, concurrency,
+effective identity and controlled redirects for migrated Python HTTP paths.
+Curl, Gobuster and Nmap are not yet integrated, so every live bug bounty
+reconnaissance entry point remains blocked even when policy setup is complete. CTFs and
+controlled authorised labs remain the supported live-testing contexts while
+R0B2 implements and verifies external-tool enforcement.
 
 ## 2. Interactive Launcher
 

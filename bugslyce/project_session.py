@@ -544,7 +544,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
             recon_pack_exists=(output_dir / "recon_manifest.json").is_file(),
             status_summary=(
                 f"{policy_status} Live bug bounty reconnaissance remains blocked "
-                "until R0B component enforcement is implemented."
+                "until R0B2 external-tool enforcement is implemented."
             ),
             recommended_action=GuidedProjectAction(
                 id="configure-engagement-policy",

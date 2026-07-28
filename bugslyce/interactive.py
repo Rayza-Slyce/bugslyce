@@ -231,7 +231,7 @@ def _start_new_project(
         if profile is not None:
             print_func(
                 f"{_profile_display_name(profile)} was selected but not started. "
-                "Live bug bounty reconnaissance remains blocked until R0B enforcement."
+                "Live bug bounty reconnaissance remains blocked until R0B2 enforcement."
             )
         else:
             print_func("Manual setup was saved. No recon was started.")

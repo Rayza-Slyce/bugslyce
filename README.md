@@ -29,13 +29,14 @@ rules cannot be honoured.**
 BugSlyce remains suitable for CTFs and controlled authorised labs. No
 production target was involved in discovering these issues.
 
-The unreleased R0A source foundation can record a platform-neutral bug
-bounty traffic and identification policy from the current programme brief.
-Those values are not yet enforced across every network component, so all live
-bug bounty project pipelines remain blocked. Use `bugslyce project policy
+The unreleased R0B1 source contains a central enforcement engine for migrated
+internal Python HTTP requests. It applies aggregate pacing, concurrency,
+identity and controlled redirect policy from the platform-neutral engagement
+policy. Curl, Gobuster and Nmap enforcement is not yet implemented, so all live
+bug bounty reconnaissance entry points remain blocked. Use `bugslyce project policy
 --project ./bugslyce_project.json --configure` for save-only setup. No platform
-preset supersedes current programme rules; R0B will implement component-level
-traffic and identification enforcement.
+preset supersedes current programme rules; R0B2 will complete external-tool
+enforcement before controlled capture acceptance.
 
 Current package version: `1.1.1`.
 

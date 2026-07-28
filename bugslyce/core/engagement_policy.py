@@ -48,7 +48,9 @@ IDENTIFICATION_UNKNOWN = "not_yet_confirmed"
 
 READINESS_INCOMPLETE = "policy_incomplete"
 READINESS_FUTURE_ENFORCEMENT = "complete_for_future_enforcement"
-ENFORCEMENT_UNAVAILABLE = "live_enforcement_unavailable_r0a"
+ENFORCEMENT_PARTIAL = "internal_http_only_external_tools_unavailable_r0b1"
+INTERNAL_HTTP_ENFORCEMENT_AVAILABLE = "internal_http_enforcement_available"
+EXTERNAL_TOOL_ENFORCEMENT_UNAVAILABLE = "external_tool_enforcement_unavailable_r0b2"
 LIVE_EXECUTION_BLOCKED = "blocked"
 
 MAX_NUMERIC_INPUT_LENGTH = 128
@@ -175,6 +177,8 @@ class EngagementPolicyAssessment:
     readiness_state: str
     not_ready_reasons: tuple[str, ...]
     enforcement_state: str
+    internal_http_enforcement_state: str
+    external_tool_enforcement_state: str
     live_execution_state: str
 
 
@@ -418,7 +422,7 @@ def build_bug_bounty_policy(
 def assess_engagement_policy(
     policy: EngagementPolicy,
 ) -> EngagementPolicyAssessment:
-    """Derive readiness and R0A capability without persisting either."""
+    """Derive readiness and current-build capability without persisting either."""
 
     reasons = tuple(
         _readiness_reasons(
@@ -443,7 +447,9 @@ def assess_engagement_policy(
             READINESS_FUTURE_ENFORCEMENT if ready else READINESS_INCOMPLETE
         ),
         not_ready_reasons=reasons,
-        enforcement_state=ENFORCEMENT_UNAVAILABLE,
+        enforcement_state=ENFORCEMENT_PARTIAL,
+        internal_http_enforcement_state=INTERNAL_HTTP_ENFORCEMENT_AVAILABLE,
+        external_tool_enforcement_state=EXTERNAL_TOOL_ENFORCEMENT_UNAVAILABLE,
         live_execution_state=LIVE_EXECUTION_BLOCKED,
     )
 
@@ -666,10 +672,11 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
         lines.append("Reasons preventing readiness: none")
     lines.extend(
         (
-            "Live enforcement: unavailable in R0A.",
+            "Internal Python HTTP enforcement: available in R0B1.",
+            "External-tool enforcement: unavailable until R0B2.",
             (
-                "Policy configuration values are not yet enforced across every "
-                "network component. Live bug bounty reconnaissance remains blocked."
+                "Policy values are not yet enforced across curl, Gobuster and Nmap. "
+                "Live bug bounty project reconnaissance remains blocked."
             ),
         )
     )

@@ -27,6 +27,11 @@ from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_source_route_collector import MAX_BODY_PREVIEW_CHARS
 from bugslyce.recon.http_origin import same_http_origin
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
+from bugslyce.recon.http_enforcement import (
+    HTTPRateRejected,
+    HTTPRedirectRefused,
+    HTTPTransportFailure,
+)
 
 
 DEFAULT_MAX_REQUESTS = 12
@@ -379,6 +384,18 @@ def collect_deep_shallow_route_followups(
         deep_request = _to_deep_collection_request(request)
         try:
             response = fetcher(deep_request, bounds)
+        except HTTPRateRejected:
+            raise
+        except HTTPRedirectRefused as exc:
+            skipped.append(
+                _collection_skip(request, "redirect_refused", exc.reason)
+            )
+            continue
+        except HTTPTransportFailure as exc:
+            skipped.append(
+                _collection_skip(request, "fetch_error", exc.category)
+            )
+            continue
         except OSError as exc:
             skipped.append(_collection_skip(request, "fetch_error", type(exc).__name__))
             continue

@@ -16,7 +16,10 @@ from bugslyce.config import (
     render_config_show,
     reset_config,
 )
-from bugslyce.core.engagement_context import ALLOWED_ENGAGEMENT_CONTEXTS
+from bugslyce.core.engagement_context import (
+    ALLOWED_ENGAGEMENT_CONTEXTS,
+    BUG_BOUNTY_CONTEXT,
+)
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
 from bugslyce.engagement_policy_setup import (
@@ -107,6 +110,7 @@ from bugslyce.recon.deep_collection_review_bundle import (
     render_deep_collection_review_bundle_markdown,
 )
 from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
+from bugslyce.recon.http_enforcement import HTTPRateRejected
 from bugslyce.recon.deep_metadata_collector import (
     collect_deep_metadata_from_plan,
     render_deep_metadata_collection_result_markdown,
@@ -1421,6 +1425,23 @@ def _project(args: argparse.Namespace) -> int:
     return 2
 
 
+def _deep_http_fetcher_for_input(
+    input_dir: Path,
+    engagement_context: str,
+    _allowed_origins: tuple[str, ...],
+):
+    """Return the permitted direct-command fetcher or refuse bug bounty traffic."""
+
+    if engagement_context == BUG_BOUNTY_CONTEXT:
+        raise ValueError(
+            "Internal Python HTTP enforcement exists in R0B1, but all live bug "
+            "bounty reconnaissance remains blocked until R0B2 and controlled "
+            "capture acceptance. Use offline policy, status, analysis, reporting "
+            "or export commands instead."
+        )
+    return urllib_deep_http_fetcher
+
+
 def _deep_eligibility_input_from_args(args: argparse.Namespace) -> DeepReconEligibilityInput:
     planned_pipeline = get_deep_recon_planned_pipeline()
     planned_outputs = get_deep_recon_planned_outputs()
@@ -1571,12 +1592,19 @@ def _recon(args: argparse.Namespace) -> int:
             print("This stage produces static manual-review context only.", file=sys.stderr)
             return 2
 
-        project_state = build_project_state(args.input_dir)
-        plan = build_deep_collection_request_plan_from_project_state(project_state)
-        result = collect_deep_metadata_from_plan(
-            plan,
-            fetcher=urllib_deep_http_fetcher,
-        )
+        try:
+            project_state = build_project_state(args.input_dir)
+            plan = build_deep_collection_request_plan_from_project_state(project_state)
+            fetcher = _deep_http_fetcher_for_input(
+                args.input_dir,
+                project_state.engagement_context,
+                plan.allowed_origins,
+            )
+            result = collect_deep_metadata_from_plan(plan, fetcher=fetcher)
+        except (OSError, ValueError, HTTPRateRejected) as exc:
+            print(f"Error: internal HTTP collection stopped: {exc}", file=sys.stderr)
+            print("No collection artefacts were written.", file=sys.stderr)
+            return 2
         print(render_deep_metadata_collection_result_markdown(result))
         if args.write_artifacts:
             markdown_path, json_path = write_deep_metadata_collection_artifacts(
@@ -1609,10 +1637,20 @@ def _recon(args: argparse.Namespace) -> int:
             )
             _print_deep_source_route_collection_guardrails()
             return 2
-        result = collect_deep_source_routes_from_plan(
-            plan,
-            fetcher=urllib_deep_http_fetcher,
-        )
+        try:
+            fetcher = _deep_http_fetcher_for_input(
+                args.input_dir,
+                project_state.engagement_context,
+                plan.allowed_origins,
+            )
+            result = collect_deep_source_routes_from_plan(plan, fetcher=fetcher)
+        except (OSError, ValueError, HTTPRateRejected) as exc:
+            print(
+                f"Error: internal source/route collection stopped: {exc}",
+                file=sys.stderr,
+            )
+            _print_deep_source_route_collection_guardrails()
+            return 2
         print(render_deep_source_route_collection_result_markdown(result))
         if args.write_artifacts:
             try:

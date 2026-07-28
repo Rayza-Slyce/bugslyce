@@ -22,6 +22,11 @@ from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPla
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
+from bugslyce.recon.http_enforcement import (
+    HTTPRateRejected,
+    HTTPRedirectRefused,
+    HTTPTransportFailure,
+)
 
 
 MAX_BODY_PREVIEW_CHARS = 500
@@ -124,6 +129,16 @@ def collect_deep_source_routes_from_plan(
 
         try:
             response = fetcher(request, bounds)
+        except HTTPRateRejected:
+            raise
+        except HTTPRedirectRefused as exc:
+            skipped.append(
+                _skip_from_request(request, f"redirect_refused:{exc.reason}")
+            )
+            continue
+        except HTTPTransportFailure as exc:
+            skipped.append(_skip_from_request(request, f"fetch_error:{exc.category}"))
+            continue
         except Exception:
             skipped.append(_skip_from_request(request, "fetch_error"))
             continue

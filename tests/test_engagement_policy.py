@@ -77,6 +77,7 @@ from bugslyce.project_session import (
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.user_agent import (
     R0B_NON_CENTRAL_USER_AGENT_CALL_SITES,
+    R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES,
     built_in_user_agent,
 )
 from bugslyce.reports.html import write_html_report
@@ -101,7 +102,18 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
     assessment = assess_engagement_policy(policy)
     assert assessment.readiness_state == READINESS_INCOMPLETE
     assert assessment.live_execution_state == "blocked"
-    assert assessment.enforcement_state == "live_enforcement_unavailable_r0a"
+    assert (
+        assessment.enforcement_state
+        == "internal_http_only_external_tools_unavailable_r0b1"
+    )
+    assert (
+        assessment.internal_http_enforcement_state
+        == "internal_http_enforcement_available"
+    )
+    assert (
+        assessment.external_tool_enforcement_state
+        == "external_tool_enforcement_unavailable_r0b2"
+    )
 
 
 def test_policy_round_trip_is_deterministic_and_sensitive_repr_is_redacted() -> None:
@@ -245,7 +257,7 @@ def test_redacted_rendering_never_exposes_identification_values() -> None:
     assert "Custom User-Agent: configured" in rendered
     assert SENTINEL_HEADER not in rendered
     assert SENTINEL_USER_AGENT not in rendered
-    assert "Live bug bounty reconnaissance remains blocked" in rendered
+    assert "Live bug bounty project reconnaissance remains blocked" in rendered
 
 
 def test_policy_storage_is_atomic_private_and_refuses_symlinks(tmp_path: Path) -> None:
@@ -542,8 +554,9 @@ def test_built_in_user_agent_uses_current_version_and_not_stale_identity() -> No
 
     assert value == f"BugSlyce/{__version__} authorised-recon"
     assert "BugSlyce/0.3" not in value
-    assert R0B_NON_CENTRAL_USER_AGENT_CALL_SITES == (
-        "bugslyce.recon.deep_http_fetcher.USER_AGENT",
+    assert R0B_NON_CENTRAL_USER_AGENT_CALL_SITES == ()
+    assert "bugslyce.recon.runner.LiveHTTPMetadataRunner" in (
+        R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES
     )
 
 
@@ -557,7 +570,7 @@ def test_bug_bounty_pipeline_profiles_refuse_before_doctor_or_runner(
     profile: str,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
-    write_engagement_policy(project_file.parent, _complete_policy())
+    save_project_engagement_policy(project_file, _complete_policy())
     called = False
 
     def fail_doctor():
@@ -567,12 +580,15 @@ def test_bug_bounty_pipeline_profiles_refuse_before_doctor_or_runner(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
 
-    with pytest.raises(ValueError, match="blocked in R0A") as exc_info:
+    with pytest.raises(ValueError, match="blocked in R0B1") as exc_info:
         run_project_pipeline(project_file, profile)
 
     assert called is False
-    assert "not yet enforced" in str(exc_info.value)
-    assert "R0B" in str(exc_info.value)
+    assert "curl, Gobuster and Nmap enforcement are incomplete" in str(
+        exc_info.value
+    )
+    assert "R0B2" in str(exc_info.value)
+    assert "Policy issues:" not in str(exc_info.value)
 
 
 def test_old_bug_bounty_project_without_policy_is_blocked_before_live_work(
@@ -616,7 +632,7 @@ def test_direct_cli_run_reports_non_bypassable_bug_bounty_refusal(
     captured = capsys.readouterr()
 
     assert exit_code == 2
-    assert "blocked in R0A" in captured.err
+    assert "blocked in R0B1" in captured.err
     assert "No pipeline phase was executed" in captured.err
 
 

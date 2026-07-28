@@ -96,8 +96,8 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
         lambda result, output_dir: (output_dir / "content-followup.json", output_dir / "content-followup.md"),
     )
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.urllib_deep_http_fetcher",
-        lambda request, bounds: _deep_fetcher(request, fetch_urls),
+        "bugslyce.project_pipeline.build_deep_http_fetcher",
+        lambda: lambda request, bounds: _deep_fetcher(request, fetch_urls),
     )
 
     result = run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)

@@ -55,7 +55,7 @@ from bugslyce.recon.deep_collection_request_plan import (
     build_deep_collection_request_plan_from_project_state,
 )
 from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
-from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
+from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_javascript_route_extraction import (
     build_deep_javascript_route_extraction,
 )
@@ -359,7 +359,7 @@ class ResumeAssessment:
 
 
 def enforce_project_execution_policy(project: object) -> None:
-    """Refuse bug bounty live execution until R0B enforcement is available."""
+    """Refuse bug bounty live execution until R0B2 enforcement is available."""
 
     if getattr(project, "engagement_context", None) != BUG_BOUNTY_CONTEXT:
         return
@@ -376,10 +376,11 @@ def enforce_project_execution_policy(project: object) -> None:
     if reasons:
         reason_text = " Policy issues: " + " ".join(reasons)
     raise ValueError(
-        "Live bug bounty reconnaissance is blocked in R0A. Policy capture exists, "
-        "but aggregate traffic limits and identification are not yet enforced "
-        "across every network component. Use the offline project policy setup for "
-        "save-only configuration; R0B will implement enforcement."
+        "Live bug bounty project reconnaissance remains blocked in R0B1. Internal "
+        "Python HTTP pacing and identification enforcement are implemented, but "
+        "curl, Gobuster and Nmap enforcement are incomplete. Use the offline project "
+        "policy setup for save-only configuration; R0B2 is required before live "
+        "bug bounty project execution."
         + reason_text
     )
 
@@ -1506,9 +1507,10 @@ def _step_runners(
     def deep_collection():
         project_state = build_project_state(output_dir)
         plan = build_deep_collection_request_plan_from_project_state(project_state)
+        fetcher = build_deep_http_fetcher()
         source_collection = collect_deep_source_routes_from_plan(
             plan,
-            fetcher=urllib_deep_http_fetcher,
+            fetcher=fetcher,
         )
         source_paths = write_deep_source_route_collection_artifacts(
             source_collection,
@@ -1522,7 +1524,7 @@ def _step_runners(
         )
         shallow_followups = collect_deep_shallow_route_followups(
             followup_plan,
-            fetcher=urllib_deep_http_fetcher,
+            fetcher=fetcher,
         )
         current = _deep_outputs_from_context(context)
         context["deep_outputs"] = replace(

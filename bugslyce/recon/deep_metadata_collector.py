@@ -18,6 +18,12 @@ from bugslyce.recon.deep_collection_policy import (
 )
 from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
+from bugslyce.recon.http_enforcement import (
+    HTTPRateRejected,
+    HTTPRedirectHop,
+    HTTPRedirectRefused,
+    HTTPTransportFailure,
+)
 
 
 MAX_BODY_PREVIEW_CHARS = 500
@@ -45,6 +51,7 @@ class DeepHTTPResponse:
     headers: tuple[tuple[str, str], ...]
     body: bytes
     elapsed_seconds: float
+    redirects: tuple[HTTPRedirectHop, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,16 @@ def collect_deep_metadata_from_plan(
 
         try:
             response = fetcher(request, bounds)
+        except HTTPRateRejected:
+            raise
+        except HTTPRedirectRefused as exc:
+            skipped.append(
+                _skip_from_request(request, f"redirect_refused:{exc.reason}")
+            )
+            continue
+        except HTTPTransportFailure as exc:
+            skipped.append(_skip_from_request(request, f"fetch_error:{exc.category}"))
+            continue
         except Exception:
             skipped.append(_skip_from_request(request, "fetch_error"))
             continue

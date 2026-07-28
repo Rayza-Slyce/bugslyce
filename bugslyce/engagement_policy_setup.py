@@ -86,8 +86,8 @@ def configure_project_policy_interactively(
         "programme brief. No platform preset supersedes those rules."
     )
     print_func(
-        "R0A records policy values but does not enforce them across every network "
-        "component. Live bug bounty reconnaissance remains blocked."
+        "R0B1 enforces policy values for internal Python HTTP requests, but not yet "
+        "for curl, Gobuster or Nmap. Live bug bounty project reconnaissance remains blocked."
     )
     print_func("")
 

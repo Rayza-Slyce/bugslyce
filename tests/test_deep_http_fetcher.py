@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from urllib.error import HTTPError
 
-import bugslyce.recon.deep_http_fetcher as fetcher_module
+import bugslyce.recon.http_enforcement as enforcement_module
+from bugslyce.core.engagement_policy import IdentificationHeader
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionRequest,
@@ -13,17 +15,26 @@ from bugslyce.recon.deep_collection_policy import (
     evaluate_deep_collection_requests,
 )
 from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
-from bugslyce.recon.deep_http_fetcher import urllib_deep_http_fetcher
+from bugslyce.recon.deep_http_fetcher import (
+    build_deep_http_fetcher,
+    urllib_deep_http_fetcher,
+)
 from bugslyce.recon.deep_metadata_collector import (
     DeepHTTPResponse,
     collect_deep_metadata_from_plan,
 )
+from bugslyce.recon.http_enforcement import (
+    HTTPEnforcementConfiguration,
+    HTTPTransportResponse,
+)
+from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
     get_recon_mode,
     is_recon_mode_available,
 )
+from bugslyce.recon.user_agent import built_in_user_agent
 
 
 def test_get_request_uses_get_user_agent_timeout_and_bounded_read(monkeypatch) -> None:
@@ -56,7 +67,7 @@ def test_get_request_uses_get_user_agent_timeout_and_bounded_read(monkeypatch) -
     urllib_request, timeout = calls[0]
     assert urllib_request.get_method() == "GET"
     assert urllib_request.full_url == "http://example.test/robots.txt"
-    assert urllib_request.get_header("User-agent") == "BugSlyce/0.3 authorised-recon"
+    assert urllib_request.get_header("User-agent") == built_in_user_agent()
     assert timeout == 7
     assert opener.response.read_sizes == [4]
 
@@ -146,7 +157,7 @@ def test_redirects_are_not_automatically_followed(monkeypatch) -> None:
             [],
         )
 
-    monkeypatch.setattr(fetcher_module, "build_opener", fake_build_opener)
+    monkeypatch.setattr(enforcement_module, "build_opener", fake_build_opener)
 
     response = urllib_deep_http_fetcher(
         _request("http://example.test/login"),
@@ -201,8 +212,38 @@ def test_mode_enablement_remains_unchanged() -> None:
     assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
 
 
+def test_policy_aware_adapter_preserves_followed_redirect_evidence() -> None:
+    responses = [
+        HTTPTransportResponse(302, (("Location", "/next"),), b""),
+        HTTPTransportResponse(200, (), b"done"),
+    ]
+
+    def transport(_request):
+        return responses.pop(0)
+
+    origin = http_origin_from_url("https://example.test")
+    assert origin is not None
+    configuration = HTTPEnforcementConfiguration(
+        maximum_request_starts_per_second=Decimal("100000"),
+        maximum_concurrent_requests=1,
+        user_agent="BugSlyce/test",
+        identification_headers=(IdentificationHeader("X-Researcher-ID", "tester"),),
+        approved_origins=(origin,),
+    )
+    fetcher = build_deep_http_fetcher(configuration, transport=transport)
+
+    response = fetcher(
+        _request("https://example.test/start"),
+        default_deep_collection_bounds(),
+    )
+
+    assert response.final_url == "https://example.test/next"
+    assert response.redirects[0].source_url == "https://example.test/start"
+    assert response.redirects[0].destination_url == "https://example.test/next"
+
+
 def _install_fake_opener(monkeypatch, opener: "_FakeOpener") -> None:
-    monkeypatch.setattr(fetcher_module, "build_opener", lambda *handlers: opener)
+    monkeypatch.setattr(enforcement_module, "build_opener", lambda *handlers: opener)
 
 
 def _plan(
