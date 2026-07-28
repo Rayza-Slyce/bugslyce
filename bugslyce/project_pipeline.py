@@ -9,7 +9,7 @@ import textwrap
 from typing import Callable
 
 from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
-from bugslyce.core.engagement_policy import bug_bounty_live_refusal_reasons
+from bugslyce.core.engagement_policy import r0b2_bug_bounty_live_refusal_message
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
@@ -359,7 +359,7 @@ class ResumeAssessment:
 
 
 def enforce_project_execution_policy(project: object) -> None:
-    """Refuse bug bounty live execution until R0B2 enforcement is available."""
+    """Refuse bug bounty live execution until R0B3 capture acceptance passes."""
 
     if getattr(project, "engagement_context", None) != BUG_BOUNTY_CONTEXT:
         return
@@ -369,19 +369,12 @@ def enforce_project_execution_policy(project: object) -> None:
         policy = load_project_engagement_policy(project)
     except ValueError as exc:
         load_error = str(exc)
-    reasons = list(bug_bounty_live_refusal_reasons(policy))
-    if load_error is not None:
-        reasons = [load_error]
-    reason_text = ""
-    if reasons:
-        reason_text = " Policy issues: " + " ".join(reasons)
     raise ValueError(
-        "Live bug bounty project reconnaissance remains blocked in R0B1. Internal "
-        "Python HTTP pacing and identification enforcement are implemented, but "
-        "curl, Gobuster and Nmap enforcement are incomplete. Use the offline project "
-        "policy setup for save-only configuration; R0B2 is required before live "
-        "bug bounty project execution."
-        + reason_text
+        r0b2_bug_bounty_live_refusal_message(
+            policy,
+            policy_error=load_error,
+            policy_assessed=True,
+        )
     )
 
 

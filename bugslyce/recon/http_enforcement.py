@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 import math
@@ -9,7 +10,7 @@ import re
 import threading
 from time import monotonic as system_monotonic
 from time import sleep as system_sleep
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
@@ -270,6 +271,16 @@ class SteadyRequestStartLimiter:
             if interrupt_check is not None:
                 interrupt_check()
 
+    def defer_next_start(self) -> Decimal:
+        """Conservatively require one full interval after an opaque HTTP tool."""
+
+        with self._lock:
+            now = _monotonic_decimal(self._monotonic)
+            barrier = now + self._interval
+            if self._next_start is None or self._next_start < barrier:
+                self._next_start = barrier
+            return self._next_start
+
 
 class InternalHTTPExecutor:
     """Shared mutable runtime enforcing identity, pacing and concurrency."""
@@ -306,6 +317,13 @@ class InternalHTTPExecutor:
             if configuration is not None
             else None
         )
+        self._concurrency_limit = (
+            configuration.maximum_concurrent_requests
+            if configuration is not None
+            else 0
+        )
+        self._concurrency_gate = threading.Lock()
+        self._exclusive_tool_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._total_request_attempts = 0
         self._last_request_start: Decimal | None = None
@@ -402,26 +420,65 @@ class InternalHTTPExecutor:
             visited.add(destination)
             current_url = destination
 
+    @contextmanager
+    def external_request_permit(self) -> Iterator[Decimal]:
+        """Reserve one paced HTTP exchange for an external single-request tool."""
+
+        if self.configuration is None:
+            raise ValueError(
+                "External HTTP permits require policy-derived enforcement configuration."
+            )
+        with self._request_permit() as start:
+            yield start
+
+    @contextmanager
+    def exclusive_external_http_tool(self) -> Iterator[Decimal]:
+        """Reserve the HTTP runtime exclusively for one internally paced tool."""
+
+        if self.configuration is None or self._concurrency is None:
+            raise ValueError(
+                "External HTTP tools require policy-derived enforcement configuration."
+            )
+        acquired = 0
+        with self._exclusive_tool_lock:
+            with self._concurrency_gate:
+                try:
+                    for _index in range(self._concurrency_limit):
+                        self._concurrency.acquire()
+                        acquired += 1
+                except BaseException:
+                    for _index in range(acquired):
+                        self._concurrency.release()
+                    raise
+            try:
+                start = self._paced_request_start()
+                yield start
+            finally:
+                if self._limiter is not None:
+                    self._limiter.defer_next_start()
+                for _index in range(acquired):
+                    self._concurrency.release()
+
+    def record_external_rate_rejection(
+        self,
+        response_headers: tuple[tuple[str, str], ...],
+    ) -> HTTPRateRejected:
+        """Set the shared terminal HTTP 429 state from an external exchange."""
+
+        rejection = HTTPRateRejected(_safe_retry_after(response_headers))
+        with self._state_lock:
+            if self._rate_rejection is None:
+                self._rate_rejection = rejection
+            else:
+                rejection = self._rate_rejection
+        self._terminal_event.set()
+        return rejection
+
     def _execute_exchange(
         self,
         request: HTTPTransportRequest,
     ) -> HTTPTransportResponse:
-        self._check_available()
-        acquired = False
-        if self._concurrency is not None:
-            self._concurrency.acquire()
-            acquired = True
-        try:
-            self._check_available()
-            start = (
-                self._limiter.wait(
-                    interrupt_event=self._terminal_event,
-                    interrupt_check=self._check_available,
-                )
-                if self._limiter is not None
-                else _monotonic_decimal(self._monotonic)
-            )
-            self._commit_request_attempt(start)
+        with self._request_permit():
             try:
                 raw_response = self.transport(request)
             except TimeoutError:
@@ -440,9 +497,34 @@ class InternalHTTPExecutor:
                 self._terminal_event.set()
                 raise rejection
             return response
+
+    @contextmanager
+    def _request_permit(self) -> Iterator[Decimal]:
+        self._check_available()
+        acquired = False
+        if self._concurrency is not None:
+            with self._concurrency_gate:
+                self._concurrency.acquire()
+                acquired = True
+        try:
+            start = self._paced_request_start()
+            yield start
         finally:
-            if acquired:
+            if acquired and self._concurrency is not None:
                 self._concurrency.release()
+
+    def _paced_request_start(self) -> Decimal:
+        self._check_available()
+        start = (
+            self._limiter.wait(
+                interrupt_event=self._terminal_event,
+                interrupt_check=self._check_available,
+            )
+            if self._limiter is not None
+            else _monotonic_decimal(self._monotonic)
+        )
+        self._commit_request_attempt(start)
+        return start
 
     def _check_available(self) -> None:
         with self._state_lock:
@@ -518,27 +600,12 @@ class InternalHTTPExecutor:
     ) -> str:
         if self.configuration is None:
             raise HTTPRedirectRefused("redirect_policy_unavailable")
-        destination = _resolve_redirect_location(current_url, location)
-        if urlparse(destination).query and not allow_query_strings:
-            raise HTTPRedirectRefused("redirect_query_not_allowed")
-        current_origin = http_origin_from_url(current_url)
-        destination_origin = http_origin_from_url(destination)
-        if current_origin is None or destination_origin is None:
-            raise HTTPRedirectRefused("unsupported_redirect")
-        if current_origin == destination_origin:
-            return destination
-        if current_origin.scheme == "https" and destination_origin.scheme == "http":
-            raise HTTPRedirectRefused("https_downgrade")
-        approved = set(self.configuration.approved_origins)
-        if (
-            current_origin.scheme == "http"
-            and destination_origin.scheme == "https"
-            and current_origin.hostname == destination_origin.hostname
-        ):
-            if current_origin in approved and destination_origin in approved:
-                return destination
-            raise HTTPRedirectRefused("http_upgrade_not_approved")
-        raise HTTPRedirectRefused("origin_not_approved")
+        return resolve_policy_redirect(
+            current_url,
+            location,
+            approved_origins=self.configuration.approved_origins,
+            allow_query_strings=allow_query_strings,
+        )
 
 
 class UrllibHTTPTransport:
@@ -742,6 +809,38 @@ def _resolve_redirect_location(current_url: str, location: str) -> str:
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
         raise HTTPRedirectRefused("unsupported_redirect")
     return destination
+
+
+def resolve_policy_redirect(
+    current_url: str,
+    location: str,
+    *,
+    approved_origins: tuple[HttpOrigin, ...],
+    allow_query_strings: bool = False,
+) -> str:
+    """Resolve one redirect using the same strict policy for every HTTP transport."""
+
+    destination = _resolve_redirect_location(current_url, location)
+    if urlparse(destination).query and not allow_query_strings:
+        raise HTTPRedirectRefused("redirect_query_not_allowed")
+    current_origin = http_origin_from_url(current_url)
+    destination_origin = http_origin_from_url(destination)
+    if current_origin is None or destination_origin is None:
+        raise HTTPRedirectRefused("unsupported_redirect")
+    if current_origin == destination_origin:
+        return destination
+    if current_origin.scheme == "https" and destination_origin.scheme == "http":
+        raise HTTPRedirectRefused("https_downgrade")
+    approved = set(approved_origins)
+    if (
+        current_origin.scheme == "http"
+        and destination_origin.scheme == "https"
+        and current_origin.hostname == destination_origin.hostname
+    ):
+        if current_origin in approved and destination_origin in approved:
+            return destination
+        raise HTTPRedirectRefused("http_upgrade_not_approved")
+    raise HTTPRedirectRefused("origin_not_approved")
 
 
 def _safe_retry_after(headers: tuple[tuple[str, str], ...]) -> str:

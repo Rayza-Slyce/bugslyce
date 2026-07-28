@@ -18,8 +18,8 @@ from bugslyce.config import (
 )
 from bugslyce.core.engagement_context import (
     ALLOWED_ENGAGEMENT_CONTEXTS,
-    BUG_BOUNTY_CONTEXT,
 )
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
 from bugslyce.engagement_policy_setup import (
@@ -1432,13 +1432,7 @@ def _deep_http_fetcher_for_input(
 ):
     """Return the permitted direct-command fetcher or refuse bug bounty traffic."""
 
-    if engagement_context == BUG_BOUNTY_CONTEXT:
-        raise ValueError(
-            "Internal Python HTTP enforcement exists in R0B1, but all live bug "
-            "bounty reconnaissance remains blocked until R0B2 and controlled "
-            "capture acceptance. Use offline policy, status, analysis, reporting "
-            "or export commands instead."
-        )
+    enforce_r0b2_bug_bounty_live_block(engagement_context)
     return urllib_deep_http_fetcher
 
 

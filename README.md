@@ -29,14 +29,24 @@ rules cannot be honoured.**
 BugSlyce remains suitable for CTFs and controlled authorised labs. No
 production target was involved in discovering these issues.
 
-The unreleased R0B1 source contains a central enforcement engine for migrated
-internal Python HTTP requests. It applies aggregate pacing, concurrency,
-identity and controlled redirect policy from the platform-neutral engagement
-policy. Curl, Gobuster and Nmap enforcement is not yet implemented, so all live
-bug bounty reconnaissance entry points remain blocked. Use `bugslyce project policy
---project ./bugslyce_project.json --configure` for save-only setup. No platform
-preset supersedes current programme rules; R0B2 will complete external-tool
-enforcement before controlled capture acceptance.
+The unreleased R0B2 source contains central internal HTTP enforcement and
+policy-aware external-tool planning and enforcement foundations. Curl shares
+aggregate pacing and traffic identity with internal HTTP. Compatible Gobuster
+plans use one thread, a conservative delay and the configured identity. Strict
+bug bounty Nmap plans perform TCP port-state discovery only; incompatible
+required curl or Nmap capability blocks preflight, while incompatible optional
+Gobuster is omitted rather than weakened.
+
+All live bug bounty reconnaissance entry points remain blocked pending R0B3
+controlled capture acceptance. Save or update policy configuration without
+running recon:
+
+```bash
+bugslyce project policy --project ./bugslyce_project.json --configure
+```
+
+No platform preset supersedes current programme rules. CTFs and controlled
+authorised labs remain the supported live-testing contexts.
 
 Current package version: `1.1.1`.
 

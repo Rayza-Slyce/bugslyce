@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse, urlunparse
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import ProjectState, ReconBodyFetchExecutionResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.body_fetch_commands import (
@@ -147,6 +148,7 @@ def run_body_fetch_workflow(
     target = validate_explicit_nmap_target_scope(target_value.strip().lower(), scope_file)
 
     initial_state = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     considered, selected_urls = select_body_fetch_urls(initial_state, target, manifest)
     if considered == 0:
         raise ValueError("No prior content-followup header artefacts were found.")

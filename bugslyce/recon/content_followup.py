@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import (
     DiscoveredPath,
     ProjectState,
@@ -145,6 +146,7 @@ def run_content_followup_workflow(
     target = validate_explicit_nmap_target_scope(target_value.strip().lower(), scope_file)
 
     initial_state = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     considered, selected_urls = select_content_followup_urls(
         initial_state,
         target,

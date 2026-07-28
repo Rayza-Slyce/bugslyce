@@ -6,6 +6,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import ReconNmapServiceExecutionResult
 from bugslyce.core.project import build_project_state
 from bugslyce.parsers.nmap import parse_nmap_normal
@@ -56,6 +57,9 @@ def run_nmap_service_workflow(
         raise ValueError(f"Input directory does not exist: {input_dir}")
     if not input_dir.is_dir():
         raise ValueError(f"Input path is not a directory: {input_dir}")
+
+    project_state = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(project_state.engagement_context)
 
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)

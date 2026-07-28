@@ -3,7 +3,16 @@
 from bugslyce import __version__
 
 
-R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES = (
+R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES = (
+    "bugslyce.recon.external_enforcement.build_bug_bounty_curl_plan",
+    "bugslyce.recon.external_enforcement.build_bug_bounty_gobuster_plan",
+    "bugslyce.recon.external_enforcement.build_bug_bounty_nmap_plan",
+)
+
+# Existing context-neutral live runners remain authorised-lab interfaces. They
+# are not reachable from a bug bounty project pipeline while the R0B3 block is
+# active and must not be mistaken for policy-aware command boundaries.
+R0B3_BLOCKED_LEGACY_LIVE_RUNNERS = (
     "bugslyce.recon.runner.LiveCurlHeaderRunner",
     "bugslyce.recon.runner.LiveHTTPMetadataRunner",
     "bugslyce.recon.runner.LivePathFollowupRunner",

@@ -11,6 +11,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import (
     ContentDiscoveryPlan,
     ContentDiscoveryStep,
@@ -138,6 +139,7 @@ def run_content_discovery_workflow(
     selected_steps = _select_steps(plan, step_id)
 
     state_before = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(state_before.engagement_context)
     if (
         state_before.recon_manifest is None
         or state_before.recon_manifest.target.strip().lower() != target

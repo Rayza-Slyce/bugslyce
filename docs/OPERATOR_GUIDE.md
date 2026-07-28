@@ -18,10 +18,11 @@ Before typing `YES` to run recon, verify:
 
 BugSlyce safety controls do not replace external rules.
 
-### R0B1 bug bounty engagement policy and internal HTTP enforcement
+### R0B2 bug bounty engagement policy and enforcement foundations
 
-R0B1 retains the local, versioned traffic and identification policy for bug
-bounty projects and applies it to migrated internal Python HTTP requests.
+R0B2 retains the local, versioned traffic and identification policy for bug
+bounty projects and applies it to migrated internal Python HTTP requests and
+strict external-tool plans.
 Configuration remains platform-neutral: copy the exact limits and
 researcher-identification requirements from the current programme brief. No
 platform preset overrides those current rules.
@@ -42,10 +43,16 @@ bugslyce project policy --project ./bugslyce_project.json
 
 The internal executor enforces steady aggregate request starts, concurrency,
 effective identity and controlled redirects for migrated Python HTTP paths.
-Curl, Gobuster and Nmap are not yet integrated, so every live bug bounty
-reconnaissance entry point remains blocked even when policy setup is complete. CTFs and
-controlled authorised labs remain the supported live-testing contexts while
-R0B2 implements and verifies external-tool enforcement.
+Curl exchanges use the same aggregate pacing and identity. Compatible Gobuster
+plans use one thread and a conservative delay and run without concurrent HTTP
+components. Strict bug bounty Nmap plans perform bounded TCP port-state
+discovery only. Incompatible optional Gobuster is omitted rather than weakened;
+incompatible required curl or Nmap capability blocks preflight.
+
+Every live bug bounty reconnaissance entry point remains blocked even when
+policy setup and tool preflight are complete. R0B3 controlled capture acceptance
+is required before that block can be reconsidered. CTFs and controlled
+authorised labs remain the supported live-testing contexts.
 
 ## 2. Interactive Launcher
 

@@ -201,7 +201,7 @@ def test_public_repo_security_and_ci_docs_exist() -> None:
     assert "pytest" in workflow
 
 
-def test_r0b1_internal_http_documentation_remains_blocked_and_platform_neutral() -> None:
+def test_r0b2_external_enforcement_documentation_remains_blocked_and_platform_neutral() -> None:
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
     operator_guide = (root / "docs" / "OPERATOR_GUIDE.md").read_text(
@@ -211,12 +211,14 @@ def test_r0b1_internal_http_documentation_remains_blocked_and_platform_neutral()
     compact = " ".join(combined.split())
 
     assert "bugslyce project policy" in combined
-    assert "unreleased R0B1 source" in readme
-    assert "central enforcement engine" in readme
+    assert "unreleased R0B2 source" in readme
+    assert "external-tool planning and enforcement foundations" in readme
     assert "platform-neutral" in combined
     assert "no platform preset" in compact.lower()
     assert "aggregate pacing" in compact
-    assert "Curl, Gobuster and Nmap enforcement is not yet implemented" in compact
+    assert "Curl shares aggregate pacing" in compact
+    assert "one thread" in compact
+    assert "TCP port-state discovery only" in compact
     assert "live bug bounty reconnaissance entry points remain blocked" in compact.lower()
-    assert "R0B2" in combined
+    assert "R0B3" in combined
     assert "CTFs and controlled authorised labs" in compact

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import (
     ProjectState,
     ReconPathFollowupExecutionResult,
@@ -90,6 +91,7 @@ def run_path_followup_workflow(
         )
 
     initial_state = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     target_value = manifest.get("target")
     if not isinstance(target_value, str) or not target_value.strip():
         raise ValueError("Recon manifest does not contain a target.")

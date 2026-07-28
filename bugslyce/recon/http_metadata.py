@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import ProjectState, ReconHTTPMetadataExecutionResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.http_metadata_commands import (
@@ -60,6 +61,7 @@ def run_http_metadata_workflow(
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)
     initial_state = build_project_state(input_dir)
+    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     target = _resolve_target(manifest, initial_state)
     target = validate_explicit_nmap_target_scope(target, scope_file)
     all_origins = discover_http_origins(

@@ -77,7 +77,8 @@ from bugslyce.project_session import (
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.user_agent import (
     R0B_NON_CENTRAL_USER_AGENT_CALL_SITES,
-    R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES,
+    R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES,
+    R0B3_BLOCKED_LEGACY_LIVE_RUNNERS,
     built_in_user_agent,
 )
 from bugslyce.reports.html import write_html_report
@@ -104,7 +105,7 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
     assert assessment.live_execution_state == "blocked"
     assert (
         assessment.enforcement_state
-        == "internal_http_only_external_tools_unavailable_r0b1"
+        == "internal_and_external_enforcement_foundations_r0b2"
     )
     assert (
         assessment.internal_http_enforcement_state
@@ -112,7 +113,7 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
     )
     assert (
         assessment.external_tool_enforcement_state
-        == "external_tool_enforcement_unavailable_r0b2"
+        == "external_tool_enforcement_foundation_available_r0b2"
     )
 
 
@@ -556,7 +557,10 @@ def test_built_in_user_agent_uses_current_version_and_not_stale_identity() -> No
     assert "BugSlyce/0.3" not in value
     assert R0B_NON_CENTRAL_USER_AGENT_CALL_SITES == ()
     assert "bugslyce.recon.runner.LiveHTTPMetadataRunner" in (
-        R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES
+        R0B3_BLOCKED_LEGACY_LIVE_RUNNERS
+    )
+    assert "bugslyce.recon.external_enforcement.build_bug_bounty_curl_plan" in (
+        R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES
     )
 
 
@@ -580,14 +584,14 @@ def test_bug_bounty_pipeline_profiles_refuse_before_doctor_or_runner(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
 
-    with pytest.raises(ValueError, match="blocked in R0B1") as exc_info:
+    with pytest.raises(ValueError, match="blocked in R0B2") as exc_info:
         run_project_pipeline(project_file, profile)
 
     assert called is False
-    assert "curl, Gobuster and Nmap enforcement are incomplete" in str(
+    assert "external curl, Gobuster and Nmap enforcement foundations" in str(
         exc_info.value
     )
-    assert "R0B2" in str(exc_info.value)
+    assert "R0B3" in str(exc_info.value)
     assert "Policy issues:" not in str(exc_info.value)
 
 
@@ -632,7 +636,7 @@ def test_direct_cli_run_reports_non_bypassable_bug_bounty_refusal(
     captured = capsys.readouterr()
 
     assert exit_code == 2
-    assert "blocked in R0B1" in captured.err
+    assert "blocked in R0B2" in captured.err
     assert "No pipeline phase was executed" in captured.err
 
 

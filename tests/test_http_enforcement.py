@@ -41,7 +41,8 @@ from bugslyce.recon.http_enforcement import (
 )
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.user_agent import (
-    R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES,
+    R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES,
+    R0B3_BLOCKED_LEGACY_LIVE_RUNNERS,
     built_in_user_agent,
 )
 
@@ -384,7 +385,7 @@ def test_direct_bug_bounty_internal_stage_remains_blocked_before_fetcher_constru
         engagement_context="bug_bounty",
     )
     save_project_engagement_policy(project_file, _complete_policy())
-    with pytest.raises(ValueError, match="R0B2"):
+    with pytest.raises(ValueError, match="R0B3"):
         cli_module._deep_http_fetcher_for_input(
             output_dir,
             "bug_bounty",
@@ -443,7 +444,7 @@ def test_bug_bounty_modular_collection_commands_refuse_before_live_fetcher(
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "R0B2" in captured.err
+    assert "R0B3" in captured.err
     assert "controlled capture acceptance" in captured.err
     assert collection_calls == []
 
@@ -1140,7 +1141,7 @@ def test_internal_http_source_audit_has_one_transport_boundary_and_no_stale_agen
         for pattern in direct_patterns:
             assert re.search(pattern, source) is None, (path, pattern)
 
-    assert R0B2_DEFERRED_EXTERNAL_HTTP_CALL_SITES == (
+    assert R0B3_BLOCKED_LEGACY_LIVE_RUNNERS == (
         "bugslyce.recon.runner.LiveCurlHeaderRunner",
         "bugslyce.recon.runner.LiveHTTPMetadataRunner",
         "bugslyce.recon.runner.LivePathFollowupRunner",
@@ -1149,6 +1150,11 @@ def test_internal_http_source_audit_has_one_transport_boundary_and_no_stale_agen
         "bugslyce.recon.runner.LiveContentDiscoveryRunner",
         "bugslyce.recon.runner.LiveNmapDiscoveryRunner",
         "bugslyce.recon.runner.LiveNmapServiceRunner",
+    )
+    assert R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES == (
+        "bugslyce.recon.external_enforcement.build_bug_bounty_curl_plan",
+        "bugslyce.recon.external_enforcement.build_bug_bounty_gobuster_plan",
+        "bugslyce.recon.external_enforcement.build_bug_bounty_nmap_plan",
     )
 
 

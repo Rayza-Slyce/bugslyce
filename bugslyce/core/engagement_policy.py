@@ -48,9 +48,11 @@ IDENTIFICATION_UNKNOWN = "not_yet_confirmed"
 
 READINESS_INCOMPLETE = "policy_incomplete"
 READINESS_FUTURE_ENFORCEMENT = "complete_for_future_enforcement"
-ENFORCEMENT_PARTIAL = "internal_http_only_external_tools_unavailable_r0b1"
+ENFORCEMENT_PARTIAL = "internal_and_external_enforcement_foundations_r0b2"
 INTERNAL_HTTP_ENFORCEMENT_AVAILABLE = "internal_http_enforcement_available"
-EXTERNAL_TOOL_ENFORCEMENT_UNAVAILABLE = "external_tool_enforcement_unavailable_r0b2"
+EXTERNAL_TOOL_ENFORCEMENT_FOUNDATION_AVAILABLE = (
+    "external_tool_enforcement_foundation_available_r0b2"
+)
 LIVE_EXECUTION_BLOCKED = "blocked"
 
 MAX_NUMERIC_INPUT_LENGTH = 128
@@ -449,7 +451,9 @@ def assess_engagement_policy(
         not_ready_reasons=reasons,
         enforcement_state=ENFORCEMENT_PARTIAL,
         internal_http_enforcement_state=INTERNAL_HTTP_ENFORCEMENT_AVAILABLE,
-        external_tool_enforcement_state=EXTERNAL_TOOL_ENFORCEMENT_UNAVAILABLE,
+        external_tool_enforcement_state=(
+            EXTERNAL_TOOL_ENFORCEMENT_FOUNDATION_AVAILABLE
+        ),
         live_execution_state=LIVE_EXECUTION_BLOCKED,
     )
 
@@ -672,11 +676,11 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
         lines.append("Reasons preventing readiness: none")
     lines.extend(
         (
-            "Internal Python HTTP enforcement: available in R0B1.",
-            "External-tool enforcement: unavailable until R0B2.",
+            "Internal Python HTTP enforcement: available.",
+            "External-tool enforcement foundation: available in R0B2.",
             (
-                "Policy values are not yet enforced across curl, Gobuster and Nmap. "
-                "Live bug bounty project reconnaissance remains blocked."
+                "Controlled capture acceptance has not yet passed. Live bug bounty "
+                "project reconnaissance remains blocked pending R0B3."
             ),
         )
     )
@@ -689,6 +693,45 @@ def bug_bounty_live_refusal_reasons(policy: EngagementPolicy | None) -> tuple[st
     if policy is None:
         return ("Engagement policy is missing.",)
     return assess_engagement_policy(policy).not_ready_reasons
+
+
+def enforce_r0b2_bug_bounty_live_block(
+    engagement_context: str,
+    policy: EngagementPolicy | None = None,
+) -> None:
+    """Refuse target traffic until R0B3 controlled capture acceptance passes."""
+
+    if engagement_context != BUG_BOUNTY_CONTEXT:
+        return
+    raise ValueError(r0b2_bug_bounty_live_refusal_message(policy))
+
+
+def r0b2_bug_bounty_live_refusal_message(
+    policy: EngagementPolicy | None = None,
+    *,
+    policy_error: str | None = None,
+    policy_assessed: bool = False,
+) -> str:
+    """Return the central redacted R0B2 live-refusal message."""
+
+    reasons = (
+        bug_bounty_live_refusal_reasons(policy)
+        if policy is not None or policy_assessed
+        else ()
+    )
+    if policy_error is not None:
+        reasons = (policy_error,)
+    reason_text = ""
+    if reasons:
+        reason_text = " Policy issues: " + " ".join(reasons)
+    return (
+        "Live bug bounty reconnaissance remains blocked in R0B2. Internal Python "
+        "HTTP and external curl, Gobuster and Nmap enforcement foundations exist, "
+        "but controlled capture acceptance has not yet passed. Use offline policy, "
+        "planning, status, analysis, reporting or export commands; R0B3 is required "
+        "before live bug bounty execution."
+        + reason_text
+    )
 
 
 def validate_policy_timestamp(value: object) -> str:
@@ -777,8 +820,12 @@ def _require_choice(value: object, allowed: set[str], label: str) -> str:
 
 
 def _normalise_decimal(value: Decimal) -> str:
-    text = format(value.normalize(), "f")
-    return text.rstrip("0").rstrip(".") if "." in text else text
+    normalized = value.normalize()
+    text = format(normalized, "f")
+    text = text.rstrip("0").rstrip(".") if "." in text else text
+    if len(text) <= MAX_NUMERIC_INPUT_LENGTH:
+        return text
+    return format(normalized, "E").replace("E+", "e").replace("E", "e")
 
 
 def _compact_ports(ports: list[int]) -> str:
