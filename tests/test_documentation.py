@@ -173,6 +173,7 @@ def test_command_examples_use_recognised_commands() -> None:
         "list",
         "runbook",
         "run",
+        "policy",
         "show",
         "status",
         "next",

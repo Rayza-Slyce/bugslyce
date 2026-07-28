@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import shlex
+import stat
+import tempfile
 from urllib.parse import urlparse
 
 from bugslyce.core.engagement_context import (
+    BUG_BOUNTY_CONTEXT,
     UNKNOWN_CONTEXT,
     engagement_context_label,
     normalise_engagement_context,
+)
+from bugslyce.core.engagement_policy import (
+    ENGAGEMENT_POLICY_FILENAME,
+    EngagementPolicy,
+    assess_engagement_policy,
+    load_engagement_policy,
+    write_engagement_policy,
 )
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.status import (
@@ -53,6 +64,7 @@ class BugSlyceProject:
     created_at: str | None
     engagement_context: str = UNKNOWN_CONTEXT
     notes: list[str] = field(default_factory=list)
+    engagement_policy_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -175,11 +187,9 @@ def initialize_project(
         created_at=utc_now_iso(clock),
         engagement_context=normalized_engagement_context,
         notes=[],
+        engagement_policy_file=None,
     )
-    project_path.write_text(
-        json.dumps(asdict(project), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    _write_project_metadata(project_path, project)
     return project, project_path
 
 
@@ -339,6 +349,15 @@ def load_project(project_file: Path) -> BugSlyceProject:
     raw_notes = payload.get("notes", [])
     if not isinstance(raw_notes, list) or not all(isinstance(note, str) for note in raw_notes):
         raise ValueError("Project notes must be a list of strings.")
+    engagement_policy_file = _optional_text(payload.get("engagement_policy_file"))
+    if (
+        engagement_policy_file is not None
+        and engagement_policy_file != ENGAGEMENT_POLICY_FILENAME
+    ):
+        raise ValueError(
+            "Project engagement_policy_file must be the dedicated project-local "
+            f"reference {ENGAGEMENT_POLICY_FILENAME}."
+        )
 
     return BugSlyceProject(
         schema_version=schema_version,
@@ -351,7 +370,105 @@ def load_project(project_file: Path) -> BugSlyceProject:
         created_at=_optional_text(payload.get("created_at")),
         engagement_context=normalise_engagement_context(payload.get("engagement_context")),
         notes=list(raw_notes),
+        engagement_policy_file=engagement_policy_file,
     )
+
+
+def load_project_engagement_policy(
+    project: BugSlyceProject,
+) -> EngagementPolicy | None:
+    """Load a referenced policy without fabricating one for an older project."""
+
+    if project.engagement_policy_file is None:
+        return None
+    if project.engagement_policy_file != ENGAGEMENT_POLICY_FILENAME:
+        raise ValueError("Project engagement-policy reference is unsupported.")
+    return load_engagement_policy(Path(project.output_dir))
+
+
+def save_project_engagement_policy(
+    project_file: Path,
+    policy: EngagementPolicy,
+) -> tuple[BugSlyceProject, Path]:
+    """Securely save a bug bounty policy and its non-sensitive project reference."""
+
+    project_file = project_file.expanduser().resolve()
+    project = load_project(project_file)
+    if project.engagement_context != BUG_BOUNTY_CONTEXT:
+        raise ValueError("Engagement policies are configured for bug bounty projects.")
+    if project.engagement_policy_file == ENGAGEMENT_POLICY_FILENAME:
+        return project, write_engagement_policy(Path(project.output_dir), policy)
+    output_dir = Path(project.output_dir)
+    policy_path = output_dir / ENGAGEMENT_POLICY_FILENAME
+    previous_policy: EngagementPolicy | None = None
+    if policy_path.exists() or policy_path.is_symlink():
+        previous_policy = load_engagement_policy(output_dir)
+    policy_path = write_engagement_policy(output_dir, policy)
+    updated = replace(project, engagement_policy_file=ENGAGEMENT_POLICY_FILENAME)
+    try:
+        _write_project_metadata(project_file, updated)
+    except Exception as metadata_error:
+        try:
+            if previous_policy is None:
+                _remove_private_policy_file(policy_path)
+            else:
+                write_engagement_policy(output_dir, previous_policy)
+        except Exception as rollback_error:
+            raise OSError(
+                "Project metadata update failed and engagement-policy rollback could not be confirmed."
+            ) from rollback_error
+        raise metadata_error
+    return updated, policy_path
+
+
+def _write_project_metadata(project_path: Path, project: BugSlyceProject) -> None:
+    payload = asdict(project)
+    if payload.get("engagement_policy_file") is None:
+        payload.pop("engagement_policy_file", None)
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    project_path = project_path.expanduser().resolve(strict=False)
+    if not project_path.parent.is_dir():
+        raise ValueError("Project metadata directory does not exist.")
+    mode: int | None = None
+    if project_path.exists():
+        path_stat = project_path.stat()
+        if not stat.S_ISREG(path_stat.st_mode):
+            raise ValueError("Project metadata path is not a regular file.")
+        mode = stat.S_IMODE(path_stat.st_mode)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=".bugslyce_project.",
+        suffix=".tmp",
+        dir=project_path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, project_path)
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _remove_private_policy_file(policy_path: Path) -> None:
+    """Remove the just-written private policy when its first reference cannot save."""
+
+    try:
+        path_stat = policy_path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("Engagement policy rollback path is unsafe.")
+    if path_stat.st_uid != os.geteuid() or stat.S_IMODE(path_stat.st_mode) & 0o077:
+        raise ValueError("Engagement policy rollback path has unsafe permissions.")
+    policy_path.unlink()
 
 
 def inspect_project_status(
@@ -402,6 +519,49 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
     project = load_project(project_file)
     output_dir = Path(project.output_dir)
     scope_file = Path(project.scope_file)
+    if project.engagement_context == BUG_BOUNTY_CONTEXT:
+        policy_status = "Engagement policy is missing."
+        try:
+            policy = load_project_engagement_policy(project)
+        except ValueError as exc:
+            policy_status = f"Engagement policy unavailable: {exc}"
+        else:
+            if policy is not None:
+                assessment = assess_engagement_policy(policy)
+                policy_status = (
+                    "Engagement policy is complete for future enforcement."
+                    if not assessment.not_ready_reasons
+                    else "Engagement policy is incomplete."
+                )
+        optional_actions = _bug_bounty_offline_actions(
+            project,
+            project_file=project_file,
+            output_dir=output_dir,
+        )
+        return ProjectNextResult(
+            project=project,
+            project_file=str(project_file),
+            recon_pack_exists=(output_dir / "recon_manifest.json").is_file(),
+            status_summary=(
+                f"{policy_status} Live bug bounty reconnaissance remains blocked "
+                "until R0B component enforcement is implemented."
+            ),
+            recommended_action=GuidedProjectAction(
+                id="configure-engagement-policy",
+                title="Review or configure the private save-only engagement policy.",
+                command_preview=_format_command(
+                    [
+                        "bugslyce",
+                        "project",
+                        "policy",
+                        "--project",
+                        str(project_file),
+                        "--configure",
+                    ]
+                ),
+            ),
+            optional_actions=optional_actions,
+        )
     manifest_path = output_dir / "recon_manifest.json"
     if not manifest_path.is_file():
         return ProjectNextResult(
@@ -616,6 +776,79 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         recommended_action=recommended,
         optional_actions=optional_actions,
     )
+
+
+def _bug_bounty_offline_actions(
+    project: BugSlyceProject,
+    *,
+    project_file: Path,
+    output_dir: Path,
+) -> list[GuidedProjectAction]:
+    """Return only local evidence-review actions while live collection is blocked."""
+
+    actions: list[GuidedProjectAction] = []
+    manifest_path = output_dir / "recon_manifest.json"
+    report_path = output_dir / "report.md"
+    state_path = output_dir / "project_state.json"
+    if manifest_path.is_file():
+        actions.append(
+            GuidedProjectAction(
+                id="inspect-project-status",
+                title="Inspect existing local collection status without running recon.",
+                command_preview=_format_command(
+                    ["bugslyce", "project", "status", "--project", str(project_file)]
+                ),
+                optional=True,
+            )
+        )
+    if report_path.is_file():
+        actions.append(
+            GuidedProjectAction(
+                id="review-existing-report",
+                title="Review the existing local Markdown report.",
+                command_preview=_format_command(["less", str(report_path)]),
+                optional=True,
+            )
+        )
+    if state_path.is_file():
+        actions.append(
+            GuidedProjectAction(
+                id="render-html-report",
+                title="Render an offline HTML view from existing local artefacts.",
+                command_preview=_format_command(
+                    [
+                        "bugslyce",
+                        "report",
+                        "html",
+                        "--input-dir",
+                        project.output_dir,
+                        "--output",
+                        f"{project.output_dir}-evidence-report.html",
+                    ]
+                ),
+                optional=True,
+            )
+        )
+    if manifest_path.is_file():
+        actions.append(
+            GuidedProjectAction(
+                id="export-evidence-pack",
+                title="Create a portable pack from existing local evidence.",
+                command_preview=_format_command(
+                    [
+                        "bugslyce",
+                        "recon",
+                        "export",
+                        "--input-dir",
+                        project.output_dir,
+                        "--output",
+                        f"{project.output_dir}-evidence-pack.zip",
+                    ]
+                ),
+                optional=True,
+            )
+        )
+    return actions
 
 
 def build_project_runbook(

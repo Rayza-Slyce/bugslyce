@@ -8,11 +8,14 @@ from pathlib import Path
 import textwrap
 from typing import Callable
 
+from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
+from bugslyce.core.engagement_policy import bug_bounty_live_refusal_reasons
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
 from bugslyce.project_session import (
     build_project_runbook,
+    load_project_engagement_policy,
     load_project,
     write_project_runbook,
 )
@@ -355,6 +358,32 @@ class ResumeAssessment:
     preserve_canonical_pipeline_metadata: bool = False
 
 
+def enforce_project_execution_policy(project: object) -> None:
+    """Refuse bug bounty live execution until R0B enforcement is available."""
+
+    if getattr(project, "engagement_context", None) != BUG_BOUNTY_CONTEXT:
+        return
+    policy = None
+    load_error: str | None = None
+    try:
+        policy = load_project_engagement_policy(project)
+    except ValueError as exc:
+        load_error = str(exc)
+    reasons = list(bug_bounty_live_refusal_reasons(policy))
+    if load_error is not None:
+        reasons = [load_error]
+    reason_text = ""
+    if reasons:
+        reason_text = " Policy issues: " + " ".join(reasons)
+    raise ValueError(
+        "Live bug bounty reconnaissance is blocked in R0A. Policy capture exists, "
+        "but aggregate traffic limits and identification are not yet enforced "
+        "across every network component. Use the offline project policy setup for "
+        "save-only configuration; R0B will implement enforcement."
+        + reason_text
+    )
+
+
 def run_project_pipeline(
     project_file: Path,
     profile: str,
@@ -373,6 +402,7 @@ def run_project_pipeline(
 
     project_file = project_file.expanduser().resolve()
     project = load_project(project_file)
+    enforce_project_execution_policy(project)
     output_dir = Path(project.output_dir).expanduser().resolve()
     scope_file = Path(project.scope_file).expanduser().resolve()
     content_profile = _content_discovery_profile_for_pipeline(profile)

@@ -16,6 +16,10 @@ from bugslyce.core.engagement_context import (
     parse_engagement_context_choice,
 )
 from bugslyce.doctor import build_doctor_report, render_doctor_text
+from bugslyce.engagement_policy_setup import (
+    configure_project_policy_interactively,
+    show_project_policy,
+)
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     PIPELINE_PROFILE,
@@ -207,6 +211,32 @@ def _start_new_project(
         return 2
 
     project_file = Path(scaffold.project_file)
+    if engagement_context == BUG_BOUNTY_CONTEXT:
+        try:
+            configure_project_policy_interactively(
+                project_file,
+                input_func=input_func,
+                print_func=print_func,
+            )
+        except ValueError as exc:
+            print_func(f"Error: {exc}")
+            print_func("The project was saved, but its engagement policy was not changed.")
+            print_func("No network requests were made.")
+            return 2
+        except (OSError, EOFError):
+            print_func("Error: engagement policy could not be read or written safely.")
+            print_func("The project was saved, but its engagement policy was not changed.")
+            print_func("No network requests were made.")
+            return 2
+        if profile is not None:
+            print_func(
+                f"{_profile_display_name(profile)} was selected but not started. "
+                "Live bug bounty reconnaissance remains blocked until R0B enforcement."
+            )
+        else:
+            print_func("Manual setup was saved. No recon was started.")
+        print_func("No network requests were made.")
+        return 0
     if profile is None:
         _print_interactive_next_steps(scaffold, print_func, profile=None)
         return 0
@@ -246,6 +276,46 @@ def _resume_existing_project(
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 2
+
+    if getattr(project, "engagement_context", UNKNOWN_CONTEXT) == BUG_BOUNTY_CONTEXT:
+        try:
+            print_func("")
+            print_func(show_project_policy(project_file))
+        except ValueError as exc:
+            print_func(f"Policy status: {exc}")
+        except OSError:
+            print_func("Policy status: engagement policy could not be read safely.")
+        try:
+            configure_answer = input_func(
+                "Type YES to configure or revise the save-only engagement policy, "
+                "or press Enter to leave it unchanged: "
+            ).strip()
+        except EOFError:
+            print_func("Error: engagement-policy input ended before a choice was made.")
+            print_func("No commands were executed.")
+            print_func("No network requests were made.")
+            return 2
+        if configure_answer == "YES":
+            try:
+                configure_project_policy_interactively(
+                    project_file,
+                    input_func=input_func,
+                    print_func=print_func,
+                )
+            except ValueError as exc:
+                print_func(f"Error: {exc}")
+                print_func("No commands were executed.")
+                print_func("No network requests were made.")
+                return 2
+            except (OSError, EOFError):
+                print_func("Error: engagement policy could not be read or written safely.")
+                print_func("No commands were executed.")
+                print_func("No network requests were made.")
+                return 2
+        print_func("Resume was not started. Live bug bounty reconnaissance remains blocked.")
+        print_func("No commands were executed.")
+        print_func("No network requests were made.")
+        return 0
 
     if not _prompt_yes_exact_with_retries(
         input_func,

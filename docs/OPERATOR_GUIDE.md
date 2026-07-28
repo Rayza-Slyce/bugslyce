@@ -18,6 +18,33 @@ Before typing `YES` to run recon, verify:
 
 BugSlyce safety controls do not replace external rules.
 
+### R0A bug bounty engagement policy
+
+R0A records a local, versioned traffic and identification policy for bug bounty
+projects. Configuration is platform-neutral: copy the exact limits and
+researcher-identification requirements from the current programme brief. No
+platform preset overrides those current rules.
+
+Create or update the private project-local policy without running recon:
+
+```bash
+bugslyce project policy \
+  --project ./bugslyce_project.json \
+  --configure
+```
+
+View the redacted policy without displaying configured identification values:
+
+```bash
+bugslyce project policy --project ./bugslyce_project.json
+```
+
+Policy capture is preparatory. R0A does not enforce aggregate request rates,
+concurrency or identification values across every network component. Live bug
+bounty reconnaissance therefore remains blocked, even when policy setup is
+complete. CTFs and controlled authorised labs remain the supported live-testing
+context while R0B implements and verifies component enforcement.
+
 ## 2. Interactive Launcher
 
 Start the launcher with:

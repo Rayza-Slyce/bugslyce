@@ -19,6 +19,10 @@ from bugslyce.config import (
 from bugslyce.core.engagement_context import ALLOWED_ENGAGEMENT_CONTEXTS
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
+from bugslyce.engagement_policy_setup import (
+    configure_project_policy_interactively,
+    show_project_policy,
+)
 from bugslyce.interactive import run_interactive_launcher
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
@@ -402,6 +406,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "Approved project pipeline profiles: "
             f"{', '.join(SUPPORTED_PIPELINE_PROFILES)}."
         ),
+    )
+    project_policy_parser = project_subparsers.add_parser(
+        "policy",
+        help="View or configure a bug bounty engagement policy without running recon.",
+    )
+    project_policy_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
+    project_policy_parser.add_argument(
+        "--configure",
+        action="store_true",
+        help="Interactively create or deliberately revise the private local policy.",
     )
     project_run_parser.add_argument(
         "--confirm",
@@ -1329,6 +1349,31 @@ def _project(args: argparse.Namespace) -> int:
         print(render_project_pipeline_summary(result))
         return 0
 
+    if args.project_command == "policy":
+        try:
+            if args.configure:
+                result = configure_project_policy_interactively(
+                    args.project_file,
+                    input_func=input,
+                    print_func=print,
+                )
+                return 0 if result.saved or result.cancelled else 2
+            print(show_project_policy(args.project_file))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        except (OSError, EOFError):
+            print(
+                "Error: engagement policy could not be read or written safely.",
+                file=sys.stderr,
+            )
+            print("No commands were executed.", file=sys.stderr)
+            print("No network requests were made.", file=sys.stderr)
+            return 2
+        return 0
+
     if args.project_command == "show":
         try:
             project = load_project(args.project_file)
@@ -1367,6 +1412,7 @@ def _project(args: argparse.Namespace) -> int:
         "'bugslyce project list --help', "
         "'bugslyce project runbook --help', "
         "'bugslyce project run --help', "
+        "'bugslyce project policy --help', "
         "'bugslyce project init --help', "
         "'bugslyce project show --help', 'bugslyce project status --help', "
         "or 'bugslyce project next --help'.",

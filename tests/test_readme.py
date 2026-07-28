@@ -199,3 +199,26 @@ def test_public_repo_security_and_ci_docs_exist() -> None:
     assert "python-version: \"3.12\"" in workflow
     assert 'python -m pip install -e ".[dev]"' in workflow
     assert "pytest" in workflow
+
+
+def test_r0a_bug_bounty_policy_documentation_is_save_only_and_platform_neutral() -> None:
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    operator_guide = (root / "docs" / "OPERATOR_GUIDE.md").read_text(
+        encoding="utf-8"
+    )
+    combined = f"{readme}\n{operator_guide}"
+    compact = " ".join(combined.split())
+
+    assert "bugslyce project policy" in combined
+    assert "unreleased R0A source foundation" in readme
+    assert "unreleased R0A working-tree foundation" not in readme
+    assert "platform-neutral" in combined
+    assert "no platform preset" in compact.lower()
+    assert "not yet enforced across every network component" in compact
+    assert (
+        "live bug bounty reconnaissance therefore remains blocked"
+        in compact.lower()
+    )
+    assert "R0B" in combined
+    assert "CTFs and controlled authorised labs" in compact

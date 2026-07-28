@@ -442,6 +442,10 @@ def test_start_new_project_accepts_engagement_context_aliases(
         "bugslyce.interactive.scaffold_project",
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(saved=False, cancelled=True),
+    )
     output: list[str] = []
     prompts: list[str] = []
     inputs = iter(["1", "demo", "10.10.10.10", "projects", context_input, "2", "YES"])

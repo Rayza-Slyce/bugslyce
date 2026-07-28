@@ -13,6 +13,7 @@ from bugslyce.core.sensitive_evidence import (
     EXPORT_RESULT_SENSITIVE_WARNINGS,
     PACK_SENSITIVE_EVIDENCE_NOTICE,
 )
+from bugslyce.core.engagement_policy import ENGAGEMENT_POLICY_FILENAME
 from bugslyce.recon.evidence_pack_closure import (
     REFERENCE_CLOSURE_FILENAME,
     EvidencePackReference,
@@ -87,6 +88,9 @@ def export_recon_evidence_pack(
 
     included: dict[str, Path] = {}
     missing_files: list[str] = []
+    excluded_sensitive_files: list[str] = []
+    if (input_dir / ENGAGEMENT_POLICY_FILENAME).exists():
+        excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
     for name in (
         "report.md",
         "project_state.json",
@@ -133,6 +137,10 @@ def export_recon_evidence_pack(
             reference,
             f"manifest artefact #{index}",
         )
+        if relative_path.as_posix() == ENGAGEMENT_POLICY_FILENAME:
+            if ENGAGEMENT_POLICY_FILENAME not in excluded_sensitive_files:
+                excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
+            continue
         archive_path = f"raw/{relative_path.as_posix()}"
         if not source_path.is_file():
             missing_files.append(archive_path)
@@ -145,6 +153,10 @@ def export_recon_evidence_pack(
         output_path,
         deep_evidence_paths,
     ):
+        if relative_path.as_posix() == ENGAGEMENT_POLICY_FILENAME:
+            if ENGAGEMENT_POLICY_FILENAME not in excluded_sensitive_files:
+                excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
+            continue
         if source_path in represented_source_paths:
             continue
         archive_path = f"raw/{relative_path.as_posix()}"
@@ -154,7 +166,12 @@ def export_recon_evidence_pack(
         _add_file(included, source_path, archive_path)
         represented_source_paths.add(source_path)
 
-    baseline_requirements = discover_evidence_pack_references(input_dir)
+    baseline_requirements = tuple(
+        reference
+        for reference in discover_evidence_pack_references(input_dir)
+        if PurePosixPath(reference.portable_path).name
+        != ENGAGEMENT_POLICY_FILENAME
+    )
     closure_records = _include_reference_closure(
         input_dir,
         included,
@@ -198,6 +215,8 @@ def export_recon_evidence_pack(
         "warning": "sensitive recon evidence",
         "no_live_commands_executed": True,
     }
+    if excluded_sensitive_files:
+        export_manifest["excluded_sensitive_files"] = sorted(excluded_sensitive_files)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
@@ -322,6 +341,10 @@ def _include_reference_closure(
     records = group_evidence_pack_references(reference_requirements)
     resolved_records: list[EvidencePackReferenceRecord] = []
     for record in records:
+        if PurePosixPath(record.portable_path).name == ENGAGEMENT_POLICY_FILENAME:
+            raise ValueError(
+                "Engagement policy values are private and cannot be evidence-pack references."
+            )
         if record.portable_path in {
             "BUGSLYCE_EXPORT_README.md",
             "bugslyce_export_manifest.json",
@@ -431,6 +454,8 @@ def _add_optional_file(
 
 
 def _add_file(included: dict[str, Path], source_path: Path, archive_name: str) -> None:
+    if source_path.name == ENGAGEMENT_POLICY_FILENAME:
+        raise ValueError("Engagement policy values cannot be included in an evidence pack.")
     normalized = PurePosixPath(archive_name)
     if normalized.is_absolute() or ".." in normalized.parts:
         raise ValueError(f"Unsafe archive path: {archive_name}")
@@ -468,6 +493,7 @@ def _portable_pack_content(
             raise ValueError("Project descriptor must contain a JSON object.")
         payload["output_dir"] = "."
         payload["scope_file"] = "scope.md"
+        payload.pop("engagement_policy_file", None)
         return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if archive_name == "recon_manifest.json":
         try:
@@ -486,6 +512,8 @@ def _portable_pack_content(
             reference = _required_text(
                 artifact, "file", f"Recon manifest artefact #{index} has no file path."
             )
+            if PurePosixPath(reference).name == ENGAGEMENT_POLICY_FILENAME:
+                continue
             source, relative = _resolve_reference(
                 input_dir, reference, f"manifest artefact #{index}"
             )
