@@ -236,6 +236,22 @@ class _DelayedArtefactProcess:
         return SimpleNamespace(returncode=0, stdout="200", stderr="")
 
 
+class _DelayedInternalTransport:
+    """Simulate target-visible arrival after internal transport start-up."""
+
+    def __init__(self, clock: _FakeTime, delays: tuple[Decimal, ...]) -> None:
+        self.clock = clock
+        self.delays = iter(delays)
+        self.starts: list[Decimal] = []
+        self.arrivals: list[Decimal] = []
+
+    def __call__(self, _request):
+        self.starts.append(self.clock.now)
+        self.clock.now += next(self.delays)
+        self.arrivals.append(self.clock.now)
+        return HTTPTransportResponse(200, (), b"ok")
+
+
 def test_curl_and_internal_http_share_one_steady_limiter(tmp_path: Path) -> None:
     clock = _FakeTime()
     transport = _Transport(clock)
@@ -250,6 +266,33 @@ def test_curl_and_internal_http_share_one_steady_limiter(tmp_path: Path) -> None
     assert transport.starts == [Decimal("0"), Decimal("1.0")]
     assert process.starts == [Decimal("0.5")]
     assert executor.total_request_attempts == 3
+
+
+def test_internal_completion_barrier_prevents_target_arrival_compression(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    transport = _DelayedInternalTransport(clock, (Decimal("0.4"),))
+    executor = _executor(clock, transport=transport)
+    session = _session(clock, executor=executor)
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    process = _DelayedArtefactProcess(clock, (Decimal("0"),))
+
+    executor.request("https://example.test/internal")
+    BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert transport.arrivals == [Decimal("0.4")]
+    assert process.permit_starts == [Decimal("0.9")]
+    assert process.arrivals == [Decimal("0.9")]
+    assert process.arrivals[0] - transport.arrivals[0] == Decimal("0.5")
+    assert executor.total_request_attempts == 2
 
 
 def test_variable_curl_launch_delays_do_not_compress_target_arrivals(

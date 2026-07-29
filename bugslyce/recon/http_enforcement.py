@@ -486,7 +486,9 @@ class InternalHTTPExecutor:
         request: HTTPTransportRequest,
     ) -> HTTPTransportResponse:
         with self._request_permit():
+            transport_invoked = False
             try:
+                transport_invoked = True
                 raw_response = self.transport(request)
             except TimeoutError:
                 if self.configuration is None:
@@ -496,14 +498,21 @@ class InternalHTTPExecutor:
                 if self.configuration is None:
                     raise
                 raise HTTPTransportFailure("transport_error") from None
-            response = _validate_transport_response(raw_response)
-            if self.configuration is not None and response.status_code == 429:
-                rejection = HTTPRateRejected(_safe_retry_after(response.headers))
-                with self._state_lock:
-                    self._rate_rejection = rejection
-                self._terminal_event.set()
-                raise rejection
-            return response
+            else:
+                response = _validate_transport_response(raw_response)
+                if self.configuration is not None and response.status_code == 429:
+                    rejection = HTTPRateRejected(_safe_retry_after(response.headers))
+                    with self._state_lock:
+                        self._rate_rejection = rejection
+                    self._terminal_event.set()
+                    raise rejection
+                return response
+            finally:
+                # An internal exchange can reach the target after its permit is
+                # committed. Reserve the next interval from exchange completion
+                # before the shared concurrency permit is released.
+                if transport_invoked and self._limiter is not None:
+                    self._limiter.defer_next_start()
 
     @contextmanager
     def _request_permit(self) -> Iterator[Decimal]:

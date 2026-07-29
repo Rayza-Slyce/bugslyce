@@ -91,6 +91,35 @@ class _RecordingTransport:
         return self.responses.pop(0)
 
 
+class _DelayedRecordingTransport:
+    """Record deterministic target-visible arrivals for internal exchanges."""
+
+    def __init__(
+        self,
+        clock: _FakeTime,
+        delays: tuple[Decimal, ...],
+        responses: list[HTTPTransportResponse] | None = None,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        self.clock = clock
+        self.delays = iter(delays)
+        self.responses = list(responses or [_response()])
+        self.error = error
+        self.requests = []
+        self.starts: list[Decimal] = []
+        self.arrivals: list[Decimal] = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        self.starts.append(self.clock.now)
+        self.clock.now += next(self.delays)
+        self.arrivals.append(self.clock.now)
+        if self.error is not None:
+            raise self.error
+        return self.responses.pop(0)
+
+
 class _BlockingTransport:
     def __init__(self, expected_active: int) -> None:
         self.expected_active = expected_active
@@ -649,6 +678,220 @@ def test_identity_is_applied_and_functional_header_collisions_are_refused() -> N
     assert HEADER_SENTINEL not in str(exc_info.value)
     assert HEADER_SENTINEL not in repr(transport.requests[0])
     assert USER_AGENT_SENTINEL not in repr(transport.requests[0])
+
+
+def test_internal_completion_barrier_preserves_target_observable_spacing() -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(
+        clock,
+        (Decimal("0.4"), Decimal("0")),
+        [_response(), _response()],
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    executor.request("https://example.test/one")
+    executor.request("https://example.test/two")
+
+    assert transport.starts == [Decimal("0"), Decimal("0.9")]
+    assert transport.arrivals == [Decimal("0.4"), Decimal("0.9")]
+    assert transport.arrivals[1] - transport.arrivals[0] == Decimal("0.5")
+    assert max(
+        sum(start <= arrival < start + Decimal(1) for arrival in transport.arrivals)
+        for start in transport.arrivals
+    ) == 2
+    assert executor.total_request_attempts == 2
+    assert executor.last_request_start == Decimal("0.9")
+
+
+@pytest.mark.parametrize(
+    ("response", "error", "raises"),
+    (
+        (HTTPTransportResponse(200, (), b"ok"), None, None),
+        (HTTPTransportResponse(404, (), b"ok"), None, None),
+        (None, TimeoutError("timeout"), HTTPTransportFailure),
+        (None, OSError("transport error"), HTTPTransportFailure),
+        (None, RuntimeError("transport failure"), RuntimeError),
+        (None, KeyboardInterrupt(), KeyboardInterrupt),
+        (None, SystemExit(7), SystemExit),
+    ),
+    ids=(
+        "success",
+        "non_2xx",
+        "timeout",
+        "os_error",
+        "exception",
+        "keyboard_interrupt",
+        "system_exit",
+    ),
+)
+def test_invoked_internal_exchange_installs_completion_barrier_for_all_outcomes(
+    response: HTTPTransportResponse | None,
+    error: BaseException | None,
+    raises: type[BaseException] | None,
+) -> None:
+    clock = _FakeTime()
+    first_transport = _DelayedRecordingTransport(
+        clock,
+        (Decimal("0.4"),),
+        [response] if response is not None else None,
+        error=error,
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=first_transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    if raises is None:
+        executor.request("https://example.test/first")
+    else:
+        with pytest.raises(raises):
+            executor.request("https://example.test/first")
+
+    succeeding = _DelayedRecordingTransport(clock, (Decimal("0"),), [_response()])
+    executor.transport = succeeding
+    executor.request("https://example.test/after")
+
+    assert first_transport.arrivals == [Decimal("0.4")]
+    assert succeeding.starts == [Decimal("0.9")]
+    assert executor.total_request_attempts == 2
+
+
+def test_redirect_exchange_installs_a_completion_barrier_before_follow_up() -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(
+        clock,
+        (Decimal("0.4"), Decimal("0"), Decimal("0")),
+        [
+            _response(302, (("Location", "/next"),)),
+            _response(),
+            _response(),
+        ],
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    executor.request("https://example.test/start")
+    executor.request("https://example.test/after")
+
+    assert transport.starts == [Decimal("0"), Decimal("0.9"), Decimal("1.4")]
+    assert executor.total_request_attempts == 3
+
+
+def test_429_installs_completion_barrier_before_entering_terminal_state() -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(
+        clock,
+        (Decimal("0.4"),),
+        [_response(429, (("Retry-After", "2"),))],
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(HTTPRateRejected):
+        executor.request("https://example.test/limited")
+    with pytest.raises(HTTPRateRejected):
+        executor.request("https://example.test/not-sent")
+
+    assert executor._limiter is not None
+    assert executor._limiter._next_start == Decimal("0.9")
+    assert executor.total_request_attempts == 1
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    ("ftp://example.test/unsupported", "https://other.test/out-of-scope"),
+)
+def test_pre_transport_rejection_installs_no_completion_barrier(url: str) -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(clock, (Decimal("0"),), [_response()])
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(ValueError):
+        executor.request(url)
+    executor.request("https://example.test/allowed")
+
+    assert transport.starts == [Decimal("0")]
+    assert executor.total_request_attempts == 1
+
+
+def test_closed_executor_rejection_installs_no_completion_barrier() -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(clock, (Decimal("0"),), [_response()])
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    executor.close()
+
+    with pytest.raises(HTTPExecutorClosed):
+        executor.request("https://example.test/closed")
+
+    assert executor._limiter is not None
+    assert executor._limiter._next_start is None
+    assert executor.total_request_attempts == 0
+    assert transport.requests == []
+
+
+def test_internal_completion_barrier_precedes_concurrency_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeTime()
+    transport = _DelayedRecordingTransport(clock, (Decimal("0"),), [_response()])
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    assert executor._limiter is not None
+    assert executor._concurrency is not None
+    original_defer = executor._limiter.defer_next_start
+    barrier_entered = threading.Event()
+    release_barrier = threading.Event()
+
+    def defer_next_start() -> Decimal:
+        barrier_entered.set()
+        if not release_barrier.wait(timeout=2):
+            raise AssertionError("test completion barrier was not released")
+        return original_defer()
+
+    monkeypatch.setattr(executor._limiter, "defer_next_start", defer_next_start)
+    worker = threading.Thread(
+        target=executor.request,
+        args=("https://example.test/first",),
+    )
+    worker.start()
+    assert barrier_entered.wait(timeout=1)
+
+    assert not executor._concurrency.acquire(blocking=False)
+    release_barrier.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert executor.total_request_attempts == 1
 
 
 def test_same_origin_redirect_is_followed_as_a_separately_paced_attempt() -> None:
