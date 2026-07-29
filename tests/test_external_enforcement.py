@@ -30,6 +30,7 @@ from bugslyce.recon.external_enforcement import (
     COMPONENT_INCOMPATIBLE,
     COMPONENT_OMITTED,
     COMPONENT_SUPPORTED,
+    GOBUSTER_STARTUP_DISCLOSURE,
     MAXIMUM_NMAP_PACKET_RATE,
     BugBountyExternalEnforcementSession,
     BugBountyExternalToolRuntime,
@@ -93,6 +94,23 @@ GOBUSTER_HELP = """
 dir
 --url --wordlist --threads --delay --useragent --headers stringArray
 --timeout --output --follow-redirect (default false)
+"""
+GOBUSTER_382_HELP = """
+Usage:
+  gobuster dir [flags]
+
+Flags:
+      --url string
+      --wordlist string
+      --threads int
+      --delay duration
+      --useragent string
+      --headers value, -H value [ --headers value, -H value ]
+            Specify HTTP headers, -H 'Header1: val1' -H 'Header2: val2'
+      --timeout duration
+      --output string
+      --follow-redirect (default false)
+            Follow redirects
 """
 NMAP_HELP = "-sT -Pn -n -p --max-rate --max-retries -oN"
 COMPACT_NMAP_HELP = """
@@ -2014,6 +2032,208 @@ def test_capability_fixtures_are_parsed_without_executable_invocation() -> None:
     )
     assert _capabilities("gobuster").repeated_headers_supported is True
     assert _capabilities("nmap").available is True
+
+
+def test_gobuster_382_bracketed_header_syntax_proves_repeatable_headers() -> None:
+    capabilities = assess_tool_capabilities("gobuster", GOBUSTER_382_HELP)
+
+    assert capabilities.repeated_headers_supported is True
+    assert capabilities.redirect_following_opt_in is True
+    assert capabilities.diagnostic == "compatible"
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "--headers value [ --headers value ]",
+        "-H value [ -H value ]",
+    ),
+)
+def test_gobuster_option_local_repeated_header_syntax_is_recognised(
+    declaration: str,
+) -> None:
+    help_text = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        declaration,
+    )
+
+    assert assess_tool_capabilities(
+        "gobuster", help_text
+    ).repeated_headers_supported is True
+
+
+def test_gobuster_single_header_or_unrelated_brackets_do_not_prove_repeatability() -> None:
+    single_header = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--headers value",
+    )
+    unrelated_brackets = single_header + "\n--status-codes string [ --expanded ]\n"
+
+    assert not assess_tool_capabilities(
+        "gobuster", single_header
+    ).repeated_headers_supported
+    assert not assess_tool_capabilities(
+        "gobuster", unrelated_brackets
+    ).repeated_headers_supported
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "--headers value [ -h, --help ]",
+        "-h value [ -h value ]",
+    ),
+)
+def test_gobuster_lowercase_help_option_never_proves_repeatable_headers(
+    declaration: str,
+) -> None:
+    help_text = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        declaration,
+    ) + "\n-h, --help  help for dir\n"
+
+    assert not assess_tool_capabilities(
+        "gobuster", help_text
+    ).repeated_headers_supported
+
+
+def test_gobuster_header_local_string_array_forms_are_distinguished() -> None:
+    header_long = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--headers stringArray",
+    )
+    header_short = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "-H stringArray",
+    )
+    unrelated_option = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--headers string --cookies stringArray",
+    )
+    unrelated_prose = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--headers value description stringArray for cookies",
+    )
+
+    assert assess_tool_capabilities(
+        "gobuster", header_long
+    ).repeated_headers_supported
+    assert assess_tool_capabilities(
+        "gobuster", header_short
+    ).repeated_headers_supported
+    assert not assess_tool_capabilities(
+        "gobuster", unrelated_option
+    ).repeated_headers_supported
+    assert not assess_tool_capabilities(
+        "gobuster", unrelated_prose
+    ).repeated_headers_supported
+
+
+def test_gobuster_missing_header_or_redirect_controls_remain_incompatible(
+    tmp_path: Path,
+) -> None:
+    missing_headers = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--status-codes string",
+    )
+    missing_redirect = GOBUSTER_382_HELP.replace("(default false)", "")
+
+    for help_text, reason in (
+        (missing_headers, "--headers"),
+        (missing_redirect, "redirect"),
+    ):
+        plan = build_bug_bounty_gobuster_plan(
+            origin="https://example.test/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=30,
+            configuration=_configuration(),
+            capabilities=assess_tool_capabilities("gobuster", help_text),
+        )
+        assert plan.compatibility_status == COMPONENT_OMITTED
+        assert reason.casefold() in plan.reason.casefold()
+
+
+def test_gobuster_382_session_builds_a_supported_redacted_two_header_plan(
+    tmp_path: Path,
+) -> None:
+    second_header = "second-private-header-7284"
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance=AUTOMATION_PERMITTED,
+        maximum_http_requests_per_second="2",
+        maximum_http_concurrency=1,
+        identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
+        identification_headers=(
+            IdentificationHeader("X-Researcher-ID", HEADER_SECRET),
+            IdentificationHeader("X-Programme-Handle", second_header),
+        ),
+        custom_user_agent=USER_AGENT_SECRET,
+        updated_at="2026-07-28T10:00:00Z",
+    )
+    configuration = build_http_enforcement_configuration(
+        policy,
+        approved_origins=("https://example.test/",),
+    )
+    session = BugBountyExternalEnforcementSession(
+        policy=policy,
+        approved_origins=("https://example.test/",),
+        profile=DEEP_RECON_PROFILE,
+        curl_capabilities=_capabilities("curl"),
+        gobuster_capabilities=assess_tool_capabilities("gobuster", GOBUSTER_382_HELP),
+        nmap_capabilities=_capabilities("nmap"),
+        http_executor=InternalHTTPExecutor(
+            configuration,
+            transport=_Transport(_FakeTime()),
+        ),
+    )
+    plan = session.build_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=30,
+    )
+    component = next(
+        item for item in session.preflight.components if item.component == "gobuster"
+    )
+
+    assert plan.compatibility_status == COMPONENT_SUPPORTED
+    assert plan.private_argv[plan.private_argv.index("--threads") + 1] == "1"
+    assert plan.private_argv[plan.private_argv.index("--delay") + 1] == "500000000ns"
+    assert plan.private_argv[plan.private_argv.index("--useragent") + 1] == USER_AGENT_SECRET
+    assert [
+        value
+        for index, value in enumerate(plan.private_argv)
+        if index and plan.private_argv[index - 1] == "--headers"
+    ] == [
+        f"X-Researcher-ID: {HEADER_SECRET}",
+        f"X-Programme-Handle: {second_header}",
+    ]
+    assert "--follow-redirect" not in plan.private_argv
+    assert HEADER_SECRET not in plan.redacted_argv
+    assert second_header not in plan.redacted_argv
+    assert USER_AGENT_SECRET not in plan.redacted_argv
+    assert component.status == COMPONENT_SUPPORTED
+    assert component.reason == GOBUSTER_STARTUP_DISCLOSURE
+    assert GOBUSTER_STARTUP_DISCLOSURE in render_external_preflight(session.preflight)
+
+
+def test_ambiguous_gobuster_header_help_is_safely_omitted(tmp_path: Path) -> None:
+    ambiguous = GOBUSTER_382_HELP.replace(
+        "--headers value, -H value [ --headers value, -H value ]",
+        "--headers value [ optional values ]",
+    )
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=30,
+        configuration=_configuration(),
+        capabilities=assess_tool_capabilities("gobuster", ambiguous),
+    )
+
+    assert plan.compatibility_status == COMPONENT_OMITTED
+    assert "repeatable" in plan.reason
 
 
 def test_external_source_audit_keeps_strict_builders_central_and_shell_free() -> None:

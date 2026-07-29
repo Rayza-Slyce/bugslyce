@@ -63,6 +63,11 @@ GOBUSTER_STARTUP_FINALISATION_ALLOWANCE_SECONDS = 30
 MAXIMUM_GOBUSTER_PROCESS_TIMEOUT_SECONDS = 14_400
 MAXIMUM_GOBUSTER_WORDLIST_BYTES = 1_048_576
 MAXIMUM_GOBUSTER_WORDLIST_ENTRIES = 4_096
+GOBUSTER_STARTUP_DISCLOSURE = (
+    "Gobuster uses one thread and a policy-derived delay for normal wordlist "
+    "enumeration. Compatible Gobuster versions may issue a small bounded startup "
+    "validation sequence before delayed enumeration begins."
+)
 
 # One central conservative set for bug bounty TCP port-state discovery. It is
 # intentionally small and does not alter the existing authorised-lab profiles.
@@ -500,10 +505,8 @@ def assess_tool_capabilities(
     supported = frozenset(
         option for option in required if _help_mentions_option(help_text, option)
     )
-    repeatable = tool == "gobuster" and (
-        "stringArray" in help_text
-        or re.search(r"headers?.{0,80}(multiple|repeat)", help_text, re.IGNORECASE)
-        is not None
+    repeatable = tool == "gobuster" and _gobuster_repeatable_headers_supported(
+        help_text
     )
     redirect_opt_in = tool == "gobuster" and re.search(
         r"follow-redirect.{0,80}(default\s*[:=]?\s*false|disabled by default)",
@@ -979,7 +982,7 @@ def build_bug_bounty_external_preflight(
             COMPONENT_OMITTED if gobuster_reason else COMPONENT_SUPPORTED,
             False,
             gobuster_reason
-            or "Strict one-thread Gobuster identity and delay controls are available.",
+            or GOBUSTER_STARTUP_DISCLOSURE,
         )
     )
     if canonical.tcp_discovery_policy == TCP_SKIP:
@@ -1672,6 +1675,27 @@ def _help_mentions_option(help_text: str, option: str) -> bool:
         rf"(?<![0-9A-Za-z_-])-{re.escape(stem)}[A-Za-z0-9](?:/{re.escape(stem)}[A-Za-z0-9])*/{re.escape(stem)}{re.escape(variant)}(?=$|[\s,=/:<])",
         help_text,
     ) is not None
+
+
+def _gobuster_repeatable_headers_supported(help_text: str) -> bool:
+    """Require option-local structural proof that Gobuster accepts repeated headers."""
+
+    header_option = re.compile(
+        r"(?<![0-9A-Za-z_-])(?:--headers|-H)(?![0-9A-Za-z_-])",
+    )
+    header_string_array = re.compile(
+        r"(?<![0-9A-Za-z_-])(?:--headers|-H)(?![0-9A-Za-z_-])\s+stringArray\b",
+    )
+    for line in help_text.splitlines():
+        if header_option.search(line) is None:
+            continue
+        if header_string_array.search(line) is not None:
+            return True
+        for bracketed in re.finditer(r"\[([^\]\r\n]{0,512})\]", line):
+            outside = line[: bracketed.start()] + line[bracketed.end() :]
+            if header_option.search(outside) and header_option.search(bracketed.group(1)):
+                return True
+    return False
 
 
 def _require_safe_local_path(path: Path, *, label: str) -> None:
