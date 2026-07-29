@@ -215,6 +215,27 @@ class _EnvironmentObservingRunner:
         return SimpleNamespace(returncode=0, stdout="200", stderr="")
 
 
+class _DelayedArtefactProcess:
+    """Simulate target-visible curl arrival after variable process start-up."""
+
+    def __init__(self, clock: _FakeTime, delays: tuple[Decimal, ...]) -> None:
+        self.clock = clock
+        self.delays = iter(delays)
+        self.permit_starts: list[Decimal] = []
+        self.arrivals: list[Decimal] = []
+        self.calls = 0
+
+    def run(self, argv, _timeout_seconds, _environment):
+        delay = next(self.delays)
+        self.permit_starts.append(self.clock.now)
+        self.clock.now += delay
+        self.arrivals.append(self.clock.now)
+        for option in ("--output", "--dump-header"):
+            Path(argv[argv.index(option) + 1]).write_text("safe", encoding="utf-8")
+        self.calls += 1
+        return SimpleNamespace(returncode=0, stdout="200", stderr="")
+
+
 def test_curl_and_internal_http_share_one_steady_limiter(tmp_path: Path) -> None:
     clock = _FakeTime()
     transport = _Transport(clock)
@@ -229,6 +250,165 @@ def test_curl_and_internal_http_share_one_steady_limiter(tmp_path: Path) -> None
     assert transport.starts == [Decimal("0"), Decimal("1.0")]
     assert process.starts == [Decimal("0.5")]
     assert executor.total_request_attempts == 3
+
+
+def test_variable_curl_launch_delays_do_not_compress_target_arrivals(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    session = _session(clock)
+    plans = tuple(
+        session.build_curl_plan(
+            url="https://example.test/value",
+            method="GET",
+            output_file=tmp_path / f"body-{index}.html",
+            response_headers_file=tmp_path / f"headers-{index}.txt",
+            timeout_seconds=10,
+            purpose="test_exchange",
+        )
+        for index in range(3)
+    )
+    process = _DelayedArtefactProcess(
+        clock,
+        (Decimal("0.4"), Decimal("0"), Decimal("0")),
+    )
+    runtime = BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process))
+
+    for plan in plans:
+        runtime.run(plan)
+
+    assert process.permit_starts == [Decimal("0"), Decimal("0.9"), Decimal("1.4")]
+    assert process.arrivals == [Decimal("0.4"), Decimal("0.9"), Decimal("1.4")]
+    assert [
+        right - left for left, right in zip(process.arrivals, process.arrivals[1:])
+    ] == [Decimal("0.5"), Decimal("0.5")]
+    assert max(
+        sum(window_start <= arrival < window_start + Decimal(1) for arrival in process.arrivals)
+        for window_start in process.arrivals
+    ) == 2
+    assert session.http_executor.total_request_attempts == 3
+
+
+def test_curl_completion_barrier_applies_to_following_internal_http(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    transport = _Transport(clock)
+    executor = _executor(clock, transport=transport)
+    session = _session(clock, executor=executor)
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    process = _DelayedArtefactProcess(clock, (Decimal("0.4"),))
+
+    BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+    executor.request("https://example.test/after-curl")
+
+    assert process.arrivals == [Decimal("0.4")]
+    assert transport.starts == [Decimal("0.9")]
+    assert executor.total_request_attempts == 2
+
+
+def test_internal_http_then_curl_still_uses_the_shared_limiter(tmp_path: Path) -> None:
+    clock = _FakeTime()
+    transport = _Transport(clock)
+    executor = _executor(clock, transport=transport)
+    session = _session(clock, executor=executor)
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    process = _DelayedArtefactProcess(clock, (Decimal("0"),))
+
+    executor.request("https://example.test/before-curl")
+    BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert transport.starts == [Decimal("0")]
+    assert process.permit_starts == [Decimal("0.5")]
+    assert executor.total_request_attempts == 2
+
+
+@pytest.mark.parametrize(
+    ("outcome", "raises"),
+    [
+        ("success", None),
+        ("non_zero", None),
+        ("timeout", None),
+        ("exception", None),
+        ("keyboard_interrupt", KeyboardInterrupt),
+        ("system_exit", SystemExit),
+    ],
+)
+def test_curl_completion_barrier_runs_for_every_process_outcome(
+    tmp_path: Path,
+    outcome: str,
+    raises: type[BaseException] | None,
+) -> None:
+    clock = _FakeTime()
+    transport = _Transport(clock)
+    executor = _executor(clock, transport=transport)
+    session = _session(clock, executor=executor)
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    process = {
+        "success": _ProcessRunner(),
+        "non_zero": _ProcessRunner(returncode=7),
+        "timeout": _ProcessRunner(error=subprocess.TimeoutExpired(("curl",), 10)),
+        "exception": _ProcessRunner(error=RuntimeError("unexpected fake failure")),
+        "keyboard_interrupt": _ProcessRunner(error=KeyboardInterrupt()),
+        "system_exit": _ProcessRunner(error=SystemExit(7)),
+    }[outcome]
+    runtime = BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process))
+
+    if raises is None:
+        runtime.run(plan)
+    else:
+        with pytest.raises(raises):
+            runtime.run(plan)
+    executor.request("https://example.test/after-curl")
+
+    assert transport.starts == [Decimal("0.5")]
+    assert executor.total_request_attempts == 2
+
+
+def test_rejected_plan_does_not_consume_a_permit_or_install_a_barrier(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    transport = _Transport(clock)
+    executor = _executor(clock, transport=transport)
+    session = _session(clock, executor=executor)
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    runtime = BugBountyExternalToolRuntime(session, SafeSubprocessRunner(_ProcessRunner()))
+
+    with pytest.raises(ValueError, match="registered session plan"):
+        runtime.run(replace(plan))
+    executor.request("https://example.test/no-barrier")
+
+    assert transport.starts == [Decimal("0")]
+    assert executor.total_request_attempts == 1
 
 
 def test_curl_then_internal_http_has_no_stage_boundary_burst(tmp_path: Path) -> None:
@@ -1939,6 +2119,7 @@ def _session(
     *,
     policy=None,
     gobuster=None,
+    executor: InternalHTTPExecutor | None = None,
 ) -> BugBountyExternalEnforcementSession:
     selected_policy = policy or _policy()
     return BugBountyExternalEnforcementSession(
@@ -1948,7 +2129,7 @@ def _session(
         curl_capabilities=_capabilities("curl"),
         gobuster_capabilities=gobuster or _capabilities("gobuster"),
         nmap_capabilities=_capabilities("nmap"),
-        http_executor=_executor(clock),
+        http_executor=executor or _executor(clock),
     )
 
 

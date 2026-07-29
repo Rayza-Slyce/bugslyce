@@ -422,14 +422,21 @@ class InternalHTTPExecutor:
 
     @contextmanager
     def external_request_permit(self) -> Iterator[Decimal]:
-        """Reserve one paced HTTP exchange for an external single-request tool."""
+        """Reserve one paced opaque HTTP exchange and its completion barrier."""
 
         if self.configuration is None:
             raise ValueError(
                 "External HTTP permits require policy-derived enforcement configuration."
             )
         with self._request_permit() as start:
-            yield start
+            try:
+                yield start
+            finally:
+                # A strict external process has one opaque exchange. Its target-visible
+                # arrival can lag the permit, so reserve the next interval from process
+                # completion before releasing the shared concurrency permit.
+                if self._limiter is not None:
+                    self._limiter.defer_next_start()
 
     @contextmanager
     def exclusive_external_http_tool(self) -> Iterator[Decimal]:
