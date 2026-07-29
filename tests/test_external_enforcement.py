@@ -1985,6 +1985,11 @@ def test_complete_preflight_is_deterministic_and_secret_safe() -> None:
     assert "X-Researcher-ID" in rendered
     assert HEADER_SECRET not in rendered
     assert USER_AGENT_SECRET not in rendered
+    assert "Strict internal HTTP ignores ambient proxy environment variables." in rendered
+    assert (
+        "Proxy routing is not enabled unless explicitly supported and configured "
+        "by BugSlyce."
+    ) in rendered
     assert "R0B3 controlled capture" in rendered
 
 

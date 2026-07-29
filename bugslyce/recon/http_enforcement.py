@@ -14,7 +14,7 @@ from typing import Callable, Iterator, Protocol
 import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from bugslyce.core.engagement_policy import (
     AUTOMATION_PERMITTED,
@@ -298,7 +298,9 @@ class InternalHTTPExecutor:
         ):
             raise ValueError("Internal HTTP enforcement configuration is invalid.")
         self.configuration = configuration
-        self.transport: HTTPTransport = transport or UrllibHTTPTransport()
+        self.transport: HTTPTransport = transport or UrllibHTTPTransport(
+            direct_only=configuration is not None
+        )
         self._monotonic = monotonic
         self._limiter = (
             SteadyRequestStartLimiter(
@@ -627,13 +629,24 @@ class InternalHTTPExecutor:
 class UrllibHTTPTransport:
     """Standard-library single-exchange transport with redirects disabled."""
 
+    def __init__(self, *, direct_only: bool = False) -> None:
+        self._opener = (
+            build_opener(ProxyHandler({}), _NoRedirectHandler)
+            if direct_only
+            else None
+        )
+
     def __call__(self, request: HTTPTransportRequest) -> HTTPTransportResponse:
         urllib_request = Request(
             request.url,
             headers=dict(request.headers),
             method=request.method,
         )
-        opener = build_opener(_NoRedirectHandler)
+        opener = (
+            self._opener
+            if self._opener is not None
+            else build_opener(_NoRedirectHandler)
+        )
         try:
             response = opener.open(urllib_request, timeout=request.timeout_seconds)
         except HTTPError as error:

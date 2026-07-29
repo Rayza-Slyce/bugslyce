@@ -943,7 +943,9 @@ def build_bug_bounty_external_preflight(
             COMPONENT_SUPPORTED if http_runtime_available else COMPONENT_INCOMPATIBLE,
             profile == DEEP_RECON_PROFILE,
             (
-                "Central internal HTTP enforcement is available."
+                "Strict internal HTTP ignores ambient proxy environment variables. "
+                "Proxy routing is not enabled unless explicitly supported and "
+                "configured by BugSlyce."
                 if http_runtime_available
                 else "Policy identity cannot configure the internal HTTP transport."
             ),

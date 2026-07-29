@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from decimal import Decimal
 import math
+import os
 from pathlib import Path
 import re
 import threading
+from urllib.request import ProxyHandler
 
 import pytest
 
+import bugslyce.recon.http_enforcement as http_enforcement_module
 import bugslyce.cli as cli_module
 from bugslyce import __version__
 from bugslyce.core.engagement_policy import (
@@ -35,6 +38,7 @@ from bugslyce.recon.http_enforcement import (
     HTTPTransportFailure,
     InternalHTTPExecutor,
     SteadyRequestStartLimiter,
+    UrllibHTTPTransport,
     _resolve_redirect_location,
     _safe_retry_after,
     build_http_enforcement_configuration,
@@ -89,6 +93,34 @@ class _RecordingTransport:
         if self.error is not None:
             raise self.error
         return self.responses.pop(0)
+
+
+class _FakeUrllibResponse:
+    def __init__(self, *, body: bytes = b"direct-response") -> None:
+        self.status = 200
+        self.headers = {"Content-Type": "text/plain"}
+        self.body = body
+        self.closed = False
+
+    def read(self, maximum_bytes: int) -> bytes:
+        return self.body[:maximum_bytes]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _RecordingOpener:
+    def __init__(self, *, error: BaseException | None = None) -> None:
+        self.error = error
+        self.requests = []
+        self.timeouts: list[int] = []
+
+    def open(self, request, *, timeout: int):
+        self.requests.append(request)
+        self.timeouts.append(timeout)
+        if self.error is not None:
+            raise self.error
+        return _FakeUrllibResponse()
 
 
 class _DelayedRecordingTransport:
@@ -353,6 +385,157 @@ def test_policy_configuration_uses_versioned_identity_when_custom_agent_is_absen
     assert configuration.user_agent == built_in_user_agent()
     assert configuration.user_agent == f"BugSlyce/{__version__} authorised-recon"
     assert "BugSlyce/0.3" not in configuration.user_agent
+
+
+def test_strict_default_transport_constructs_one_proxy_free_opener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = _RecordingOpener()
+    handler_calls: list[tuple[object, ...]] = []
+
+    def fake_build_opener(*handlers: object) -> _RecordingOpener:
+        handler_calls.append(handlers)
+        return opener
+
+    monkeypatch.setattr(http_enforcement_module, "build_opener", fake_build_opener)
+
+    executor = InternalHTTPExecutor(_configuration())
+
+    assert isinstance(executor.transport, UrllibHTTPTransport)
+    assert len(handler_calls) == 1
+    proxy_handlers = [
+        handler for handler in handler_calls[0] if isinstance(handler, ProxyHandler)
+    ]
+    assert len(proxy_handlers) == 1
+    assert proxy_handlers[0].proxies == {}
+
+
+def test_strict_transport_is_direct_only_across_environment_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_names = (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    )
+    for name in proxy_names:
+        monkeypatch.setenv(name, f"http://before-{name.casefold()}.invalid:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    environment_before_construction = dict(os.environ)
+    opener = _RecordingOpener()
+    handler_calls: list[tuple[object, ...]] = []
+
+    def fake_build_opener(*handlers: object) -> _RecordingOpener:
+        handler_calls.append(handlers)
+        return opener
+
+    monkeypatch.setattr(http_enforcement_module, "build_opener", fake_build_opener)
+    clock = _FakeTime()
+    executor = InternalHTTPExecutor(
+        _configuration(
+            approved_origins=("http://example.test", "https://example.test")
+        ),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    assert dict(os.environ) == environment_before_construction
+    for name in proxy_names:
+        monkeypatch.setenv(name, f"http://after-{name.casefold()}.invalid:9090")
+    monkeypatch.setenv("NO_PROXY", "unexpected.example")
+    monkeypatch.setenv("no_proxy", "*")
+    environment_before_requests = dict(os.environ)
+
+    executor.request("http://example.test/plain")
+    executor.request("https://example.test/secure")
+
+    assert dict(os.environ) == environment_before_requests
+    assert len(handler_calls) == 1
+    proxy_handlers = [
+        handler for handler in handler_calls[0] if isinstance(handler, ProxyHandler)
+    ]
+    assert len(proxy_handlers) == 1
+    assert proxy_handlers[0].proxies == {}
+    assert [request.full_url for request in opener.requests] == [
+        "http://example.test/plain",
+        "https://example.test/secure",
+    ]
+    for request in opener.requests:
+        headers = {
+            name.casefold(): value for name, value in request.header_items()
+        }
+        assert headers["x-researcher-id"] == HEADER_SENTINEL
+        assert headers["user-agent"] == USER_AGENT_SENTINEL
+    assert executor.total_request_attempts == 2
+
+
+def test_strict_direct_failure_does_not_retry_through_environment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://implicit-proxy.invalid:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://implicit-proxy.invalid:8080")
+    monkeypatch.setenv("ALL_PROXY", "http://implicit-proxy.invalid:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    opener = _RecordingOpener(error=OSError("direct connection failed"))
+    handler_calls: list[tuple[object, ...]] = []
+
+    def fake_build_opener(*handlers: object) -> _RecordingOpener:
+        handler_calls.append(handlers)
+        return opener
+
+    monkeypatch.setattr(http_enforcement_module, "build_opener", fake_build_opener)
+    executor = InternalHTTPExecutor(_configuration())
+
+    with pytest.raises(HTTPTransportFailure, match="transport_error"):
+        executor.request("https://example.test/fail")
+
+    assert len(handler_calls) == 1
+    assert len(opener.requests) == 1
+    assert executor.total_request_attempts == 1
+
+
+def test_injected_transport_does_not_construct_an_urllib_opener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_build_opener(*_handlers: object):
+        raise AssertionError("injected transport must bypass urllib construction")
+
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "build_opener",
+        unexpected_build_opener,
+    )
+    transport = _RecordingTransport()
+    executor = InternalHTTPExecutor(_configuration(), transport=transport)
+
+    executor.request("https://example.test/injected")
+
+    assert len(transport.requests) == 1
+
+
+def test_non_strict_compatibility_transport_retains_existing_opener_behaviour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = _RecordingOpener()
+    handler_calls: list[tuple[object, ...]] = []
+
+    def fake_build_opener(*handlers: object) -> _RecordingOpener:
+        handler_calls.append(handlers)
+        return opener
+
+    monkeypatch.setattr(http_enforcement_module, "build_opener", fake_build_opener)
+    executor = InternalHTTPExecutor(None)
+
+    assert handler_calls == []
+    executor.request("https://example.test/compatibility")
+
+    assert len(handler_calls) == 1
+    assert not any(isinstance(handler, ProxyHandler) for handler in handler_calls[0])
+    assert len(opener.requests) == 1
 
 
 @pytest.mark.parametrize(
