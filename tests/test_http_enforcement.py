@@ -24,6 +24,19 @@ from bugslyce.core.engagement_policy import (
     IdentificationHeader,
     build_bug_bounty_policy,
 )
+from bugslyce.core.programme_scope import (
+    ACTION_EXCLUDE,
+    ACTION_INCLUDE,
+    RULE_EXACT_HOSTNAME,
+    RULE_EXACT_HTTP_URL,
+    RULE_EXACT_IPV4,
+    RULE_HTTP_PATH_PREFIX,
+    RULE_IPV4_CIDR,
+    RULE_WILDCARD_SUBDOMAIN,
+    ProgrammeScopePolicy,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.project_session import (
     initialize_project,
     save_project_engagement_policy,
@@ -339,6 +352,427 @@ def test_policy_configuration_derives_exact_private_identity_without_repr_leak()
     )
     assert HEADER_SENTINEL not in repr(configuration)
     assert USER_AGENT_SENTINEL not in repr(configuration)
+
+
+@pytest.mark.parametrize(
+    ("rules", "url", "allow_query_strings", "allowed", "reason_code"),
+    (
+        ((("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+         "https://example.test/path", False, True, None),
+        ((("wild", ACTION_INCLUDE, RULE_WILDCARD_SUBDOMAIN, "*.example.test"),),
+         "https://deep.api.example.test/path", False, True, None),
+        ((("wild", ACTION_INCLUDE, RULE_WILDCARD_SUBDOMAIN, "*.example.test"),),
+         "https://example.test/path", False, False, "no_matching_inclusion"),
+        ((("url", ACTION_INCLUDE, RULE_EXACT_HTTP_URL,
+           "https://example.test/exact?order=1&order=2"),),
+         "https://example.test/exact?order=1&order=2", True, True, None),
+        ((("url", ACTION_INCLUDE, RULE_EXACT_HTTP_URL,
+           "https://example.test/exact?order=1&order=2"),),
+         "https://example.test/exact?order=2&order=1", True, False,
+         "no_matching_inclusion"),
+        ((("path", ACTION_INCLUDE, RULE_HTTP_PATH_PREFIX,
+           "https://example.test/api"),),
+         "https://example.test/api/items?view=short", True, True, None),
+        ((("ip", ACTION_INCLUDE, RULE_EXACT_IPV4, "192.0.2.10"),),
+         "https://192.0.2.10/path", False, True, None),
+        ((("cidr", ACTION_INCLUDE, RULE_IPV4_CIDR, "192.0.2.0/24"),),
+         "https://192.0.2.200/path", False, True, None),
+        ((("cidr", ACTION_INCLUDE, RULE_IPV4_CIDR, "192.0.2.0/24"),),
+         "https://example.test/path", False, False, "no_matching_inclusion"),
+        ((
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("private", ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX,
+             "https://example.test/private"),
+         ), "https://example.test/private/item", False, False,
+         "explicit_exclusion"),
+        ((
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("exact", ACTION_INCLUDE, RULE_EXACT_HTTP_URL,
+             "https://example.test/private/item"),
+            ("private", ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX,
+             "https://example.test/private"),
+         ), "https://example.test/private/item", False, False,
+         "explicit_exclusion"),
+        ((("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+         "https://other.test/path", False, False, "no_matching_inclusion"),
+        ((("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+         "https://example.test/%2f", False, False, "invalid_destination"),
+    ),
+)
+def test_programme_scope_controls_initial_logical_url_before_transport(
+    rules: tuple[tuple[str, str, str, str], ...],
+    url: str,
+    allow_query_strings: bool,
+    allowed: bool,
+    reason_code: str | None,
+) -> None:
+    clock = _FakeTime()
+    transport = _RecordingTransport(clock=clock)
+    policy = _programme_scope_policy(rules)
+    approved_origins = (
+        "https://192.0.2.10",
+        "https://192.0.2.200",
+        "https://deep.api.example.test",
+        "https://example.test",
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=approved_origins),
+        programme_scope_policy=policy,
+        transport=transport,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    if allowed:
+        executor.request(url, allow_query_strings=allow_query_strings)
+        assert len(transport.requests) == 1
+        assert executor.total_request_attempts == 1
+        assert executor.last_request_start == Decimal("0")
+    else:
+        with pytest.raises(
+            http_enforcement_module.HTTPProgrammeScopeRefused
+        ) as exc_info:
+            executor.request(url, allow_query_strings=allow_query_strings)
+        assert exc_info.value.stage == "initial"
+        assert exc_info.value.reason_code == reason_code
+        assert transport.requests == []
+        assert executor.total_request_attempts == 0
+        assert executor.last_request_start is None
+        assert executor._limiter is not None
+        assert executor._limiter._next_start is None
+        assert clock.sleeps == []
+
+
+def test_initial_scope_refusal_precedes_origin_identity_and_permit_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_note = "PRIVATE-NOTE-SENTINEL-3491"
+    private_source = "PRIVATE-SOURCE-WORDING-SENTINEL-3491"
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "allowed.test"),),
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+    transport = _RecordingTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    def unexpected_headers(_additional_headers):
+        raise AssertionError("identity headers must not be prepared after scope refusal")
+
+    monkeypatch.setattr(executor, "_effective_headers", unexpected_headers)
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://other.test/not-authorised")
+
+    refusal = exc_info.value
+    assert refusal.stage == "initial"
+    assert refusal.reason_code == "no_matching_inclusion"
+    assert refusal.operator_safe_explanation == (
+        "Destination has no matching programme scope inclusion."
+    )
+    assert str(refusal) == (
+        "Internal HTTP programme scope refused at initial: "
+        "no_matching_inclusion. Destination has no matching programme scope inclusion."
+    )
+    assert private_note not in str(refusal)
+    assert private_note not in repr(refusal)
+    assert private_source not in str(refusal)
+    assert private_source not in repr(refusal)
+    assert HEADER_SENTINEL not in str(refusal)
+    assert HEADER_SENTINEL not in repr(refusal)
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+def test_programme_scope_refusal_is_distinct_from_redirect_and_transport_failures() -> None:
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=_RecordingTransport(),
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://other.test/")
+
+    assert not isinstance(exc_info.value, HTTPRedirectRefused)
+    assert not isinstance(exc_info.value, HTTPTransportFailure)
+    assert repr(exc_info.value) == (
+        "HTTPProgrammeScopeRefused(stage='initial', "
+        "reason_code='no_matching_inclusion', "
+        "operator_safe_explanation='Destination has no matching programme scope "
+        "inclusion.')"
+    )
+
+
+def test_non_bug_bounty_programme_scope_policy_is_rejected_at_construction() -> None:
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    object.__setattr__(policy, "engagement_context", "ctf")
+
+    with pytest.raises(ValueError, match="bug_bounty"):
+        InternalHTTPExecutor(
+            _configuration(),
+            programme_scope_policy=policy,
+            transport=_RecordingTransport(),
+        )
+
+
+def test_executor_stores_a_canonical_immutable_programme_scope_copy() -> None:
+    private_note = "PRIVATE-NOTE-SENTINEL-8821"
+    private_source = "PRIVATE-SOURCE-WORDING-SENTINEL-8821"
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=_RecordingTransport(),
+    )
+
+    assert executor._programme_scope_policy == policy
+    assert executor._programme_scope_policy is not policy
+    assert private_note not in repr(executor)
+    assert private_source not in repr(executor)
+    with pytest.raises(ValueError, match="canonical programme scope policy"):
+        InternalHTTPExecutor(
+            _configuration(),
+            programme_scope_policy=object(),  # type: ignore[arg-type]
+            transport=_RecordingTransport(),
+        )
+
+
+def test_executor_rejects_a_noncanonical_programme_scope_rule() -> None:
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    object.__setattr__(policy.rules[0], "canonical_value", "Example.TEST")
+
+    with pytest.raises(ValueError, match="not canonical"):
+        InternalHTTPExecutor(
+            _configuration(),
+            programme_scope_policy=policy,
+            transport=_RecordingTransport(),
+        )
+
+
+def test_programme_scope_requires_http_enforcement_configuration() -> None:
+    private_note = "PRIVATE-NOTE-SENTINEL-5591"
+    private_source = "PRIVATE-SOURCE-WORDING-SENTINEL-5591"
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+    transport = _RecordingTransport()
+
+    with pytest.raises(ValueError) as exc_info:
+        InternalHTTPExecutor(
+            None,
+            programme_scope_policy=policy,
+            transport=transport,
+        )
+
+    assert str(exc_info.value) == (
+        "Programme-scoped internal HTTP requires enforcement configuration."
+    )
+    assert private_note not in str(exc_info.value)
+    assert private_note not in repr(exc_info.value)
+    assert private_source not in str(exc_info.value)
+    assert private_source not in repr(exc_info.value)
+    assert transport.requests == []
+
+
+def test_unscoped_executor_retains_existing_compatibility_behaviour() -> None:
+    transport = _RecordingTransport()
+    executor = InternalHTTPExecutor(_configuration(), transport=transport)
+
+    executor.request("https://example.test/unscoped")
+
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/unscoped"
+    ]
+    assert executor.total_request_attempts == 1
+
+
+def test_allowed_scope_does_not_weaken_approved_origin_containment() -> None:
+    policy = _programme_scope_policy(
+        (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test"),)
+    )
+    transport = _RecordingTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    with pytest.raises(ValueError, match="origin is not approved"):
+        executor.request("https://other.test/path")
+
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+def test_allowed_relative_redirect_is_independently_scope_evaluated_and_sent() -> None:
+    policy = _programme_scope_policy(
+        (("path", ACTION_INCLUDE, RULE_HTTP_PATH_PREFIX,
+          "https://example.test/allowed"),)
+    )
+    transport = _RecordingTransport(
+        [
+            _response(302, (("Location", "next"),)),
+            _response(200, body=b"final"),
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    response = executor.request("https://example.test/allowed/start")
+
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/allowed/start",
+        "https://example.test/allowed/next",
+    ]
+    assert executor.total_request_attempts == 2
+    assert response.redirects == (
+        http_enforcement_module.HTTPRedirectHop(
+            status_code=302,
+            source_url="https://example.test/allowed/start",
+            destination_url="https://example.test/allowed/next",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rules", "location", "reason_code"),
+    (
+        ((("start", ACTION_INCLUDE, RULE_EXACT_HTTP_URL,
+           "https://example.test/start"),),
+         "/next", "no_matching_inclusion"),
+        ((
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("blocked", ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX,
+             "https://example.test/private"),
+         ), "/private/next", "explicit_exclusion"),
+    ),
+)
+def test_denied_redirect_is_not_sent_counted_or_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+    rules: tuple[tuple[str, str, str, str], ...],
+    location: str,
+    reason_code: str,
+) -> None:
+    policy = _programme_scope_policy(rules)
+    transport = _RecordingTransport([_response(302, (("Location", location),))])
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    def unexpected_redirect_hop(**_values):
+        raise AssertionError("refused redirect must not be recorded as accepted")
+
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "HTTPRedirectHop",
+        unexpected_redirect_hop,
+    )
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/start")
+
+    assert exc_info.value.stage == "redirect"
+    assert exc_info.value.reason_code == reason_code
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/start"
+    ]
+    assert executor.total_request_attempts == 1
+
+
+@pytest.mark.parametrize(
+    ("location", "approved_origins", "reason"),
+    (
+        (
+            "https://other.test/path",
+            ("https://example.test", "https://other.test"),
+            "origin_not_approved",
+        ),
+        (
+            "http://example.test/path",
+            ("http://example.test", "https://example.test"),
+            "https_downgrade",
+        ),
+        (
+            "https://example.test:8443/path",
+            ("https://example.test", "https://example.test:8443"),
+            "origin_not_approved",
+        ),
+    ),
+)
+def test_scope_inclusion_does_not_weaken_existing_redirect_mechanics(
+    location: str,
+    approved_origins: tuple[str, ...],
+    reason: str,
+) -> None:
+    policy = _programme_scope_policy(
+        (
+            ("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("other", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test"),
+        )
+    )
+    transport = _RecordingTransport(
+        [_response(302, (("Location", location),))]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=approved_origins),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    with pytest.raises(HTTPRedirectRefused, match=reason):
+        executor.request("https://example.test/start")
+
+    assert len(transport.requests) == 1
+    assert executor.total_request_attempts == 1
+
+
+def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingTransport(
+        [
+            _response(301, (("Location", "https://example.test/secure"),)),
+            _response(),
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(
+            approved_origins=("http://example.test", "https://example.test")
+        ),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    executor.request("http://example.test/start")
+
+    assert [request.url for request in transport.requests] == [
+        "http://example.test/start",
+        "https://example.test/secure",
+    ]
+    assert executor.total_request_attempts == 2
 
 
 def test_multiple_policy_identification_headers_reach_every_exchange_in_order() -> None:
@@ -1604,6 +2038,28 @@ def _configuration(
             if (origin := http_origin_from_url(value)) is not None
         ),
         maximum_redirect_hops=maximum_redirect_hops,
+    )
+
+
+def _programme_scope_policy(
+    rules: tuple[tuple[str, str, str, str], ...],
+    *,
+    private_note: str | None = None,
+    private_source_wording: str | None = None,
+) -> ProgrammeScopePolicy:
+    return build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id=rule_id,
+                action=action,
+                kind=kind,
+                value=value,
+                private_note=private_note,
+                private_source_wording=private_source_wording,
+            )
+            for rule_id, action, kind, value in rules
+        ],
+        updated_at="2026-07-30T10:00:00Z",
     )
 
 

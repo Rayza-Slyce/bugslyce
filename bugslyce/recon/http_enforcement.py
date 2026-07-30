@@ -27,6 +27,16 @@ from bugslyce.core.engagement_policy import (
     validate_identification_headers,
     validate_identification_value,
 )
+from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
+from bugslyce.core.programme_scope import (
+    DESTINATION_HTTP_URL,
+    OUTCOME_ALLOWED,
+    ProgrammeScopePolicy,
+    ScopeDecision,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
 from bugslyce.recon.user_agent import built_in_user_agent
 
@@ -194,6 +204,31 @@ class HTTPRedirectRefused(InternalHTTPExecutionError):
         super().__init__(f"Internal HTTP redirect refused: {reason}.")
 
 
+class HTTPProgrammeScopeRefused(InternalHTTPExecutionError):
+    """Raised before transmission when a logical HTTP URL is outside scope."""
+
+    def __init__(self, stage: str, decision: ScopeDecision) -> None:
+        if stage not in {"initial", "redirect"}:
+            raise ValueError("Programme scope refusal stage is invalid.")
+        if not isinstance(decision, ScopeDecision) or decision.outcome == OUTCOME_ALLOWED:
+            raise ValueError("Programme scope refusal requires a refused decision.")
+        self.stage = stage
+        self.reason_code = decision.reason_code
+        self.operator_safe_explanation = decision.operator_safe_explanation
+        super().__init__(
+            "Internal HTTP programme scope refused "
+            f"at {stage}: {self.reason_code}. {self.operator_safe_explanation}"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(stage={self.stage!r}, "
+            f"reason_code={self.reason_code!r}, "
+            "operator_safe_explanation="
+            f"{self.operator_safe_explanation!r})"
+        )
+
+
 class HTTPRateRejected(InternalHTTPExecutionError):
     """Typed stage-stop signal for an HTTP 429 response."""
 
@@ -289,6 +324,7 @@ class InternalHTTPExecutor:
         self,
         configuration: HTTPEnforcementConfiguration | None,
         *,
+        programme_scope_policy: ProgrammeScopePolicy | None = None,
         transport: HTTPTransport | None = None,
         monotonic: Monotonic = system_monotonic,
         sleep: Sleeper = system_sleep,
@@ -297,7 +333,41 @@ class InternalHTTPExecutor:
             configuration, HTTPEnforcementConfiguration
         ):
             raise ValueError("Internal HTTP enforcement configuration is invalid.")
+        if programme_scope_policy is not None and configuration is None:
+            raise ValueError(
+                "Programme-scoped internal HTTP requires enforcement configuration."
+            )
+        if programme_scope_policy is not None:
+            if not isinstance(programme_scope_policy, ProgrammeScopePolicy):
+                raise ValueError("A canonical programme scope policy is required.")
+            if programme_scope_policy.engagement_context != BUG_BOUNTY_CONTEXT:
+                raise ValueError("Programme scope policy context must be bug_bounty.")
+            try:
+                canonical_rules = tuple(
+                    build_programme_scope_rule(
+                        rule_id=rule.rule_id,
+                        action=rule.action,
+                        kind=rule.kind,
+                        value=rule.canonical_value,
+                        private_note=rule.private_note,
+                        private_source_wording=rule.private_source_wording,
+                    )
+                    for rule in programme_scope_policy.rules
+                )
+                canonical_programme_scope_policy = build_programme_scope_policy(
+                    canonical_rules,
+                    schema_version=programme_scope_policy.schema_version,
+                    engagement_context=programme_scope_policy.engagement_context,
+                    updated_at=programme_scope_policy.updated_at,
+                )
+            except (AttributeError, TypeError, ValueError):
+                raise ValueError("Programme scope policy is not canonical.") from None
+            if canonical_programme_scope_policy != programme_scope_policy:
+                raise ValueError("Programme scope policy is not canonical.")
+        else:
+            canonical_programme_scope_policy = None
         self.configuration = configuration
+        self._programme_scope_policy = canonical_programme_scope_policy
         self.transport: HTTPTransport = transport or UrllibHTTPTransport(
             direct_only=configuration is not None
         )
@@ -367,6 +437,7 @@ class InternalHTTPExecutor:
             maximum_response_bytes,
             allow_query_strings,
         )
+        self._require_programme_scope(url, stage="initial")
         self._require_approved_initial_origin(url)
         headers = self._effective_headers(additional_headers)
         requested_url = url
@@ -412,6 +483,7 @@ class InternalHTTPExecutor:
                 raise HTTPRedirectRefused("redirect_loop")
             if len(redirects) >= self.configuration.maximum_redirect_hops:
                 raise HTTPRedirectRefused("redirect_hop_limit")
+            self._require_programme_scope(destination, stage="redirect")
             redirects.append(
                 HTTPRedirectHop(
                     status_code=response.status_code,
@@ -608,6 +680,19 @@ class InternalHTTPExecutor:
         origin = http_origin_from_url(url)
         if origin not in self.configuration.approved_origins:
             raise ValueError("Internal HTTP request origin is not approved.")
+
+    def _require_programme_scope(self, url: str, *, stage: str) -> None:
+        """Enforce logical URL scope; resolved-peer binding is deferred to R0C3A2."""
+
+        if self._programme_scope_policy is None:
+            return
+        decision = evaluate_raw_scope_destination(
+            self._programme_scope_policy,
+            DESTINATION_HTTP_URL,
+            url,
+        )
+        if decision.outcome != OUTCOME_ALLOWED:
+            raise HTTPProgrammeScopeRefused(stage, decision)
 
     def _redirect_destination(
         self,
