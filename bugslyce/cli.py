@@ -46,6 +46,10 @@ from bugslyce.project_session import (
     scaffold_project,
     write_project_runbook,
 )
+from bugslyce.programme_scope_setup import (
+    configure_project_programme_scope,
+    show_project_programme_scope,
+)
 from bugslyce.project_pipeline import (
     PIPELINE_PROFILE,
     ProjectPipelineFailed,
@@ -427,6 +431,25 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Interactively create or deliberately revise the private local policy.",
     )
+    project_programme_scope_parser = project_subparsers.add_parser(
+        "programme-scope",
+        help="Show or configure private local bug-bounty programme scope.",
+    )
+    programme_scope_subparsers = project_programme_scope_parser.add_subparsers(
+        dest="programme_scope_command"
+    )
+    for command, help_text in (
+        ("show", "Show the privacy-safe local programme-scope summary."),
+        ("configure", "Interactively create or edit private local programme scope."),
+    ):
+        command_parser = programme_scope_subparsers.add_parser(command, help=help_text)
+        command_parser.add_argument(
+            "--project",
+            dest="project_file",
+            required=True,
+            type=Path,
+            help="Path to bugslyce_project.json.",
+        )
     project_run_parser.add_argument(
         "--confirm",
         action="store_true",
@@ -1378,6 +1401,14 @@ def _project(args: argparse.Namespace) -> int:
             return 2
         return 0
 
+    if args.project_command == "programme-scope":
+        if args.programme_scope_command == "show":
+            return show_project_programme_scope(args.project_file)
+        if args.programme_scope_command == "configure":
+            return configure_project_programme_scope(args.project_file)
+        print("Error: programme-scope command required.", file=sys.stderr)
+        return 2
+
     if args.project_command == "show":
         try:
             project = load_project(args.project_file)
@@ -1417,6 +1448,7 @@ def _project(args: argparse.Namespace) -> int:
         "'bugslyce project runbook --help', "
         "'bugslyce project run --help', "
         "'bugslyce project policy --help', "
+        "'bugslyce project programme-scope --help', "
         "'bugslyce project init --help', "
         "'bugslyce project show --help', 'bugslyce project status --help', "
         "or 'bugslyce project next --help'.",

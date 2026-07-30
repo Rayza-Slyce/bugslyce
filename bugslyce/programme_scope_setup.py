@@ -1,0 +1,400 @@
+"""Offline programme-scope show and configure orchestration."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+import sys
+
+from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
+from bugslyce.core.programme_scope import (
+    ACTION_INCLUDE,
+    PROGRAMME_SCOPE_SCHEMA_VERSION,
+    ProgrammeScopePolicy,
+    ProgrammeScopeRule,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+    validate_rule_id,
+)
+from bugslyce.programme_scope_management import (
+    add_programme_scope_rule,
+    build_changed_programme_scope_policy,
+    programme_scope_rules_changed,
+    remove_programme_scope_rule,
+    render_programme_scope_local_summary,
+    replace_programme_scope_rule,
+    update_programme_scope_rule_private_fields,
+)
+from bugslyce.project_session import (
+    BugSlyceProject,
+    load_project,
+    load_project_programme_scope_policy,
+    save_project_programme_scope_policy,
+)
+from bugslyce.time_utils import utc_now_iso
+
+
+InputFunc = Callable[[str], str]
+PrintFunc = Callable[[str], None]
+NowFunc = Callable[[], str]
+
+_CANCEL = "CANCEL"
+_DRAFT_TIMESTAMP = "1970-01-01T00:00:00Z"
+
+
+class _Cancelled(Exception):
+    pass
+
+
+def _stderr_print(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def show_project_programme_scope(
+    project_path: Path,
+    *,
+    print_func: PrintFunc = print,
+    error_func: PrintFunc = _stderr_print,
+) -> int:
+    """Show one project's explicit private local programme-scope summary."""
+
+    try:
+        project = _load_bug_bounty_project(project_path)
+        policy = load_project_programme_scope_policy(project)
+        if policy is None:
+            print_func("Programme scope is not configured.")
+            print_func("Live bug-bounty execution remains blocked.")
+            return 0
+        print_func(render_programme_scope_local_summary(project, policy))
+        return 0
+    except ValueError as exc:
+        error_func(f"Error: {exc}")
+        return 2
+    except (OSError, UnicodeError):
+        error_func("Error: programme scope could not be read safely.")
+        return 2
+
+
+def configure_project_programme_scope(
+    project_path: Path,
+    *,
+    input_func: InputFunc = input,
+    print_func: PrintFunc = print,
+    error_func: PrintFunc = _stderr_print,
+    now_func: NowFunc = utc_now_iso,
+) -> int:
+    """Create or edit one programme-scope policy with a single final save."""
+
+    try:
+        project = _load_bug_bounty_project(project_path)
+        stored = load_project_programme_scope_policy(project)
+        _render_initial_screen(project, stored, print_func)
+        return _configure_loop(
+            Path(project_path),
+            project,
+            stored,
+            input_func=input_func,
+            print_func=print_func,
+            error_func=error_func,
+            now_func=now_func,
+        )
+    except _Cancelled:
+        print_func("Programme-scope configuration cancelled; stored values are unchanged.")
+        return 0
+    except EOFError:
+        error_func("Error: programme-scope input ended unexpectedly.")
+        return 2
+    except ValueError as exc:
+        error_func(f"Error: {exc}")
+        return 2
+    except (OSError, UnicodeError):
+        error_func("Error: programme scope could not be read or saved safely.")
+        return 2
+
+
+def _load_bug_bounty_project(project_path: Path) -> BugSlyceProject:
+    project = load_project(Path(project_path))
+    if project.engagement_context != BUG_BOUNTY_CONTEXT:
+        raise ValueError("Programme-scope configuration requires a bug bounty project.")
+    return project
+
+
+def _render_initial_screen(
+    project: BugSlyceProject,
+    policy: ProgrammeScopePolicy | None,
+    print_func: PrintFunc,
+) -> None:
+    print_func("Programme scope configuration - private local operator workflow")
+    print_func(f"Project: {project.name}")
+    print_func(f"Engagement context: {project.engagement_context}")
+    print_func(f"Programme scope configured: {'yes' if policy is not None else 'no'}")
+    print_func("Copy rules manually from the current authorised programme brief.")
+    print_func("Runtime programme-scope enforcement is not active yet.")
+    print_func("Configuration does not currently enable live bug-bounty reconnaissance.")
+    if policy is not None:
+        print_func("")
+        print_func(render_programme_scope_local_summary(project, policy))
+
+
+def _configure_loop(
+    project_path: Path,
+    project: BugSlyceProject,
+    stored: ProgrammeScopePolicy | None,
+    *,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    error_func: PrintFunc,
+    now_func: NowFunc,
+) -> int:
+    rules = () if stored is None else stored.rules
+    while True:
+        if stored is None:
+            print_func("1. Add rule\n2. Review rules\n3. Review and save\n4. Cancel")
+            choice = _prompt(input_func, "Select an option: ")
+            actions = {"1": "add", "2": "review", "3": "save", "4": "cancel"}
+        else:
+            print_func(
+                "1. List/review rules\n2. Add rule\n3. Replace rule\n"
+                "4. Remove rule\n5. Change private fields\n6. Review and save\n7. Cancel"
+            )
+            choice = _prompt(input_func, "Select an option: ")
+            actions = {
+                "1": "review", "2": "add", "3": "replace", "4": "remove",
+                "5": "private", "6": "save", "7": "cancel",
+            }
+        action = actions.get(choice)
+        if action is None:
+            error_func("Error: select one of the listed programme-scope options.")
+            continue
+        if action == "cancel":
+            raise _Cancelled
+        if action == "review":
+            print_func(_render_draft(project, stored, rules))
+            continue
+        if action == "save":
+            return _review_and_save(
+                project_path, project, stored, rules,
+                input_func=input_func, print_func=print_func,
+                error_func=error_func, now_func=now_func,
+            )
+        try:
+            if action == "add":
+                new_rule = _collect_rule(input_func)
+                rules = add_programme_scope_rule(rules, new_rule)
+                print_func(f"Rule added: {_safe_rule(new_rule)}")
+            elif action == "replace":
+                rules = _replace_rule(rules, input_func, print_func)
+            elif action == "remove":
+                rules = _remove_rule(rules, input_func, print_func)
+            elif action == "private":
+                rules = _change_private_fields(rules, input_func)
+        except _Cancelled:
+            raise
+        except ValueError as exc:
+            error_func(f"Error: {exc}")
+
+
+def _collect_rule(
+    input_func: InputFunc,
+    *,
+    rule_id: str | None = None,
+) -> ProgrammeScopeRule:
+    selected_id = rule_id or _prompt(input_func, "Rule ID: ")
+    action = _prompt(input_func, "Action [include/exclude]: ")
+    kind = _prompt(
+        input_func,
+        "Rule kind [exact_hostname/wildcard_subdomain/exact_http_url/"
+        "http_path_prefix/exact_ipv4/ipv4_cidr]: ",
+    )
+    value = _prompt(input_func, "Literal programme scope value: ")
+    private_note = _optional_private(_prompt(input_func, "Optional private note: "))
+    private_source = _optional_private(
+        _prompt(input_func, "Optional private source wording: ")
+    )
+    return build_programme_scope_rule(
+        rule_id=selected_id,
+        action=action,
+        kind=kind,
+        value=value,
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+
+
+def _replace_rule(
+    rules: tuple[ProgrammeScopeRule, ...],
+    input_func: InputFunc,
+    print_func: PrintFunc,
+) -> tuple[ProgrammeScopeRule, ...]:
+    rule_id = _prompt(input_func, "Existing rule ID: ")
+    current = _find_rule(rules, rule_id)
+    print_func(f"Current rule: {_safe_rule(current)}")
+    replacement = _collect_public_replacement(input_func, current)
+    if replacement.action != current.action:
+        confirmation = _prompt(
+            input_func,
+            "Type CHANGE to confirm the include/exclude action change: ",
+        )
+        if confirmation != "CHANGE":
+            raise ValueError("Rule action change was not confirmed.")
+    changed = replace_programme_scope_rule(rules, current.rule_id, replacement)
+    print_func(f"Rule replaced: {_safe_rule(replacement)}")
+    return changed
+
+
+def _collect_public_replacement(
+    input_func: InputFunc,
+    current: ProgrammeScopeRule,
+) -> ProgrammeScopeRule:
+    action = _prompt(input_func, "Replacement action [include/exclude]: ")
+    kind = _prompt(
+        input_func,
+        "Replacement rule kind [exact_hostname/wildcard_subdomain/"
+        "exact_http_url/http_path_prefix/exact_ipv4/ipv4_cidr]: ",
+    )
+    value = _prompt(input_func, "Replacement literal programme scope value: ")
+    return build_programme_scope_rule(
+        rule_id=current.rule_id,
+        action=action,
+        kind=kind,
+        value=value,
+        private_note=current.private_note,
+        private_source_wording=current.private_source_wording,
+    )
+
+
+def _remove_rule(
+    rules: tuple[ProgrammeScopeRule, ...],
+    input_func: InputFunc,
+    print_func: PrintFunc,
+) -> tuple[ProgrammeScopeRule, ...]:
+    rule_id = _prompt(input_func, "Existing rule ID: ")
+    current = _find_rule(rules, rule_id)
+    print_func(f"Rule selected: {_safe_rule(current)}")
+    if _prompt(input_func, "Type REMOVE to remove this rule: ") != "REMOVE":
+        raise ValueError("Rule removal was not confirmed.")
+    inclusions = tuple(rule for rule in rules if rule.action == ACTION_INCLUDE)
+    if current.action == ACTION_INCLUDE and len(inclusions) == 1:
+        if _prompt(
+            input_func,
+            "Type SAVE WITHOUT INCLUSIONS to remove the final inclusion rule: ",
+        ) != "SAVE WITHOUT INCLUSIONS":
+            raise ValueError("Removal of the final inclusion rule was not confirmed.")
+    if len(rules) == 1:
+        if _prompt(
+            input_func,
+            "Type REMOVE FINAL RULE to leave an empty local policy: ",
+        ) != "REMOVE FINAL RULE":
+            raise ValueError("Removal of the final rule was not confirmed.")
+    return remove_programme_scope_rule(rules, current.rule_id)
+
+
+def _change_private_fields(
+    rules: tuple[ProgrammeScopeRule, ...], input_func: InputFunc
+) -> tuple[ProgrammeScopeRule, ...]:
+    rule_id = _prompt(input_func, "Existing rule ID: ")
+    current = _find_rule(rules, rule_id)
+    note = _optional_private(
+        _prompt(input_func, "Replacement private note (blank clears it): ")
+    )
+    source = _optional_private(
+        _prompt(input_func, "Replacement private source wording (blank clears it): ")
+    )
+    return update_programme_scope_rule_private_fields(
+        rules,
+        current.rule_id,
+        private_note=note,
+        private_source_wording=source,
+    )
+
+
+def _review_and_save(
+    project_path: Path,
+    project: BugSlyceProject,
+    stored: ProgrammeScopePolicy | None,
+    rules: tuple[ProgrammeScopeRule, ...],
+    *,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    error_func: PrintFunc,
+    now_func: NowFunc,
+) -> int:
+    print_func(_render_draft(project, stored, rules))
+    if stored is not None and not programme_scope_rules_changed(stored, rules):
+        print_func("No programme-scope changes to save.")
+        return 0
+    required = "SAVE EMPTY POLICY" if not rules else "YES"
+    confirmation = _prompt(
+        input_func,
+        f"Type {required} to save this private local policy: ",
+    )
+    if confirmation != required:
+        print_func("Programme-scope save cancelled; stored values are unchanged.")
+        return 0
+    timestamp = now_func()
+    policy = (
+        build_programme_scope_policy(
+            rules,
+            schema_version=PROGRAMME_SCOPE_SCHEMA_VERSION,
+            engagement_context=BUG_BOUNTY_CONTEXT,
+            updated_at=timestamp,
+        )
+        if stored is None
+        else build_changed_programme_scope_policy(stored, rules, updated_at=timestamp)
+    )
+    try:
+        updated_project, policy_path = save_project_programme_scope_policy(
+            project_path, policy
+        )
+    except ValueError as exc:
+        error_func(f"Error: {exc}")
+        return 2
+    except (OSError, UnicodeError):
+        error_func("Error: programme scope could not be saved safely.")
+        return 2
+    print_func(render_programme_scope_local_summary(updated_project, policy))
+    print_func(f"Programme scope saved privately: {policy_path.name} (mode 0600).")
+    print_func("No reconnaissance was executed. Live bug-bounty execution remains blocked.")
+    return 0
+
+
+def _render_draft(
+    project: BugSlyceProject,
+    stored: ProgrammeScopePolicy | None,
+    rules: tuple[ProgrammeScopeRule, ...],
+) -> str:
+    timestamp = stored.updated_at if stored is not None else _DRAFT_TIMESTAMP
+    draft = build_programme_scope_policy(rules, updated_at=timestamp)
+    rendered = render_programme_scope_local_summary(project, draft)
+    if stored is None:
+        return rendered.replace(
+            f"Updated at: {_DRAFT_TIMESTAMP}",
+            "Updated at: not saved yet",
+            1,
+        )
+    return rendered
+
+
+def _find_rule(
+    rules: tuple[ProgrammeScopeRule, ...], rule_id: str
+) -> ProgrammeScopeRule:
+    validated = validate_rule_id(rule_id)
+    for rule in rules:
+        if rule.rule_id.casefold() == validated.casefold():
+            return rule
+    raise ValueError("Programme scope rule does not exist.")
+
+
+def _safe_rule(rule: ProgrammeScopeRule) -> str:
+    return f"{rule.rule_id} | {rule.action} | {rule.kind} | {rule.canonical_value}"
+
+
+def _prompt(input_func: InputFunc, prompt: str) -> str:
+    value = input_func(prompt).strip()
+    if value == _CANCEL:
+        raise _Cancelled
+    return value
+
+
+def _optional_private(value: str) -> str | None:
+    return value or None

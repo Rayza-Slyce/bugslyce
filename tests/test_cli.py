@@ -149,6 +149,56 @@ def test_cli_project_run_help_lists_all_executable_profiles(capsys) -> None:
     assert "unsafe partial Deep state is refused" in captured.out
 
 
+def test_cli_project_programme_scope_help_registers_exact_commands(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["project", "programme-scope", "--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "usage: bugslyce project programme-scope" in captured.out
+    assert "show" in captured.out
+    assert "configure" in captured.out
+    assert "delete" not in captured.out
+    assert "import" not in captured.out
+    assert "export" not in captured.out
+
+
+@pytest.mark.parametrize("command", ("show", "configure"))
+def test_cli_project_programme_scope_requires_project(command: str, capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["project", "programme-scope", command])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "--project" in captured.err
+
+
+def test_cli_project_programme_scope_dispatches_show(monkeypatch) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        cli_module,
+        "show_project_programme_scope",
+        lambda path: calls.append(path) or 0,
+    )
+    assert main(
+        ["project", "programme-scope", "show", "--project", "project.json"]
+    ) == 0
+    assert calls == [Path("project.json")]
+
+
+def test_cli_project_programme_scope_dispatches_configure_and_exit_code(monkeypatch) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        cli_module,
+        "configure_project_programme_scope",
+        lambda path: calls.append(path) or 2,
+    )
+    assert main(
+        ["project", "programme-scope", "configure", "--project", "project.json"]
+    ) == 2
+    assert calls == [Path("project.json")]
+
+
 def test_cli_run_help_exits_successfully(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["run", "--help"])
