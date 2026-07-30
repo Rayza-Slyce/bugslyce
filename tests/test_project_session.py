@@ -48,7 +48,7 @@ def test_project_init_creates_expected_json_and_output_directory(tmp_path: Path)
 
     assert output_dir.is_dir()
     assert project_path == output_dir / PROJECT_FILENAME
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["name"] == "smoke-test"
     assert payload["target"] == "10.10.10.10"
     assert payload["scope_file"] == str(scope.resolve())

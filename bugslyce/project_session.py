@@ -26,6 +26,12 @@ from bugslyce.core.engagement_policy import (
     load_engagement_policy,
     write_engagement_policy,
 )
+from bugslyce.core.programme_scope import ProgrammeScopePolicy
+from bugslyce.core.programme_scope_store import (
+    PROGRAMME_SCOPE_FILENAME,
+    load_programme_scope_policy,
+    save_programme_scope_policy,
+)
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.status import (
     ReconStatusResult,
@@ -38,7 +44,11 @@ from bugslyce.time_utils import Clock, utc_now_iso
 
 PROJECT_FILENAME = "bugslyce_project.json"
 PROJECT_RUNBOOK_FILENAME = "runbook.md"
-PROJECT_SCHEMA_VERSION = "1.0"
+PROJECT_SCHEMA_VERSION = "1.1"
+LEGACY_PROJECT_SCHEMA_VERSION = "1.0"
+SUPPORTED_PROJECT_SCHEMA_VERSIONS = frozenset(
+    {LEGACY_PROJECT_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION}
+)
 SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 HOSTNAME_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 DEFAULT_PROFILES = {
@@ -48,6 +58,24 @@ DEFAULT_PROFILES = {
 }
 SCAFFOLD_SCOPE_FILENAME = "scope.md"
 SCAFFOLD_OWNED_FILENAMES = {PROJECT_FILENAME, SCAFFOLD_SCOPE_FILENAME}
+_PROJECT_SCHEMA_1_0_FIELDS = frozenset(
+    {
+        "schema_version",
+        "name",
+        "target",
+        "scope_file",
+        "output_dir",
+        "created_by",
+        "default_profiles",
+        "created_at",
+        "engagement_context",
+        "notes",
+        "engagement_policy_file",
+    }
+)
+_PROJECT_SCHEMA_1_1_FIELDS = _PROJECT_SCHEMA_1_0_FIELDS | {
+    "programme_scope_file"
+}
 
 
 @dataclass(frozen=True)
@@ -65,6 +93,7 @@ class BugSlyceProject:
     engagement_context: str = UNKNOWN_CONTEXT
     notes: list[str] = field(default_factory=list)
     engagement_policy_file: str | None = None
+    programme_scope_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +217,7 @@ def initialize_project(
         engagement_context=normalized_engagement_context,
         notes=[],
         engagement_policy_file=None,
+        programme_scope_file=None,
     )
     _write_project_metadata(project_path, project)
     return project, project_path
@@ -327,8 +357,18 @@ def load_project(project_file: Path) -> BugSlyceProject:
         raise ValueError(f"Project file must contain a JSON object: {project_file}")
 
     schema_version = _required_text(payload, "schema_version")
-    if schema_version != PROJECT_SCHEMA_VERSION:
+    if schema_version not in SUPPORTED_PROJECT_SCHEMA_VERSIONS:
         raise ValueError(f"Unsupported project schema version: {schema_version}")
+    if (
+        schema_version == LEGACY_PROJECT_SCHEMA_VERSION
+        and "programme_scope_file" in payload
+    ):
+        raise ValueError("Project file contains unsupported fields for its schema.")
+    if (
+        schema_version == PROJECT_SCHEMA_VERSION
+        and not set(payload) <= _PROJECT_SCHEMA_1_1_FIELDS
+    ):
+        raise ValueError("Project file contains unsupported fields for its schema.")
     name = _required_text(payload, "name")
     if not SAFE_PROJECT_NAME.fullmatch(name):
         raise ValueError("Project file contains an unsafe project name.")
@@ -358,6 +398,11 @@ def load_project(project_file: Path) -> BugSlyceProject:
             "Project engagement_policy_file must be the dedicated project-local "
             f"reference {ENGAGEMENT_POLICY_FILENAME}."
         )
+    programme_scope_file = _project_local_private_reference(
+        payload,
+        "programme_scope_file",
+        PROGRAMME_SCOPE_FILENAME,
+    )
 
     return BugSlyceProject(
         schema_version=schema_version,
@@ -371,6 +416,7 @@ def load_project(project_file: Path) -> BugSlyceProject:
         engagement_context=normalise_engagement_context(payload.get("engagement_context")),
         notes=list(raw_notes),
         engagement_policy_file=engagement_policy_file,
+        programme_scope_file=programme_scope_file,
     )
 
 
@@ -421,10 +467,69 @@ def save_project_engagement_policy(
     return updated, policy_path
 
 
+def load_project_programme_scope_policy(
+    project: BugSlyceProject,
+) -> ProgrammeScopePolicy | None:
+    """Explicitly validate and load a referenced private programme scope."""
+
+    if project.programme_scope_file is None:
+        return None
+    if project.programme_scope_file != PROGRAMME_SCOPE_FILENAME:
+        raise ValueError("Project programme-scope reference is unsupported.")
+    return load_programme_scope_policy(
+        Path(project.output_dir) / PROGRAMME_SCOPE_FILENAME
+    )
+
+
+def save_project_programme_scope_policy(
+    project_file: Path,
+    policy: ProgrammeScopePolicy,
+) -> tuple[BugSlyceProject, Path]:
+    """Save private programme scope and atomically add its project reference."""
+
+    project_file = project_file.expanduser().resolve()
+    _refuse_legacy_project_extension_upgrade(project_file)
+    project = load_project(project_file)
+    if project.engagement_context != BUG_BOUNTY_CONTEXT:
+        raise ValueError("Programme scope policies are configured for bug bounty projects.")
+    output_dir = Path(project.output_dir)
+    policy_path = output_dir / PROGRAMME_SCOPE_FILENAME
+    if project.programme_scope_file == PROGRAMME_SCOPE_FILENAME:
+        save_programme_scope_policy(policy_path, policy)
+        return project, policy_path
+
+    previous_policy: ProgrammeScopePolicy | None = None
+    if policy_path.exists() or policy_path.is_symlink():
+        previous_policy = load_programme_scope_policy(policy_path)
+    save_programme_scope_policy(policy_path, policy)
+    updated = replace(
+        project,
+        schema_version=PROJECT_SCHEMA_VERSION,
+        programme_scope_file=PROGRAMME_SCOPE_FILENAME,
+    )
+    try:
+        _write_project_metadata(project_file, updated)
+    except Exception as metadata_error:
+        try:
+            if previous_policy is None:
+                _remove_private_programme_scope_file(policy_path)
+            else:
+                save_programme_scope_policy(policy_path, previous_policy)
+        except Exception as rollback_error:
+            raise OSError(
+                "Project metadata update failed and programme-scope rollback "
+                "could not be confirmed."
+            ) from rollback_error
+        raise metadata_error
+    return updated, policy_path
+
+
 def _write_project_metadata(project_path: Path, project: BugSlyceProject) -> None:
     payload = asdict(project)
     if payload.get("engagement_policy_file") is None:
         payload.pop("engagement_policy_file", None)
+    if payload.get("programme_scope_file") is None:
+        payload.pop("programme_scope_file", None)
     content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     project_path = project_path.expanduser().resolve(strict=False)
     if not project_path.parent.is_dir():
@@ -469,6 +574,39 @@ def _remove_private_policy_file(policy_path: Path) -> None:
     if path_stat.st_uid != os.geteuid() or stat.S_IMODE(path_stat.st_mode) & 0o077:
         raise ValueError("Engagement policy rollback path has unsafe permissions.")
     policy_path.unlink()
+
+
+def _remove_private_programme_scope_file(policy_path: Path) -> None:
+    """Remove a newly saved scope policy if its first reference cannot save."""
+
+    try:
+        path_stat = policy_path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("Programme scope policy rollback path is unsafe.")
+    if path_stat.st_uid != os.geteuid() or stat.S_IMODE(path_stat.st_mode) != 0o600:
+        raise ValueError("Programme scope policy rollback path has unsafe permissions.")
+    policy_path.unlink()
+
+
+def _refuse_legacy_project_extension_upgrade(project_file: Path) -> None:
+    """Refuse a lossy schema upgrade before touching private policy storage."""
+
+    try:
+        payload = json.loads(project_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not parse project file {project_file}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Project file must contain a JSON object: {project_file}")
+    if (
+        payload.get("schema_version") == LEGACY_PROJECT_SCHEMA_VERSION
+        and not set(payload) <= _PROJECT_SCHEMA_1_0_FIELDS
+    ):
+        raise ValueError(
+            "Legacy project metadata contains extension fields and cannot be "
+            "upgraded automatically."
+        )
 
 
 def inspect_project_status(
@@ -1530,3 +1668,19 @@ def _optional_text(value: object) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _project_local_private_reference(
+    payload: dict[str, object],
+    key: str,
+    expected_filename: str,
+) -> str | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str) or value != expected_filename:
+        raise ValueError(
+            f"Project {key} must be the dedicated project-local reference "
+            f"{expected_filename}."
+        )
+    return value

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import zipfile
 
@@ -1304,7 +1305,12 @@ def test_archive_path_collision_cannot_silently_overwrite(tmp_path: Path) -> Non
     included = {"same.txt": first}
 
     with pytest.raises(ValueError, match="Archive path collision"):
-        export_module._add_file(included, second, "same.txt")
+        export_module._add_file(
+            included,
+            second,
+            "same.txt",
+            input_dir=tmp_path,
+        )
 
     assert included == {"same.txt": first}
 
@@ -1480,6 +1486,360 @@ def test_export_excludes_unrelated_and_cache_files(tmp_path: Path) -> None:
     assert not any(".pytest_cache" in name for name in names)
     assert "unrelated.txt" not in names
     assert "evidence-pack.zip" not in names
+
+
+def test_export_excludes_private_programme_scope_from_every_selection_path(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    private_note = "programme-private-note-sentinel-9142"
+    private_source = "programme-source-wording-sentinel-9142"
+    policy_path = input_dir / "programme_scope.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "private_note": private_note,
+                "private_source_wording": private_source,
+            }
+        ),
+        encoding="utf-8",
+    )
+    unrelated = input_dir / "unrelated.json"
+    unrelated.write_text('{"ordinary":"artefact"}\n', encoding="utf-8")
+
+    project_path = input_dir / "bugslyce_project.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["schema_version"] = "1.1"
+    project["programme_scope_file"] = "programme_scope.json"
+    project_path.write_text(json.dumps(project), encoding="utf-8")
+
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"].extend(
+        (
+            {"type": "private-policy", "file": "programme_scope.json"},
+            {"type": "ordinary-json", "file": "unrelated.json"},
+        )
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    output_path = tmp_path / "private-boundary.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        deep_evidence_paths=(policy_path,),
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+        contents = b"\n".join(archive.read(name) for name in names)
+        packed_project = json.loads(archive.read("bugslyce_project.json"))
+        packed_manifest = json.loads(archive.read("recon_manifest.json"))
+        export_manifest = json.loads(
+            archive.read("bugslyce_export_manifest.json")
+        )
+
+    assert "programme_scope.json" not in names
+    assert "raw/programme_scope.json" not in names
+    assert "raw/unrelated.json" in names
+    assert private_note.encode() not in contents
+    assert private_source.encode() not in contents
+    assert "programme_scope_file" not in packed_project
+    assert all(
+        item["file"] != "raw/programme_scope.json"
+        for item in packed_manifest["artifacts"]
+    )
+    assert export_manifest["excluded_sensitive_files"] == [
+        "programme_scope.json"
+    ]
+    assert "programme_scope.json" not in result.files_included
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_refuses_root_private_policy(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    policy_path = tmp_path / filename
+    policy_path.write_text("private", encoding="utf-8")
+    included = {"existing.txt": tmp_path / "existing.txt"}
+
+    with pytest.raises(ValueError, match="Private policy values"):
+        export_module._add_file(
+            included,
+            policy_path,
+            "raw/renamed-policy.json",
+            input_dir=tmp_path,
+        )
+    assert included == {"existing.txt": tmp_path / "existing.txt"}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_refuses_broken_root_policy_symlink(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    policy_path = tmp_path / filename
+    policy_path.symlink_to(tmp_path / "missing-private-policy")
+    included: dict[str, Path] = {}
+
+    with pytest.raises(ValueError, match="Private policy values"):
+        export_module._add_file(
+            included,
+            policy_path,
+            "raw/renamed-policy.json",
+            input_dir=tmp_path,
+        )
+
+    assert included == {}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_refuses_dot_segment_root_alias(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    root_policy = tmp_path / filename
+    root_policy.write_text("private", encoding="utf-8")
+    (tmp_path / "nested").mkdir()
+    alias = tmp_path / "nested" / ".." / filename
+    included: dict[str, Path] = {}
+
+    with pytest.raises(ValueError, match="Private policy values"):
+        export_module._add_file(
+            included,
+            alias,
+            "raw/ordinary-looking.json",
+            input_dir=tmp_path,
+        )
+
+    assert included == {}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_refuses_symlink_to_root_policy(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    root_policy = tmp_path / filename
+    root_policy.write_text("private", encoding="utf-8")
+    alias = tmp_path / "captures" / f"alias-{filename}"
+    alias.parent.mkdir()
+    alias.symlink_to(root_policy)
+    included: dict[str, Path] = {}
+
+    with pytest.raises(ValueError, match="Private policy values"):
+        export_module._add_file(
+            included,
+            alias,
+            "raw/renamed.json",
+            input_dir=tmp_path,
+        )
+
+    assert included == {}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_refuses_hard_link_to_root_policy(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    root_policy = tmp_path / filename
+    root_policy.write_text("private", encoding="utf-8")
+    alias = tmp_path / "captures" / f"alias-{filename}"
+    alias.parent.mkdir()
+    os.link(root_policy, alias)
+    included: dict[str, Path] = {}
+
+    with pytest.raises(ValueError, match="Private policy values"):
+        export_module._add_file(
+            included,
+            alias,
+            "raw/renamed.json",
+            input_dir=tmp_path,
+        )
+
+    assert included == {}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_allows_nested_same_name_evidence(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    nested = tmp_path / "captures" / filename
+    nested.parent.mkdir()
+    nested.write_text("ordinary evidence\n", encoding="utf-8")
+    included: dict[str, Path] = {}
+
+    export_module._add_file(
+        included,
+        nested,
+        f"raw/captures/{filename}",
+        input_dir=tmp_path,
+    )
+
+    assert included == {f"raw/captures/{filename}": nested}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("programme_scope.json", "engagement_policy.json"),
+)
+def test_low_level_export_selector_allows_distinct_inode_with_identical_bytes(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    content = b"identical bytes do not establish private identity\n"
+    (tmp_path / filename).write_bytes(content)
+    nested = tmp_path / "captures" / filename
+    nested.parent.mkdir()
+    nested.write_bytes(content)
+    assert nested.stat().st_ino != (tmp_path / filename).stat().st_ino
+    included: dict[str, Path] = {}
+
+    export_module._add_file(
+        included,
+        nested,
+        f"raw/captures/{filename}",
+        input_dir=tmp_path,
+    )
+
+    assert included == {f"raw/captures/{filename}": nested}
+
+
+def test_export_classifies_private_policies_by_exact_project_root_source(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    root_private = {
+        "programme_scope.json": "root programme private sentinel",
+        "engagement_policy.json": "root engagement private sentinel",
+    }
+    for filename, content in root_private.items():
+        (input_dir / filename).write_text(content, encoding="utf-8")
+
+    manifest_nested = input_dir / "captures" / "api"
+    deep_nested = input_dir / "responses"
+    closure_nested = input_dir / "nested"
+    for directory in (manifest_nested, deep_nested, closure_nested):
+        directory.mkdir(parents=True, exist_ok=True)
+    for filename in root_private:
+        (manifest_nested / filename).write_text(
+            f"manifest ordinary {filename}\n", encoding="utf-8"
+        )
+        (deep_nested / filename).write_text(
+            f"deep ordinary {filename}\n", encoding="utf-8"
+        )
+        (closure_nested / filename).write_text(
+            f"closure ordinary {filename}\n", encoding="utf-8"
+        )
+    ordinary_json = input_dir / "captures" / "ordinary.json"
+    ordinary_json.write_text('{"ordinary":true}\n', encoding="utf-8")
+
+    project_path = input_dir / "bugslyce_project.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["engagement_policy_file"] = "engagement_policy.json"
+    project["programme_scope_file"] = "programme_scope.json"
+    project_path.write_text(json.dumps(project), encoding="utf-8")
+
+    manifest_path = input_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"].extend(
+        [
+            {"type": "root-private", "file": filename}
+            for filename in root_private
+        ]
+        + [
+            {
+                "type": "nested-ordinary",
+                "file": f"captures/api/{filename}",
+            }
+            for filename in root_private
+        ]
+        + [{"type": "ordinary-json", "file": "captures/ordinary.json"}]
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    closure_references = tuple(
+        EvidencePackReference(
+            portable_path=f"raw/nested/{filename}",
+            source_path=f"nested/{filename}",
+            owner_kind="test_nested_evidence",
+            owner_id=filename,
+        )
+        for filename in root_private
+    ) + tuple(
+        EvidencePackReference(
+            portable_path=f"raw/renamed-{index}.json",
+            source_path=filename,
+            owner_kind="test_root_private_policy",
+            owner_id=filename,
+        )
+        for index, filename in enumerate(root_private, start=1)
+    )
+    output_path = tmp_path / "source-identity.zip"
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        deep_evidence_paths=tuple(
+            deep_nested / filename for filename in root_private
+        ),
+        reference_requirements=closure_references,
+    )
+
+    with zipfile.ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+        packed_project = json.loads(archive.read("bugslyce_project.json"))
+        packed_manifest = json.loads(archive.read("recon_manifest.json"))
+        export_manifest = json.loads(
+            archive.read("bugslyce_export_manifest.json")
+        )
+        packed_content = b"\n".join(archive.read(name) for name in names)
+
+    expected_nested = {
+        f"raw/captures/api/{filename}" for filename in root_private
+    } | {
+        f"raw/responses/{filename}" for filename in root_private
+    } | {
+        f"raw/nested/{filename}" for filename in root_private
+    }
+    assert expected_nested <= names
+    assert "raw/captures/ordinary.json" in names
+    assert not ({"raw/programme_scope.json", "raw/engagement_policy.json"} & names)
+    assert not ({"raw/renamed-1.json", "raw/renamed-2.json"} & names)
+    assert "programme_scope_file" not in packed_project
+    assert "engagement_policy_file" not in packed_project
+    packed_references = {item["file"] for item in packed_manifest["artifacts"]}
+    assert {
+        f"raw/captures/api/{filename}" for filename in root_private
+    } <= packed_references
+    assert "raw/programme_scope.json" not in packed_references
+    assert "raw/engagement_policy.json" not in packed_references
+    assert export_manifest["excluded_sensitive_files"] == [
+        "engagement_policy.json",
+        "programme_scope.json",
+    ]
+    assert all(content.encode() not in packed_content for content in root_private.values())
+    assert expected_nested <= set(result.files_included)
 
 
 def test_export_is_deterministic_for_unchanged_input(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import json
+import os
 from pathlib import Path, PurePosixPath
 import tempfile
 import zipfile
@@ -26,6 +27,9 @@ from bugslyce.time_utils import Clock, utc_now_iso
 
 
 EXPORT_VERSION = "1.0"
+PRIVATE_POLICY_FILENAMES = frozenset(
+    {ENGAGEMENT_POLICY_FILENAME, "programme_scope.json"}
+)
 EXPORT_README_TEMPLATE = (
     "# BugSlyce Evidence Pack Export\n\n"
     "Exported at: `{exported_at}`\n\n"
@@ -89,18 +93,32 @@ def export_recon_evidence_pack(
     included: dict[str, Path] = {}
     missing_files: list[str] = []
     excluded_sensitive_files: list[str] = []
-    if (input_dir / ENGAGEMENT_POLICY_FILENAME).exists():
-        excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
+    for filename in sorted(PRIVATE_POLICY_FILENAMES):
+        if (input_dir / filename).exists():
+            excluded_sensitive_files.append(filename)
     for name in (
         "report.md",
         "project_state.json",
         "recon_manifest.json",
         "bugslyce_project.json",
     ):
-        _add_optional_file(included, missing_files, input_dir / name, name)
+        _add_optional_file(
+            included,
+            missing_files,
+            input_dir / name,
+            name,
+            input_dir=input_dir,
+        )
 
     for name in ("recon_status.md", "recon_status.json", "runbook.md"):
-        _add_optional_file(included, missing_files, input_dir / name, name, record_missing=False)
+        _add_optional_file(
+            included,
+            missing_files,
+            input_dir / name,
+            name,
+            record_missing=False,
+            input_dir=input_dir,
+        )
 
     metadata_paths = {
         path
@@ -114,12 +132,12 @@ def export_recon_evidence_pack(
         if path.is_file()
     }
     for path in sorted(metadata_paths, key=lambda item: item.name):
-        _add_file(included, path, f"metadata/{path.name}")
+        _add_file(included, path, f"metadata/{path.name}", input_dir=input_dir)
 
     scope_reference = _optional_text(manifest.get("scope_file")) or "scope.md"
     scope_path, scope_relative = _resolve_reference(input_dir, scope_reference, "scope file")
     if scope_path.is_file():
-        _add_file(included, scope_path, "scope.md")
+        _add_file(included, scope_path, "scope.md", input_dir=input_dir)
     elif scope_reference != "scope.md" or (input_dir / "scope.md").exists():
         missing_files.append("scope.md")
 
@@ -137,15 +155,15 @@ def export_recon_evidence_pack(
             reference,
             f"manifest artefact #{index}",
         )
-        if relative_path.as_posix() == ENGAGEMENT_POLICY_FILENAME:
-            if ENGAGEMENT_POLICY_FILENAME not in excluded_sensitive_files:
-                excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
+        if _is_private_policy_relative_path(relative_path):
+            if relative_path.name not in excluded_sensitive_files:
+                excluded_sensitive_files.append(relative_path.name)
             continue
         archive_path = f"raw/{relative_path.as_posix()}"
         if not source_path.is_file():
             missing_files.append(archive_path)
             continue
-        _add_file(included, source_path, archive_path)
+        _add_file(included, source_path, archive_path, input_dir=input_dir)
 
     represented_source_paths = {source_path.resolve() for source_path in included.values()}
     for source_path, relative_path, reference in _canonical_deep_evidence_paths(
@@ -153,9 +171,9 @@ def export_recon_evidence_pack(
         output_path,
         deep_evidence_paths,
     ):
-        if relative_path.as_posix() == ENGAGEMENT_POLICY_FILENAME:
-            if ENGAGEMENT_POLICY_FILENAME not in excluded_sensitive_files:
-                excluded_sensitive_files.append(ENGAGEMENT_POLICY_FILENAME)
+        if _is_private_policy_relative_path(relative_path):
+            if relative_path.name not in excluded_sensitive_files:
+                excluded_sensitive_files.append(relative_path.name)
             continue
         if source_path in represented_source_paths:
             continue
@@ -163,22 +181,17 @@ def export_recon_evidence_pack(
         if not source_path.is_file():
             missing_files.append(archive_path)
             continue
-        _add_file(included, source_path, archive_path)
+        _add_file(included, source_path, archive_path, input_dir=input_dir)
         represented_source_paths.add(source_path)
 
-    baseline_requirements = tuple(
-        reference
-        for reference in discover_evidence_pack_references(input_dir)
-        if PurePosixPath(reference.portable_path).name
-        != ENGAGEMENT_POLICY_FILENAME
-    )
     closure_records = _include_reference_closure(
         input_dir,
         included,
         (
-            *baseline_requirements,
+            *discover_evidence_pack_references(input_dir),
             *(reference_requirements or ()),
         ),
+        excluded_sensitive_files,
     )
     missing_files.extend(
         record.portable_path
@@ -337,14 +350,11 @@ def _include_reference_closure(
     input_dir: Path,
     included: dict[str, Path],
     reference_requirements: Sequence[EvidencePackReference],
+    excluded_sensitive_files: list[str],
 ) -> tuple[EvidencePackReferenceRecord, ...]:
     records = group_evidence_pack_references(reference_requirements)
     resolved_records: list[EvidencePackReferenceRecord] = []
     for record in records:
-        if PurePosixPath(record.portable_path).name == ENGAGEMENT_POLICY_FILENAME:
-            raise ValueError(
-                "Engagement policy values are private and cannot be evidence-pack references."
-            )
         if record.portable_path in {
             "BUGSLYCE_EXPORT_README.md",
             "bugslyce_export_manifest.json",
@@ -359,6 +369,10 @@ def _include_reference_closure(
             record.source_path or record.portable_path,
             "locally reviewable artefact",
         )
+        if _is_private_policy_source(source_path, input_dir):
+            if source_path.name not in excluded_sensitive_files:
+                excluded_sensitive_files.append(source_path.name)
+            continue
         if not source_path.is_file():
             resolved_records.append(
                 replace(
@@ -368,7 +382,12 @@ def _include_reference_closure(
                 )
             )
             continue
-        _add_file(included, source_path, record.portable_path)
+        _add_file(
+            included,
+            source_path,
+            record.portable_path,
+            input_dir=input_dir,
+        )
         resolved_records.append(
             replace(record, included=True, unresolved_reason=None)
         )
@@ -446,16 +465,58 @@ def _add_optional_file(
     source_path: Path,
     archive_name: str,
     record_missing: bool = True,
+    *,
+    input_dir: Path,
 ) -> None:
     if source_path.is_file():
-        _add_file(included, source_path, archive_name)
+        _add_file(included, source_path, archive_name, input_dir=input_dir)
     elif record_missing:
         missing_files.append(source_path.name)
 
 
-def _add_file(included: dict[str, Path], source_path: Path, archive_name: str) -> None:
-    if source_path.name == ENGAGEMENT_POLICY_FILENAME:
-        raise ValueError("Engagement policy values cannot be included in an evidence pack.")
+def _is_private_policy_relative_path(path: Path) -> bool:
+    return len(path.parts) == 1 and path.name in PRIVATE_POLICY_FILENAMES
+
+
+def _is_private_policy_source(source_path: Path, input_dir: Path) -> bool:
+    canonical_root = input_dir.resolve()
+    private_paths = tuple(
+        canonical_root / filename for filename in PRIVATE_POLICY_FILENAMES
+    )
+    lexical_source = Path(os.path.abspath(os.path.normpath(source_path)))
+    if lexical_source in private_paths:
+        return True
+
+    try:
+        resolved_source = source_path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        resolved_source = None
+    for private_path in private_paths:
+        try:
+            resolved_private = private_path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved_source == resolved_private:
+            return True
+        try:
+            if os.path.samefile(source_path, private_path):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _add_file(
+    included: dict[str, Path],
+    source_path: Path,
+    archive_name: str,
+    *,
+    input_dir: Path,
+) -> None:
+    if _is_private_policy_source(source_path, input_dir):
+        raise ValueError("Private policy values cannot be included in an evidence pack.")
+    if source_path.is_symlink():
+        raise ValueError("Symbolic links cannot be included in an evidence pack.")
     normalized = PurePosixPath(archive_name)
     if normalized.is_absolute() or ".." in normalized.parts:
         raise ValueError(f"Unsafe archive path: {archive_name}")
@@ -494,6 +555,7 @@ def _portable_pack_content(
         payload["output_dir"] = "."
         payload["scope_file"] = "scope.md"
         payload.pop("engagement_policy_file", None)
+        payload.pop("programme_scope_file", None)
         return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if archive_name == "recon_manifest.json":
         try:
@@ -512,11 +574,11 @@ def _portable_pack_content(
             reference = _required_text(
                 artifact, "file", f"Recon manifest artefact #{index} has no file path."
             )
-            if PurePosixPath(reference).name == ENGAGEMENT_POLICY_FILENAME:
-                continue
             source, relative = _resolve_reference(
                 input_dir, reference, f"manifest artefact #{index}"
             )
+            if _is_private_policy_relative_path(relative):
+                continue
             archive_path = f"raw/{relative.as_posix()}"
             if source.is_file() and included.get(archive_path) != source:
                 raise ValueError(
