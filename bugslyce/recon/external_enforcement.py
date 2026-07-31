@@ -34,14 +34,26 @@ from bugslyce.core.engagement_policy import (
     validate_identification_header_name,
     validate_identification_value,
 )
+from bugslyce.core.programme_scope import (
+    DESTINATION_HTTP_URL,
+    OUTCOME_ALLOWED,
+    CanonicalHTTPURLDestination,
+    ProgrammeScopePolicy,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.core.scope import scope_entry_target
 from bugslyce.recon.http_enforcement import (
     HTTPEnforcementConfiguration,
+    HTTPProgrammeScopeRefused,
     HTTPRateRejected,
     HTTPRedirectRefused,
+    IPv4Resolver,
     InternalHTTPExecutor,
+    _canonical_programme_scope_policy,
+    _system_ipv4_resolver,
     build_http_enforcement_configuration,
     resolve_policy_redirect,
+    select_programme_scope_ipv4_peer,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.modes import (
@@ -99,6 +111,7 @@ _CURL_REQUIRED_OPTIONS = frozenset(
         "--noproxy",
         "--output",
         "--proto",
+        "--resolve",
         "--silent",
         "--show-error",
         "--user-agent",
@@ -384,6 +397,8 @@ class BugBountyExternalEnforcementSession:
         curl_capabilities: ToolCapabilities,
         gobuster_capabilities: ToolCapabilities,
         nmap_capabilities: ToolCapabilities,
+        programme_scope_policy: ProgrammeScopePolicy | None = None,
+        ipv4_resolver: IPv4Resolver | None = None,
         http_executor: InternalHTTPExecutor | None = None,
     ) -> None:
         self._token = object()
@@ -405,15 +420,29 @@ class BugBountyExternalEnforcementSession:
         self.curl_capabilities = curl_capabilities
         self.gobuster_capabilities = gobuster_capabilities
         self.nmap_capabilities = nmap_capabilities
+        canonical_programme_scope_policy = (
+            None
+            if programme_scope_policy is None
+            else _canonical_programme_scope_policy(programme_scope_policy)
+        )
+        if ipv4_resolver is not None and not callable(ipv4_resolver):
+            raise ValueError("Strict curl IPv4 resolver is invalid.")
+        self._programme_scope_policy = canonical_programme_scope_policy
+        self._ipv4_resolver = ipv4_resolver or _system_ipv4_resolver
         self.http_executor = http_executor or InternalHTTPExecutor(self.configuration)
         self._registered_plans: dict[int, ExternalCommandPlan] = {}
+        self._registered_plan_states: dict[int, tuple[object, ...]] = {}
         if self.http_executor.configuration != self.configuration:
             raise ValueError("HTTP executor does not match the policy-derived configuration.")
 
     def build_curl_plan(self, **kwargs: object) -> ExternalCommandPlan:
+        if self._programme_scope_policy is None:
+            raise ValueError("Strict curl planning requires programme scope policy.")
         return self._register_plan(build_bug_bounty_curl_plan(
             configuration=self.configuration,
             capabilities=self.curl_capabilities,
+            programme_scope_policy=self._programme_scope_policy,
+            ipv4_resolver=self._ipv4_resolver,
             _provenance_token=self._token,
             **kwargs,
         ))
@@ -438,11 +467,14 @@ class BugBountyExternalEnforcementSession:
         """Keep a strong reference to the exact in-memory plan instance."""
 
         self._registered_plans[id(plan)] = plan
+        self._registered_plan_states[id(plan)] = _external_plan_state(plan)
         return plan
 
     def _require_plan(self, plan: ExternalCommandPlan) -> None:
         if self._registered_plans.get(id(plan)) is not plan:
             raise ValueError("External command plan is not the registered session plan.")
+        if self._registered_plan_states.get(id(plan)) != _external_plan_state(plan):
+            raise ValueError("External command plan changed after registration.")
         if plan._provenance_token is not self._token:
             raise ValueError("External command plan is not bound to this enforcement session.")
         component = next(
@@ -459,6 +491,22 @@ class BugBountyExternalEnforcementSession:
             _validate_bound_nmap_plan(plan, policy=self.policy)
         else:
             raise ValueError("External command plan uses an unsupported tool.")
+
+
+def _external_plan_state(plan: ExternalCommandPlan) -> tuple[object, ...]:
+    return (
+        plan.tool,
+        plan.purpose,
+        plan.compatibility_status,
+        plan.redacted_argv,
+        plan.process_timeout_seconds,
+        plan.expected_artefacts,
+        plan.request_timeout_seconds,
+        plan.reason,
+        plan._private_argv,
+        plan._redaction_values,
+        plan._provenance_token,
+    )
 
 
 class BugBountyExternalToolRuntime:
@@ -535,15 +583,57 @@ def build_bug_bounty_curl_plan(
     timeout_seconds: int,
     configuration: HTTPEnforcementConfiguration,
     capabilities: ToolCapabilities,
+    programme_scope_policy: ProgrammeScopePolicy,
+    ipv4_resolver: IPv4Resolver,
     purpose: str,
     additional_headers: tuple[tuple[str, str], ...] = (),
     _provenance_token: object | None = None,
 ) -> ExternalCommandPlan:
     """Build one strict, single-exchange curl command."""
 
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("Strict curl target URL is not an approved HTTP origin.")
     normalised_method = method.upper().strip() if isinstance(method, str) else ""
     if normalised_method not in {"GET", "HEAD"}:
         raise ValueError("Strict curl method must be GET or HEAD.")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("Strict curl timeout must be a positive integer.")
+    canonical_programme_scope_policy = _canonical_programme_scope_policy(
+        programme_scope_policy
+    )
+    decision = evaluate_raw_scope_destination(
+        canonical_programme_scope_policy,
+        DESTINATION_HTTP_URL,
+        url,
+    )
+    if decision.outcome != OUTCOME_ALLOWED:
+        raise HTTPProgrammeScopeRefused("initial", decision)
+    origin = http_origin_from_url(url)
+    if origin not in configuration.approved_origins:
+        raise ValueError("Strict curl target URL is not an approved HTTP origin.")
+    selected_ipv4 = select_programme_scope_ipv4_peer(
+        canonical_programme_scope_policy,
+        decision,
+        ipv4_resolver,
+    )
+    destination = decision.canonical_destination
+    if not isinstance(destination, CanonicalHTTPURLDestination):
+        raise ValueError("Strict curl target URL is not canonical.")
+    resolve_mapping = (
+        f"{parsed.hostname}:"
+        f"{destination.origin.effective_port}:{selected_ipv4}"
+    )
     required_options = (
         _CURL_REQUIRED_OPTIONS
         if normalised_method == "HEAD"
@@ -552,22 +642,6 @@ def build_bug_bounty_curl_plan(
     reason = _capability_reason(capabilities, "curl", required_options)
     if reason:
         return _unsupported_plan("curl", purpose, COMPONENT_INCOMPATIBLE, reason)
-    parsed = urlparse(url)
-    origin = http_origin_from_url(url)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.username
-        or parsed.password
-        or parsed.fragment
-        or origin not in configuration.approved_origins
-    ):
-        raise ValueError("Strict curl target URL is not an approved HTTP origin.")
-    if (
-        isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, int)
-        or timeout_seconds <= 0
-    ):
-        raise ValueError("Strict curl timeout must be a positive integer.")
     headers = _effective_external_headers(configuration, additional_headers)
     _require_safe_local_path(output_file, label="Strict curl output path")
     _require_safe_local_path(
@@ -590,6 +664,8 @@ def build_bug_bounty_curl_plan(
         str(min(timeout_seconds, 5)),
         "--max-time",
         str(timeout_seconds),
+        "--resolve",
+        resolve_mapping,
         "--user-agent",
         configuration.user_agent,
     ]
@@ -1155,11 +1231,13 @@ def _validate_strict_curl_argv(
         "--parallel",
         "--retry",
         "--location",
+        "--location-trusted",
         "-L",
         "--no-globoff",
         "--proxy",
         "-x",
         "--preproxy",
+        "--connect-to",
         "--proxy-user",
         "--proxy-header",
     )
@@ -1194,6 +1272,24 @@ def _validate_strict_curl_argv(
         raise ValueError("Strict curl plan must restrict target protocols.")
     if "--noproxy" not in argv or argv[argv.index("--noproxy") + 1] != "*":
         raise ValueError("Strict curl plan must disable proxy routing.")
+    if argv.count("--resolve") != 1:
+        raise ValueError("Strict curl plan must bind exactly one resolved IPv4 peer.")
+    mapping = argv[argv.index("--resolve") + 1]
+    if mapping.count(":") != 2 or any(value in mapping for value in {",", "*"}):
+        raise ValueError("Strict curl plan resolved peer binding is invalid.")
+    mapping_host, mapping_port, mapping_ipv4 = mapping.split(":")
+    parsed_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        canonical_ipv4 = str(ipaddress.IPv4Address(mapping_ipv4))
+    except ipaddress.AddressValueError:
+        raise ValueError("Strict curl plan resolved peer binding is invalid.") from None
+    if (
+        not parsed.hostname
+        or mapping_host != parsed.hostname
+        or mapping_port != str(parsed_port)
+        or mapping_ipv4 != canonical_ipv4
+    ):
+        raise ValueError("Strict curl plan resolved peer binding is invalid.")
     if "--user-agent" not in argv or argv[argv.index("--user-agent") + 1] != configuration.user_agent:
         raise ValueError("Strict curl plan identity does not match the enforcement configuration.")
     names = [value.split(":", 1)[0].casefold() for index, value in enumerate(argv) if index and argv[index - 1] == "--header"]
@@ -1206,6 +1302,7 @@ def _validate_strict_curl_argv(
         "--max-redirs",
         "--connect-timeout",
         "--max-time",
+        "--resolve",
         "--user-agent",
         "--header",
         "--dump-header",
@@ -1312,6 +1409,7 @@ def _validate_bound_curl_plan(
             "--max-redirs": 1,
             "--connect-timeout": 1,
             "--max-time": 1,
+            "--resolve": 1,
             "--user-agent": 1,
             "--dump-header": 1,
             "--write-out": 1,

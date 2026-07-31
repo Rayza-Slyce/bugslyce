@@ -25,6 +25,10 @@ from bugslyce.core.engagement_policy import (
     build_bug_bounty_policy,
     enforce_r0b2_bug_bounty_live_block,
 )
+from bugslyce.core.programme_scope import (
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.recon.external_enforcement import (
     BUG_BOUNTY_COMMON_WEB_PORTS,
     COMPONENT_INCOMPATIBLE,
@@ -53,8 +57,10 @@ from bugslyce.recon.external_enforcement import (
 )
 from bugslyce.recon.http_enforcement import (
     HTTPExecutorClosed,
+    HTTPProgrammeScopeRefused,
     HTTPRateRejected,
     HTTPRedirectRefused,
+    HTTPTransportFailure,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     build_http_enforcement_configuration,
@@ -84,6 +90,7 @@ CURL_HELP = " ".join(
         "--noproxy",
         "--output",
         "--proto",
+        "--resolve",
         "--silent",
         "--show-error",
         "--user-agent",
@@ -652,6 +659,8 @@ def test_curl_plan_uses_versioned_builtin_user_agent_when_custom_is_absent(
         timeout_seconds=10,
         configuration=configuration,
         capabilities=_capabilities("curl"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         purpose="headers",
     )
 
@@ -682,6 +691,8 @@ def test_required_curl_capability_failure_is_incompatible(
         timeout_seconds=10,
         configuration=_configuration(),
         capabilities=assess_tool_capabilities("curl", help_text, available=available),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         purpose="capability_test",
     )
 
@@ -906,6 +917,8 @@ def test_strict_curl_capability_requires_disable_support(tmp_path: Path) -> None
         timeout_seconds=10,
         configuration=_configuration(),
         capabilities=capabilities,
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         purpose="test_exchange",
     )
 
@@ -1380,21 +1393,26 @@ def test_exact_session_curl_functional_header_reaches_fake_runner(
     assert result.produced_artefacts == plan.expected_artefacts
 
 
-def test_strict_curl_glob_url_has_explicit_glob_safety_controls(
+def test_strict_curl_refuses_raw_brace_glob_destination(
     tmp_path: Path,
 ) -> None:
-    plan = _curl_plan(tmp_path, url="https://example.test/item{1,2}")
+    with pytest.raises(HTTPProgrammeScopeRefused, match="invalid_destination"):
+        _curl_plan(tmp_path, url="https://example.test/item{1,2}")
+
+
+def test_strict_curl_canonical_url_has_explicit_glob_safety_controls(
+    tmp_path: Path,
+) -> None:
+    plan = _curl_plan(tmp_path, url="https://example.test/item")
 
     assert plan.private_argv[:3] == ("curl", "--disable", "--globoff")
     assert plan.private_argv.count("--globoff") == 1
     assert plan.private_argv[plan.private_argv.index("--noproxy") + 1] == "*"
 
 
-def test_strict_curl_accepts_bracket_url_with_globbing_disabled(tmp_path: Path) -> None:
-    plan = _curl_plan(tmp_path, url="https://example.test/item[1-2]")
-
-    assert plan.private_argv[-1] == "https://example.test/item[1-2]"
-    assert "--globoff" in plan.private_argv
+def test_strict_curl_refuses_raw_bracket_glob_destination(tmp_path: Path) -> None:
+    with pytest.raises(HTTPProgrammeScopeRefused, match="invalid_destination"):
+        _curl_plan(tmp_path, url="https://example.test/item[1-2]")
 
 
 @pytest.mark.parametrize(
@@ -1414,8 +1432,8 @@ def test_strict_curl_validator_requires_exact_globbing_controls(
         _validate_strict_curl_argv(tuple(argv), _configuration())
 
 
-def test_curl_capability_requires_globoff_and_noproxy() -> None:
-    for option in ("--globoff", "--noproxy"):
+def test_curl_capability_requires_globoff_noproxy_and_resolve() -> None:
+    for option in ("--globoff", "--noproxy", "--resolve"):
         plan = build_bug_bounty_curl_plan(
             url="https://example.test/value",
             method="GET",
@@ -1424,6 +1442,8 @@ def test_curl_capability_requires_globoff_and_noproxy() -> None:
             timeout_seconds=10,
             configuration=_configuration(),
             capabilities=assess_tool_capabilities("curl", CURL_HELP.replace(option, "")),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
             purpose="test_exchange",
         )
         assert plan.compatibility_status == COMPONENT_INCOMPATIBLE
@@ -1435,7 +1455,7 @@ def test_strict_curl_proxy_environment_is_explicit_and_redacted(
 ) -> None:
     session = _session(_FakeTime())
     plan = session.build_curl_plan(
-        url="https://example.test/item{1,2}",
+        url="https://example.test/item",
         method="GET",
         output_file=tmp_path / "body.html",
         response_headers_file=tmp_path / "headers.txt",
@@ -2287,6 +2307,347 @@ def test_central_bug_bounty_block_names_r0b3_and_is_redacted() -> None:
     assert "controlled capture acceptance" in str(caught.value)
 
 
+def test_scoped_curl_refuses_logical_url_before_resolver_or_permit(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.10",)
+
+    session = BugBountyExternalEnforcementSession(
+        policy=_policy(),
+        programme_scope_policy=_programme_policy(hostname="other.test"),
+        ipv4_resolver=resolver,
+        approved_origins=("https://example.test/",),
+        profile=DEEP_RECON_PROFILE,
+        curl_capabilities=_capabilities("curl"),
+        gobuster_capabilities=_capabilities("gobuster"),
+        nmap_capabilities=_capabilities("nmap"),
+        http_executor=_executor(clock),
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        session.build_curl_plan(
+            url="https://example.test/value",
+            method="GET",
+            output_file=tmp_path / "body.html",
+            response_headers_file=tmp_path / "headers.txt",
+            timeout_seconds=10,
+            purpose="test_exchange",
+        )
+
+    assert resolver_calls == []
+    assert session.http_executor.total_request_attempts == 0
+    assert not (tmp_path / "body.html").exists()
+    assert HEADER_SECRET not in repr(session)
+
+
+def test_scoped_curl_rejects_complete_peer_set_without_launch_or_attempt(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    session = BugBountyExternalEnforcementSession(
+        policy=_policy(),
+        programme_scope_policy=_programme_policy(excluded_ipv4="192.0.2.20"),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10", "192.0.2.20"),
+        approved_origins=("https://example.test/",),
+        profile=DEEP_RECON_PROFILE,
+        curl_capabilities=_capabilities("curl"),
+        gobuster_capabilities=_capabilities("gobuster"),
+        nmap_capabilities=_capabilities("nmap"),
+        http_executor=_executor(clock),
+    )
+    process = _ProcessRunner()
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="resolved_peer"):
+        session.build_curl_plan(
+            url="https://example.test/value",
+            method="GET",
+            output_file=tmp_path / "body.html",
+            response_headers_file=tmp_path / "headers.txt",
+            timeout_seconds=10,
+            purpose="test_exchange",
+        )
+
+    assert process.calls == []
+    assert session.http_executor.total_request_attempts == 0
+
+
+def test_scoped_curl_pins_lowest_peer_and_retains_logical_url(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    session = BugBountyExternalEnforcementSession(
+        policy=_policy(),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: (
+            "192.0.2.20",
+            "192.0.2.10",
+            "192.0.2.20",
+        ),
+        approved_origins=("https://example.test/",),
+        profile=DEEP_RECON_PROFILE,
+        curl_capabilities=_capabilities("curl"),
+        gobuster_capabilities=_capabilities("gobuster"),
+        nmap_capabilities=_capabilities("nmap"),
+        http_executor=_executor(clock),
+    )
+    logical_url = "https://example.test/value"
+    plan = session.build_curl_plan(
+        url=logical_url,
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    process = _ProcessRunner()
+
+    BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert plan.private_argv.count("--resolve") == 1
+    assert plan.private_argv[plan.private_argv.index("--resolve") + 1] == (
+        "example.test:443:192.0.2.10"
+    )
+    assert plan.private_argv[-1] == logical_url
+    assert process.calls[0][0] == plan.private_argv
+    assert session.http_executor.total_request_attempts == 1
+
+
+def test_scoped_curl_logical_refusal_precedes_identity_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session(
+        _FakeTime(),
+        programme_scope_policy=_programme_policy(hostname="other.test"),
+    )
+
+    def fail_identity(*_args, **_kwargs):
+        raise AssertionError("identity must not be constructed before scope approval")
+
+    monkeypatch.setattr(
+        "bugslyce.recon.external_enforcement._effective_external_headers",
+        fail_identity,
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused) as caught:
+        session.build_curl_plan(
+            url="https://example.test/value",
+            method="GET",
+            output_file=tmp_path / "body.html",
+            response_headers_file=tmp_path / "headers.txt",
+            timeout_seconds=10,
+            purpose="test_exchange",
+        )
+
+    rendered = f"{caught.value!s} {caught.value!r}"
+    assert HEADER_SECRET not in rendered
+    assert "private-programme-note-4729" not in rendered
+    assert "private-programme-source-4729" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("resolver", "category"),
+    [
+        (lambda _hostname, _port: (_ for _ in ()).throw(OSError()), "dns_error"),
+        (lambda _hostname, _port: ["192.0.2.10"], "invalid_resolver_result"),
+        (lambda _hostname, _port: ("192.0.2.010",), "invalid_resolver_result"),
+        (lambda _hostname, _port: (), "no_usable_ipv4"),
+    ],
+)
+def test_scoped_curl_resolver_failures_precede_permit_and_launch(
+    tmp_path: Path,
+    resolver,
+    category: str,
+) -> None:
+    session = _session(_FakeTime(), ipv4_resolver=resolver)
+
+    with pytest.raises(HTTPTransportFailure, match=category):
+        session.build_curl_plan(
+            url="https://example.test/value",
+            method="GET",
+            output_file=tmp_path / "body.html",
+            response_headers_file=tmp_path / "headers.txt",
+            timeout_seconds=10,
+            purpose="test_exchange",
+        )
+
+    assert session.http_executor.total_request_attempts == 0
+    assert not (tmp_path / "body.html").exists()
+
+
+@pytest.mark.parametrize(
+    ("url", "approved_origin", "expected_mapping"),
+    [
+        ("http://example.test/path", "http://example.test/", "example.test:80:192.0.2.10"),
+        ("https://example.test/path", "https://example.test/", "example.test:443:192.0.2.10"),
+        (
+            "https://example.test./path",
+            "https://example.test/",
+            "example.test.:443:192.0.2.10",
+        ),
+        (
+            "https://example.test:8443/path?item=1",
+            "https://example.test:8443/",
+            "example.test:8443:192.0.2.10",
+        ),
+    ],
+)
+def test_scoped_curl_resolve_mapping_uses_logical_host_and_effective_port(
+    tmp_path: Path,
+    url: str,
+    approved_origin: str,
+    expected_mapping: str,
+) -> None:
+    plan = _build_scoped_curl_plan(
+        tmp_path,
+        url=url,
+        approved_origin=approved_origin,
+    )
+
+    assert plan.private_argv.count("--resolve") == 1
+    assert plan.private_argv[plan.private_argv.index("--resolve") + 1] == expected_mapping
+    assert plan.private_argv[-1] == url
+    assert "192.0.2.10" not in plan.private_argv[-1]
+    assert "--connect-to" not in plan.private_argv
+    assert not {"--insecure", "-k", "--location", "-L", "--retry", "--parallel"} & set(
+        plan.private_argv
+    )
+
+
+def test_scoped_curl_resolver_order_does_not_change_selected_peer(
+    tmp_path: Path,
+) -> None:
+    mappings = []
+    for index, candidates in enumerate(
+        (
+            ("192.0.2.20", "192.0.2.10"),
+            ("192.0.2.10", "192.0.2.20"),
+        )
+    ):
+        plan = _build_scoped_curl_plan(
+            tmp_path,
+            url="https://example.test/value",
+            approved_origin="https://example.test/",
+            resolver=lambda _hostname, _port, values=candidates: values,
+            suffix=str(index),
+        )
+        mappings.append(plan.private_argv[plan.private_argv.index("--resolve") + 1])
+
+    assert mappings == [
+        "example.test:443:192.0.2.10",
+        "example.test:443:192.0.2.10",
+    ]
+
+
+def test_scoped_curl_ipv4_literal_skips_resolver_and_pins_literal(
+    tmp_path: Path,
+) -> None:
+    programme_policy = build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id="literal",
+                action="include",
+                kind="exact_ipv4",
+                value="192.0.2.10",
+            )
+        ],
+        updated_at="2026-07-30T10:00:00Z",
+    )
+
+    def fail_resolver(_hostname: str, _port: int) -> tuple[str, ...]:
+        raise AssertionError("IPv4 literal must not be resolved")
+
+    plan = build_bug_bounty_curl_plan(
+        url="https://192.0.2.10/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "response.headers",
+        timeout_seconds=10,
+        configuration=_configuration(
+            approved_origins=("https://192.0.2.10/",),
+        ),
+        capabilities=_capabilities("curl"),
+        programme_scope_policy=programme_policy,
+        ipv4_resolver=fail_resolver,
+        purpose="test_exchange",
+    )
+
+    assert plan.private_argv[plan.private_argv.index("--resolve") + 1] == (
+        "192.0.2.10:443:192.0.2.10"
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "url",
+        "resolve_host",
+        "resolve_port",
+        "resolve_ipv4",
+        "remove_resolve",
+        "duplicate_resolve",
+        "redirect",
+        "retry",
+        "proxy",
+        "parallel",
+        "extra_url",
+    ],
+)
+def test_registered_scoped_curl_plan_tampering_is_refused_before_permit(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_curl_plan(
+        url="https://example.test/value",
+        method="GET",
+        output_file=tmp_path / "body.html",
+        response_headers_file=tmp_path / "headers.txt",
+        timeout_seconds=10,
+        purpose="test_exchange",
+    )
+    argv = list(plan.private_argv)
+    resolve_index = argv.index("--resolve")
+    if tamper == "url":
+        argv[-1] = "https://example.test/changed"
+    elif tamper == "resolve_host":
+        argv[resolve_index + 1] = "other.test:443:192.0.2.10"
+    elif tamper == "resolve_port":
+        argv[resolve_index + 1] = "example.test:8443:192.0.2.10"
+    elif tamper == "resolve_ipv4":
+        argv[resolve_index + 1] = "example.test:443:192.0.2.11"
+        redacted = list(plan.redacted_argv)
+        redacted[redacted.index("--resolve") + 1] = argv[resolve_index + 1]
+        object.__setattr__(plan, "redacted_argv", tuple(redacted))
+    elif tamper == "remove_resolve":
+        del argv[resolve_index : resolve_index + 2]
+    elif tamper == "duplicate_resolve":
+        argv[resolve_index:resolve_index] = ["--resolve", "example.test:443:192.0.2.10"]
+    elif tamper == "extra_url":
+        argv.insert(-1, "https://example.test/extra")
+    else:
+        option = {
+            "redirect": "--location",
+            "retry": "--retry",
+            "proxy": "--proxy",
+            "parallel": "--parallel",
+        }[tamper]
+        argv.insert(argv.index("--"), option)
+    object.__setattr__(plan, "_private_argv", tuple(argv))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+    assert session.http_executor.total_request_attempts == 0
+
+
 def test_evidence_backed_modular_external_workflows_use_central_block() -> None:
     root = Path(__file__).resolve().parents[1] / "bugslyce" / "recon"
     modules = {
@@ -2347,7 +2708,42 @@ def _policy(
     )
 
 
-def _configuration(*, rate: str = "2", concurrency: int = 1):
+def _programme_policy(
+    *,
+    hostname: str = "example.test",
+    excluded_ipv4: str | None = None,
+):
+    rules = [
+        build_programme_scope_rule(
+            rule_id="host",
+            action="include",
+            kind="exact_hostname",
+            value=hostname,
+            private_note="private-programme-note-4729",
+            private_source_wording="private-programme-source-4729",
+        )
+    ]
+    if excluded_ipv4 is not None:
+        rules.append(
+            build_programme_scope_rule(
+                rule_id="excluded-peer",
+                action="exclude",
+                kind="exact_ipv4",
+                value=excluded_ipv4,
+            )
+        )
+    return build_programme_scope_policy(
+        rules,
+        updated_at="2026-07-30T10:00:00Z",
+    )
+
+
+def _configuration(
+    *,
+    rate: str = "2",
+    concurrency: int = 1,
+    approved_origins: tuple[str, ...] = ("https://example.test/",),
+):
     policy = _policy()
     if rate != "2" or concurrency != 1:
         policy = build_bug_bounty_policy(
@@ -2369,13 +2765,18 @@ def _configuration(*, rate: str = "2", concurrency: int = 1):
         )
     return build_http_enforcement_configuration(
         policy,
-        approved_origins=("https://example.test/",),
+        approved_origins=approved_origins,
     )
 
 
-def _executor(clock: _FakeTime, *, transport=None) -> InternalHTTPExecutor:
+def _executor(
+    clock: _FakeTime,
+    *,
+    transport=None,
+    configuration=None,
+) -> InternalHTTPExecutor:
     return InternalHTTPExecutor(
-        _configuration(),
+        configuration or _configuration(),
         transport=transport or _Transport(clock),
         monotonic=clock.monotonic,
         sleep=clock.sleep,
@@ -2387,6 +2788,8 @@ def _session(
     *,
     policy=None,
     gobuster=None,
+    programme_scope_policy=None,
+    ipv4_resolver=None,
     executor: InternalHTTPExecutor | None = None,
 ) -> BugBountyExternalEnforcementSession:
     selected_policy = policy or _policy()
@@ -2397,6 +2800,9 @@ def _session(
         curl_capabilities=_capabilities("curl"),
         gobuster_capabilities=gobuster or _capabilities("gobuster"),
         nmap_capabilities=_capabilities("nmap"),
+        programme_scope_policy=programme_scope_policy or _programme_policy(),
+        ipv4_resolver=ipv4_resolver
+        or (lambda _hostname, _port: ("192.0.2.10",)),
         http_executor=executor or _executor(clock),
     )
 
@@ -2420,8 +2826,32 @@ def _curl_plan(
         timeout_seconds=10,
         configuration=_configuration(),
         capabilities=_capabilities("curl"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         purpose="test_exchange",
         additional_headers=additional_headers,
+    )
+
+
+def _build_scoped_curl_plan(
+    tmp_path: Path,
+    *,
+    url: str,
+    approved_origin: str,
+    resolver=lambda _hostname, _port: ("192.0.2.10",),
+    suffix: str = "",
+):
+    return build_bug_bounty_curl_plan(
+        url=url,
+        method="GET",
+        output_file=tmp_path / f"body{suffix}.html",
+        response_headers_file=tmp_path / f"response{suffix}.headers",
+        timeout_seconds=10,
+        configuration=_configuration(approved_origins=(approved_origin,)),
+        capabilities=_capabilities("curl"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=resolver,
+        purpose="test_exchange",
     )
 
 

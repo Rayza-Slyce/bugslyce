@@ -356,32 +356,9 @@ class InternalHTTPExecutor:
                 "Programme-scoped internal HTTP requires enforcement configuration."
             )
         if programme_scope_policy is not None:
-            if not isinstance(programme_scope_policy, ProgrammeScopePolicy):
-                raise ValueError("A canonical programme scope policy is required.")
-            if programme_scope_policy.engagement_context != BUG_BOUNTY_CONTEXT:
-                raise ValueError("Programme scope policy context must be bug_bounty.")
-            try:
-                canonical_rules = tuple(
-                    build_programme_scope_rule(
-                        rule_id=rule.rule_id,
-                        action=rule.action,
-                        kind=rule.kind,
-                        value=rule.canonical_value,
-                        private_note=rule.private_note,
-                        private_source_wording=rule.private_source_wording,
-                    )
-                    for rule in programme_scope_policy.rules
-                )
-                canonical_programme_scope_policy = build_programme_scope_policy(
-                    canonical_rules,
-                    schema_version=programme_scope_policy.schema_version,
-                    engagement_context=programme_scope_policy.engagement_context,
-                    updated_at=programme_scope_policy.updated_at,
-                )
-            except (AttributeError, TypeError, ValueError):
-                raise ValueError("Programme scope policy is not canonical.") from None
-            if canonical_programme_scope_policy != programme_scope_policy:
-                raise ValueError("Programme scope policy is not canonical.")
+            canonical_programme_scope_policy = _canonical_programme_scope_policy(
+                programme_scope_policy
+            )
         else:
             canonical_programme_scope_policy = None
         if ipv4_resolver is not None and not callable(ipv4_resolver):
@@ -752,50 +729,11 @@ class InternalHTTPExecutor:
     ) -> str | None:
         if self._programme_scope_policy is None:
             return None
-        if logical_decision is None or logical_decision.outcome != OUTCOME_ALLOWED:
-            raise ValueError("Canonical logical programme scope decision is required.")
-        destination = logical_decision.canonical_destination
-        if not isinstance(destination, CanonicalHTTPURLDestination):
-            raise ValueError("Canonical logical HTTP destination is required.")
-        if destination.origin.host_kind == DESTINATION_IPV4:
-            return destination.origin.host
-        if destination.origin.host_kind != DESTINATION_HOSTNAME:
-            raise HTTPTransportFailure("invalid_resolver_result")
-
-        try:
-            raw_candidates = self._ipv4_resolver(
-                destination.origin.host,
-                destination.origin.effective_port,
-            )
-        except HTTPTransportFailure:
-            raise
-        except (OSError, ValueError, TypeError):
-            raise HTTPTransportFailure("dns_error") from None
-        candidates = _canonical_ipv4_candidates(raw_candidates)
-        decisions: list[tuple[str, ScopeDecision]] = []
-        for candidate in candidates:
-            resolved_peer = canonicalise_resolved_ipv4_peer(destination, candidate)
-            decisions.append(
-                (
-                    candidate,
-                    evaluate_resolved_ipv4_peer(
-                        self._programme_scope_policy,
-                        logical_decision,
-                        resolved_peer,
-                    ),
-                )
-            )
-
-        blocked = [item for item in decisions if item[1].outcome == OUTCOME_BLOCKED]
-        non_allowed = [item for item in decisions if item[1].outcome != OUTCOME_ALLOWED]
-        refused = blocked or non_allowed
-        if refused:
-            _candidate, decision = min(
-                refused,
-                key=lambda item: int(ipaddress.IPv4Address(item[0])),
-            )
-            raise HTTPProgrammeScopeRefused("resolved_peer", decision)
-        return candidates[0]
+        return select_programme_scope_ipv4_peer(
+            self._programme_scope_policy,
+            logical_decision,
+            self._ipv4_resolver,
+        )
 
     def _redirect_destination(
         self,
@@ -812,6 +750,95 @@ class InternalHTTPExecutor:
             approved_origins=self.configuration.approved_origins,
             allow_query_strings=allow_query_strings,
         )
+
+
+def select_programme_scope_ipv4_peer(
+    policy: ProgrammeScopePolicy,
+    logical_decision: ScopeDecision | None,
+    ipv4_resolver: IPv4Resolver,
+) -> str:
+    """Select the one peer authorised by the accepted complete-set semantics."""
+
+    if not isinstance(policy, ProgrammeScopePolicy):
+        raise ValueError("A canonical programme scope policy is required.")
+    if logical_decision is None or logical_decision.outcome != OUTCOME_ALLOWED:
+        raise ValueError("Canonical logical programme scope decision is required.")
+    if not callable(ipv4_resolver):
+        raise ValueError("Internal HTTP IPv4 resolver is invalid.")
+    destination = logical_decision.canonical_destination
+    if not isinstance(destination, CanonicalHTTPURLDestination):
+        raise ValueError("Canonical logical HTTP destination is required.")
+    if destination.origin.host_kind == DESTINATION_IPV4:
+        return destination.origin.host
+    if destination.origin.host_kind != DESTINATION_HOSTNAME:
+        raise HTTPTransportFailure("invalid_resolver_result")
+
+    try:
+        raw_candidates = ipv4_resolver(
+            destination.origin.host,
+            destination.origin.effective_port,
+        )
+    except HTTPTransportFailure:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise HTTPTransportFailure("dns_error") from None
+    candidates = _canonical_ipv4_candidates(raw_candidates)
+    decisions: list[tuple[str, ScopeDecision]] = []
+    for candidate in candidates:
+        resolved_peer = canonicalise_resolved_ipv4_peer(destination, candidate)
+        decisions.append(
+            (
+                candidate,
+                evaluate_resolved_ipv4_peer(
+                    policy,
+                    logical_decision,
+                    resolved_peer,
+                ),
+            )
+        )
+
+    blocked = [item for item in decisions if item[1].outcome == OUTCOME_BLOCKED]
+    non_allowed = [item for item in decisions if item[1].outcome != OUTCOME_ALLOWED]
+    refused = blocked or non_allowed
+    if refused:
+        _candidate, decision = min(
+            refused,
+            key=lambda item: int(ipaddress.IPv4Address(item[0])),
+        )
+        raise HTTPProgrammeScopeRefused("resolved_peer", decision)
+    return candidates[0]
+
+
+def _canonical_programme_scope_policy(
+    policy: ProgrammeScopePolicy,
+) -> ProgrammeScopePolicy:
+    if not isinstance(policy, ProgrammeScopePolicy):
+        raise ValueError("A canonical programme scope policy is required.")
+    if policy.engagement_context != BUG_BOUNTY_CONTEXT:
+        raise ValueError("Programme scope policy context must be bug_bounty.")
+    try:
+        canonical_rules = tuple(
+            build_programme_scope_rule(
+                rule_id=rule.rule_id,
+                action=rule.action,
+                kind=rule.kind,
+                value=rule.canonical_value,
+                private_note=rule.private_note,
+                private_source_wording=rule.private_source_wording,
+            )
+            for rule in policy.rules
+        )
+        canonical = build_programme_scope_policy(
+            canonical_rules,
+            schema_version=policy.schema_version,
+            engagement_context=policy.engagement_context,
+            updated_at=policy.updated_at,
+        )
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("Programme scope policy is not canonical.") from None
+    if canonical != policy:
+        raise ValueError("Programme scope policy is not canonical.")
+    return canonical
 
 
 def _system_ipv4_resolver(hostname: str, port: int) -> tuple[str, ...]:
