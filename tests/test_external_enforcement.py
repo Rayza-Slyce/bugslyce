@@ -851,6 +851,8 @@ def test_gobuster_rejects_userinfo_in_root_origin(tmp_path: Path, origin: str) -
             timeout_seconds=10,
             configuration=_configuration(),
             capabilities=_capabilities("gobuster"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         )
 
 
@@ -864,6 +866,8 @@ def test_gobuster_process_timeout_covers_bounded_delay_schedule(tmp_path: Path) 
         timeout_seconds=10,
         configuration=_configuration(rate="2"),
         capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert plan.timeout_seconds >= 877
@@ -1677,6 +1681,8 @@ def test_gobuster_packaged_wordlists_fit_conservative_process_deadline(tmp_path:
         timeout_seconds=10,
         configuration=_configuration(),
         capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
     deep = build_bug_bounty_gobuster_plan(
         origin="https://example.test/",
@@ -1685,6 +1691,8 @@ def test_gobuster_packaged_wordlists_fit_conservative_process_deadline(tmp_path:
         timeout_seconds=10,
         configuration=_configuration(),
         capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert standard.request_timeout_seconds == 10
@@ -1770,6 +1778,8 @@ def test_gobuster_unrepresentable_delay_is_omitted(tmp_path: Path) -> None:
         timeout_seconds=30,
         configuration=_configuration(rate="1e-1000"),
         capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert plan.compatibility_status == COMPONENT_OMITTED
@@ -1820,6 +1830,8 @@ def test_incompatible_gobuster_is_safely_omitted(
         timeout_seconds=30,
         configuration=_configuration(),
         capabilities=capabilities,
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert plan.compatibility_status == COMPONENT_OMITTED
@@ -2174,6 +2186,8 @@ def test_gobuster_missing_header_or_redirect_controls_remain_incompatible(
             timeout_seconds=30,
             configuration=_configuration(),
             capabilities=assess_tool_capabilities("gobuster", help_text),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         )
         assert plan.compatibility_status == COMPONENT_OMITTED
         assert reason.casefold() in plan.reason.casefold()
@@ -2207,6 +2221,8 @@ def test_gobuster_382_session_builds_a_supported_redacted_two_header_plan(
         curl_capabilities=_capabilities("curl"),
         gobuster_capabilities=assess_tool_capabilities("gobuster", GOBUSTER_382_HELP),
         nmap_capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
         http_executor=InternalHTTPExecutor(
             configuration,
             transport=_Transport(_FakeTime()),
@@ -2255,6 +2271,8 @@ def test_ambiguous_gobuster_header_help_is_safely_omitted(tmp_path: Path) -> Non
         timeout_seconds=30,
         configuration=_configuration(),
         capabilities=assess_tool_capabilities("gobuster", ambiguous),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert plan.compatibility_status == COMPONENT_OMITTED
@@ -2305,6 +2323,473 @@ def test_central_bug_bounty_block_names_r0b3_and_is_redacted() -> None:
     assert HEADER_SECRET not in str(caught.value)
     assert USER_AGENT_SECRET not in str(caught.value)
     assert "controlled capture acceptance" in str(caught.value)
+
+
+def test_scoped_gobuster_exact_hostname_authority_passes_dns_preflight(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.10",)
+
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=resolver,
+    )
+
+    assert plan.private_argv[plan.private_argv.index("--url") + 1] == (
+        "https://example.test/api/"
+    )
+    assert resolver_calls == [("example.test", 443)]
+
+
+def test_scoped_gobuster_exact_url_alone_is_refused_before_dns(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    policy = build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id="one-url",
+                action="include",
+                kind="exact_http_url",
+                value="https://example.test/api/",
+            )
+        ],
+        updated_at="2026-07-30T10:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="namespace authority"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test/api/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+            configuration=_configuration(),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+def test_scoped_gobuster_nested_exclusion_refuses_only_intersecting_base(
+    tmp_path: Path,
+) -> None:
+    policy = build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id="api",
+                action="include",
+                kind="http_path_prefix",
+                value="https://example.test/api/",
+            ),
+            build_programme_scope_rule(
+                rule_id="private",
+                action="exclude",
+                kind="http_path_prefix",
+                value="https://example.test/api/private/",
+            ),
+        ],
+        updated_at="2026-07-30T10:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="intersecting exclusion"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test/api/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "blocked.txt",
+            timeout_seconds=10,
+            configuration=_configuration(),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        )
+
+    safe = build_bug_bounty_gobuster_plan(
+        origin="https://example.test/public/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "safe.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+    assert safe.compatibility_status == COMPONENT_SUPPORTED
+
+
+def test_scoped_gobuster_rejected_peer_precedes_plan_and_attempt(
+    tmp_path: Path,
+) -> None:
+    clock = _FakeTime()
+    session = BugBountyExternalEnforcementSession(
+        policy=_policy(),
+        programme_scope_policy=_programme_policy(excluded_ipv4="192.0.2.20"),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10", "192.0.2.20"),
+        approved_origins=("https://example.test/",),
+        profile=DEEP_RECON_PROFILE,
+        curl_capabilities=_capabilities("curl"),
+        gobuster_capabilities=_capabilities("gobuster"),
+        nmap_capabilities=_capabilities("nmap"),
+        http_executor=_executor(clock),
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="resolved_peer"):
+        session.build_gobuster_plan(
+            origin="https://example.test/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+        )
+
+    assert session.http_executor.total_request_attempts == 0
+    assert not (tmp_path / "gobuster.txt").exists()
+
+
+def test_scoped_gobuster_wildcard_authorises_only_proper_descendant(
+    tmp_path: Path,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("wildcard", "include", "wildcard_subdomain", "*.example.test"),
+    )
+    resolver_calls: list[tuple[str, int]] = []
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://api.example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "descendant.txt",
+        timeout_seconds=10,
+        configuration=_configuration(
+            approved_origins=("https://api.example.test/",),
+        ),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda hostname, port: (
+            resolver_calls.append((hostname, port)) or ("192.0.2.10",)
+        ),
+    )
+
+    assert plan.compatibility_status == COMPONENT_SUPPORTED
+    assert resolver_calls == [("api.example.test", 443)]
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "apex.txt",
+            timeout_seconds=10,
+            configuration=_configuration(),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        )
+
+
+@pytest.mark.parametrize("base_path", ["/api", "/api/", "/api/v1/"])
+def test_scoped_gobuster_path_prefix_authorises_equal_or_deeper_base(
+    tmp_path: Path,
+    base_path: str,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("api", "include", "http_path_prefix", "https://example.test/api"),
+    )
+    origin = f"https://example.test{base_path}"
+    plan = build_bug_bounty_gobuster_plan(
+        origin=origin,
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+
+    assert plan.private_argv[plan.private_argv.index("--url") + 1] == origin
+
+
+@pytest.mark.parametrize("base_path", ["/", "/apiv2", "/other/"])
+def test_scoped_gobuster_path_prefix_refuses_parent_or_sibling_base_before_dns(
+    tmp_path: Path,
+    base_path: str,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("api", "include", "http_path_prefix", "https://example.test/api"),
+    )
+    resolver_calls: list[tuple[str, int]] = []
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        build_bug_bounty_gobuster_plan(
+            origin=f"https://example.test{base_path}",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+            configuration=_configuration(),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+def test_scoped_gobuster_path_authority_retains_origin_port_boundary(
+    tmp_path: Path,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("api", "include", "http_path_prefix", "https://example.test/api/"),
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test:8443/api/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+            configuration=_configuration(
+                approved_origins=("https://example.test:8443/",),
+            ),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        )
+
+
+def test_scoped_gobuster_exact_url_needs_separate_broad_authority(
+    tmp_path: Path,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("exact", "include", "exact_http_url", "https://example.test/api/"),
+        ("host", "include", "exact_hostname", "example.test"),
+    )
+
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+
+    assert plan.compatibility_status == COMPONENT_SUPPORTED
+
+
+def test_scoped_gobuster_query_specific_base_is_refused_before_dns(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    policy = _programme_policy_from_rules(
+        ("query", "include", "exact_http_url", "https://example.test/api/?view=all"),
+    )
+
+    with pytest.raises(ValueError, match="base URL"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test/api/?view=all",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+            configuration=_configuration(),
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+@pytest.mark.parametrize(
+    ("excluded_kind", "excluded_value", "blocked"),
+    [
+        ("exact_http_url", "https://example.test/api/private", True),
+        ("http_path_prefix", "https://example.test/api/private/", True),
+        ("exact_http_url", "https://example.test/sibling", False),
+        ("http_path_prefix", "https://other.test/api/private/", False),
+        ("http_path_prefix", "https://example.test:8443/api/private/", False),
+        ("exact_http_url", "https://example.test/api/private?view=all", False),
+    ],
+)
+def test_scoped_gobuster_only_intersecting_generated_exclusions_block(
+    tmp_path: Path,
+    excluded_kind: str,
+    excluded_value: str,
+    blocked: bool,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("host", "include", "exact_hostname", "example.test"),
+        ("excluded", "exclude", excluded_kind, excluded_value),
+    )
+    kwargs = dict(
+        origin="https://example.test/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+
+    if blocked:
+        with pytest.raises(ValueError, match="intersecting exclusion"):
+            build_bug_bounty_gobuster_plan(**kwargs)
+    else:
+        assert build_bug_bounty_gobuster_plan(**kwargs).compatibility_status == (
+            COMPONENT_SUPPORTED
+        )
+
+
+@pytest.mark.parametrize(
+    ("resolver", "category"),
+    [
+        (lambda _hostname, _port: (_ for _ in ()).throw(OSError()), "dns_error"),
+        (lambda _hostname, _port: ["192.0.2.10"], "invalid_resolver_result"),
+        (lambda _hostname, _port: ("192.0.2.010",), "invalid_resolver_result"),
+        (lambda _hostname, _port: (), "no_usable_ipv4"),
+    ],
+)
+def test_scoped_gobuster_dns_failures_precede_plan_attempt_and_identity(
+    tmp_path: Path,
+    resolver,
+    category: str,
+) -> None:
+    clock = _FakeTime()
+    session = _session(clock, ipv4_resolver=resolver)
+
+    with pytest.raises(HTTPTransportFailure, match=category) as caught:
+        session.build_gobuster_plan(
+            origin="https://example.test/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+        )
+
+    rendered = f"{caught.value!s} {caught.value!r}"
+    assert session.http_executor.total_request_attempts == 0
+    assert not (tmp_path / "gobuster.txt").exists()
+    assert HEADER_SECRET not in rendered
+    assert "private-programme-note-4729" not in rendered
+    assert "private-programme-source-4729" not in rendered
+
+
+def test_scoped_gobuster_preflight_keeps_logical_url_and_existing_controls(
+    tmp_path: Path,
+) -> None:
+    origin = "https://example.test/api/"
+    plan = build_bug_bounty_gobuster_plan(
+        origin=origin,
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(rate="5"),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: (
+            "192.0.2.20",
+            "192.0.2.10",
+            "192.0.2.20",
+        ),
+    )
+    argv = plan.private_argv
+
+    assert argv[:2] == ("gobuster", "dir")
+    assert argv[argv.index("--url") + 1] == origin
+    assert argv[argv.index("--threads") + 1] == "1"
+    assert argv[argv.index("--delay") + 1] == "200000000ns"
+    assert f"X-Researcher-ID: {HEADER_SECRET}" in argv
+    assert "192.0.2.10" not in argv and "192.0.2.20" not in argv
+    assert not {
+        "--follow-redirect",
+        "-r",
+        "--no-tls-validation",
+        "-k",
+        "--proxy",
+        "--recursive",
+        "--extensions",
+        "--backup",
+    } & set(argv)
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--url", "https://example.test/changed/"),
+        ("--wordlist", "/tmp/changed-wordlist"),
+        ("--threads", "2"),
+        ("--delay", "1ns"),
+    ],
+)
+def test_registered_scoped_gobuster_value_tampering_is_refused_before_permit(
+    tmp_path: Path,
+    option: str,
+    value: str,
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+    )
+    argv = list(plan.private_argv)
+    argv[argv.index(option) + 1] = value
+    object.__setattr__(plan, "_private_argv", tuple(argv))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+    assert session.http_executor.total_request_attempts == 0
+
+
+@pytest.mark.parametrize(
+    "added",
+    [
+        ("--follow-redirect",),
+        ("--proxy", "http://127.0.0.1:8080"),
+        ("--no-tls-validation",),
+        ("--recursive",),
+        ("--extensions", "php"),
+        ("--backup",),
+        ("https://example.test/extra",),
+    ],
+)
+def test_registered_scoped_gobuster_added_behaviour_is_refused_before_permit(
+    tmp_path: Path,
+    added: tuple[str, ...],
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+    )
+    object.__setattr__(plan, "_private_argv", (*plan.private_argv, *added))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+    assert session.http_executor.total_request_attempts == 0
 
 
 def test_scoped_curl_refuses_logical_url_before_resolver_or_permit(
@@ -2738,6 +3223,25 @@ def _programme_policy(
     )
 
 
+def _programme_policy_from_rules(
+    *rules: tuple[str, str, str, str],
+):
+    return build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id=rule_id,
+                action=action,
+                kind=kind,
+                value=value,
+                private_note="private-programme-note-4729",
+                private_source_wording="private-programme-source-4729",
+            )
+            for rule_id, action, kind, value in rules
+        ],
+        updated_at="2026-07-30T10:00:00Z",
+    )
+
+
 def _configuration(
     *,
     rate: str = "2",
@@ -2869,6 +3373,8 @@ def _gobuster_plan(tmp_path: Path, *, rate: str = "2"):
         timeout_seconds=30,
         configuration=_configuration(rate=rate),
         capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
 

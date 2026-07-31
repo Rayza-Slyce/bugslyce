@@ -35,10 +35,17 @@ from bugslyce.core.engagement_policy import (
     validate_identification_value,
 )
 from bugslyce.core.programme_scope import (
+    ACTION_EXCLUDE,
+    ACTION_INCLUDE,
     DESTINATION_HTTP_URL,
     OUTCOME_ALLOWED,
+    RULE_EXACT_HOSTNAME,
+    RULE_EXACT_HTTP_URL,
+    RULE_HTTP_PATH_PREFIX,
+    RULE_WILDCARD_SUBDOMAIN,
     CanonicalHTTPURLDestination,
     ProgrammeScopePolicy,
+    canonicalise_http_url_destination,
     evaluate_raw_scope_destination,
 )
 from bugslyce.core.scope import scope_entry_target
@@ -448,9 +455,13 @@ class BugBountyExternalEnforcementSession:
         ))
 
     def build_gobuster_plan(self, **kwargs: object) -> ExternalCommandPlan:
+        if self._programme_scope_policy is None:
+            raise ValueError("Strict Gobuster planning requires programme scope policy.")
         return self._register_plan(build_bug_bounty_gobuster_plan(
             configuration=self.configuration,
             capabilities=self.gobuster_capabilities,
+            programme_scope_policy=self._programme_scope_policy,
+            ipv4_resolver=self._ipv4_resolver,
             _provenance_token=self._token,
             **kwargs,
         ))
@@ -802,6 +813,8 @@ def build_bug_bounty_gobuster_plan(
     timeout_seconds: int,
     configuration: HTTPEnforcementConfiguration,
     capabilities: ToolCapabilities,
+    programme_scope_policy: ProgrammeScopePolicy,
+    ipv4_resolver: IPv4Resolver,
     _provenance_token: object | None = None,
 ) -> ExternalCommandPlan:
     """Build an optional strict one-thread Gobuster plan."""
@@ -824,15 +837,44 @@ def build_bug_bounty_gobuster_plan(
     ):
         raise ValueError("Strict Gobuster timeout must be a positive integer.")
     parsed = urlparse(origin)
-    parsed_origin = http_origin_from_url(origin)
     if (
         parsed.scheme not in {"http", "https"}
-        or parsed.path not in {"", "/"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
         or parsed.query
         or parsed.fragment
-        or parsed_origin not in configuration.approved_origins
     ):
-        raise ValueError("Strict Gobuster origin is not an approved root HTTP origin.")
+        raise ValueError(
+            "Strict Gobuster base URL is not an approved root or path HTTP destination."
+        )
+    canonical_programme_scope_policy = _canonical_programme_scope_policy(
+        programme_scope_policy
+    )
+    decision = evaluate_raw_scope_destination(
+        canonical_programme_scope_policy,
+        DESTINATION_HTTP_URL,
+        origin,
+    )
+    if decision.outcome != OUTCOME_ALLOWED:
+        raise HTTPProgrammeScopeRefused("initial", decision)
+    destination = decision.canonical_destination
+    if not isinstance(destination, CanonicalHTTPURLDestination):
+        raise ValueError("Strict Gobuster base URL is not canonical.")
+    if http_origin_from_url(origin) not in configuration.approved_origins:
+        raise ValueError(
+            "Strict Gobuster base URL is not an approved root or path HTTP destination."
+        )
+    _require_gobuster_namespace_authority(
+        canonical_programme_scope_policy,
+        decision.matched_inclusion_rule_ids,
+        destination,
+    )
+    select_programme_scope_ipv4_peer(
+        canonical_programme_scope_policy,
+        decision,
+        ipv4_resolver,
+    )
     if not wordlist.is_file():
         raise ValueError("Strict Gobuster wordlist does not exist.")
     _require_safe_local_path(wordlist, label="Strict Gobuster wordlist path")
@@ -890,6 +932,54 @@ def build_bug_bounty_gobuster_plan(
         _redaction_values=tuple(dict.fromkeys(redactions)),
         _provenance_token=_provenance_token,
     )
+
+
+def _require_gobuster_namespace_authority(
+    policy: ProgrammeScopePolicy,
+    matched_inclusion_rule_ids: tuple[str, ...],
+    base: CanonicalHTTPURLDestination,
+) -> None:
+    """Require broad authority and reject exclusions Gobuster cannot intercept."""
+
+    matched_ids = {rule_id.casefold() for rule_id in matched_inclusion_rule_ids}
+    broad_kinds = {
+        RULE_EXACT_HOSTNAME,
+        RULE_WILDCARD_SUBDOMAIN,
+        RULE_HTTP_PATH_PREFIX,
+    }
+    if not any(
+        rule.action == ACTION_INCLUDE
+        and rule.kind in broad_kinds
+        and rule.rule_id.casefold() in matched_ids
+        for rule in policy.rules
+    ):
+        raise ValueError(
+            "Strict Gobuster base lacks generated-namespace authority."
+        )
+
+    for rule in policy.rules:
+        if rule.action != ACTION_EXCLUDE or rule.kind not in {
+            RULE_EXACT_HTTP_URL,
+            RULE_HTTP_PATH_PREFIX,
+        }:
+            continue
+        excluded = canonicalise_http_url_destination(rule.canonical_value)
+        if excluded.origin != base.origin:
+            continue
+        if rule.kind == RULE_EXACT_HTTP_URL and excluded.query is not None:
+            continue
+        if _path_is_equal_or_beneath(base.path, excluded.path):
+            raise ValueError(
+                "Strict Gobuster base has an intersecting exclusion."
+            )
+
+
+def _path_is_equal_or_beneath(base_path: str, candidate_path: str) -> bool:
+    if base_path == "/":
+        return True
+    if base_path.endswith("/"):
+        return candidate_path.startswith(base_path)
+    return candidate_path == base_path or candidate_path.startswith(f"{base_path}/")
 
 
 def run_bug_bounty_gobuster(
