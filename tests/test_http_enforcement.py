@@ -7,6 +7,8 @@ import math
 import os
 from pathlib import Path
 import re
+import socket
+import ssl
 import threading
 from urllib.request import ProxyHandler
 
@@ -68,6 +70,31 @@ HEADER_SENTINEL = "private-researcher-identity-9173"
 USER_AGENT_SENTINEL = "PrivateProgrammeAgent/9173"
 
 
+@pytest.fixture(autouse=True)
+def _prevent_real_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_getaddrinfo(
+        _hostname,
+        port,
+        family,
+        socket_type,
+        protocol,
+    ):
+        assert family == socket.AF_UNSPEC
+        assert socket_type == socket.SOCK_STREAM
+        assert protocol == socket.IPPROTO_TCP
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("203.0.113.10", port),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+
 class _FakeTime:
     def __init__(self) -> None:
         self.now = Decimal("0")
@@ -106,6 +133,118 @@ class _RecordingTransport:
         if self.error is not None:
             raise self.error
         return self.responses.pop(0)
+
+
+class _RecordingPeerBoundTransport(
+    _RecordingTransport,
+    http_enforcement_module.PeerBoundHTTPTransport,
+):
+    """Deterministic scoped fake retaining the peer-bound transport capability."""
+
+
+class _PeerSocket:
+    def __init__(
+        self,
+        peer: str,
+        events: list[tuple[object, ...]],
+        *,
+        connect_error: BaseException | None = None,
+    ) -> None:
+        self.peer = peer
+        self.events = events
+        self.connect_error = connect_error
+        self.closed = False
+
+    def settimeout(self, timeout: int) -> None:
+        self.events.append(("timeout", timeout))
+
+    def connect(self, address: tuple[str, int]) -> None:
+        self.events.append(("connect", address))
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def getpeername(self) -> tuple[str, int]:
+        self.events.append(("getpeername",))
+        return self.peer, 443
+
+    def close(self) -> None:
+        self.closed = True
+        self.events.append(("socket_close",))
+
+
+class _HTTPClientResponse:
+    status = 200
+    headers = {"Content-Type": "text/plain"}
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.read_limits: list[int] = []
+
+    def read(self, limit: int) -> bytes:
+        self.read_limits.append(limit)
+        return b"peer-bound"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _HTTPClientConnection:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        timeout: int,
+        events: list[tuple[object, ...]],
+        response: _HTTPClientResponse,
+        context=None,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.events = events
+        self.response = response
+        self.context = context
+        self._create_connection = None
+        self.closed = False
+
+    def request(self, method: str, target: str, *, headers: dict[str, str]) -> None:
+        assert self._create_connection is not None
+        raw_socket = self._create_connection(
+            (self.host, self.port),
+            self.timeout,
+            None,
+        )
+        if self.context is not None:
+            raw_socket = self.context.wrap_socket(
+                raw_socket,
+                server_hostname=self.host,
+            )
+        self.events.append(("request", method, target, headers, raw_socket))
+
+    def getresponse(self) -> _HTTPClientResponse:
+        self.events.append(("getresponse",))
+        return self.response
+
+    def close(self) -> None:
+        self.closed = True
+        self.events.append(("connection_close",))
+
+
+class _VerifiedSSLContext:
+    verify_mode = ssl.CERT_REQUIRED
+    check_hostname = True
+    post_handshake_auth = False
+
+    def __init__(self, events: list[tuple[object, ...]]) -> None:
+        self.events = events
+
+    def set_alpn_protocols(self, protocols: list[str]) -> None:
+        self.events.append(("alpn", tuple(protocols)))
+
+    def wrap_socket(self, raw_socket, *, server_hostname: str):
+        self.events.append(("tls", server_hostname, raw_socket))
+        return ("tls-socket", raw_socket)
 
 
 class _FakeUrllibResponse:
@@ -407,7 +546,7 @@ def test_programme_scope_controls_initial_logical_url_before_transport(
     reason_code: str | None,
 ) -> None:
     clock = _FakeTime()
-    transport = _RecordingTransport(clock=clock)
+    transport = _RecordingPeerBoundTransport(clock=clock)
     policy = _programme_scope_policy(rules)
     approved_origins = (
         "https://192.0.2.10",
@@ -453,11 +592,14 @@ def test_initial_scope_refusal_precedes_origin_identity_and_permit_checks(
         private_note=private_note,
         private_source_wording=private_source,
     )
-    transport = _RecordingTransport()
+    transport = _RecordingPeerBoundTransport()
     executor = InternalHTTPExecutor(
         _configuration(),
         programme_scope_policy=policy,
         transport=transport,
+        ipv4_resolver=lambda _host, _port: (_ for _ in ()).throw(
+            AssertionError("logical refusal must precede resolution")
+        ),
     )
 
     def unexpected_headers(_additional_headers):
@@ -494,7 +636,7 @@ def test_programme_scope_refusal_is_distinct_from_redirect_and_transport_failure
     executor = InternalHTTPExecutor(
         _configuration(),
         programme_scope_policy=policy,
-        transport=_RecordingTransport(),
+        transport=_RecordingPeerBoundTransport(),
     )
 
     with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
@@ -536,7 +678,7 @@ def test_executor_stores_a_canonical_immutable_programme_scope_copy() -> None:
     executor = InternalHTTPExecutor(
         _configuration(),
         programme_scope_policy=policy,
-        transport=_RecordingTransport(),
+        transport=_RecordingPeerBoundTransport(),
     )
 
     assert executor._programme_scope_policy == policy
@@ -608,7 +750,7 @@ def test_allowed_scope_does_not_weaken_approved_origin_containment() -> None:
     policy = _programme_scope_policy(
         (("allowed", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test"),)
     )
-    transport = _RecordingTransport()
+    transport = _RecordingPeerBoundTransport()
     executor = InternalHTTPExecutor(
         _configuration(),
         programme_scope_policy=policy,
@@ -627,7 +769,7 @@ def test_allowed_relative_redirect_is_independently_scope_evaluated_and_sent() -
         (("path", ACTION_INCLUDE, RULE_HTTP_PATH_PREFIX,
           "https://example.test/allowed"),)
     )
-    transport = _RecordingTransport(
+    transport = _RecordingPeerBoundTransport(
         [
             _response(302, (("Location", "next"),)),
             _response(200, body=b"final"),
@@ -675,7 +817,9 @@ def test_denied_redirect_is_not_sent_counted_or_recorded(
     reason_code: str,
 ) -> None:
     policy = _programme_scope_policy(rules)
-    transport = _RecordingTransport([_response(302, (("Location", location),))])
+    transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", location),))]
+    )
     executor = InternalHTTPExecutor(
         _configuration(),
         programme_scope_policy=policy,
@@ -732,7 +876,7 @@ def test_scope_inclusion_does_not_weaken_existing_redirect_mechanics(
             ("other", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test"),
         )
     )
-    transport = _RecordingTransport(
+    transport = _RecordingPeerBoundTransport(
         [_response(302, (("Location", location),))]
     )
     executor = InternalHTTPExecutor(
@@ -752,7 +896,7 @@ def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> 
     policy = _programme_scope_policy(
         (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
-    transport = _RecordingTransport(
+    transport = _RecordingPeerBoundTransport(
         [
             _response(301, (("Location", "https://example.test/secure"),)),
             _response(),
@@ -773,6 +917,823 @@ def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> 
         "https://example.test/secure",
     ]
     assert executor.total_request_attempts == 2
+
+
+def test_programme_scoped_executor_selects_lowest_allowed_resolved_ipv4() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport()
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.20", "192.0.2.3", "192.0.2.20")
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=resolver,
+    )
+
+    executor.request("https://example.test/path")
+
+    assert resolver_calls == [("example.test", 443)]
+    assert len(transport.requests) == 1
+    assert transport.requests[0].selected_ipv4 == "192.0.2.3"
+    assert executor.total_request_attempts == 1
+
+
+def test_any_excluded_resolved_ipv4_rejects_complete_set_before_permit() -> None:
+    policy = _programme_scope_policy(
+        (
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("excluded", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.20"),
+        ),
+        private_note="PRIVATE-PEER-NOTE-7319",
+        private_source_wording="PRIVATE-PEER-SOURCE-7319",
+    )
+    clock = _FakeTime()
+    transport = _RecordingPeerBoundTransport(clock=clock)
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3", "192.0.2.20"),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/path")
+
+    assert exc_info.value.stage == "resolved_peer"
+    assert exc_info.value.reason_code == "resolved_ip_excluded"
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+    assert executor.last_request_start is None
+    assert executor._limiter is not None
+    assert executor._limiter._next_start is None
+    assert clock.sleeps == []
+    assert "PRIVATE-PEER-NOTE-7319" not in str(exc_info.value)
+    assert "PRIVATE-PEER-SOURCE-7319" not in repr(exc_info.value)
+    assert HEADER_SENTINEL not in repr(exc_info.value)
+    assert "192.0.2.3" not in str(exc_info.value)
+    assert "192.0.2.20" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("resolver_result", "category"),
+    (
+        ([], "invalid_resolver_result"),
+        (("192.0.2.1", 7), "invalid_resolver_result"),
+        (("192.000.2.1",), "invalid_resolver_result"),
+        ((), "no_usable_ipv4"),
+    ),
+)
+def test_programme_scoped_executor_rejects_invalid_or_empty_resolver_results(
+    resolver_result,
+    category: str,
+) -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: resolver_result,
+    )
+
+    with pytest.raises(HTTPTransportFailure, match=category):
+        executor.request("https://example.test/")
+
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+def test_ipv4_literal_scope_skips_resolution_and_binds_literal_peer() -> None:
+    policy = _programme_scope_policy(
+        (("network", ACTION_INCLUDE, RULE_IPV4_CIDR, "192.0.2.0/24"),)
+    )
+    transport = _RecordingPeerBoundTransport()
+
+    def unexpected_resolver(_host: str, _port: int) -> tuple[str, ...]:
+        raise AssertionError("IPv4 literal must not be resolved")
+
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://192.0.2.10",)),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=unexpected_resolver,
+    )
+
+    executor.request("https://192.0.2.10/path")
+
+    assert transport.requests[0].selected_ipv4 == "192.0.2.10"
+
+
+def test_redirect_resolves_and_evaluates_each_logical_destination_fresh() -> None:
+    policy = _programme_scope_policy(
+        (
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("redirect-peer", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.8"),
+        )
+    )
+    responses = [_response(302, (("Location", "/next"),))]
+    transport = _RecordingPeerBoundTransport(responses)
+    resolved = iter((("192.0.2.7",), ("192.0.2.8",)))
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return next(resolved)
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=resolver,
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/start")
+
+    assert exc_info.value.stage == "resolved_peer"
+    assert resolver_calls == [("example.test", 443), ("example.test", 443)]
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/start"
+    ]
+    assert executor.total_request_attempts == 1
+
+
+def test_system_ipv4_resolver_filters_well_formed_ipv6_and_alias_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = [
+        (
+            socket.AF_INET6,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "ignored-v6-alias.example",
+            ("2001:db8::1", 443, 0, 0),
+        ),
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "ignored-v4-alias.example",
+            ("192.0.2.20", 443),
+        ),
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "",
+            ("192.0.2.3", 443),
+        ),
+    ]
+    calls = []
+
+    def fake_getaddrinfo(*args):
+        calls.append(args)
+        return records
+
+    monkeypatch.setattr(http_enforcement_module.socket, "getaddrinfo", fake_getaddrinfo)
+
+    assert http_enforcement_module._system_ipv4_resolver("example.test", 443) == (
+        "192.0.2.20",
+        "192.0.2.3",
+    )
+    assert calls == [
+        (
+            "example.test",
+            443,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+        )
+    ]
+
+
+def test_peer_bound_http_transport_connects_to_selected_peer_with_logical_host() -> None:
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.3", events)
+    response = _HTTPClientResponse()
+    connections: list[_HTTPClientConnection] = []
+
+    def socket_factory(family: int, socktype: int, protocol: int):
+        events.append(("socket", family, socktype, protocol))
+        return peer_socket
+
+    def connection_factory(host: str, port: int, *, timeout: int):
+        connection = _HTTPClientConnection(
+            host,
+            port,
+            timeout=timeout,
+            events=events,
+            response=response,
+        )
+        connections.append(connection)
+        return connection
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=socket_factory,
+        http_connection_factory=connection_factory,
+    )
+    request = http_enforcement_module.HTTPTransportRequest(
+        url="http://example.test:8080/path?a=1",
+        method="GET",
+        headers=(("User-Agent", "test-agent"),),
+        timeout_seconds=7,
+        maximum_response_bytes=50,
+        selected_ipv4="192.0.2.3",
+    )
+
+    result = transport(request)
+
+    assert result.status_code == 200
+    assert result.headers == (("Content-Type", "text/plain"),)
+    assert result.body == b"peer-bound"
+    assert [(connection.host, connection.port) for connection in connections] == [
+        ("example.test", 8080)
+    ]
+    assert ("socket", socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP) in events
+    assert ("timeout", 7) in events
+    assert ("connect", ("192.0.2.3", 8080)) in events
+    request_event = next(event for event in events if event[0] == "request")
+    assert request_event[1:3] == ("GET", "/path?a=1")
+    assert request_event[3]["Host"] == "example.test:8080"
+    assert request_event[3]["Connection"] == "close"
+    assert response.read_limits == [51]
+    assert "192.0.2.3" not in repr(request)
+
+
+def test_peer_bound_https_transport_uses_logical_sni_and_verified_context() -> None:
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.3", events)
+    response = _HTTPClientResponse()
+    context = _VerifiedSSLContext(events)
+
+    def socket_factory(_family: int, _socktype: int, _protocol: int):
+        return peer_socket
+
+    def connection_factory(
+        host: str,
+        port: int,
+        *,
+        timeout: int,
+        context: _VerifiedSSLContext,
+    ):
+        return _HTTPClientConnection(
+            host,
+            port,
+            timeout=timeout,
+            events=events,
+            response=response,
+            context=context,
+        )
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=socket_factory,
+        https_connection_factory=connection_factory,
+        ssl_context_factory=lambda: context,
+    )
+    request = http_enforcement_module.HTTPTransportRequest(
+        url="https://example.test/",
+        method="HEAD",
+        headers=(),
+        timeout_seconds=5,
+        maximum_response_bytes=10,
+        selected_ipv4="192.0.2.3",
+    )
+
+    transport(request)
+
+    peer_check_index = events.index(("getpeername",))
+    tls_event = next(event for event in events if event[0] == "tls")
+    tls_index = events.index(tls_event)
+    request_index = next(index for index, event in enumerate(events) if event[0] == "request")
+    assert peer_check_index < tls_index < request_index
+    assert tls_event[1] == "example.test"
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert ("alpn", ("http/1.1",)) in events
+    https_request = next(event for event in events if event[0] == "request")
+    assert https_request[1:3] == ("HEAD", "/")
+
+
+def test_peer_bound_connector_closes_mismatched_peer_before_http_bytes() -> None:
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.99", events)
+
+    with pytest.raises(HTTPTransportFailure, match="peer_mismatch"):
+        http_enforcement_module._connect_selected_ipv4(
+            "192.0.2.3",
+            443,
+            5,
+            socket_factory=lambda _family, _socktype, _protocol: peer_socket,
+        )
+
+    assert peer_socket.closed is True
+    assert not any(event[0] in {"tls", "request"} for event in events)
+
+
+def test_resolved_peer_block_takes_precedence_over_lower_unknown_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _programme_scope_policy(
+        (
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("blocked", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.20"),
+        )
+    )
+    original_evaluator = http_enforcement_module.evaluate_resolved_ipv4_peer
+    unknown = http_enforcement_module.evaluate_raw_scope_destination(
+        policy,
+        http_enforcement_module.DESTINATION_IPV4,
+        "192.0.2.3",
+    )
+
+    def evaluator(policy_arg, logical_decision, resolved_peer):
+        if resolved_peer.peer.address == "192.0.2.3":
+            return unknown
+        return original_evaluator(policy_arg, logical_decision, resolved_peer)
+
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "evaluate_resolved_ipv4_peer",
+        evaluator,
+    )
+    transport = _RecordingPeerBoundTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.20", "192.0.2.3"),
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/")
+
+    assert exc_info.value.reason_code == "resolved_ip_excluded"
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+def test_numerically_lowest_blocked_peer_controls_deterministic_refusal() -> None:
+    policy = _programme_scope_policy(
+        (
+            ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("lower-peer", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.3"),
+            ("higher-peer", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.20"),
+        )
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=_RecordingPeerBoundTransport(),
+        ipv4_resolver=lambda _host, _port: ("192.0.2.20", "192.0.2.3"),
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/")
+
+    assert exc_info.value.operator_safe_explanation == (
+        "Resolved IPv4 peer is blocked by explicit programme scope rule lower-peer."
+    )
+
+
+def test_unknown_resolved_peer_rejects_complete_set_before_identity_or_permit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    unknown = http_enforcement_module.evaluate_raw_scope_destination(
+        policy,
+        http_enforcement_module.DESTINATION_IPV4,
+        "192.0.2.3",
+    )
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "evaluate_resolved_ipv4_peer",
+        lambda _policy, _logical, _peer: unknown,
+    )
+    transport = _RecordingPeerBoundTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+
+    def unexpected_headers(_additional_headers):
+        raise AssertionError("identity must not be prepared for a refused peer")
+
+    monkeypatch.setattr(executor, "_effective_headers", unexpected_headers)
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as exc_info:
+        executor.request("https://example.test/")
+
+    assert exc_info.value.stage == "resolved_peer"
+    assert exc_info.value.reason_code == "no_matching_inclusion"
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+def test_resolver_failure_precedes_identity_permit_and_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport()
+
+    def failing_resolver(_host: str, _port: int) -> tuple[str, ...]:
+        raise socket.gaierror("PRIVATE-RESOLVER-DETAIL-1192")
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=failing_resolver,
+    )
+    monkeypatch.setattr(
+        executor,
+        "_effective_headers",
+        lambda _headers: (_ for _ in ()).throw(
+            AssertionError("identity must not be prepared after DNS failure")
+        ),
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        executor.request("https://example.test/")
+
+    assert exc_info.value.category == "dns_error"
+    assert "PRIVATE-RESOLVER-DETAIL-1192" not in str(exc_info.value)
+    assert transport.requests == []
+    assert executor.total_request_attempts == 0
+
+
+@pytest.mark.parametrize(
+    "records",
+    (
+        [(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 443))],
+        [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 80))],
+        [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1",))],
+        [(9999, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 443))],
+        [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("not-ipv6", 443, 0, 0))],
+        ["not-a-getaddrinfo-record"],
+    ),
+)
+def test_system_ipv4_resolver_rejects_malformed_records(
+    monkeypatch: pytest.MonkeyPatch,
+    records,
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args: records)
+
+    with pytest.raises(HTTPTransportFailure, match="invalid_resolver_result"):
+        http_enforcement_module._system_ipv4_resolver("example.test", 443)
+
+
+def test_system_ipv4_resolver_maps_gaierror_without_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args):
+        raise socket.gaierror("PRIVATE-DNS-DETAIL-4412")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        http_enforcement_module._system_ipv4_resolver("example.test", 443)
+
+    assert exc_info.value.category == "dns_error"
+    assert "PRIVATE-DNS-DETAIL-4412" not in str(exc_info.value)
+
+
+def test_ipv6_only_system_resolution_becomes_no_usable_ipv4() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport()
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: (),
+    )
+
+    with pytest.raises(HTTPTransportFailure, match="no_usable_ipv4"):
+        executor.request("https://example.test/")
+
+    assert transport.requests == []
+
+
+def test_selected_peer_connect_failure_has_no_fallback_and_counts_one_attempt() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    events: list[tuple[object, ...]] = []
+    sockets: list[_PeerSocket] = []
+    response = _HTTPClientResponse()
+
+    def socket_factory(_family: int, _socket_type: int, _protocol: int):
+        peer_socket = _PeerSocket(
+            "192.0.2.3",
+            events,
+            connect_error=OSError("PRIVATE-CONNECT-DETAIL-9172"),
+        )
+        sockets.append(peer_socket)
+        return peer_socket
+
+    def connection_factory(host: str, port: int, *, timeout: int):
+        return _HTTPClientConnection(
+            host,
+            port,
+            timeout=timeout,
+            events=events,
+            response=response,
+        )
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=socket_factory,
+        http_connection_factory=connection_factory,
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=("http://example.test",)),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.20", "192.0.2.3"),
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        executor.request("http://example.test/")
+
+    assert exc_info.value.category == "connect_error"
+    assert "PRIVATE-CONNECT-DETAIL-9172" not in str(exc_info.value)
+    assert len(sockets) == 1
+    assert ("connect", ("192.0.2.3", 80)) in events
+    assert not any(event == ("connect", ("192.0.2.20", 80)) for event in events)
+    assert executor.total_request_attempts == 1
+
+
+def test_peer_bound_https_transport_maps_tls_failure_without_http_request() -> None:
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.3", events)
+    response = _HTTPClientResponse()
+
+    class FailingContext(_VerifiedSSLContext):
+        def wrap_socket(self, raw_socket, *, server_hostname: str):
+            self.events.append(("tls", server_hostname, raw_socket))
+            raise ssl.SSLError("PRIVATE-TLS-DETAIL-3281")
+
+    context = FailingContext(events)
+
+    def connection_factory(host: str, port: int, *, timeout: int, context):
+        return _HTTPClientConnection(
+            host,
+            port,
+            timeout=timeout,
+            events=events,
+            response=response,
+            context=context,
+        )
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=lambda _family, _type, _protocol: peer_socket,
+        https_connection_factory=connection_factory,
+        ssl_context_factory=lambda: context,
+    )
+    request = http_enforcement_module.HTTPTransportRequest(
+        url="https://example.test/",
+        method="GET",
+        headers=(),
+        timeout_seconds=5,
+        maximum_response_bytes=10,
+        selected_ipv4="192.0.2.3",
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        transport(request)
+
+    assert exc_info.value.category == "tls_error"
+    assert "PRIVATE-TLS-DETAIL-3281" not in str(exc_info.value)
+    assert not any(event[0] == "request" for event in events)
+
+
+def test_https_ipv4_literal_is_used_as_certificate_identity() -> None:
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.10", events)
+    response = _HTTPClientResponse()
+    context = _VerifiedSSLContext(events)
+
+    def connection_factory(host: str, port: int, *, timeout: int, context):
+        return _HTTPClientConnection(
+            host,
+            port,
+            timeout=timeout,
+            events=events,
+            response=response,
+            context=context,
+        )
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=lambda _family, _type, _protocol: peer_socket,
+        https_connection_factory=connection_factory,
+        ssl_context_factory=lambda: context,
+    )
+    transport(
+        http_enforcement_module.HTTPTransportRequest(
+            url="https://192.0.2.10/",
+            method="GET",
+            headers=(),
+            timeout_seconds=5,
+            maximum_response_bytes=10,
+            selected_ipv4="192.0.2.10",
+        )
+    )
+
+    tls_event = next(event for event in events if event[0] == "tls")
+    assert tls_event[1] == "192.0.2.10"
+
+
+def test_default_transport_selection_is_isolated_by_programme_scope() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+
+    scoped = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+    configured_unscoped = InternalHTTPExecutor(_configuration())
+    compatibility = InternalHTTPExecutor(None)
+
+    assert isinstance(
+        scoped.transport,
+        http_enforcement_module.PeerBoundHTTPTransport,
+    )
+    assert isinstance(configured_unscoped.transport, UrllibHTTPTransport)
+    assert isinstance(compatibility.transport, UrllibHTTPTransport)
+
+
+def test_scoped_executor_rejects_explicit_urllib_transport_at_construction() -> None:
+    private_note = "PRIVATE-TRANSPORT-NOTE-7741"
+    private_source = "PRIVATE-TRANSPORT-SOURCE-7741"
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+    opener = _RecordingOpener()
+    transport = UrllibHTTPTransport(direct_only=True)
+    transport._opener = opener
+
+    with pytest.raises(ValueError) as exc_info:
+        InternalHTTPExecutor(
+            _configuration(),
+            programme_scope_policy=policy,
+            transport=transport,
+            ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+        )
+
+    assert str(exc_info.value) == (
+        "Programme-scoped internal HTTP requires a peer-bound transport."
+    )
+    assert opener.requests == []
+    assert private_note not in str(exc_info.value)
+    assert private_source not in repr(exc_info.value)
+    assert HEADER_SENTINEL not in str(exc_info.value)
+
+
+def test_scoped_executor_rejects_explicit_ordinary_recording_transport() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+
+    with pytest.raises(ValueError, match="peer-bound transport"):
+        InternalHTTPExecutor(
+            _configuration(),
+            programme_scope_policy=policy,
+            transport=_RecordingTransport(),
+            ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+        )
+
+
+def test_scoped_executor_accepts_explicit_peer_bound_transports() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    explicit = http_enforcement_module.PeerBoundHTTPTransport()
+    test_subclass = _RecordingPeerBoundTransport()
+
+    explicit_executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=explicit,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+    fake_executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=test_subclass,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+
+    assert explicit_executor.transport is explicit
+    fake_executor.request("https://example.test/path")
+    assert [request.url for request in test_subclass.requests] == [
+        "https://example.test/path"
+    ]
+
+
+def test_scoped_exchange_rejects_postconstruction_urllib_replacement() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+    opener = _RecordingOpener()
+    replacement = UrllibHTTPTransport(direct_only=True)
+    replacement._opener = opener
+    executor.transport = replacement
+
+    with pytest.raises(ValueError, match="peer-bound transport"):
+        executor.request("https://example.test/path")
+
+    assert opener.requests == []
+    assert executor.total_request_attempts == 0
+    assert executor.last_request_start is None
+    assert executor._limiter is not None
+    assert executor._limiter._next_start is None
+
+
+def test_scoped_exchange_rejects_postconstruction_recording_replacement() -> None:
+    private_note = "PRIVATE-REPLACEMENT-NOTE-4418"
+    private_source = "PRIVATE-REPLACEMENT-SOURCE-4418"
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
+        private_note=private_note,
+        private_source_wording=private_source,
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+    replacement = _RecordingTransport()
+    executor.transport = replacement
+
+    with pytest.raises(ValueError) as exc_info:
+        executor.request("https://example.test/path")
+
+    assert str(exc_info.value) == (
+        "Programme-scoped internal HTTP requires a peer-bound transport."
+    )
+    assert replacement.requests == []
+    assert executor.total_request_attempts == 0
+    assert executor.last_request_start is None
+    assert executor._limiter is not None
+    assert executor._limiter._next_start is None
+    assert HEADER_SENTINEL not in str(exc_info.value)
+    assert private_note not in str(exc_info.value)
+    assert private_source not in repr(exc_info.value)
+
+
+def test_programme_scoped_requests_retain_pacing_and_identity_headers() -> None:
+    policy = _programme_scope_policy(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    clock = _FakeTime()
+    transport = _RecordingPeerBoundTransport(
+        [_response(), _response()],
+        clock=clock,
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(rate="2"),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    executor.request("https://example.test/one")
+    executor.request("https://example.test/two")
+
+    assert transport.starts == [Decimal("0"), Decimal("0.5")]
+    assert executor.total_request_attempts == 2
+    assert all(request.selected_ipv4 == "192.0.2.3" for request in transport.requests)
+    assert all(
+        ("X-Researcher-ID", HEADER_SENTINEL) in request.headers
+        for request in transport.requests
+    )
 
 
 def test_multiple_policy_identification_headers_reach_every_exchange_in_order() -> None:

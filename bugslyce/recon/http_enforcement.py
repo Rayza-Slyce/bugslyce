@@ -5,8 +5,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
+import ipaddress
 import math
 import re
+import socket
+import ssl
 import threading
 from time import monotonic as system_monotonic
 from time import sleep as system_sleep
@@ -29,12 +33,19 @@ from bugslyce.core.engagement_policy import (
 )
 from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.core.programme_scope import (
+    DESTINATION_HOSTNAME,
     DESTINATION_HTTP_URL,
+    DESTINATION_IPV4,
     OUTCOME_ALLOWED,
+    OUTCOME_BLOCKED,
+    CanonicalHTTPURLDestination,
     ProgrammeScopePolicy,
     ScopeDecision,
     build_programme_scope_policy,
     build_programme_scope_rule,
+    canonicalise_ipv4,
+    canonicalise_resolved_ipv4_peer,
+    evaluate_resolved_ipv4_peer,
     evaluate_raw_scope_destination,
 )
 from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
@@ -49,10 +60,15 @@ MAXIMUM_SLEEP_CHUNK_SECONDS = 60
 MAXIMUM_TERMINAL_POLL_SECONDS = Decimal("0.1")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _HTTP_FIELD_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_PEER_BOUND_TRANSPORT_REQUIRED = (
+    "Programme-scoped internal HTTP requires a peer-bound transport."
+)
 
 Monotonic = Callable[[], float]
 Sleeper = Callable[[float], None]
 InterruptibleWaiter = Callable[[float, threading.Event], bool]
+IPv4Resolver = Callable[[str, int], tuple[str, ...]]
+SocketFactory = Callable[[int, int, int], socket.socket]
 
 
 @dataclass(frozen=True)
@@ -146,6 +162,7 @@ class HTTPTransportRequest:
     headers: tuple[tuple[str, str], ...] = field(repr=False)
     timeout_seconds: int
     maximum_response_bytes: int
+    selected_ipv4: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -205,10 +222,10 @@ class HTTPRedirectRefused(InternalHTTPExecutionError):
 
 
 class HTTPProgrammeScopeRefused(InternalHTTPExecutionError):
-    """Raised before transmission when a logical HTTP URL is outside scope."""
+    """Raised before transmission when a logical URL or resolved peer is refused."""
 
     def __init__(self, stage: str, decision: ScopeDecision) -> None:
-        if stage not in {"initial", "redirect"}:
+        if stage not in {"initial", "redirect", "resolved_peer"}:
             raise ValueError("Programme scope refusal stage is invalid.")
         if not isinstance(decision, ScopeDecision) or decision.outcome == OUTCOME_ALLOWED:
             raise ValueError("Programme scope refusal requires a refused decision.")
@@ -326,6 +343,7 @@ class InternalHTTPExecutor:
         *,
         programme_scope_policy: ProgrammeScopePolicy | None = None,
         transport: HTTPTransport | None = None,
+        ipv4_resolver: IPv4Resolver | None = None,
         monotonic: Monotonic = system_monotonic,
         sleep: Sleeper = system_sleep,
     ) -> None:
@@ -366,11 +384,25 @@ class InternalHTTPExecutor:
                 raise ValueError("Programme scope policy is not canonical.")
         else:
             canonical_programme_scope_policy = None
+        if ipv4_resolver is not None and not callable(ipv4_resolver):
+            raise ValueError("Internal HTTP IPv4 resolver is invalid.")
+        if (
+            canonical_programme_scope_policy is not None
+            and transport is not None
+            and not isinstance(transport, PeerBoundHTTPTransport)
+        ):
+            raise ValueError(_PEER_BOUND_TRANSPORT_REQUIRED)
         self.configuration = configuration
         self._programme_scope_policy = canonical_programme_scope_policy
-        self.transport: HTTPTransport = transport or UrllibHTTPTransport(
-            direct_only=configuration is not None
-        )
+        self._ipv4_resolver = ipv4_resolver or _system_ipv4_resolver
+        if transport is not None:
+            self.transport = transport
+        elif canonical_programme_scope_policy is not None:
+            self.transport = PeerBoundHTTPTransport()
+        else:
+            self.transport = UrllibHTTPTransport(
+                direct_only=configuration is not None
+            )
         self._monotonic = monotonic
         self._limiter = (
             SteadyRequestStartLimiter(
@@ -437,8 +469,9 @@ class InternalHTTPExecutor:
             maximum_response_bytes,
             allow_query_strings,
         )
-        self._require_programme_scope(url, stage="initial")
+        logical_decision = self._require_programme_scope(url, stage="initial")
         self._require_approved_initial_origin(url)
+        selected_ipv4 = self._select_programme_scope_peer(logical_decision)
         headers = self._effective_headers(additional_headers)
         requested_url = url
         current_url = url
@@ -454,6 +487,7 @@ class InternalHTTPExecutor:
                     headers=headers,
                     timeout_seconds=timeout_seconds,
                     maximum_response_bytes=maximum_response_bytes,
+                    selected_ipv4=selected_ipv4,
                 )
             )
             if (
@@ -483,7 +517,13 @@ class InternalHTTPExecutor:
                 raise HTTPRedirectRefused("redirect_loop")
             if len(redirects) >= self.configuration.maximum_redirect_hops:
                 raise HTTPRedirectRefused("redirect_hop_limit")
-            self._require_programme_scope(destination, stage="redirect")
+            redirect_decision = self._require_programme_scope(
+                destination,
+                stage="redirect",
+            )
+            redirect_ipv4 = self._select_programme_scope_peer(
+                redirect_decision,
+            )
             redirects.append(
                 HTTPRedirectHop(
                     status_code=response.status_code,
@@ -493,6 +533,7 @@ class InternalHTTPExecutor:
             )
             visited.add(destination)
             current_url = destination
+            selected_ipv4 = redirect_ipv4
 
     @contextmanager
     def external_request_permit(self) -> Iterator[Decimal]:
@@ -559,6 +600,11 @@ class InternalHTTPExecutor:
         self,
         request: HTTPTransportRequest,
     ) -> HTTPTransportResponse:
+        if self._programme_scope_policy is not None and not isinstance(
+            self.transport,
+            PeerBoundHTTPTransport,
+        ):
+            raise ValueError(_PEER_BOUND_TRANSPORT_REQUIRED)
         with self._request_permit():
             transport_invoked = False
             try:
@@ -681,11 +727,16 @@ class InternalHTTPExecutor:
         if origin not in self.configuration.approved_origins:
             raise ValueError("Internal HTTP request origin is not approved.")
 
-    def _require_programme_scope(self, url: str, *, stage: str) -> None:
-        """Enforce logical URL scope; resolved-peer binding is deferred to R0C3A2."""
+    def _require_programme_scope(
+        self,
+        url: str,
+        *,
+        stage: str,
+    ) -> ScopeDecision | None:
+        """Return the canonical logical URL decision after enforcing scope."""
 
         if self._programme_scope_policy is None:
-            return
+            return None
         decision = evaluate_raw_scope_destination(
             self._programme_scope_policy,
             DESTINATION_HTTP_URL,
@@ -693,6 +744,58 @@ class InternalHTTPExecutor:
         )
         if decision.outcome != OUTCOME_ALLOWED:
             raise HTTPProgrammeScopeRefused(stage, decision)
+        return decision
+
+    def _select_programme_scope_peer(
+        self,
+        logical_decision: ScopeDecision | None,
+    ) -> str | None:
+        if self._programme_scope_policy is None:
+            return None
+        if logical_decision is None or logical_decision.outcome != OUTCOME_ALLOWED:
+            raise ValueError("Canonical logical programme scope decision is required.")
+        destination = logical_decision.canonical_destination
+        if not isinstance(destination, CanonicalHTTPURLDestination):
+            raise ValueError("Canonical logical HTTP destination is required.")
+        if destination.origin.host_kind == DESTINATION_IPV4:
+            return destination.origin.host
+        if destination.origin.host_kind != DESTINATION_HOSTNAME:
+            raise HTTPTransportFailure("invalid_resolver_result")
+
+        try:
+            raw_candidates = self._ipv4_resolver(
+                destination.origin.host,
+                destination.origin.effective_port,
+            )
+        except HTTPTransportFailure:
+            raise
+        except (OSError, ValueError, TypeError):
+            raise HTTPTransportFailure("dns_error") from None
+        candidates = _canonical_ipv4_candidates(raw_candidates)
+        decisions: list[tuple[str, ScopeDecision]] = []
+        for candidate in candidates:
+            resolved_peer = canonicalise_resolved_ipv4_peer(destination, candidate)
+            decisions.append(
+                (
+                    candidate,
+                    evaluate_resolved_ipv4_peer(
+                        self._programme_scope_policy,
+                        logical_decision,
+                        resolved_peer,
+                    ),
+                )
+            )
+
+        blocked = [item for item in decisions if item[1].outcome == OUTCOME_BLOCKED]
+        non_allowed = [item for item in decisions if item[1].outcome != OUTCOME_ALLOWED]
+        refused = blocked or non_allowed
+        if refused:
+            _candidate, decision = min(
+                refused,
+                key=lambda item: int(ipaddress.IPv4Address(item[0])),
+            )
+            raise HTTPProgrammeScopeRefused("resolved_peer", decision)
+        return candidates[0]
 
     def _redirect_destination(
         self,
@@ -708,6 +811,246 @@ class InternalHTTPExecutor:
             location,
             approved_origins=self.configuration.approved_origins,
             allow_query_strings=allow_query_strings,
+        )
+
+
+def _system_ipv4_resolver(hostname: str, port: int) -> tuple[str, ...]:
+    """Resolve TCP peers and retain only strict canonical IPv4 addresses."""
+
+    try:
+        records = socket.getaddrinfo(
+            hostname,
+            port,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+        )
+    except socket.gaierror:
+        raise HTTPTransportFailure("dns_error") from None
+    if not isinstance(records, list):
+        raise HTTPTransportFailure("invalid_resolver_result")
+
+    candidates: list[str] = []
+    for record in records:
+        if not isinstance(record, tuple) or len(record) != 5:
+            raise HTTPTransportFailure("invalid_resolver_result")
+        family, socket_type, protocol, canonical_name, socket_address = record
+        if (
+            socket_type != socket.SOCK_STREAM
+            or protocol != socket.IPPROTO_TCP
+            or not isinstance(canonical_name, str)
+            or not isinstance(socket_address, tuple)
+        ):
+            raise HTTPTransportFailure("invalid_resolver_result")
+        if family == socket.AF_INET:
+            if (
+                len(socket_address) != 2
+                or not isinstance(socket_address[0], str)
+                or socket_address[1] != port
+            ):
+                raise HTTPTransportFailure("invalid_resolver_result")
+            try:
+                candidates.append(canonicalise_ipv4(socket_address[0]))
+            except ValueError:
+                raise HTTPTransportFailure("invalid_resolver_result") from None
+        elif family == socket.AF_INET6:
+            if (
+                len(socket_address) != 4
+                or not isinstance(socket_address[0], str)
+                or socket_address[1] != port
+                or not all(isinstance(value, int) for value in socket_address[2:])
+            ):
+                raise HTTPTransportFailure("invalid_resolver_result")
+            try:
+                ipaddress.IPv6Address(socket_address[0])
+            except ValueError:
+                raise HTTPTransportFailure("invalid_resolver_result") from None
+        else:
+            raise HTTPTransportFailure("invalid_resolver_result")
+    return tuple(candidates)
+
+
+def _canonical_ipv4_candidates(result: object) -> tuple[str, ...]:
+    if not isinstance(result, tuple):
+        raise HTTPTransportFailure("invalid_resolver_result")
+    candidates: set[str] = set()
+    for item in result:
+        if not isinstance(item, str):
+            raise HTTPTransportFailure("invalid_resolver_result")
+        try:
+            candidate = canonicalise_ipv4(item)
+        except ValueError:
+            raise HTTPTransportFailure("invalid_resolver_result") from None
+        candidates.add(candidate)
+    if not candidates:
+        raise HTTPTransportFailure("no_usable_ipv4")
+    return tuple(sorted(candidates, key=lambda value: int(ipaddress.IPv4Address(value))))
+
+
+def _connect_selected_ipv4(
+    selected_ipv4: str,
+    port: int,
+    timeout_seconds: int,
+    *,
+    socket_factory: SocketFactory = socket.socket,
+) -> socket.socket:
+    """Connect once to one approved IPv4 and verify the resulting TCP peer."""
+
+    try:
+        canonical_peer = canonicalise_ipv4(selected_ipv4)
+    except ValueError:
+        raise HTTPTransportFailure("invalid_resolver_result") from None
+    connected_socket = None
+    try:
+        connected_socket = socket_factory(
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+        )
+        connected_socket.settimeout(timeout_seconds)
+        connected_socket.connect((canonical_peer, port))
+        peer_name = connected_socket.getpeername()
+        if (
+            not isinstance(peer_name, tuple)
+            or len(peer_name) < 2
+            or not isinstance(peer_name[0], str)
+        ):
+            raise HTTPTransportFailure("peer_mismatch")
+        try:
+            actual_peer = canonicalise_ipv4(peer_name[0])
+        except ValueError:
+            raise HTTPTransportFailure("peer_mismatch") from None
+        if actual_peer != canonical_peer:
+            raise HTTPTransportFailure("peer_mismatch")
+        return connected_socket
+    except TimeoutError:
+        if connected_socket is not None:
+            connected_socket.close()
+        raise
+    except HTTPTransportFailure:
+        if connected_socket is not None:
+            connected_socket.close()
+        raise
+    except OSError:
+        if connected_socket is not None:
+            connected_socket.close()
+        raise HTTPTransportFailure("connect_error") from None
+    except BaseException:
+        if connected_socket is not None:
+            connected_socket.close()
+        raise
+
+
+class PeerBoundHTTPTransport:
+    """Single-exchange HTTP/1.1 transport bound to one pre-approved IPv4 peer."""
+
+    def __init__(
+        self,
+        *,
+        socket_factory: SocketFactory = socket.socket,
+        http_connection_factory: Callable[..., HTTPConnection] = HTTPConnection,
+        https_connection_factory: Callable[..., HTTPSConnection] = HTTPSConnection,
+        ssl_context_factory: Callable[[], ssl.SSLContext] = ssl.create_default_context,
+    ) -> None:
+        self._socket_factory = socket_factory
+        self._http_connection_factory = http_connection_factory
+        self._https_connection_factory = https_connection_factory
+        self._ssl_context_factory = ssl_context_factory
+
+    def __call__(self, request: HTTPTransportRequest) -> HTTPTransportResponse:
+        if request.selected_ipv4 is None:
+            raise HTTPTransportFailure("invalid_resolver_result")
+        parsed = urlparse(request.url)
+        logical_host = parsed.hostname
+        if parsed.scheme.lower() not in {"http", "https"} or logical_host is None:
+            raise HTTPTransportFailure("transport_error")
+        try:
+            port = parsed.port
+        except ValueError:
+            raise HTTPTransportFailure("transport_error") from None
+        effective_port = port or (80 if parsed.scheme.lower() == "http" else 443)
+        target = parsed.path or "/"
+        if "?" in request.url:
+            target = f"{target}?{parsed.query}"
+
+        headers = dict(request.headers)
+        if not any(name.casefold() == "host" for name in headers):
+            default_port = 80 if parsed.scheme.lower() == "http" else 443
+            headers["Host"] = (
+                logical_host
+                if effective_port == default_port
+                else f"{logical_host}:{effective_port}"
+            )
+        if not any(name.casefold() == "connection" for name in headers):
+            headers["Connection"] = "close"
+
+        context = None
+        if parsed.scheme.lower() == "https":
+            try:
+                context = self._ssl_context_factory()
+                if (
+                    context.verify_mode != ssl.CERT_REQUIRED
+                    or context.check_hostname is not True
+                ):
+                    raise HTTPTransportFailure("tls_error")
+                context.set_alpn_protocols(["http/1.1"])
+                if context.post_handshake_auth is not None:
+                    context.post_handshake_auth = True
+            except HTTPTransportFailure:
+                raise
+            except (OSError, ssl.SSLError):
+                raise HTTPTransportFailure("tls_error") from None
+            connection = self._https_connection_factory(
+                logical_host,
+                effective_port,
+                timeout=request.timeout_seconds,
+                context=context,
+            )
+        else:
+            connection = self._http_connection_factory(
+                logical_host,
+                effective_port,
+                timeout=request.timeout_seconds,
+            )
+
+        def create_peer_connection(
+            _address,
+            timeout=request.timeout_seconds,
+            _source_address=None,
+        ):
+            return _connect_selected_ipv4(
+                request.selected_ipv4,
+                effective_port,
+                timeout,
+                socket_factory=self._socket_factory,
+            )
+
+        connection._create_connection = create_peer_connection
+        response = None
+        try:
+            connection.request(request.method, target, headers=headers)
+            response = connection.getresponse()
+            body = response.read(request.maximum_response_bytes + 1)
+            response_headers = tuple(
+                (str(name), str(value)) for name, value in response.headers.items()
+            )
+            status = response.status
+        except TimeoutError:
+            raise
+        except HTTPTransportFailure:
+            raise
+        except ssl.SSLError:
+            raise HTTPTransportFailure("tls_error") from None
+        except (HTTPException, OSError):
+            raise HTTPTransportFailure("transport_error") from None
+        finally:
+            if response is not None:
+                response.close()
+            connection.close()
+        return HTTPTransportResponse(
+            status_code=status,
+            headers=response_headers,
+            body=body,
         )
 
 
