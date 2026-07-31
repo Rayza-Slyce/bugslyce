@@ -9,6 +9,14 @@ from bugslyce.core.models import (
     HTTPService,
     ProjectState,
 )
+from bugslyce.core.programme_scope import (
+    ACTION_EXCLUDE,
+    ACTION_INCLUDE,
+    RULE_EXACT_HOSTNAME,
+    RULE_HTTP_PATH_PREFIX,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_request_plan import (
     DeepCollectionRequestPlan,
@@ -106,6 +114,89 @@ def test_external_absolute_references_do_not_become_executable_deep_requests() -
     assert not any("manpages.debian.org" in url for url in urls)
     assert not any("bugs.launchpad.net" in url for url in urls)
     assert plan.allowed_origins == ("http://target.test",)
+
+
+def test_programme_scope_retains_cross_origin_evidence_and_records_no_contact_decisions() -> None:
+    project = _project_state(
+        http_services=[_service("https://source.test/", "EVID-SOURCE")],
+        endpoints=[
+            _endpoint("https://allowed.test/api", "EVID-ALLOWED"),
+            _endpoint("https://allowed.test/private/item", "EVID-BLOCKED"),
+            _endpoint("https://unknown.test/admin", "EVID-UNKNOWN"),
+        ],
+    )
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "allowed.test", "include-allowed"),
+        (ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX, "https://allowed.test/private", "exclude-private"),
+    )
+
+    plan = build_deep_collection_request_plan_from_project_state(
+        project,
+        programme_scope_policy=policy,
+    )
+
+    assert _decision(plan, "https://allowed.test/api").allowed
+    blocked = _decision(plan, "https://allowed.test/private/item")
+    unknown = _decision(plan, "https://unknown.test/admin")
+    assert (blocked.allowed, blocked.reason, blocked.evidence_ids) == (
+        False,
+        "programme_scope_blocked",
+        ("EVID-BLOCKED",),
+    )
+    assert (unknown.allowed, unknown.reason) == (False, "programme_scope_unknown")
+    assert project.endpoints[1].url == "https://allowed.test/private/item"
+
+
+def test_programme_scope_classifies_metadata_and_retained_redirect_candidates() -> None:
+    redirect = _path("https://source.test/start", "EVID-REDIRECT")
+    redirect.status_code = 302
+    redirect.redirect_location = "https://source.test/private/admin"
+    project = _project_state(
+        http_services=[_service("https://source.test/", "EVID-SOURCE")],
+        discovered_paths=[redirect],
+    )
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "source.test", "include-source"),
+        (ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX, "https://source.test/private", "exclude-private"),
+    )
+
+    plan = build_deep_collection_request_plan_from_project_state(
+        project,
+        programme_scope_policy=policy,
+    )
+
+    assert _decision(plan, "https://source.test/robots.txt").allowed
+    redirect_decision = _decision(plan, "https://source.test/private/admin")
+    assert redirect_decision.allowed is False
+    assert redirect_decision.reason == "programme_scope_blocked"
+    assert redirect.redirect_location == "https://source.test/private/admin"
+
+
+def test_programme_scope_does_not_admit_sanitised_credential_bearing_evidence() -> None:
+    project = _project_state(
+        http_services=[_service("https://target.test/", "EVID-SOURCE")],
+        endpoints=[
+            _endpoint(
+                "https://user:PRIVATE-CREDENTIAL@target.test/admin",
+                "EVID-CREDENTIAL",
+            )
+        ],
+    )
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "target.test", "include-target"),
+    )
+
+    plan = build_deep_collection_request_plan_from_project_state(
+        project,
+        programme_scope_policy=policy,
+    )
+
+    decision = _decision(plan, "https://target.test/admin")
+    assert decision.allowed is False
+    assert decision.reason == "malformed_destination"
+    assert decision.evidence_ids == ("EVID-CREDENTIAL",)
+    assert project.endpoints[0].url == "https://user:PRIVATE-CREDENTIAL@target.test/admin"
+    assert "PRIVATE-CREDENTIAL" not in repr(decision)
 
 
 def test_origin_normalisation_rejects_different_scheme_port_and_host() -> None:
@@ -601,3 +692,18 @@ def _path(url: str, evidence_id: str) -> DiscoveredPath:
 
 def urlparse_path(url: str) -> str:
     return "/" + url.split("/", 3)[3].split("?", 1)[0] if "/" in url[8:] else "/"
+
+
+def _programme_policy(*rules):
+    return build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id=rule_id,
+                action=action,
+                kind=kind,
+                value=value,
+            )
+            for action, kind, value, rule_id in rules
+        ],
+        updated_at="2026-07-31T12:00:00Z",
+    )

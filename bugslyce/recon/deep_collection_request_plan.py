@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
 from bugslyce.core.models import ProjectState
+from bugslyce.core.programme_scope import ProgrammeScopePolicy
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionBounds,
     DeepCollectionPolicySummary,
@@ -85,6 +86,7 @@ def build_deep_collection_request_plan_from_project_state(
     project_state: ProjectState,
     *,
     bounds: DeepCollectionBounds | None = None,
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
 ) -> DeepCollectionRequestPlan:
     """Build an offline future Deep collection request plan from ProjectState."""
 
@@ -108,19 +110,38 @@ def build_deep_collection_request_plan_from_project_state(
             if item.status != status or item.category not in categories:
                 continue
             item_origin = _origin_for_url(item.url)
-            if item_origin is None or item_origin not in allowed_origins:
+            if programme_scope_policy is None and (
+                item_origin is None or item_origin not in allowed_origins
+            ):
                 continue
-            if item.url in unsafe_normalised_urls:
+            unsafe_destination = item.url in unsafe_normalised_urls
+            if programme_scope_policy is None and unsafe_destination:
                 continue
-            pending.append(_pending_route_request(item.url, item.status, item.category, item.evidence_ids))
+            pending.append(
+                _pending_route_request(
+                    item.url,
+                    item.status,
+                    item.category,
+                    item.evidence_ids,
+                    malformed_destination=unsafe_destination,
+                )
+            )
 
-    pending.extend(_pending_query_endpoint_requests(project_state, allowed_origins))
+    pending.extend(
+        _pending_query_endpoint_requests(
+            project_state,
+            allowed_origins,
+            programme_scope_policy=programme_scope_policy,
+        )
+    )
 
     for item in metadata_coverage.items:
         if item.status != "planned_uncollected":
             continue
         item_origin = _origin_for_url(item.url)
-        if item_origin is None or item_origin not in allowed_origins:
+        if programme_scope_policy is None and (
+            item_origin is None or item_origin not in allowed_origins
+        ):
             continue
         pending.append(
             _PendingRequest(
@@ -138,6 +159,7 @@ def build_deep_collection_request_plan_from_project_state(
         proposed_requests,
         bounds=bounds,
         allowed_origins=allowed_origins,
+        programme_scope_policy=programme_scope_policy,
     )
     source_counts = tuple(
         DeepCollectionRequestSourceCount(source=source, count=count)
@@ -208,6 +230,8 @@ def _pending_route_request(
     status: str,
     category: str,
     evidence_ids: tuple[str, ...],
+    *,
+    malformed_destination: bool = False,
 ) -> _PendingRequest:
     reason_part = ROUTE_CATEGORY_REASON_PARTS.get(category, "route")
     reason = f"{status}_{reason_part}"
@@ -217,20 +241,29 @@ def _pending_route_request(
         source="source_route_coverage",
         reason=reason,
         evidence_ids=evidence_ids,
-        tags=("route", category) if status == "discovered_unfetched" else ("route", "referenced_only", category),
+        tags=(
+            (
+                ("route", category)
+                if status == "discovered_unfetched"
+                else ("route", "referenced_only", category)
+            )
+            + (("malformed_destination",) if malformed_destination else ())
+        ),
     )
 
 
 def _pending_query_endpoint_requests(
     project_state: ProjectState,
     allowed_origins: tuple[str, ...],
+    *,
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
 ) -> tuple[_PendingRequest, ...]:
     pending: list[_PendingRequest] = []
     for endpoint in project_state.endpoints:
         normalised = _normalise_url(endpoint.url, keep_query=True)
         if normalised is None or "?" not in normalised[0]:
             continue
-        if normalised[1] not in allowed_origins:
+        if programme_scope_policy is None and normalised[1] not in allowed_origins:
             continue
         category = _category_for_path(endpoint.path)
         if category not in ROUTE_REQUEST_CATEGORIES:

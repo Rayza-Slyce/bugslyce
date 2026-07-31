@@ -121,6 +121,32 @@ def test_manual_cross_origin_allowed_decision_is_rejected_before_fetch() -> None
     assert result.skipped[0].reason == "cross_origin_not_allowed"
 
 
+def test_programme_scoped_cross_origin_decision_reaches_the_bounded_fetcher() -> None:
+    calls: list[str] = []
+    external = _request(
+        "http://other.test/admin",
+        source="source_route_coverage",
+    )
+    decision = DeepCollectionDecision(
+        url=external.url,
+        method=external.method,
+        allowed=True,
+        reason="policy_allowed",
+        policy_notes=("programme_scope_allowed",),
+        origin="http://other.test",
+        path="/admin",
+        evidence_ids=external.evidence_ids,
+    )
+
+    result = collect_deep_source_routes_from_plan(
+        _manual_plan((external,), (decision,)),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert calls == ["http://other.test/admin"]
+    assert result.total_collected == 1
+
+
 @pytest.mark.parametrize(
     "url",
     (

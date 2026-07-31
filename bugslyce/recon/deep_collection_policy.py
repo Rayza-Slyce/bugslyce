@@ -11,6 +11,15 @@ from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
+from bugslyce.core.programme_scope import (
+    DESTINATION_HTTP_URL,
+    OUTCOME_ALLOWED,
+    OUTCOME_BLOCKED,
+    REASON_INVALID_DESTINATION,
+    REASON_UNSUPPORTED_DESTINATION,
+    ProgrammeScopePolicy,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.recon.http_origin import http_origin_from_url
 
 
@@ -37,6 +46,13 @@ ALLOW_NOTES = (
     "method_allowed",
     "scheme_allowed",
     "origin_allowed",
+    "within_request_bounds",
+    "read_only_request",
+)
+PROGRAMME_SCOPE_ALLOW_NOTES = (
+    "method_allowed",
+    "scheme_allowed",
+    "programme_scope_allowed",
     "within_request_bounds",
     "read_only_request",
 )
@@ -137,6 +153,7 @@ def evaluate_deep_collection_request(
     *,
     bounds: DeepCollectionBounds | None = None,
     allowed_origins: tuple[str, ...] = (),
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
     already_seen_counts_by_origin: dict[str, int] | None = None,
     already_seen_total: int = 0,
 ) -> DeepCollectionDecision:
@@ -147,7 +164,11 @@ def evaluate_deep_collection_request(
     method = request.method.upper().strip()
     normalised = _normalise_url(request.url)
     if normalised is None:
-        return _blocked(request, method, "invalid_url")
+        return _blocked(
+            request,
+            method,
+            "malformed_destination" if programme_scope_policy is not None else "invalid_url",
+        )
     normalised_url, origin, path, parsed = normalised
 
     if parsed.scheme not in active_bounds.allowed_schemes:
@@ -162,7 +183,19 @@ def evaluate_deep_collection_request(
         return _blocked(request, method, "url_fragment_not_allowed", origin=origin, path=path, url=normalised_url)
     if parsed.query and not active_bounds.allow_query_strings:
         return _blocked(request, method, "query_string_not_allowed", origin=origin, path=path, url=normalised_url)
-    if not active_bounds.allow_cross_origin and origin not in _normalised_origins(allowed_origins):
+    if "malformed_destination" in request.tags:
+        return _blocked(request, method, "malformed_destination", origin=origin, path=path, url=normalised_url)
+    scope_reason = programme_scope_http_candidate_no_contact_reason(
+        programme_scope_policy,
+        normalised_url,
+    )
+    if scope_reason is not None:
+        return _blocked(request, method, scope_reason, origin=origin, path=path, url=normalised_url)
+    if (
+        programme_scope_policy is None
+        and not active_bounds.allow_cross_origin
+        and origin not in _normalised_origins(allowed_origins)
+    ):
         return _blocked(request, method, "cross_origin_not_allowed", origin=origin, path=path, url=normalised_url)
     if _has_unsafe_intent(request):
         return _blocked(request, method, "unsafe_request_intent_blocked", origin=origin, path=path, url=normalised_url)
@@ -176,7 +209,11 @@ def evaluate_deep_collection_request(
         method=method,
         allowed=True,
         reason="policy_allowed",
-        policy_notes=ALLOW_NOTES,
+        policy_notes=(
+            PROGRAMME_SCOPE_ALLOW_NOTES
+            if programme_scope_policy is not None
+            else ALLOW_NOTES
+        ),
         origin=origin,
         path=path,
         evidence_ids=tuple(_dedupe(list(request.evidence_ids))),
@@ -188,9 +225,15 @@ def evaluate_deep_collection_requests(
     *,
     bounds: DeepCollectionBounds | None = None,
     allowed_origins: tuple[str, ...] = (),
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
 ) -> DeepCollectionPolicySummary:
     """Evaluate proposed requests sequentially against the offline Deep policy."""
 
+    if programme_scope_policy is not None and not isinstance(
+        programme_scope_policy,
+        ProgrammeScopePolicy,
+    ):
+        raise ValueError("A canonical programme scope policy is required.")
     active_bounds = bounds or default_deep_collection_bounds()
     counts_by_origin: dict[str, int] = {}
     total_seen = 0
@@ -200,6 +243,7 @@ def evaluate_deep_collection_requests(
             request,
             bounds=active_bounds,
             allowed_origins=allowed_origins,
+            programme_scope_policy=programme_scope_policy,
             already_seen_counts_by_origin=counts_by_origin,
             already_seen_total=total_seen,
         )
@@ -216,6 +260,32 @@ def evaluate_deep_collection_requests(
         blocked_count=sum(1 for decision in decisions if not decision.allowed),
         blocked_reasons=tuple(sorted(blocked_counter.items())),
     )
+
+
+def programme_scope_http_candidate_no_contact_reason(
+    policy: ProgrammeScopePolicy | None,
+    candidate_url: str,
+) -> str | None:
+    """Return a private-safe no-contact reason, or None when scope allows contact."""
+
+    if policy is None:
+        return None
+    if not isinstance(policy, ProgrammeScopePolicy):
+        raise ValueError("A canonical programme scope policy is required.")
+    decision = evaluate_raw_scope_destination(
+        policy,
+        DESTINATION_HTTP_URL,
+        candidate_url,
+    )
+    if decision.outcome == OUTCOME_ALLOWED:
+        return None
+    if decision.outcome == OUTCOME_BLOCKED:
+        return "programme_scope_blocked"
+    if decision.reason_code == REASON_INVALID_DESTINATION:
+        return "malformed_destination"
+    if decision.reason_code == REASON_UNSUPPORTED_DESTINATION:
+        return "unsupported_scheme"
+    return "programme_scope_unknown"
 
 
 def render_deep_collection_policy_summary_markdown(

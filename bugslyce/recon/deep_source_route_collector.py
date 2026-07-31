@@ -117,7 +117,10 @@ def collect_deep_source_routes_from_plan(
         if not decision.allowed:
             skipped.append(_skip_from_request(request, "policy_blocked"))
             continue
-        if not _request_matches_allowed_origin(request.url, plan.allowed_origins):
+        if (
+            "programme_scope_allowed" not in decision.policy_notes
+            and not _request_matches_allowed_origin(request.url, plan.allowed_origins)
+        ):
             skipped.append(_skip_from_request(request, "cross_origin_not_allowed"))
             continue
         if request.source == "metadata_coverage":

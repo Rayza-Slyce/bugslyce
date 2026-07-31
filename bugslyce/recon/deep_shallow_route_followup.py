@@ -14,10 +14,12 @@ from hashlib import sha256
 import math
 from urllib.parse import parse_qsl, quote, urljoin, urlparse
 
+from bugslyce.core.programme_scope import ProgrammeScopePolicy
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionBounds,
     DeepCollectionRequest,
     default_deep_collection_bounds,
+    programme_scope_http_candidate_no_contact_reason,
 )
 from bugslyce.recon.deep_html_route_extraction import DeepHtmlRouteExtractionResult
 from bugslyce.recon.deep_javascript_route_extraction import (
@@ -75,8 +77,9 @@ LOW_VALUE_STATIC_SUFFIXES = (
 )
 DYNAMIC_SUFFIXES = (".php", ".asp", ".aspx", ".jsp", ".json", ".xml", ".html", ".htm", ".txt", ".map")
 JAVASCRIPT_SUFFIXES = (".js", ".mjs", ".cjs")
+PROGRAMME_SCOPE_SELECTION_REASON = "programme_scope_allowed"
 PLAN_SAFETY_NOTES = (
-    "This is one bounded shallow same-origin follow-up planning pass.",
+    "This is one bounded shallow follow-up planning pass.",
     "Only path-only GET requests were planned.",
     "Observed query parameter names were retained as metadata, but query values were not replayed or invented.",
     "No route was followed recursively.",
@@ -90,7 +93,7 @@ PLAN_SAFETY_NOTES = (
     "This stage produces static manual-review context only.",
 )
 RESULT_SAFETY_NOTES = (
-    "This is one bounded shallow same-origin follow-up collection pass.",
+    "This is one bounded shallow follow-up collection pass.",
     "Only path-only GET requests were selected.",
     "Observed query parameter names were retained as metadata, but query values were not replayed or invented.",
     "No route was followed recursively.",
@@ -255,8 +258,9 @@ def build_deep_shallow_route_followup_plan(
     javascript_extraction: DeepJavaScriptRouteExtractionResult,
     *,
     max_requests: int = DEFAULT_MAX_REQUESTS,
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
 ) -> DeepShallowRouteFollowupPlan:
-    """Build a deterministic one-pass same-origin shallow follow-up plan."""
+    """Build a deterministic one-pass shallow follow-up plan."""
 
     active_max = _validate_max_requests(max_requests)
     pending: dict[str, list[_PendingEvidence]] = {}
@@ -266,18 +270,32 @@ def build_deep_shallow_route_followup_plan(
 
     for route in html_extraction.routes:
         safe_url = route.safe_resolved_url
-        if route.origin_relationship == "cross_origin":
+        if route.origin_relationship == "cross_origin" and programme_scope_policy is None:
             skipped.append(_skip("html_route", route.route_id, safe_url, "cross_origin", route.source_response_ids, route.evidence_ids))
             continue
         if route.origin_relationship == "not_comparable":
             skipped.append(_skip("html_route", route.route_id, safe_url, "not_comparable", route.source_response_ids, route.evidence_ids))
             continue
-        if route.origin_relationship != "same_origin":
+        if route.origin_relationship not in {"same_origin", "cross_origin"}:
             skipped.append(_skip("html_route", route.route_id, safe_url, "invalid_origin_relationship", route.source_response_ids, route.evidence_ids))
             continue
+        raw_scope_reason = programme_scope_http_candidate_no_contact_reason(
+            programme_scope_policy,
+            safe_url,
+        )
         request_url, query_names, reason = _path_only_request_url(safe_url)
         if reason is not None:
             skipped.append(_skip("html_route", route.route_id, safe_url, reason, route.source_response_ids, route.evidence_ids))
+            continue
+        if raw_scope_reason is not None:
+            skipped.append(_skip("html_route", route.route_id, request_url, raw_scope_reason, route.source_response_ids, route.evidence_ids))
+            continue
+        scope_reason = programme_scope_http_candidate_no_contact_reason(
+            programme_scope_policy,
+            request_url,
+        )
+        if scope_reason is not None:
+            skipped.append(_skip("html_route", route.route_id, request_url, scope_reason, route.source_response_ids, route.evidence_ids))
             continue
         if _has_low_value_suffix(request_url):
             skipped.append(_skip("html_route", route.route_id, request_url, "low_value_static_suffix", route.source_response_ids, route.evidence_ids))
@@ -308,16 +326,33 @@ def build_deep_shallow_route_followup_plan(
         if candidate.safe_resolved_url is None:
             skipped.append(_skip("javascript_route", candidate.candidate_id, candidate.safe_candidate, "unresolved_relative", candidate.source_response_ids, candidate.evidence_ids))
             continue
+        raw_scope_reason = programme_scope_http_candidate_no_contact_reason(
+            programme_scope_policy,
+            candidate.safe_resolved_url,
+        )
         request_url, query_names, reason = _path_only_request_url(candidate.safe_resolved_url)
         if reason is not None:
             skipped.append(_skip("javascript_route", candidate.candidate_id, candidate.safe_resolved_url, reason, candidate.source_response_ids, candidate.evidence_ids))
+            continue
+        if raw_scope_reason is not None:
+            skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, raw_scope_reason, candidate.source_response_ids, candidate.evidence_ids))
             continue
         source_urls = _valid_safe_urls(candidate.source_request_urls)
         if not source_urls:
             skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, "invalid_url", candidate.source_response_ids, candidate.evidence_ids))
             continue
-        if not any(_same_origin(url, request_url) for url in source_urls):
+        if (
+            programme_scope_policy is None
+            and not any(_same_origin(url, request_url) for url in source_urls)
+        ):
             skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, "cross_origin", candidate.source_response_ids, candidate.evidence_ids))
+            continue
+        scope_reason = programme_scope_http_candidate_no_contact_reason(
+            programme_scope_policy,
+            request_url,
+        )
+        if scope_reason is not None:
+            skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, scope_reason, candidate.source_response_ids, candidate.evidence_ids))
             continue
         if _has_low_value_suffix(request_url):
             skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, "low_value_static_suffix", candidate.source_response_ids, candidate.evidence_ids))
@@ -344,7 +379,13 @@ def build_deep_shallow_route_followup_plan(
             )
         )
 
-    pending_requests = tuple(_pending_to_request(items) for items in pending.values())
+    pending_requests = tuple(
+        _pending_to_request(
+            items,
+            programme_scope_authorised=programme_scope_policy is not None,
+        )
+        for items in pending.values()
+    )
     ordered_pending = tuple(sorted(pending_requests, key=_request_priority_key))
     selected = ordered_pending[:active_max]
     overflow = ordered_pending[active_max:]
@@ -620,7 +661,11 @@ def _has_low_value_suffix(url: str) -> bool:
     return suffix_path.endswith(LOW_VALUE_STATIC_SUFFIXES)
 
 
-def _pending_to_request(values: list[_PendingEvidence]) -> DeepShallowRouteFollowupRequest:
+def _pending_to_request(
+    values: list[_PendingEvidence],
+    *,
+    programme_scope_authorised: bool,
+) -> DeepShallowRouteFollowupRequest:
     ordered = sorted(values, key=_pending_sort_key)
     request_url = ordered[0].request_url
     kinds = _merge_sorted([item.source_model_kind for item in ordered], order=("html_route", "javascript_route"))
@@ -644,8 +689,16 @@ def _pending_to_request(values: list[_PendingEvidence]) -> DeepShallowRouteFollo
         javascript_script_types=_merge_sorted([value for item in ordered for value in item.javascript_script_types]),
         occurrence_count=sum(item.occurrence_count for item in ordered),
         evidence_ids=evidence,
-        selection_reason="same_origin_static_route",
-        interpretation="Same-origin static route selected for one bounded shallow GET follow-up.",
+        selection_reason=(
+            PROGRAMME_SCOPE_SELECTION_REASON
+            if programme_scope_authorised
+            else "same_origin_static_route"
+        ),
+        interpretation=(
+            "Programme-scope-authorised static route selected for one bounded shallow GET follow-up."
+            if programme_scope_authorised
+            else "Same-origin static route selected for one bounded shallow GET follow-up."
+        ),
     )
 
 
@@ -803,7 +856,7 @@ def _to_deep_collection_request(
         url=request.request_url,
         method="GET",
         source="shallow_route_followup",
-        reason="same_origin_static_route",
+        reason=request.selection_reason,
         origin=f"{parsed.scheme.lower()}://{_authority(parsed)}",
         path=parsed.path or "/",
         evidence_ids=request.evidence_ids,
@@ -837,9 +890,14 @@ def _validate_plan_for_collection(plan: DeepShallowRouteFollowupPlan) -> None:
             raise ValueError("plan request URL must not contain userinfo, query, or fragment")
         if request.request_url != canonical:
             raise ValueError("plan request URL must equal canonical path-only URL")
-        if not request.source_request_urls or not any(
-            _same_origin(source_url, request.request_url)
-            for source_url in request.source_request_urls
+        if not request.source_request_urls:
+            raise ValueError("plan request must retain source provenance")
+        if (
+            request.selection_reason != PROGRAMME_SCOPE_SELECTION_REASON
+            and not any(
+                _same_origin(source_url, request.request_url)
+                for source_url in request.source_request_urls
+            )
         ):
             raise ValueError("plan request URL must have same-origin source provenance")
 

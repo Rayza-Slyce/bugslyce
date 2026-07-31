@@ -9,6 +9,14 @@ import math
 
 import pytest
 
+from bugslyce.core.programme_scope import (
+    ACTION_EXCLUDE,
+    ACTION_INCLUDE,
+    RULE_EXACT_HOSTNAME,
+    RULE_HTTP_PATH_PREFIX,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_html_route_extraction import (
     DeepHtmlRouteExtractionResult,
@@ -126,6 +134,82 @@ def test_javascript_same_origin_rules_and_no_reresolution() -> None:
     assert ("J4", "cross_origin") in skipped
     assert ("J7", "cross_origin") in skipped
     assert all("../admin" not in request.request_url for request in plan.requests)
+
+
+def test_programme_scope_classifies_html_and_javascript_before_shallow_admission() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test", "include-other"),
+        (ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX, "http://example.test/private", "exclude-private"),
+    )
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(route_id="H-ALLOW", url="http://example.test/public"),
+            _html_route(route_id="H-BLOCK", url="http://example.test/private/report"),
+            _html_route(route_id="H-CROSS", url="http://other.test/public", origin="cross_origin"),
+        ),
+        _js_result(
+            _js_candidate(candidate_id="J-BLOCK", safe_resolved_url="http://example.test/private/api"),
+            _js_candidate(candidate_id="J-CROSS", safe_resolved_url="http://other.test/api"),
+        ),
+        programme_scope_policy=policy,
+    )
+
+    assert {request.request_url for request in plan.requests} == {
+        "http://example.test/public",
+        "http://other.test/api",
+        "http://other.test/public",
+    }
+    skipped = {(item.source_id, item.safe_url, item.reason) for item in plan.skipped}
+    assert ("H-BLOCK", "http://example.test/private/report", "programme_scope_blocked") in skipped
+    assert ("J-BLOCK", "http://example.test/private/api", "programme_scope_blocked") in skipped
+
+    calls: list[str] = []
+    result = collect_deep_shallow_route_followups(
+        plan,
+        fetcher=lambda request, bounds: (
+            calls.append(request.url) or _ok_fetcher(request, bounds)
+        ),
+    )
+    assert calls == [request.request_url for request in plan.requests]
+    assert result.summary_counts.responses_collected == 3
+
+
+def test_programme_scope_refused_shallow_candidate_never_reaches_fetcher() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX, "http://example.test/private", "exclude-private"),
+    )
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(_html_route(url="http://example.test/private/report")),
+        _js_result(),
+        programme_scope_policy=policy,
+    )
+
+    result = collect_deep_shallow_route_followups(plan, fetcher=_raising_fetcher)
+
+    assert plan.requests == ()
+    assert plan.skipped[0].reason == "programme_scope_blocked"
+    assert result.summary_counts.requests_planned == 0
+
+
+def test_programme_scope_rejects_credential_bearing_shallow_evidence_before_sanitising() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+    )
+    raw = "https://user:PRIVATE-CREDENTIAL@example.test/admin"
+    html = _html_result(_html_route(url=raw, source_urls=("https://example.test/source",)))
+
+    plan = build_deep_shallow_route_followup_plan(
+        html,
+        _js_result(),
+        programme_scope_policy=policy,
+    )
+
+    assert plan.requests == ()
+    assert plan.skipped[0].reason == "malformed_destination"
+    assert html.routes[0].safe_resolved_url == raw
+    assert "PRIVATE-CREDENTIAL" not in repr(plan.skipped[0])
 
 
 def test_javascript_provenance_invalid_cross_and_mixed_sources() -> None:
@@ -914,6 +998,23 @@ def _manual_plan(
 
 def _raising_fetcher(request, bounds):
     raise AssertionError("fetcher should not be called")
+
+
+def _programme_policy(*rules):
+    return build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id=rule_id,
+                action=action,
+                kind=kind,
+                value=value,
+                private_note="PRIVATE-NOTE-SENTINEL",
+                private_source_wording="PRIVATE-SOURCE-SENTINEL",
+            )
+            for action, kind, value, rule_id in rules
+        ],
+        updated_at="2026-07-31T12:00:00Z",
+    )
 
 
 def _assert_no_prohibited_wording(rendered: str) -> None:

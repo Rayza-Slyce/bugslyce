@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from bugslyce.core.programme_scope import (
+    ACTION_EXCLUDE,
+    ACTION_INCLUDE,
+    RULE_EXACT_HOSTNAME,
+    RULE_EXACT_HTTP_URL,
+    RULE_HTTP_PATH_PREFIX,
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionRequest,
@@ -205,6 +214,72 @@ def test_evaluate_multiple_requests_counts_allowed_blocked_and_reasons() -> None
     )
 
 
+def test_programme_scope_classifies_discovered_http_candidates_without_private_data() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "target.test", "include-host"),
+        (ACTION_EXCLUDE, RULE_HTTP_PATH_PREFIX, "https://target.test/private", "exclude-private"),
+    )
+    requests = (
+        _request("https://target.test/public", source="html_route"),
+        _request("https://target.test/private/report", source="javascript_route"),
+        _request("https://other.test/robots.txt", source="metadata_coverage"),
+    )
+
+    summary = evaluate_deep_collection_requests(
+        requests,
+        programme_scope_policy=policy,
+    )
+    rendered = render_deep_collection_policy_summary_markdown(summary)
+
+    assert tuple((item.allowed, item.reason) for item in summary.decisions) == (
+        (True, "policy_allowed"),
+        (False, "programme_scope_blocked"),
+        (False, "programme_scope_unknown"),
+    )
+    assert summary.decisions[1].evidence_ids == ("EVID-0001",)
+    assert "PRIVATE-NOTE-SENTINEL" not in rendered
+    assert "PRIVATE-SOURCE-SENTINEL" not in rendered
+
+
+def test_programme_scope_candidate_validation_keeps_scheme_port_query_and_fragment_semantics() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "target.test", "include-host"),
+    )
+
+    assert evaluate_deep_collection_request(
+        _request("http://target.test:8080/path"),
+        programme_scope_policy=policy,
+    ).allowed
+    assert evaluate_deep_collection_request(
+        _request("ftp://target.test/path"),
+        programme_scope_policy=policy,
+    ).reason == "unsupported_scheme"
+    assert evaluate_deep_collection_request(
+        _request("https://target.test/path?x=1"),
+        programme_scope_policy=policy,
+    ).reason == "query_string_not_allowed"
+    assert evaluate_deep_collection_request(
+        _request("https://target.test/path#fragment"),
+        programme_scope_policy=policy,
+    ).reason == "url_fragment_not_allowed"
+    assert evaluate_deep_collection_request(
+        _request("not a URL"),
+        programme_scope_policy=policy,
+    ).reason == "malformed_destination"
+
+    exact_port_policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HTTP_URL, "https://target.test:8443/path", "include-port"),
+    )
+    assert evaluate_deep_collection_request(
+        _request("https://target.test:8443/path"),
+        programme_scope_policy=exact_port_policy,
+    ).allowed
+    assert evaluate_deep_collection_request(
+        _request("https://target.test/path"),
+        programme_scope_policy=exact_port_policy,
+    ).reason == "programme_scope_unknown"
+
+
 def test_renderer_includes_bounds_decisions_and_safety_wording() -> None:
     summary = evaluate_deep_collection_requests(
         (
@@ -281,4 +356,21 @@ def _request(
         path="",
         evidence_ids=("EVID-0001",),
         tags=tags,
+    )
+
+
+def _programme_policy(*rules):
+    return build_programme_scope_policy(
+        [
+            build_programme_scope_rule(
+                rule_id=rule_id,
+                action=action,
+                kind=kind,
+                value=value,
+                private_note="PRIVATE-NOTE-SENTINEL",
+                private_source_wording="PRIVATE-SOURCE-SENTINEL",
+            )
+            for action, kind, value, rule_id in rules
+        ],
+        updated_at="2026-07-31T12:00:00Z",
     )
