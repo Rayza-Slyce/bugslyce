@@ -38,6 +38,7 @@ from bugslyce.core.programme_scope import (
     DESTINATION_IPV4,
     OUTCOME_ALLOWED,
     OUTCOME_BLOCKED,
+    CanonicalHostnameDestination,
     CanonicalHTTPURLDestination,
     ProgrammeScopePolicy,
     ScopeDecision,
@@ -756,6 +757,8 @@ def select_programme_scope_ipv4_peer(
     policy: ProgrammeScopePolicy,
     logical_decision: ScopeDecision | None,
     ipv4_resolver: IPv4Resolver,
+    *,
+    resolver_port: int | None = None,
 ) -> str:
     """Select the one peer authorised by the accepted complete-set semantics."""
 
@@ -766,18 +769,27 @@ def select_programme_scope_ipv4_peer(
     if not callable(ipv4_resolver):
         raise ValueError("Internal HTTP IPv4 resolver is invalid.")
     destination = logical_decision.canonical_destination
-    if not isinstance(destination, CanonicalHTTPURLDestination):
-        raise ValueError("Canonical logical HTTP destination is required.")
-    if destination.origin.host_kind == DESTINATION_IPV4:
-        return destination.origin.host
-    if destination.origin.host_kind != DESTINATION_HOSTNAME:
-        raise HTTPTransportFailure("invalid_resolver_result")
+    if isinstance(destination, CanonicalHTTPURLDestination):
+        if destination.origin.host_kind == DESTINATION_IPV4:
+            return destination.origin.host
+        if destination.origin.host_kind != DESTINATION_HOSTNAME:
+            raise HTTPTransportFailure("invalid_resolver_result")
+        hostname = destination.origin.host
+        port = destination.origin.effective_port
+    elif isinstance(destination, CanonicalHostnameDestination):
+        if (
+            isinstance(resolver_port, bool)
+            or not isinstance(resolver_port, int)
+            or not 0 <= resolver_port <= 65535
+        ):
+            raise ValueError("Canonical hostname peer selection requires a resolver port.")
+        hostname = destination.hostname
+        port = resolver_port
+    else:
+        raise ValueError("Canonical logical hostname or HTTP destination is required.")
 
     try:
-        raw_candidates = ipv4_resolver(
-            destination.origin.host,
-            destination.origin.effective_port,
-        )
+        raw_candidates = ipv4_resolver(hostname, port)
     except HTTPTransportFailure:
         raise
     except (OSError, ValueError, TypeError):

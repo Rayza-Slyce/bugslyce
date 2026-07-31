@@ -37,7 +37,9 @@ from bugslyce.core.engagement_policy import (
 from bugslyce.core.programme_scope import (
     ACTION_EXCLUDE,
     ACTION_INCLUDE,
+    DESTINATION_HOSTNAME,
     DESTINATION_HTTP_URL,
+    DESTINATION_IPV4,
     OUTCOME_ALLOWED,
     RULE_EXACT_HOSTNAME,
     RULE_EXACT_HTTP_URL,
@@ -470,6 +472,8 @@ class BugBountyExternalEnforcementSession:
         return self._register_plan(build_bug_bounty_nmap_plan(
             policy=self.policy,
             capabilities=self.nmap_capabilities,
+            programme_scope_policy=self._programme_scope_policy,
+            ipv4_resolver=self._ipv4_resolver,
             _provenance_token=self._token,
             **kwargs,
         ))
@@ -1002,6 +1006,8 @@ def build_bug_bounty_nmap_plan(
     policy: EngagementPolicy,
     capabilities: ToolCapabilities,
     timeout_seconds: int = 1800,
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
+    ipv4_resolver: IPv4Resolver | None = None,
     _provenance_token: object | None = None,
 ) -> ExternalCommandPlan:
     """Build strict TCP port-state discovery from canonical policy facts."""
@@ -1030,6 +1036,33 @@ def build_bug_bounty_nmap_plan(
             "nmap", "tcp_port_state_discovery", COMPONENT_INCOMPATIBLE, reason
         )
     normalised_target = _normalise_target(target)
+    if programme_scope_policy is None:
+        raise ValueError("Strict Nmap planning requires programme scope policy.")
+    canonical_programme_scope_policy = _canonical_programme_scope_policy(
+        programme_scope_policy
+    )
+    try:
+        ipaddress.IPv4Address(normalised_target)
+    except ValueError:
+        destination_kind = DESTINATION_HOSTNAME
+    else:
+        destination_kind = DESTINATION_IPV4
+    decision = evaluate_raw_scope_destination(
+        canonical_programme_scope_policy,
+        destination_kind,
+        normalised_target,
+    )
+    if decision.outcome != OUTCOME_ALLOWED:
+        raise HTTPProgrammeScopeRefused("initial", decision)
+    if destination_kind == DESTINATION_HOSTNAME:
+        selected_target = select_programme_scope_ipv4_peer(
+            canonical_programme_scope_policy,
+            decision,
+            ipv4_resolver,
+            resolver_port=0,
+        )
+    else:
+        selected_target = normalised_target
     _require_safe_local_path(output_file, label="Strict Nmap output path")
     if mode == TCP_CONSERVATIVE:
         port_specification = ",".join(str(port) for port in BUG_BOUNTY_COMMON_WEB_PORTS)
@@ -1056,7 +1089,7 @@ def build_bug_bounty_nmap_plan(
         str(NMAP_MAX_RETRIES),
         "-oN",
         str(output_file),
-        normalised_target,
+        selected_target,
     )
     _validate_strict_nmap_argv(argv, policy=canonical)
     return ExternalCommandPlan(
@@ -1285,6 +1318,7 @@ def _normalise_target(target: str) -> str:
         or value.startswith("-")
         or any(character.isspace() for character in value)
         or "/" in value
+        or ("-" in value and re.fullmatch(r"[0-9.-]+", value) is not None)
         or scope_entry_target(value) != value
     ):
         raise ValueError("Strict Nmap target must be one hostname or IP address.")
@@ -1476,7 +1510,11 @@ def _validate_strict_nmap_argv(
     )
     if expected_ports is None or argv[argv.index("-p") + 1] != expected_ports:
         raise ValueError("Strict bug bounty Nmap ports do not match the engagement policy.")
-    if argv[-1] != _normalise_target(argv[-1]):
+    try:
+        canonical_target = str(ipaddress.IPv4Address(argv[-1]))
+    except ValueError:
+        raise ValueError("Strict bug bounty Nmap target is invalid.") from None
+    if argv[-1] != canonical_target:
         raise ValueError("Strict bug bounty Nmap target is invalid.")
     _require_safe_local_path(Path(argv[argv.index("-oN") + 1]), label="Strict Nmap output path")
 

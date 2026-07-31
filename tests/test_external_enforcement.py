@@ -830,6 +830,8 @@ def test_strict_nmap_disables_dns_resolution(tmp_path: Path) -> None:
         output_file=tmp_path / "nmap.txt",
         policy=_policy(),
         capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
     assert "-n" in plan.private_argv
@@ -1573,7 +1575,9 @@ def test_exact_session_nmap_plan_reaches_fake_runner(tmp_path: Path) -> None:
 
     result = BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
 
-    assert process.calls
+    assert len(process.calls) == 1
+    assert process.calls[0][0][-1] == "192.0.2.10"
+    assert session.http_executor.total_request_attempts == 0
     assert result.produced_artefacts == plan.expected_artefacts
 
 
@@ -1924,6 +1928,8 @@ def test_nmap_policy_modes_build_strict_tcp_only_plan(
         output_file=tmp_path / "nmap-allports.txt",
         policy=policy,
         capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
     argv = plan.private_argv
 
@@ -2323,6 +2329,464 @@ def test_central_bug_bounty_block_names_r0b3_and_is_redacted() -> None:
     assert HEADER_SECRET not in str(caught.value)
     assert USER_AGENT_SECRET not in str(caught.value)
     assert "controlled capture acceptance" in str(caught.value)
+
+
+def test_scoped_nmap_hostname_selects_lowest_authorised_ipv4(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.20", "192.0.2.10", "192.0.2.20")
+
+    plan = build_bug_bounty_nmap_plan(
+        target="example.test",
+        output_file=tmp_path / "nmap.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=resolver,
+    )
+
+    assert plan.private_argv[-1] == "192.0.2.10"
+    assert "example.test" not in plan.private_argv
+    assert resolver_calls == [("example.test", 0)]
+
+
+def test_scoped_nmap_canonicalises_hostname_before_single_resolution(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    plan = build_bug_bounty_nmap_plan(
+        target="Example.TEST.",
+        output_file=tmp_path / "nmap.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda hostname, port: (
+            resolver_calls.append((hostname, port)) or ("192.0.2.10",)
+        ),
+    )
+
+    assert resolver_calls == [("example.test", 0)]
+    assert plan.private_argv[-1] == "192.0.2.10"
+
+
+def test_scoped_nmap_direct_ipv4_uses_cidr_authority_without_dns(
+    tmp_path: Path,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("network", "include", "ipv4_cidr", "192.0.2.0/24"),
+    )
+
+    def fail_resolver(_hostname: str, _port: int) -> tuple[str, ...]:
+        raise AssertionError("direct IPv4 must not be resolved")
+
+    plan = build_bug_bounty_nmap_plan(
+        target="192.0.2.10",
+        output_file=tmp_path / "nmap.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=policy,
+        ipv4_resolver=fail_resolver,
+    )
+
+    assert plan.private_argv[-1] == "192.0.2.10"
+
+
+def test_scoped_nmap_exact_url_does_not_authorise_hostname_or_dns(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    policy = _programme_policy_from_rules(
+        ("url", "include", "exact_http_url", "https://example.test/"),
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        build_bug_bounty_nmap_plan(
+            target="example.test",
+            output_file=tmp_path / "nmap.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+def test_scoped_nmap_rejected_peer_precedes_registration_and_launch(
+    tmp_path: Path,
+) -> None:
+    session = _session(
+        _FakeTime(),
+        programme_scope_policy=_programme_policy(excluded_ipv4="192.0.2.20"),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10", "192.0.2.20"),
+    )
+    process = _ProcessRunner()
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="resolved_peer"):
+        session.build_nmap_plan(
+            target="example.test",
+            output_file=tmp_path / "nmap.txt",
+        )
+
+    assert process.calls == []
+    assert not (tmp_path / "nmap.txt").exists()
+
+
+def test_scoped_nmap_wildcard_authorises_only_proper_descendant(
+    tmp_path: Path,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("wildcard", "include", "wildcard_subdomain", "*.example.test"),
+    )
+    plan = build_bug_bounty_nmap_plan(
+        target="api.example.test",
+        output_file=tmp_path / "descendant.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+
+    assert plan.private_argv[-1] == "192.0.2.10"
+    with pytest.raises(HTTPProgrammeScopeRefused, match="no_matching_inclusion"):
+        build_bug_bounty_nmap_plan(
+            target="example.test",
+            output_file=tmp_path / "apex.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("rules", "reason"),
+    [
+        (
+            (("other", "include", "exact_hostname", "other.test"),),
+            "no_matching_inclusion",
+        ),
+        (
+            (
+                ("host", "include", "exact_hostname", "example.test"),
+                ("blocked", "exclude", "exact_hostname", "example.test"),
+            ),
+            "explicit_exclusion",
+        ),
+        (
+            (("url", "include", "exact_http_url", "https://example.test/"),),
+            "no_matching_inclusion",
+        ),
+        (
+            (
+                (
+                    "path",
+                    "include",
+                    "http_path_prefix",
+                    "https://example.test/api/",
+                ),
+            ),
+            "no_matching_inclusion",
+        ),
+        (
+            (("address", "include", "exact_ipv4", "192.0.2.10"),),
+            "no_matching_inclusion",
+        ),
+        (
+            (("network", "include", "ipv4_cidr", "192.0.2.0/24"),),
+            "no_matching_inclusion",
+        ),
+    ],
+)
+def test_scoped_nmap_hostname_requires_hostname_authority_before_dns(
+    tmp_path: Path,
+    rules: tuple[tuple[str, str, str, str], ...],
+    reason: str,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match=reason) as caught:
+        build_bug_bounty_nmap_plan(
+            target="example.test",
+            output_file=tmp_path / "nmap.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=_programme_policy_from_rules(*rules),
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    rendered = f"{caught.value!s} {caught.value!r}"
+    assert resolver_calls == []
+    assert not (tmp_path / "nmap.txt").exists()
+    assert "private-programme-note-4729" not in rendered
+    assert "private-programme-source-4729" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("resolver", "category"),
+    [
+        (lambda _hostname, _port: (_ for _ in ()).throw(OSError()), "dns_error"),
+        (lambda _hostname, _port: ["192.0.2.10"], "invalid_resolver_result"),
+        (lambda _hostname, _port: ("192.0.2.010",), "invalid_resolver_result"),
+        (lambda _hostname, _port: (), "no_usable_ipv4"),
+    ],
+)
+def test_scoped_nmap_dns_failures_leave_existing_output_unchanged(
+    tmp_path: Path,
+    resolver,
+    category: str,
+) -> None:
+    output = tmp_path / "nmap.txt"
+    output.write_text("existing-output", encoding="utf-8")
+
+    with pytest.raises(HTTPTransportFailure, match=category):
+        build_bug_bounty_nmap_plan(
+            target="example.test",
+            output_file=output,
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=resolver,
+        )
+
+    assert output.read_text(encoding="utf-8") == "existing-output"
+
+
+def test_scoped_nmap_resolver_order_does_not_change_selected_target(
+    tmp_path: Path,
+) -> None:
+    targets = []
+    for index, candidates in enumerate(
+        (
+            ("192.0.2.20", "192.0.2.10"),
+            ("192.0.2.10", "192.0.2.20", "192.0.2.10"),
+        )
+    ):
+        plan = build_bug_bounty_nmap_plan(
+            target="example.test",
+            output_file=tmp_path / f"nmap-{index}.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda _hostname, _port, values=candidates: values,
+        )
+        targets.append(plan.private_argv[-1])
+
+    assert targets == ["192.0.2.10", "192.0.2.10"]
+
+
+@pytest.mark.parametrize(
+    ("rules", "target", "allowed"),
+    [
+        (("ip", "include", "exact_ipv4", "192.0.2.10"), "192.0.2.10", True),
+        (("cidr", "include", "ipv4_cidr", "192.0.2.0/24"), "192.0.2.10", True),
+        (
+            ("include", "include", "ipv4_cidr", "192.0.2.0/24"),
+            "192.0.2.10",
+            True,
+        ),
+        (("other", "include", "exact_ipv4", "192.0.2.11"), "192.0.2.10", False),
+        (("host", "include", "exact_hostname", "example.test"), "192.0.2.10", False),
+    ],
+)
+def test_scoped_nmap_direct_ipv4_authority_is_address_specific(
+    tmp_path: Path,
+    rules: tuple[str, str, str, str],
+    target: str,
+    allowed: bool,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    kwargs = dict(
+        target=target,
+        output_file=tmp_path / "nmap.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy_from_rules(rules),
+        ipv4_resolver=lambda hostname, port: resolver_calls.append((hostname, port)),
+    )
+
+    if allowed:
+        assert build_bug_bounty_nmap_plan(**kwargs).private_argv[-1] == target
+    else:
+        with pytest.raises(HTTPProgrammeScopeRefused):
+            build_bug_bounty_nmap_plan(**kwargs)
+    assert resolver_calls == []
+
+
+@pytest.mark.parametrize(
+    ("exclude_kind", "exclude_value"),
+    [
+        ("exact_ipv4", "192.0.2.10"),
+        ("ipv4_cidr", "192.0.2.0/24"),
+    ],
+)
+def test_scoped_nmap_direct_ipv4_exclusion_overrides_inclusion(
+    tmp_path: Path,
+    exclude_kind: str,
+    exclude_value: str,
+) -> None:
+    policy = _programme_policy_from_rules(
+        ("included", "include", "ipv4_cidr", "192.0.2.0/24"),
+        ("excluded", "exclude", exclude_kind, exclude_value),
+    )
+
+    with pytest.raises(HTTPProgrammeScopeRefused, match="explicit_exclusion"):
+        build_bug_bounty_nmap_plan(
+            target="192.0.2.10",
+            output_file=tmp_path / "nmap.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=policy,
+            ipv4_resolver=lambda _hostname, _port: (),
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "192.0.2.0/24",
+        "192.0.2.10,192.0.2.11",
+        "example.test other.test",
+        "*.example.test",
+        "https://example.test/",
+        "2001:db8::1",
+        "192.0.2.1-20",
+        "@targets.txt",
+        "-iL",
+    ],
+)
+def test_scoped_nmap_rejects_target_expressions_before_dns(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    with pytest.raises(ValueError, match="Strict Nmap target"):
+        build_bug_bounty_nmap_plan(
+            target=target,
+            output_file=tmp_path / "nmap.txt",
+            policy=_policy(),
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+def test_scoped_nmap_command_retains_exact_tcp_controls_and_one_ipv4_target(
+    tmp_path: Path,
+) -> None:
+    plan = build_bug_bounty_nmap_plan(
+        target="example.test",
+        output_file=tmp_path / "nmap.txt",
+        policy=_policy(),
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+    argv = plan.private_argv
+
+    assert argv == (
+        "nmap",
+        "-sT",
+        "-Pn",
+        "-n",
+        "-p",
+        ",".join(map(str, BUG_BOUNTY_COMMON_WEB_PORTS)),
+        "--max-rate",
+        str(MAXIMUM_NMAP_PACKET_RATE),
+        "--max-retries",
+        "2",
+        "-oN",
+        str(tmp_path / "nmap.txt"),
+        "192.0.2.10",
+    )
+    assert not {"-sV", "-sC", "--script", "-O", "-sU", "-sS", "-iL"} & set(
+        argv
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "replacement"),
+    [
+        ("target", "192.0.2.11"),
+        ("-p", "22"),
+        ("--max-rate", "51"),
+        ("--max-retries", "3"),
+        ("-oN", "/tmp/changed-nmap.txt"),
+    ],
+)
+def test_registered_scoped_nmap_value_tampering_is_refused_before_launch(
+    tmp_path: Path,
+    option: str,
+    replacement: str,
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_nmap_plan(
+        target="example.test",
+        output_file=tmp_path / "nmap.txt",
+    )
+    argv = list(plan.private_argv)
+    if option == "target":
+        argv[-1] = replacement
+    else:
+        argv[argv.index(option) + 1] = replacement
+    object.__setattr__(plan, "_private_argv", tuple(argv))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("remove", "-sT"),
+        ("remove", "-Pn"),
+        ("remove", "-n"),
+        ("add", "192.0.2.11"),
+        ("add", "--script"),
+        ("add", "-sV"),
+        ("add", "-O"),
+        ("add", "-sU"),
+        ("add", "-iL"),
+    ],
+)
+def test_registered_scoped_nmap_shape_tampering_is_refused_before_launch(
+    tmp_path: Path,
+    mutation: tuple[str, str],
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_nmap_plan(
+        target="example.test",
+        output_file=tmp_path / "nmap.txt",
+    )
+    argv = list(plan.private_argv)
+    action, value = mutation
+    if action == "remove":
+        argv.remove(value)
+    else:
+        argv.append(value)
+    object.__setattr__(plan, "_private_argv", tuple(argv))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
 
 
 def test_scoped_gobuster_exact_hostname_authority_passes_dns_preflight(
