@@ -37,6 +37,8 @@ EXPORT_README_TEMPLATE = (
     + "\n\n"
     "BugSlyce output is evidence for manual review. It does not establish confirmed\n"
     "vulnerabilities.\n\n"
+    "When present, report.html is a derived offline operator view; Markdown and\n"
+    "structured artefacts remain canonical.\n\n"
     "No live commands were executed during export.\n"
 )
 
@@ -110,7 +112,12 @@ def export_recon_evidence_pack(
             input_dir=input_dir,
         )
 
-    for name in ("recon_status.md", "recon_status.json", "runbook.md"):
+    for name in (
+        "recon_status.md",
+        "recon_status.json",
+        "runbook.md",
+        "report.html",
+    ):
         _add_optional_file(
             included,
             missing_files,

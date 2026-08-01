@@ -1185,13 +1185,60 @@ def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
         )
 
     assert exc_info.value.result.final_status == "failed"
-    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
     assert report_path.read_bytes() == report_before
     assert not (output_dir / "report.html").exists()
+    assert not Path(f"{output_dir}-evidence-pack.zip").exists()
     guidance = "\n".join(render_project_pipeline_failure_guidance(exc_info.value.result))
     assert "fixture HTML rendering failure" in str(exc_info.value)
     assert "report.html" not in guidance
     assert "xdg-open" not in guidance
+
+
+def test_project_html_is_rendered_once_before_evidence_pack_exports(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    ordering: list[str] = []
+
+    def write_html(input_dir: Path) -> Path:
+        ordering.append("html")
+        output = input_dir / "report.html"
+        output.write_text(
+            "<!doctype html><title>BugSlyce Evidence Report - fixture</title>\n",
+            encoding="utf-8",
+        )
+        return output
+
+    def export_with_html(input_dir: Path, output_path: Path, **_kwargs):
+        ordering.append("export")
+        assert (input_dir / "report.html").is_file()
+        with zipfile.ZipFile(output_path, "w") as archive:
+            archive.write(input_dir / "report.html", "report.html")
+        return SimpleNamespace(output_path=str(output_path))
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_html_report",
+        write_html,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.export_recon_evidence_pack",
+        export_with_html,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    assert result.final_status == "completed"
+    assert ordering == ["html", "export", "export"]
+    with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
+        assert archive.namelist() == ["report.html"]
 
 
 def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
@@ -2151,6 +2198,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
         run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert export_calls == 2
+    assert (output_dir / "report.html").is_file()
     assert exc_info.value.result.final_status == "failed"
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
     assert exc_info.value.result.export_path is None

@@ -1689,6 +1689,7 @@ def _step_runners(
             output_dir,
             context,
         )
+        write_project_html_report(output_dir)
         if deep_evidence_paths is None:
             result = export_recon_evidence_pack(
                 output_dir,
@@ -1962,7 +1963,6 @@ def _refresh_final_pipeline_outputs(
             Path(result.export_path),
             **export_kwargs,
         )
-    write_project_html_report(output_dir)
     write_project_pipeline_result(result)
 
 

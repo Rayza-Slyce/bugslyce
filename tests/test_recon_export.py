@@ -67,18 +67,61 @@ def test_export_refuses_overwrite_without_force_and_allows_force(tmp_path: Path)
     assert zipfile.is_zipfile(output_path)
 
 
-def test_export_deliberately_excludes_project_local_html_report(tmp_path: Path) -> None:
+def test_export_includes_only_canonical_project_html_report_portably(
+    tmp_path: Path,
+) -> None:
     input_dir = _export_input(tmp_path)
     (input_dir / "report.html").write_text(
-        "<!doctype html><title>Local derived view</title>\n",
+        "<!doctype html>\n"
+        "<html><head><style>body { color: #111; }</style></head>\n"
+        "<body><main id=\"overview\">BugSlyce Evidence Report</main>\n"
+        "<script>document.body.dataset.ready = 'true';</script></body></html>\n",
         encoding="utf-8",
     )
+    (input_dir / "unrelated.html").write_text("unrelated\n", encoding="utf-8")
+    (input_dir / ".report.html.fixture.tmp").write_text("temporary\n", encoding="utf-8")
     output_path = tmp_path / "pack.zip"
 
     export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
 
     with zipfile.ZipFile(output_path) as archive:
-        assert "report.html" not in archive.namelist()
+        names = archive.namelist()
+        assert names.count("report.html") == 1
+        assert "unrelated.html" not in names
+        assert ".report.html.fixture.tmp" not in names
+        assert "report.md" in names
+        assert "project_state.json" in names
+        assert "derived offline operator view" in archive.read(
+            "BUGSLYCE_EXPORT_README.md"
+        ).decode("utf-8")
+        info = archive.getinfo("report.html")
+        assert info.external_attr >> 16 == 0o100644
+        html = archive.read("report.html").decode("utf-8")
+        assert "BugSlyce Evidence Report" in html
+        assert "<style>" in html
+        assert "<script>" in html
+        assert "http://" not in html
+        assert "https://" not in html
+        assert "file://" not in html
+
+
+def test_export_with_project_html_remains_byte_deterministic(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "report.html").write_text(
+        "<!doctype html><title>BugSlyce Evidence Report - fixture</title>\n",
+        encoding="utf-8",
+    )
+    first = tmp_path / "first-html.zip"
+    second = tmp_path / "second-html.zip"
+
+    export_recon_evidence_pack(input_dir, first, clock=lambda: FIXED_TIME)
+    export_recon_evidence_pack(input_dir, second, clock=lambda: FIXED_TIME)
+
+    assert first.read_bytes() == second.read_bytes()
+    with zipfile.ZipFile(first) as archive:
+        assert {info.date_time for info in archive.infolist()} == {
+            (1980, 1, 1, 0, 0, 0)
+        }
 
 
 def test_export_failure_preserves_existing_pack_and_removes_temporary_file(

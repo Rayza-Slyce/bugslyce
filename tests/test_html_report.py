@@ -169,6 +169,7 @@ def test_html_report_has_no_external_assets_or_network_code(tmp_path: Path) -> N
     assert "websocket" not in lowered
     assert 'src="http' not in lowered
     assert 'href="http' not in lowered
+    assert "file://" not in lowered
     assert "default-src 'none'" in lowered
     assert "unsafe-inline" not in lowered
     assert "style-src 'sha256-" in lowered
