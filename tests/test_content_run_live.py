@@ -754,6 +754,163 @@ def test_stable_fallback_uses_internal_comparator_with_truthful_provenance(
     assert "http://10.10.10.10/hidden" in followups
 
 
+def test_internal_comparator_progress_is_rate_limited_and_truthful(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, _input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    clock = _ComparatorProgressClock(seconds_per_candidate=1.0)
+    executor = _ComparatorProgressExecutor(clock)
+    messages: list[str] = []
+
+    result = run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=_NeverRunContentRunner(),
+        wordlist_check=lambda path: path == TINY_WORDLIST,
+        step_id="CONTENT-STEP-001",
+        http_executor=executor,
+        comparator_monotonic=clock.monotonic,
+        comparator_progress_callback=messages.append,
+        comparator_progress_interval_seconds=6.0,
+    )
+
+    assert messages[0] == (
+        "6/25 candidates checked; 2 retained; 4 baseline-equivalent; elapsed 6s"
+    )
+    assert messages[1].startswith("12/25 candidates checked;")
+    assert messages[-1] == (
+        "25/25 candidates checked; 2 retained; 23 baseline-equivalent; elapsed 25s"
+    )
+    assert len(messages) == 5
+    assert all("\r" not in message and "\n" not in message for message in messages)
+    completed = [int(message.split("/", 1)[0]) for message in messages]
+    assert completed == sorted(completed)
+    assert all(value <= 25 for value in completed)
+    assert result.origin_decisions[0].retained_candidates == 2
+    assert result.origin_decisions[0].baseline_equivalent_candidates == 23
+
+
+def test_internal_comparator_progress_default_threshold_and_fast_silence(
+    tmp_path: Path,
+) -> None:
+    slow_plan, slow_scope, _input_dir, _output_dir = _written_plan(
+        tmp_path / "slow",
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    slow_clock = _ComparatorProgressClock(seconds_per_candidate=0.5)
+    slow_messages: list[str] = []
+    run_content_discovery_workflow(
+        slow_plan,
+        slow_scope,
+        runner=_NeverRunContentRunner(),
+        wordlist_check=lambda path: path == TINY_WORDLIST,
+        step_id="CONTENT-STEP-001",
+        http_executor=_ComparatorProgressExecutor(slow_clock),
+        comparator_monotonic=slow_clock.monotonic,
+        comparator_progress_callback=slow_messages.append,
+    )
+
+    assert slow_messages[0].startswith("24/25 candidates checked;")
+    assert "elapsed 12s" in slow_messages[0]
+
+    fast_plan, fast_scope, _input_dir, _output_dir = _written_plan(
+        tmp_path / "fast",
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    fast_messages: list[str] = []
+    run_content_discovery_workflow(
+        fast_plan,
+        fast_scope,
+        runner=_NeverRunContentRunner(),
+        wordlist_check=lambda path: path == TINY_WORDLIST,
+        step_id="CONTENT-STEP-001",
+        http_executor=_StableFallbackExecutor(),
+        comparator_progress_callback=fast_messages.append,
+    )
+
+    assert fast_messages == []
+
+
+def test_internal_comparator_progress_preserves_requests_and_evidence(
+    tmp_path: Path,
+) -> None:
+    results = []
+    comparator_outputs = []
+    candidate_urls = []
+    for name, callback in (("silent", None), ("visible", lambda _message: None)):
+        plan_path, scope, input_dir, _output_dir = _written_plan(
+            tmp_path / name,
+            profile=CONTENT_DISCOVERY_TINY_PROFILE,
+        )
+        clock = _ComparatorProgressClock(seconds_per_candidate=1.0)
+        executor = _ComparatorProgressExecutor(clock)
+        result = run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_NeverRunContentRunner(),
+            wordlist_check=lambda path: path == TINY_WORDLIST,
+            step_id="CONTENT-STEP-001",
+            http_executor=executor,
+            comparator_monotonic=clock.monotonic,
+            comparator_progress_callback=callback,
+            comparator_progress_interval_seconds=6.0,
+        )
+        results.append(result.origin_decisions)
+        candidate_urls.append(executor.urls[3:])
+        comparator_path = next(
+            Path(path)
+            for path in result.artifact_paths
+            if Path(path).name.startswith("content-discovery-internal-")
+        )
+        comparator_outputs.append(comparator_path.read_text(encoding="utf-8"))
+        assert "candidates checked" not in json.dumps(
+            json.loads((input_dir / BASELINE_ARTIFACT_NAME).read_text(encoding="utf-8"))
+        )
+
+    assert results[0] == results[1]
+    assert candidate_urls[0] == candidate_urls[1]
+    assert len(candidate_urls[0]) == 25
+    assert comparator_outputs[0] == comparator_outputs[1]
+
+
+def test_internal_comparator_progress_callback_failure_is_hard(
+    tmp_path: Path,
+) -> None:
+    plan_path, scope, input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    clock = _ComparatorProgressClock(seconds_per_candidate=1.0)
+    executor = _ComparatorProgressExecutor(clock)
+
+    def fail_progress(_message: str) -> None:
+        raise RuntimeError("fixture progress callback failure")
+
+    with pytest.raises(RuntimeError, match="fixture progress callback failure"):
+        run_content_discovery_workflow(
+            plan_path,
+            scope,
+            runner=_NeverRunContentRunner(),
+            wordlist_check=lambda path: path == TINY_WORDLIST,
+            step_id="CONTENT-STEP-001",
+            http_executor=executor,
+            comparator_monotonic=clock.monotonic,
+            comparator_progress_callback=fail_progress,
+            comparator_progress_interval_seconds=3.0,
+        )
+
+    assert len(executor.urls) == 3 + 3
+    assert not any(
+        artifact.get("type") == "content_discovery_internal"
+        for artifact in json.loads(
+            (input_dir / "recon_manifest.json").read_text(encoding="utf-8")
+        )["artifacts"]
+    )
+
+
 def test_comparator_budget_uses_effective_executor_request_rate(tmp_path: Path) -> None:
     plan_path, scope, input_dir, _output_dir = _written_plan(
         tmp_path,
@@ -1211,6 +1368,27 @@ class _StableFallbackExecutor:
         if url.endswith("/hidden"):
             return _internal_response(url, status=200, body=b"genuine endpoint")
         return _internal_response(url, status=200, body=b"stable application shell")
+
+
+class _ComparatorProgressClock:
+    def __init__(self, *, seconds_per_candidate: float) -> None:
+        self.now = 0.0
+        self.seconds_per_candidate = seconds_per_candidate
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+class _ComparatorProgressExecutor(_StableFallbackExecutor):
+    def __init__(self, clock: _ComparatorProgressClock) -> None:
+        super().__init__()
+        self.clock = clock
+
+    def request(self, url: str, **kwargs) -> InternalHTTPResponse:
+        response = super().request(url, **kwargs)
+        if ".bugslyce-negative-" not in url:
+            self.clock.now += self.clock.seconds_per_candidate
+        return response
 
 
 class _PacingConfiguration:

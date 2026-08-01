@@ -488,8 +488,26 @@ def run_project_pipeline(
         "profile": profile,
         "deep_outputs": DeepPipelineOutputs(),
     }
-    step_runners = _step_runners(context, clock)
     total_steps = len(result.steps)
+    content_step_position = next(
+        index
+        for index, step in enumerate(result.steps, start=1)
+        if step.step_id == "PIPELINE-STEP-007"
+    )
+    content_step_name = result.steps[content_step_position - 1].name
+    comparator_progress_callback = (
+        lambda message: _emit(
+            progress_callback,
+            f"[{content_step_position}/{total_steps}] {content_step_name}: {message}",
+        )
+        if progress_callback is not None
+        else None
+    )
+    step_runners = _step_runners(
+        context,
+        clock,
+        comparator_progress_callback=comparator_progress_callback,
+    )
     for index, step in enumerate(result.steps):
         position = index + 1
         if step.status == "skipped_existing":
@@ -1389,6 +1407,8 @@ def _pending_steps(profile: str) -> list[PipelineStep]:
 def _step_runners(
     context: dict[str, object],
     clock: Clock | None,
+    *,
+    comparator_progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Callable[[], tuple[str, list[str], dict[str, object]]]]:
     output_dir = context["output_dir"]
     scope_file = context["scope_file"]
@@ -1470,7 +1490,11 @@ def _step_runners(
         )
 
     def content_run():
-        result = run_content_discovery_workflow(plan_path, scope_file)
+        result = run_content_discovery_workflow(
+            plan_path,
+            scope_file,
+            comparator_progress_callback=comparator_progress_callback,
+        )
         metadata = write_content_discovery_execution_result(result, plan_dir)
         result_profile = getattr(result, "profile", _content_discovery_profile_for_pipeline(profile))
         return (

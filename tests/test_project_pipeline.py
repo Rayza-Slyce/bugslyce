@@ -1101,6 +1101,50 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert "No NSE scripts, UDP scans, brute force" in markdown
 
 
+def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    progress: list[str] = []
+
+    def content_run(*_args, comparator_progress_callback=None, **_kwargs):
+        calls.append("content-run")
+        assert comparator_progress_callback is not None
+        comparator_progress_callback(
+            "250/1753 candidates checked; 7 retained; "
+            "243 baseline-equivalent; elapsed 24s"
+        )
+        return SimpleNamespace(
+            profile="lab-root-light",
+            artifact_paths=[str(output_dir / "internal-content-comparator.txt")],
+            report_path=str(output_dir / "report.md"),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_discovery_workflow",
+        content_run,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
+    )
+
+    assert result.final_status == "completed"
+    assert "[7/12] bounded content discovery execution starting..." in progress
+    assert (
+        "[7/12] bounded content discovery execution: 250/1753 candidates checked; "
+        "7 retained; 243 baseline-equivalent; elapsed 24s"
+    ) in progress
+    assert "[7/12] bounded content discovery execution complete" in progress
+    assert all("\r" not in message for message in progress)
+
+
 def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     tmp_path: Path,
     monkeypatch,

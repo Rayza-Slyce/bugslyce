@@ -81,7 +81,10 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     _patch_local_base_pipeline(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline.run_content_discovery_workflow",
-        lambda plan_path, scope_file: _write_sitemap_content_discovery(output_dir, plan_path),
+        lambda plan_path, scope_file, **_kwargs: _write_sitemap_content_discovery(
+            output_dir,
+            plan_path,
+        ),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.write_content_discovery_execution_result",

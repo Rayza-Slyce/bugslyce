@@ -113,6 +113,7 @@ BASELINE_POLICY_INTERNAL_COMPARATOR = "internal_exact_body_comparator"
 BASELINE_POLICY_REFUSE = "refuse"
 INTERNAL_COMPARATOR_ARTIFACT_TYPE = "content_discovery_internal"
 INTERNAL_COMPARATOR_TAG = "internal_exact_body_comparator"
+COMPARATOR_PROGRESS_INTERVAL_SECONDS = 12.0
 MAX_INTERNAL_COMPARATOR_CANDIDATES = 4096
 COMPARATOR_FIXED_ALLOWANCE_SECONDS = 60
 COMPARATOR_PER_CANDIDATE_ALLOWANCE_SECONDS = 1
@@ -457,6 +458,8 @@ def run_content_discovery_workflow(
     http_executor: InternalHTTPExecutor | None = None,
     token_factory: Callable[[], str] | None = None,
     comparator_monotonic: Callable[[], float] = time.monotonic,
+    comparator_progress_callback: Callable[[str], None] | None = None,
+    comparator_progress_interval_seconds: float = COMPARATOR_PROGRESS_INTERVAL_SECONDS,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
 
@@ -514,6 +517,8 @@ def run_content_discovery_workflow(
             enforced_executor=enforced_executor,
             token_factory=token_factory,
             comparator_monotonic=comparator_monotonic,
+            comparator_progress_callback=comparator_progress_callback,
+            comparator_progress_interval_seconds=comparator_progress_interval_seconds,
             runner=runner,
             step_id=step_id,
             progress_callback=progress_callback,
@@ -536,6 +541,8 @@ def _execute_content_discovery(
     enforced_executor: InternalHTTPExecutor,
     token_factory: Callable[[], str] | None,
     comparator_monotonic: Callable[[], float],
+    comparator_progress_callback: Callable[[str], None] | None,
+    comparator_progress_interval_seconds: float,
     runner: LiveContentDiscoveryRunner | None,
     step_id: str | None,
     progress_callback: Callable[[str], None] | None,
@@ -586,6 +593,8 @@ def _execute_content_discovery(
                     enforced_executor,
                     decision,
                     monotonic=comparator_monotonic,
+                    progress_callback=comparator_progress_callback,
+                    progress_interval_seconds=comparator_progress_interval_seconds,
                     on_first_request=lambda origin=step.origin: discovery_started_origins.add(
                         origin
                     ),
@@ -1000,6 +1009,8 @@ def _run_internal_exact_body_comparator(
     baseline: ContentBaselineDecision,
     *,
     monotonic: Callable[[], float],
+    progress_callback: Callable[[str], None] | None,
+    progress_interval_seconds: float,
     on_first_request: Callable[[], None],
 ) -> tuple[_ContentArtifactSource, ContentBaselineDecision]:
     if baseline.comparison_signature is None:
@@ -1022,7 +1033,13 @@ def _run_internal_exact_body_comparator(
     retained_lines: list[str] = []
     suppressed = 0
     retained = 0
-    deadline = monotonic() + runtime_budget_seconds
+    if progress_interval_seconds <= 0:
+        raise ValueError("Content comparator progress interval must be positive.")
+    started_at = monotonic()
+    deadline = started_at + runtime_budget_seconds
+    next_progress_at = started_at + progress_interval_seconds
+    progress_emitted = False
+    last_progress_completed = 0
     request_started = False
     for entry in entries:
         remaining_timeout = min(
@@ -1085,9 +1102,41 @@ def _run_internal_exact_body_comparator(
             raise _ComparatorStopped(stopped) from None
         if response_comparison_signature(response) == baseline.comparison_signature:
             suppressed += 1
-            continue
-        retained += 1
-        retained_lines.append(_comparator_output_line(candidate_url, response))
+        else:
+            retained += 1
+            retained_lines.append(_comparator_output_line(candidate_url, response))
+        if progress_callback is not None:
+            now = monotonic()
+            if now >= next_progress_at:
+                completed = suppressed + retained
+                progress_callback(
+                    _render_comparator_progress(
+                        completed=completed,
+                        total=len(entries),
+                        retained=retained,
+                        suppressed=suppressed,
+                        elapsed_seconds=now - started_at,
+                    )
+                )
+                progress_emitted = True
+                last_progress_completed = completed
+                next_progress_at = now + progress_interval_seconds
+
+    completed = suppressed + retained
+    if (
+        progress_callback is not None
+        and progress_emitted
+        and completed > last_progress_completed
+    ):
+        progress_callback(
+            _render_comparator_progress(
+                completed=completed,
+                total=len(entries),
+                retained=retained,
+                suppressed=suppressed,
+                elapsed_seconds=monotonic() - started_at,
+            )
+        )
 
     output_path = output_dir / _internal_comparator_filename(step.origin)
     output_path.write_text("".join(retained_lines), encoding="utf-8")
@@ -1108,6 +1157,20 @@ def _run_internal_exact_body_comparator(
             tags=(INTERNAL_COMPARATOR_TAG,),
         ),
         updated,
+    )
+
+
+def _render_comparator_progress(
+    *,
+    completed: int,
+    total: int,
+    retained: int,
+    suppressed: int,
+    elapsed_seconds: float,
+) -> str:
+    return (
+        f"{completed}/{total} candidates checked; {retained} retained; "
+        f"{suppressed} baseline-equivalent; elapsed {int(max(0.0, elapsed_seconds))}s"
     )
 
 
