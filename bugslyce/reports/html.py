@@ -13,6 +13,9 @@ import tempfile
 from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
+from bugslyce.recon.deep_source_route_collector import (
+    render_deep_source_route_skip_reason,
+)
 from bugslyce.reports.html_model import (
     HtmlReportModel,
     HtmlRouteGroup,
@@ -477,7 +480,7 @@ def _limitations_section(model: HtmlReportModel) -> str:
             (
                 "Deep source/route collection",
                 item.url,
-                _human_label(item.reason),
+                render_deep_source_route_skip_reason(item.reason),
                 _human_label(item.source),
                 _compact_list(item.evidence_ids, "evidence IDs"),
                 "deep_source_route_collection.json",

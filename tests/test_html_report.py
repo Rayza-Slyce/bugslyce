@@ -216,10 +216,17 @@ def test_html_report_rebuilds_existing_deep_review_models(tmp_path: Path) -> Non
                 source="source_route_coverage",
                 evidence_ids=("EVID-SKIPPED-0001",),
             ),
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/budget-capped",
+                method="GET",
+                reason="per_origin_limit_exceeded",
+                source="source_route_coverage",
+                evidence_ids=("EVID-SKIPPED-0002",),
+            ),
         ),
-        total_considered=5,
+        total_considered=6,
         total_collected=4,
-        total_skipped=1,
+        total_skipped=2,
     )
     (pack / "deep_source_route_collection.json").write_text(
         json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
@@ -236,7 +243,8 @@ def test_html_report_rebuilds_existing_deep_review_models(tmp_path: Path) -> Non
     assert "Exact repeated non-empty body hash" in html
     assert "EVID-REDIRECT-0001" in html
     assert "Warnings and skipped collection" in html
-    assert "Policy blocked" in html
+    assert "Blocked by Deep collection policy" in html
+    assert "Per-service request budget exhausted" in html
     assert "EVID-SKIPPED-0001" in html
     _assert_category_filter_complete(html)
 
@@ -889,7 +897,7 @@ def test_html_report_humanises_visible_identifier_fields_without_changing_raw_va
         "Kill switch",
         "Deep source route collection",
         "Source route collection",
-        "Query string not allowed",
+        "Query-bearing route excluded by policy",
         "Source route coverage",
         "Same origin",
         "Redirect to auth path",

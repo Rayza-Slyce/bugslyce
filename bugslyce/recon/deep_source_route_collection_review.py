@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
+    render_deep_source_route_skip_reason,
 )
 from bugslyce.recon.deep_structured_body_review import (
     DeepStructuredBodyDisclosure,
@@ -227,7 +228,10 @@ def render_deep_source_route_collection_review_markdown(
     lines.extend(["", "### Skip Reasons", ""])
     if summary.skip_reasons:
         for reason, count in summary.skip_reasons:
-            lines.append(f"- `{reason}`: {count}")
+            lines.append(
+                f"- {render_deep_source_route_skip_reason(reason)} "
+                f"(`{reason}`): {count}"
+            )
     else:
         lines.append("- None.")
 

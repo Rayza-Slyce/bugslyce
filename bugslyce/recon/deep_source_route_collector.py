@@ -45,6 +45,18 @@ SAFETY_NOTES = (
     "It does not confirm vulnerabilities.",
     "This stage produces static manual-review context only.",
 )
+SKIP_REASON_LABELS = {
+    "per_origin_limit_exceeded": "Per-service request budget exhausted",
+    "total_request_limit_exceeded": "Deep request budget exhausted",
+    "method_not_allowed": "Method not permitted",
+    "cross_origin_not_allowed": "Outside approved origin",
+    "query_string_not_allowed": "Query-bearing route excluded by policy",
+    "duplicate_request": "Duplicate request",
+    "already_collected": "Already adequately collected",
+    "programme_scope_blocked": "Outside programme scope",
+    "programme_scope_unknown": "Not authorised by programme scope",
+    "policy_blocked": "Blocked by Deep collection policy",
+}
 
 
 @dataclass(frozen=True)
@@ -115,7 +127,7 @@ def collect_deep_source_routes_from_plan(
             skipped.append(_skip_from_request(request, "query_string_not_allowed"))
             continue
         if not decision.allowed:
-            skipped.append(_skip_from_request(request, "policy_blocked"))
+            skipped.append(_skip_from_request(request, decision.reason))
             continue
         if (
             "programme_scope_allowed" not in decision.policy_notes
@@ -178,6 +190,15 @@ def collect_deep_source_routes_from_plan(
     )
 
 
+def render_deep_source_route_skip_reason(reason: str) -> str:
+    """Render one stable machine reason as concise operator wording."""
+
+    return SKIP_REASON_LABELS.get(
+        reason,
+        " ".join(part for part in reason.split("_") if part).capitalize(),
+    )
+
+
 def render_deep_source_route_collection_result_markdown(
     result: DeepSourceRouteCollectionResult,
 ) -> str:
@@ -207,7 +228,9 @@ def render_deep_source_route_collection_result_markdown(
     if result.skipped:
         for item in result.skipped:
             lines.append(
-                f"- `{item.method} {item.url}` - reason: {item.reason} - source: `{item.source}`"
+                f"- `{item.method} {item.url}` - reason: "
+                f"{render_deep_source_route_skip_reason(item.reason)} "
+                f"(`{item.reason}`) - source: `{item.source}`"
             )
     else:
         lines.append("- None.")

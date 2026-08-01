@@ -700,6 +700,10 @@ def test_skip_reason_leads_and_counts_are_deterministic() -> None:
             _skipped("http://example.test/assets?C=M", "query_string_not_allowed"),
             _skipped("http://example.test/robots.txt", "metadata_request"),
             _skipped("https://other.test/admin", "policy_blocked"),
+            _skipped(
+                "http://example.test/bounded",
+                "per_origin_limit_exceeded",
+            ),
             _skipped("http://example.test/admin", "fetch_error"),
         )
     )
@@ -714,6 +718,7 @@ def test_skip_reason_leads_and_counts_are_deterministic() -> None:
         ("query_string_not_allowed", 2),
         ("fetch_error", 1),
         ("metadata_request", 1),
+        ("per_origin_limit_exceeded", 1),
         ("policy_blocked", 1),
     )
     assert "query_string_route_skipped" in categories
@@ -721,6 +726,11 @@ def test_skip_reason_leads_and_counts_are_deterministic() -> None:
     assert "policy_blocked_skipped" in categories
     assert "fetch_error_skipped" in categories
     assert "metadata is handled by the Deep metadata collection path" in metadata_lead.reason
+
+    rendered = render_deep_source_route_collection_review_markdown(summary)
+    assert "Per-service request budget exhausted" in rendered
+    assert "(`per_origin_limit_exceeded`): 1" in rendered
+    assert "Blocked by Deep collection policy (`policy_blocked`): 1" in rendered
 
 
 def test_renderer_sections_compact_urls_safety_and_no_full_body() -> None:

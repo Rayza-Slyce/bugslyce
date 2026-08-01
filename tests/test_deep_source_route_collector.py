@@ -15,13 +15,17 @@ from bugslyce.recon.deep_collection_policy import (
     default_deep_collection_bounds,
     evaluate_deep_collection_requests,
 )
-from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
+from bugslyce.recon.deep_collection_request_plan import (
+    DeepCollectionRequestPlan,
+    _active_deep_collection_bounds,
+)
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_source_route_collector import (
     collect_deep_source_routes_from_plan,
     render_deep_source_route_collection_result_markdown,
 )
 from bugslyce.recon.modes import (
+    DEEP_RECON_BOUNDS,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
     get_recon_mode,
@@ -47,7 +51,7 @@ def test_collects_only_policy_allowed_source_route_get_requests() -> None:
     assert result.total_skipped == 1
 
 
-def test_skips_policy_blocked_and_unsupported_methods() -> None:
+def test_skips_with_exact_method_and_cross_origin_policy_reasons() -> None:
     post_request = _request(
         "http://example.test/login.php",
         method="POST",
@@ -63,7 +67,7 @@ def test_skips_policy_blocked_and_unsupported_methods() -> None:
     assert result.collected == ()
     assert tuple(item.reason for item in result.skipped) == (
         "method_not_allowed",
-        "policy_blocked",
+        "cross_origin_not_allowed",
     )
 
 
@@ -400,6 +404,117 @@ def test_collection_order_is_deterministic_and_plan_is_not_mutated() -> None:
     )
     assert plan.proposed_requests == before_requests
     assert plan.policy_summary.decisions == before_decisions
+
+
+def test_legacy_default_cuts_off_same_origin_collection_after_25_requests() -> None:
+    requests = tuple(
+        _request(
+            f"http://example.test/synthetic-route-{index:02d}",
+            source="source_route_coverage",
+        )
+        for index in range(49)
+    )
+    calls: list[str] = []
+    plan = _plan(requests, allowed_origins=("http://example.test",))
+
+    result = collect_deep_source_routes_from_plan(
+        plan,
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert plan.policy_summary.allowed_count == 25
+    assert plan.policy_summary.blocked_reasons == (("per_origin_limit_exceeded", 24),)
+    assert len(calls) == 25
+    assert result.total_considered == 49
+    assert result.total_collected == 25
+    assert result.total_skipped == 24
+    assert {item.reason for item in result.skipped} == {
+        "per_origin_limit_exceeded"
+    }
+
+
+def test_active_deep_profile_collects_all_49_eligible_same_origin_routes() -> None:
+    requests = tuple(
+        _request(
+            f"http://example.test/synthetic-route-{index:02d}",
+            source="source_route_coverage",
+        )
+        for index in range(49)
+    )
+    bounds = _active_deep_collection_bounds()
+    calls: list[str] = []
+
+    result = collect_deep_source_routes_from_plan(
+        _plan(
+            requests,
+            bounds=bounds,
+            allowed_origins=("http://example.test",),
+        ),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert calls == [request.url for request in requests]
+    assert result.total_considered == 49
+    assert result.total_collected == 49
+    assert result.total_skipped == 0
+    assert result.skipped == ()
+
+
+def test_active_deep_per_service_limit_remains_bounded_with_exact_reason() -> None:
+    requests = tuple(
+        _request(
+            f"http://example.test/bounded-route-{index:03d}",
+            source="source_route_coverage",
+        )
+        for index in range(DEEP_RECON_BOUNDS.max_requests_per_service + 1)
+    )
+    bounds = _active_deep_collection_bounds()
+    calls: list[str] = []
+
+    result = collect_deep_source_routes_from_plan(
+        _plan(
+            requests,
+            bounds=bounds,
+            allowed_origins=("http://example.test",),
+        ),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert len(calls) == DEEP_RECON_BOUNDS.max_requests_per_service
+    assert result.total_considered == len(requests)
+    assert result.total_collected == DEEP_RECON_BOUNDS.max_requests_per_service
+    assert result.total_skipped == 1
+    assert result.skipped[0].reason == "per_origin_limit_exceeded"
+    rendered = render_deep_source_route_collection_result_markdown(result)
+    assert "Per-service request budget exhausted" in rendered
+    assert "`per_origin_limit_exceeded`" in rendered
+
+
+def test_active_deep_total_limit_remains_bounded_with_exact_reason() -> None:
+    bounds = _active_deep_collection_bounds()
+    service_count = 4
+    requests = tuple(
+        _request(
+            "http://service-"
+            f"{index % service_count}.example.test/route-{index:04d}",
+            source="source_route_coverage",
+        )
+        for index in range(bounds.max_total_requests + 1)
+    )
+    allowed_origins = tuple(
+        f"http://service-{index}.example.test" for index in range(service_count)
+    )
+    calls: list[str] = []
+
+    result = collect_deep_source_routes_from_plan(
+        _plan(requests, bounds=bounds, allowed_origins=allowed_origins),
+        fetcher=_fake_fetcher(calls),
+    )
+
+    assert len(calls) == DEEP_RECON_BOUNDS.max_total_requests
+    assert result.total_collected == DEEP_RECON_BOUNDS.max_total_requests
+    assert result.total_skipped == 1
+    assert result.skipped[0].reason == "total_request_limit_exceeded"
 
 
 def test_fake_fetcher_receives_only_allowed_source_route_requests() -> None:

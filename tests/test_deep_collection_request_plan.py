@@ -21,16 +21,51 @@ from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_request_plan import (
     DeepCollectionRequestPlan,
     DeepCollectionRequestSourceCount,
+    _active_deep_collection_bounds,
     build_deep_collection_request_plan_from_project_state,
     render_deep_collection_request_plan_markdown,
 )
 from bugslyce.recon.deep_metadata_plan import DEEP_METADATA_PATHS
 from bugslyce.recon.modes import (
+    DEEP_RECON_BOUNDS,
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
     get_recon_mode,
     is_recon_mode_available,
 )
+
+
+def test_default_deep_request_plan_uses_authoritative_profile_bounds() -> None:
+    bounds = _active_deep_collection_bounds()
+
+    assert bounds.max_total_requests == DEEP_RECON_BOUNDS.max_total_requests
+    assert bounds.max_requests_per_origin == DEEP_RECON_BOUNDS.max_requests_per_service
+    assert bounds.timeout_seconds == DEEP_RECON_BOUNDS.request_timeout_seconds
+    assert bounds.max_response_bytes == DEEP_RECON_BOUNDS.max_body_bytes
+
+
+def test_default_deep_plan_allows_49_eligible_same_origin_routes() -> None:
+    route_urls = tuple(
+        f"http://example.test/synthetic-route-{index:02d}" for index in range(49)
+    )
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[_service("http://example.test/", "EVID-HTTP-0001")],
+            endpoints=[
+                _endpoint(url, f"EVID-ROUTE-{index:04d}")
+                for index, url in enumerate(route_urls)
+            ],
+        )
+    )
+    route_decisions = tuple(
+        decision
+        for decision in plan.policy_summary.decisions
+        if decision.url in route_urls
+    )
+
+    assert len(route_decisions) == 49
+    assert all(decision.allowed for decision in route_decisions)
+    assert tuple(decision.url for decision in route_decisions) == route_urls
 
 
 def test_empty_project_state_returns_no_requests_or_origins() -> None:

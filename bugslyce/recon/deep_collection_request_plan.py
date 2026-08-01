@@ -9,7 +9,7 @@ Deep Recon available.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlparse, urlunparse
 
 from bugslyce.core.models import ProjectState
@@ -18,6 +18,7 @@ from bugslyce.recon.deep_collection_policy import (
     DeepCollectionBounds,
     DeepCollectionPolicySummary,
     DeepCollectionRequest,
+    default_deep_collection_bounds,
     evaluate_deep_collection_requests,
 )
 from bugslyce.recon.deep_metadata_coverage import (
@@ -27,6 +28,7 @@ from bugslyce.recon.deep_source_route_coverage import (
     build_deep_source_route_coverage_from_project_state,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.modes import get_deep_recon_profile_contract
 
 
 ROUTE_REQUEST_CATEGORIES = {
@@ -157,7 +159,7 @@ def build_deep_collection_request_plan_from_project_state(
     proposed_requests = tuple(_to_collection_requests(_dedupe_pending_requests(pending)))
     policy_summary = evaluate_deep_collection_requests(
         proposed_requests,
-        bounds=bounds,
+        bounds=bounds or _active_deep_collection_bounds(),
         allowed_origins=allowed_origins,
         programme_scope_policy=programme_scope_policy,
     )
@@ -170,6 +172,19 @@ def build_deep_collection_request_plan_from_project_state(
         proposed_requests=proposed_requests,
         policy_summary=policy_summary,
         source_counts=source_counts,
+    )
+
+
+def _active_deep_collection_bounds() -> DeepCollectionBounds:
+    """Map the authoritative Deep profile budget onto HTTP-origin collection."""
+
+    profile_bounds = get_deep_recon_profile_contract().bounds
+    return replace(
+        default_deep_collection_bounds(),
+        max_total_requests=profile_bounds.max_total_requests,
+        max_requests_per_origin=profile_bounds.max_requests_per_service,
+        timeout_seconds=profile_bounds.request_timeout_seconds,
+        max_response_bytes=profile_bounds.max_body_bytes,
     )
 
 
