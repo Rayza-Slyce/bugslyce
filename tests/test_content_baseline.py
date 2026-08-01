@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from bugslyce.recon.content_run import (
@@ -14,6 +16,7 @@ from bugslyce.recon.content_run import (
     BASELINE_POLICY_INTERNAL_COMPARATOR,
     BASELINE_POLICY_REFUSE,
     ContentBaselineObservation,
+    calculate_content_comparator_runtime_budget,
     classify_content_discovery_baseline,
     collect_content_discovery_baseline,
     response_comparison_signature,
@@ -23,6 +26,37 @@ from bugslyce.recon.http_enforcement import InternalHTTPExecutionError
 
 
 ORIGIN = "http://app.example.test:3000/"
+
+
+def test_unpaced_comparator_budgets_scale_with_candidate_count() -> None:
+    quick = calculate_content_comparator_runtime_budget(25, None)
+    standard = calculate_content_comparator_runtime_budget(220, None)
+    deep = calculate_content_comparator_runtime_budget(1753, None)
+
+    assert quick == 85
+    assert standard == 280
+    assert deep == 1813
+    assert quick < standard < deep
+    assert deep > 120
+
+
+def test_paced_deep_comparator_budget_covers_start_spacing_and_overhead() -> None:
+    at_two = calculate_content_comparator_runtime_budget(1753, Decimal("2"))
+    at_one = calculate_content_comparator_runtime_budget(1753, Decimal("1"))
+    at_half = calculate_content_comparator_runtime_budget(1753, Decimal("0.5"))
+
+    assert at_two == 2690
+    assert at_two > Decimal("876.5")
+    assert at_one == 3566
+    assert at_one > 1753
+    assert at_half == 5319
+    assert at_two < at_one < at_half
+
+
+def test_comparator_budget_is_deterministic_and_capped_at_two_hours() -> None:
+    assert calculate_content_comparator_runtime_budget(1753, Decimal("2")) == 2690
+    assert calculate_content_comparator_runtime_budget(1753, Decimal("2")) == 2690
+    assert calculate_content_comparator_runtime_budget(4096, Decimal("0.1")) == 7200
 
 
 def test_variable_body_conventional_404_selects_gobuster() -> None:

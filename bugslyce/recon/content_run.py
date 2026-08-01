@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
+from decimal import Decimal, ROUND_CEILING
 import hashlib
 import json
 from pathlib import Path
@@ -113,6 +114,9 @@ BASELINE_POLICY_REFUSE = "refuse"
 INTERNAL_COMPARATOR_ARTIFACT_TYPE = "content_discovery_internal"
 INTERNAL_COMPARATOR_TAG = "internal_exact_body_comparator"
 MAX_INTERNAL_COMPARATOR_CANDIDATES = 4096
+COMPARATOR_FIXED_ALLOWANCE_SECONDS = 60
+COMPARATOR_PER_CANDIDATE_ALLOWANCE_SECONDS = 1
+MAX_COMPARATOR_RUNTIME_SECONDS = 2 * 60 * 60
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -186,6 +190,7 @@ class ContentBaselineDecision:
     comparison_signature: ContentComparisonSignature | None = None
     baseline_equivalent_candidates: int = 0
     retained_candidates: int = 0
+    comparator_runtime_budget_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +332,40 @@ def response_comparison_signature(
         _relative_final_url_marker(response.requested_url, response.final_url),
         tuple((hop.status_code, hop.destination_url) for hop in response.redirects),
     )
+
+
+def calculate_content_comparator_runtime_budget(
+    candidate_count: int,
+    requests_per_second: Decimal | None,
+) -> int:
+    """Return a deterministic per-origin comparator safety ceiling."""
+
+    if (
+        isinstance(candidate_count, bool)
+        or not isinstance(candidate_count, int)
+        or not 1 <= candidate_count <= MAX_INTERNAL_COMPARATOR_CANDIDATES
+    ):
+        raise ValueError("Content comparator candidate count is outside bounds.")
+    pacing_allowance = 0
+    if requests_per_second is not None:
+        if (
+            isinstance(requests_per_second, bool)
+            or not isinstance(requests_per_second, Decimal)
+            or not requests_per_second.is_finite()
+            or requests_per_second <= 0
+        ):
+            raise ValueError("Content comparator request rate is invalid.")
+        pacing_allowance = int(
+            (Decimal(candidate_count) / requests_per_second).to_integral_value(
+                rounding=ROUND_CEILING
+            )
+        )
+    calculated = (
+        COMPARATOR_FIXED_ALLOWANCE_SECONDS
+        + candidate_count * COMPARATOR_PER_CANDIDATE_ALLOWANCE_SECONDS
+        + pacing_allowance
+    )
+    return min(calculated, MAX_COMPARATOR_RUNTIME_SECONDS)
 
 
 def load_content_discovery_plan(path: Path) -> ContentDiscoveryPlan:
@@ -546,7 +585,6 @@ def _execute_content_discovery(
                     output_dir,
                     enforced_executor,
                     decision,
-                    timeout_seconds=profile_definition.timeout_seconds,
                     monotonic=comparator_monotonic,
                     on_first_request=lambda origin=step.origin: discovery_started_origins.add(
                         origin
@@ -948,6 +986,9 @@ def _baseline_decision_payload(decision: ContentBaselineDecision) -> dict[str, o
         "limitations": list(decision.limitations),
         "baseline_equivalent_candidate_count": decision.baseline_equivalent_candidates,
         "retained_candidate_count": decision.retained_candidates,
+        "comparator_runtime_budget_seconds": (
+            decision.comparator_runtime_budget_seconds
+        ),
     }
 
 
@@ -958,17 +999,30 @@ def _run_internal_exact_body_comparator(
     executor: InternalHTTPExecutor,
     baseline: ContentBaselineDecision,
     *,
-    timeout_seconds: int,
     monotonic: Callable[[], float],
     on_first_request: Callable[[], None],
 ) -> tuple[_ContentArtifactSource, ContentBaselineDecision]:
     if baseline.comparison_signature is None:
         raise ValueError("Stable fallback baseline lacks a comparison signature.")
     entries = _load_internal_comparator_entries(wordlist)
+    configuration = getattr(executor, "configuration", None)
+    requests_per_second = (
+        getattr(configuration, "maximum_request_starts_per_second", None)
+        if configuration is not None
+        else None
+    )
+    runtime_budget_seconds = calculate_content_comparator_runtime_budget(
+        len(entries),
+        requests_per_second,
+    )
+    baseline = replace(
+        baseline,
+        comparator_runtime_budget_seconds=runtime_budget_seconds,
+    )
     retained_lines: list[str] = []
     suppressed = 0
     retained = 0
-    deadline = monotonic() + timeout_seconds
+    deadline = monotonic() + runtime_budget_seconds
     request_started = False
     for entry in entries:
         remaining_timeout = min(
@@ -981,8 +1035,9 @@ def _run_internal_exact_body_comparator(
                 baseline_equivalent_candidates=suppressed,
                 retained_candidates=retained,
                 failure_or_instability_reason=(
-                    "Internal exact-body comparison reached the content-discovery "
-                    "time limit before completing the approved wordlist."
+                    "Internal exact-body comparison reached its "
+                    f"{runtime_budget_seconds}-second aggregate runtime budget "
+                    "before completing the approved wordlist."
                 ),
                 limitations=tuple(
                     dict.fromkeys(

@@ -96,6 +96,9 @@ def test_content_run_executes_approved_plan_and_rebuilds_recon_pack(
     )
     manifest = json.loads((input_dir / "recon_manifest.json").read_text(encoding="utf-8"))
     project = json.loads((input_dir / "project_state.json").read_text(encoding="utf-8"))
+    baseline = json.loads(
+        (input_dir / BASELINE_ARTIFACT_NAME).read_text(encoding="utf-8")
+    )
 
     assert result.execution_count == 2
     assert result.commands_started == 2
@@ -124,6 +127,10 @@ def test_content_run_executes_approved_plan_and_rebuilds_recon_pack(
         artifact for artifact in manifest["artifacts"] if artifact["type"] == "gobuster"
     ]
     assert len(gobuster_artifacts) == 2
+    assert all(
+        origin["comparator_runtime_budget_seconds"] is None
+        for origin in baseline["origins"]
+    )
     assert all(artifact["base_url"] in result.origins for artifact in gobuster_artifacts)
     assert any(
         path["url"] == "http://10.10.10.10/admin"
@@ -726,6 +733,7 @@ def test_stable_fallback_uses_internal_comparator_with_truthful_provenance(
     assert "internal exact-body comparator" in internal_artifacts[0]["description"]
     assert baseline["origins"][0]["baseline_equivalent_candidate_count"] == 23
     assert baseline["origins"][0]["retained_candidate_count"] == 2
+    assert baseline["origins"][0]["comparator_runtime_budget_seconds"] == 85
     assert "identity-sentinel" not in json.dumps(baseline)
     assert "stable application shell" not in json.dumps(baseline)
     assert any(
@@ -744,6 +752,29 @@ def test_stable_fallback_uses_internal_comparator_with_truthful_provenance(
     )
     assert considered == 2
     assert "http://10.10.10.10/hidden" in followups
+
+
+def test_comparator_budget_uses_effective_executor_request_rate(tmp_path: Path) -> None:
+    plan_path, scope, input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    executor = _StableFallbackExecutor()
+    executor.configuration = _PacingConfiguration(Decimal("2"))
+
+    run_content_discovery_workflow(
+        plan_path,
+        scope,
+        runner=_NeverRunContentRunner(),
+        wordlist_check=lambda path: path == TINY_WORDLIST,
+        step_id="CONTENT-STEP-001",
+        http_executor=executor,
+    )
+
+    baseline = json.loads(
+        (input_dir / BASELINE_ARTIFACT_NAME).read_text(encoding="utf-8")
+    )
+    assert baseline["origins"][0]["comparator_runtime_budget_seconds"] == 98
 
 
 def test_unstable_origin_writes_all_baselines_before_refusing_all_discovery(
@@ -1058,7 +1089,10 @@ def test_comparator_deadline_preserves_counts_and_stops_before_next_candidate(
     assert executor.candidate_timeouts == [10, 5]
     assert first_origin["baseline_equivalent_candidate_count"] == 1
     assert first_origin["retained_candidate_count"] == 1
-    assert "time limit" in first_origin["failure_or_instability_reason"]
+    assert "85-second aggregate runtime budget" in first_origin[
+        "failure_or_instability_reason"
+    ]
+    assert first_origin["comparator_runtime_budget_seconds"] == 85
     assert any("not complete" in item for item in first_origin["limitations"])
     assert runner.called is False
     assert not any(
@@ -1179,6 +1213,11 @@ class _StableFallbackExecutor:
         return _internal_response(url, status=200, body=b"stable application shell")
 
 
+class _PacingConfiguration:
+    def __init__(self, rate: Decimal) -> None:
+        self.maximum_request_starts_per_second = rate
+
+
 class _UnstableSecondOriginExecutor:
     def __init__(self) -> None:
         self.urls: list[str] = []
@@ -1250,9 +1289,9 @@ class _ComparatorDeadlineExecutor:
         self.candidate_urls.append(url)
         self.candidate_timeouts.append(kwargs["timeout_seconds"])
         if len(self.candidate_urls) == 1:
-            self.clock.now = 115.0
+            self.clock.now = 80.0
             return _internal_response(url, status=200, body=b"stable shell")
-        self.clock.now = 121.0
+        self.clock.now = 86.0
         return _internal_response(url, status=200, body=b"genuine endpoint")
 
 
