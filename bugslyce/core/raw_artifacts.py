@@ -24,7 +24,11 @@ from bugslyce.core.normalise import dedupe_preserve_order, normalise_hostname, n
 from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
-from bugslyce.parsers.nmap import parse_nmap_normal
+from bugslyce.parsers.nmap import (
+    http_scheme_for_port_service,
+    is_http_capable_port_service,
+    parse_nmap_normal,
+)
 from bugslyce.parsers.robots import parse_robots
 
 
@@ -231,8 +235,8 @@ def _assemble_nmap(
                 existing.product = record.product
             if not existing.version and record.version:
                 existing.version = record.version
-        if record.state == "open" and _is_http_service_name(record.service):
-            service_url = _service_url(host, record.port, record.service)
+        if record.state == "open" and is_http_capable_port_service(record):
+            service_url = _service_url(host, record)
             _merge_http_service(
                 service_records,
                 service_order,
@@ -661,23 +665,21 @@ def _append_unique(values: list[str], value: str) -> None:
 
 
 def _port_service_tags(record: PortService) -> list[str]:
-    tags: list[str] = []
+    tags = list(record.tags)
     if record.state == "open":
         tags.append("open_service")
-    if _is_http_service_name(record.service):
+    if is_http_capable_port_service(record):
         tags.append("http_service")
         if record.port not in {80, 443}:
             tags.append("non_default_http_port")
     return tags
 
 
-def _is_http_service_name(service: str | None) -> bool:
-    value = (service or "").lower()
-    return value in {"http", "https", "http-proxy", "https-alt"} or "http" in value
-
-
-def _service_url(host: str, port: int, service: str | None) -> str:
-    scheme = "https" if "https" in (service or "").lower() or port == 443 else "http"
+def _service_url(host: str, record: PortService) -> str:
+    scheme = http_scheme_for_port_service(record)
+    if scheme is None:
+        raise ValueError("Port service does not contain recognised HTTP evidence.")
+    port = record.port
     default_port = 443 if scheme == "https" else 80
     netloc = host if port == default_port else f"{host}:{port}"
     return f"{scheme}://{netloc}/"

@@ -38,6 +38,92 @@ def test_nmap_parser_extracts_varied_http_ssh_and_database_services(tmp_path: Pa
     assert records[0].version == "2.7"
 
 
+def test_nmap_parser_recognises_same_port_escaped_http_fingerprint(tmp_path: Path) -> None:
+    source = tmp_path / "nmap-services.txt"
+    source.write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  ppp?",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%I=7%D=7/31%Time=synthetic%P=x86_64-pc-linux-gnu%r(",
+                'SF:GetRequest,123,"HTTP/1\\.1\\x20200\\x20OK\\r\\nContent-Type:\\x20text/html',
+                'SF:\\r\\n\\r\\n<title>OWASP Juice Shop</title>")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    records = parse_nmap_normal(source)
+
+    assert len(records) == 1
+    assert records[0].service == "ppp?"
+    assert "http_protocol_evidence" in records[0].tags
+
+
+def test_nmap_http_fingerprint_recognition_is_port_local_and_requires_status_line(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "nmap-services.txt"
+    source.write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  unknown",
+                "4000/tcp open  unknown",
+                "5000/tcp open  unknown HTTP-compatible product text",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%r(GetRequest,80,",
+                'SF:"Content-Type: text/html\\r\\n\\r\\nHTTP documentation")',
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port4000-TCP:V=7.94%r(GetRequest,80,",
+                'SF:"HTTP/1.1 404 Not Found\\r\\nContent-Type: text/html")',
+                "Nmap scan report for 10.10.10.11",
+                "PORT     STATE SERVICE VERSION",
+                "4000/tcp open  unknown",
+                "Nmap done: 1 IP address (1 host up) scanned in 1.00 seconds; HTTP/1.1 200",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    records = {(record.host, record.port): record for record in parse_nmap_normal(source)}
+
+    assert "http_protocol_evidence" not in records[("10.10.10.10", 3000)].tags
+    assert "http_protocol_evidence" in records[("10.10.10.10", 4000)].tags
+    assert "http_protocol_evidence" not in records[("10.10.10.10", 5000)].tags
+    assert "http_protocol_evidence" not in records[("10.10.10.11", 4000)].tags
+
+
+def test_nmap_http_fingerprint_requires_status_at_response_payload_start(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "nmap-services.txt"
+    source.write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  unknown",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%r(GetRequest,100,",
+                'SF:"non-HTTP preface; body says HTTP/1.1 200 OK\\r\\n")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    records = parse_nmap_normal(source)
+
+    assert len(records) == 1
+    assert "http_protocol_evidence" not in records[0].tags
+
+
 def test_gobuster_parser_extracts_varied_paths_status_size_and_redirect(tmp_path: Path) -> None:
     source = tmp_path / "gobuster.txt"
     source.write_text(

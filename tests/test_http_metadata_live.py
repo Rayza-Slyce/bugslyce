@@ -422,6 +422,84 @@ def test_http_metadata_service_cap_is_deterministic(tmp_path: Path) -> None:
     assert origins[-1] == "http://10.10.10.10:8009/"
 
 
+def test_http_metadata_plans_nmap_fingerprint_derived_origin(tmp_path: Path) -> None:
+    (tmp_path / "nmap-services.txt").write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  ppp?",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%r(GetRequest,123,",
+                'SF:"HTTP/1\\.1\\x20204\\x20No\\x20Content\\r\\n")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    origins = discover_http_origins(build_project_state(tmp_path), "10.10.10.10")
+
+    assert origins == ["http://10.10.10.10:3000/"]
+
+
+def test_http_metadata_preserves_explicit_https_scheme_recognition(tmp_path: Path) -> None:
+    (tmp_path / "nmap-services.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "8443/tcp open  https TestServer\n",
+        encoding="utf-8",
+    )
+
+    origins = discover_http_origins(build_project_state(tmp_path), "10.10.10.10")
+
+    assert origins == ["https://10.10.10.10:8443/"]
+
+
+def test_http_metadata_preserves_fingerprint_evidence_across_two_file_nmap_merge(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE\n"
+        "3000/tcp open  ppp\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nmap-services-all.txt").write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  ppp?",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%r(GetRequest,123,",
+                'SF:"HTTP/1\\.1\\x20200\\x20OK\\r\\nContent-Type:\\x20text/html")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    matching_ports = [
+        service
+        for service in state.port_services
+        if service.port == 3000 and service.protocol == "tcp"
+    ]
+
+    assert len(matching_ports) == 1
+    assert matching_ports[0].service in {"ppp", "ppp?"}
+    assert matching_ports[0].service != "http"
+    assert "http_protocol_evidence" in matching_ports[0].tags
+    assert "http_service" in matching_ports[0].tags
+    assert [service.url for service in state.http_services] == [
+        "http://10.10.10.10:3000/"
+    ]
+    assert discover_http_origins(state, "10.10.10.10") == [
+        "http://10.10.10.10:3000/"
+    ]
+
+
 def _scope(tmp_path: Path) -> Path:
     scope = tmp_path / "scope.md"
     scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")

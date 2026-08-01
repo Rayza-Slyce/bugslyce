@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse
 from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import ProjectState, ReconHTTPMetadataExecutionResult
 from bugslyce.core.project import build_project_state
+from bugslyce.parsers.nmap import http_scheme_for_port_service
 from bugslyce.recon.http_metadata_commands import (
     MAX_HTTP_METADATA_SERVICES,
     build_http_metadata_commands,
@@ -29,15 +30,14 @@ def discover_http_origins(
 
     origins: set[str] = set()
     for service in project_state.port_services:
-        service_name = (service.service or "").lower()
+        scheme = http_scheme_for_port_service(service)
         if (
             service.host != target
             or service.state != "open"
             or service.protocol != "tcp"
-            or not _is_http_service(service_name)
+            or scheme is None
         ):
             continue
-        scheme = "https" if "https" in service_name or service.port == 443 else "http"
         default_port = 443 if scheme == "https" else 80
         host = f"[{target}]" if ":" in target else target
         netloc = host if service.port == default_port else f"{host}:{service.port}"
@@ -289,10 +289,6 @@ def _updated_manifest(
         }
     )
     return payload
-
-
-def _is_http_service(service_name: str) -> bool:
-    return service_name in {"http", "https", "http-proxy", "https-alt"} or "http" in service_name
 
 
 def _origin_sort_key(origin: str) -> tuple[int, str]:

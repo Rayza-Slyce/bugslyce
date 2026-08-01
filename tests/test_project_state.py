@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from bugslyce.core.project import build_project_state
+from bugslyce.reports.markdown import render_markdown_report
 
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
@@ -208,6 +209,41 @@ def test_project_state_builds_from_raw_recon_fixture() -> None:
     assert all(item.evidence_ids for item in state.port_services)
     assert all(item.evidence_ids for item in state.discovered_paths)
     assert all(item.evidence_ids for item in state.http_artifacts)
+
+
+def test_project_state_derives_plain_http_from_nmap_fingerprint_without_changing_label(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-services.txt").write_text(
+        "\n".join(
+            [
+                "Nmap scan report for 10.10.10.10",
+                "PORT     STATE SERVICE VERSION",
+                "3000/tcp open  ppp?",
+                "8080/tcp open  http TestServer",
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port3000-TCP:V=7.94%r(GetRequest,123,",
+                'SF:"HTTP/1\\.1\\x20200\\x20OK\\r\\nContent-Type:\\x20text/html")',
+                "==============NEXT SERVICE FINGERPRINT==============",
+                "SF-Port8080-TCP:V=7.94%r(GetRequest,123,",
+                'SF:"HTTP/1\\.1\\x20200\\x20OK\\r\\nContent-Type:\\x20text/html")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    ports = {service.port: service for service in state.port_services}
+
+    assert ports[3000].service == "ppp?"
+    assert "http_protocol_evidence" in ports[3000].tags
+    assert {service.url for service in state.http_services} == {
+        "http://10.10.10.10:3000/",
+        "http://10.10.10.10:8080/",
+    }
+    assert len(state.http_services) == 2
+    assert "http://10.10.10.10:3000/" in render_markdown_report(state, [])
 
 
 def test_saved_robots_body_value_becomes_http_artifact(tmp_path: Path) -> None:
