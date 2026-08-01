@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from base64 import b64encode
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from html import escape
 import json
+import os
 from pathlib import Path
+import tempfile
 from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
@@ -53,6 +55,7 @@ _ACRONYMS = {
     "url": "URL",
 }
 _DISPLAY_WORDS = {"artifact": "artefact"}
+PROJECT_HTML_REPORT_FILENAME = "report.html"
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,69 @@ def write_html_report(input_dir: Path, output: Path) -> Path:
     model = build_html_report_model(input_dir)
     output.write_text(render_html_report(model), encoding="utf-8")
     return output
+
+
+def write_project_html_report(
+    input_dir: Path,
+    output: Path | None = None,
+) -> Path:
+    """Atomically write the canonical project-local offline HTML report."""
+
+    input_root = input_dir.expanduser().resolve()
+    if not input_root.is_dir():
+        raise ValueError(f"input path is not a directory: {input_root}")
+    requested = output.expanduser() if output is not None else Path(PROJECT_HTML_REPORT_FILENAME)
+    if not requested.is_absolute():
+        requested = input_root / requested
+    if requested.is_symlink():
+        raise ValueError("project HTML report output must not be a symbolic link")
+    output_path = requested.resolve(strict=False)
+    canonical_output = input_root / PROJECT_HTML_REPORT_FILENAME
+    if output_path != canonical_output:
+        raise ValueError(f"project HTML report output must be {canonical_output}")
+    if output_path.exists() and not output_path.is_file():
+        raise ValueError("project HTML report output is not a regular file")
+    if output_path.exists():
+        with output_path.open("r", encoding="utf-8") as existing:
+            prefix = existing.read(8192)
+        if "<title>BugSlyce Evidence Report - " not in prefix:
+            raise ValueError(
+                "existing project HTML report output is not recognised as BugSlyce-owned"
+            )
+
+    model = build_html_report_model(input_root)
+    if PROJECT_HTML_REPORT_FILENAME in getattr(model, "available_artefacts", ()):
+        model = replace(
+            model,
+            available_artefacts=tuple(
+                name
+                for name in model.available_artefacts
+                if name != PROJECT_HTML_REPORT_FILENAME
+            ),
+        )
+    rendered = render_html_report(model)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{PROJECT_HTML_REPORT_FILENAME}.",
+        suffix=".tmp",
+        dir=input_root,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if output_path.is_symlink():
+            raise ValueError("project HTML report output must not be a symbolic link")
+        os.replace(temporary, output_path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary.exists():
+            temporary.unlink()
+    return output_path
 
 
 def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:

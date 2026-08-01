@@ -37,6 +37,7 @@ from bugslyce.project_pipeline import (
     STANDARD_PIPELINE_PROFILE,
     _body_fetch_warning_message,
     format_exception_diagnostic,
+    render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
     write_project_pipeline_result,
@@ -248,7 +249,9 @@ def test_cli_project_run_prints_compact_structured_run_summary(
     assert "... and 1 more prioritised item in the full report." in output
     assert "Step summary:" in output
     assert "Final outputs:" in output
-    assert f"* Report: {output_dir / 'report.md'}" in output
+    assert f"* Markdown report: {output_dir / 'report.md'}" in output
+    assert "report.html" not in output
+    assert "xdg-open" not in output
     assert f"* Runbook: {output_dir / 'runbook.md'}" in output
     assert f"* Evidence pack: {output_dir}-evidence-pack.zip" in output
 
@@ -1088,6 +1091,18 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert payload["final_status"] == "completed"
     assert payload["no_unapproved_actions"] is True
     assert len(payload["steps"]) == 12
+    html_path = output_dir / "report.html"
+    assert html_path.read_text(encoding="utf-8") == "<!doctype html><title>Fixture report</title>\n"
+    rendered_summary = render_project_pipeline_summary(result)
+    assert f"* HTML report: {html_path}" in rendered_summary
+    assert f"* Markdown report: {output_dir / 'report.md'}" in rendered_summary
+    assert "* Open the HTML Operator Report:" in rendered_summary
+    assert f"  xdg-open {html_path}" in rendered_summary
+    assert "Text fallback:" in rendered_summary
+    assert f"  less {output_dir / 'report.md'}" in rendered_summary
+    assert rendered_summary.index("HTML report") < rendered_summary.index(
+        "Markdown report"
+    )
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "## Summary" in markdown
     assert "- Completed steps: `12`" in markdown
@@ -1143,6 +1158,40 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
     ) in progress
     assert "[7/12] bounded content discovery execution complete" in progress
     assert all("\r" not in message for message in progress)
+
+
+def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    report_path = output_dir / "report.md"
+    report_path.write_text("# Canonical Markdown report\n", encoding="utf-8")
+    report_before = report_path.read_bytes()
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_html_report",
+        lambda _input_dir: (_ for _ in ()).throw(
+            ValueError("fixture HTML rendering failure")
+        ),
+    )
+
+    with pytest.raises(ProjectPipelineFailed, match="fixture HTML rendering failure") as exc_info:
+        run_project_pipeline(
+            project_file,
+            PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    assert exc_info.value.result.final_status == "failed"
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert report_path.read_bytes() == report_before
+    assert not (output_dir / "report.html").exists()
+    guidance = "\n".join(render_project_pipeline_failure_guidance(exc_info.value.result))
+    assert "fixture HTML rendering failure" in str(exc_info.value)
+    assert "report.html" not in guidance
+    assert "xdg-open" not in guidance
 
 
 def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
@@ -1272,6 +1321,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         clock=lambda: FIXED_TIME,
     )
 
+    assert (output_dir / "report.html").is_file()
     assert calls == [
         "nmap-discover",
         "nmap-discover-write",
@@ -1818,6 +1868,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert result.profile == "deep-bounded"
     assert result.final_status == "completed"
     assert result.completed_steps == 14
+    assert (output_dir / "report.html").is_file()
     assert calls.count("deep-source-collect") == 1
     assert calls.count("deep-shallow-collect") == 1
     assert calls.count("deep-orchestrate") == 1
@@ -3598,6 +3649,19 @@ def _patch_successful_pipeline(
     monkeypatch.setattr(
         "bugslyce.project_pipeline.export_recon_evidence_pack",
         phase("export", output_path=f"{output_dir}-evidence-pack.zip"),
+    )
+
+    def write_html(input_dir: Path) -> Path:
+        output = input_dir / "report.html"
+        output.write_text(
+            "<!doctype html><title>Fixture report</title>\n",
+            encoding="utf-8",
+        )
+        return output
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_project_html_report",
+        write_html,
     )
 
 

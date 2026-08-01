@@ -9,12 +9,14 @@ import re
 
 import pytest
 
+from bugslyce.reports import html as html_module
 from bugslyce.cli import main
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.html import (
     build_html_report_model,
     render_html_report,
     write_html_report,
+    write_project_html_report,
 )
 from bugslyce.reports.markdown import export_project_state_json
 from bugslyce.recon.deep_source_route_collection_export import (
@@ -274,6 +276,81 @@ def test_html_report_writes_only_requested_output_and_preserves_input(
     with pytest.raises(ValueError, match="output path must be outside the input directory"):
         write_html_report(pack, state_path)
     assert state_path.read_bytes() == state_bytes
+
+
+def test_project_html_report_reuses_renderer_and_writes_canonical_local_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    model = object()
+    calls: list[object] = []
+    monkeypatch.setattr(
+        html_module,
+        "build_html_report_model",
+        lambda input_dir: calls.append(input_dir) or model,
+    )
+    monkeypatch.setattr(
+        html_module,
+        "render_html_report",
+        lambda value: calls.append(value) or "<html>fixture</html>\n",
+    )
+
+    output = write_project_html_report(pack)
+
+    assert output == pack / "report.html"
+    assert output.read_text(encoding="utf-8") == "<html>fixture</html>\n"
+    assert calls == [pack.resolve(), model]
+    assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_project_html_report_is_deterministic_and_confined(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+
+    output = write_project_html_report(pack)
+    first = output.read_bytes()
+    write_project_html_report(pack)
+
+    assert output.read_bytes() == first
+    with pytest.raises(ValueError, match="must be"):
+        write_project_html_report(pack, Path("../outside.html"))
+    assert not (tmp_path / "outside.html").exists()
+
+    output.write_text("unrelated local file\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not recognised as BugSlyce-owned"):
+        write_project_html_report(pack)
+    assert output.read_text(encoding="utf-8") == "unrelated local file\n"
+
+
+def test_project_html_report_rejects_symlink_and_cleans_failed_atomic_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    output = pack / "report.html"
+    outside = tmp_path / "outside.html"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        output.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        write_project_html_report(pack)
+    assert outside.read_text(encoding="utf-8") == "outside\n"
+    output.unlink()
+
+    monkeypatch.setattr(
+        html_module.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("fixture replace failure")),
+    )
+    with pytest.raises(OSError, match="fixture replace failure"):
+        write_project_html_report(pack)
+    assert not output.exists()
+    assert list(pack.glob(".report.html.*.tmp")) == []
 
 
 def test_html_report_rejects_new_output_beneath_input_before_any_write(

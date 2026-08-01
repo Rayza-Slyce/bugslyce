@@ -132,6 +132,7 @@ from bugslyce.reports.human_triage import (
     render_human_triage_brief_markdown,
     render_readable_evidence_cards_markdown,
 )
+from bugslyce.reports.html import write_project_html_report
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
@@ -720,21 +721,32 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
                 "",
             ]
         )
-    lines.extend(
+    final_outputs = []
+    review_commands = []
+    if outputs["html_report"] != "not generated":
+        final_outputs.append(f"- HTML report: `{outputs['html_report']}`")
+        review_commands.append(f"xdg-open {outputs['html_report']}")
+    final_outputs.extend(
         [
-            "## Final Outputs",
-            "",
-            f"- Report: `{outputs['report']}`",
+            f"- Markdown report: `{outputs['report']}`",
             f"- Recon status: `{outputs['status']}`",
             f"- Runbook: `{outputs['runbook']}`",
             f"- Pipeline metadata JSON: `{outputs['pipeline_json']}`",
             f"- Pipeline metadata Markdown: `{outputs['pipeline_markdown']}`",
             f"- Evidence pack: `{outputs['export']}`",
+        ]
+    )
+    review_commands.append(f"less {outputs['report']}")
+    lines.extend(
+        [
+            "## Final Outputs",
+            "",
+            *final_outputs,
             "",
             "## Suggested Review Commands",
             "",
             "```bash",
-            f"less {outputs['report']}",
+            *review_commands,
             f"bugslyce project next --project {result.project_file}",
             f"bugslyce project status --project {result.project_file}",
             "```",
@@ -770,18 +782,41 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
     compact_summary = _render_compact_run_summary(completion_summary)
     if compact_summary is not None:
         lines.extend([*compact_summary, ""])
-    lines.extend(
+    final_outputs = []
+    if outputs["html_report"] != "not generated":
+        final_outputs.append(f"* HTML report: {outputs['html_report']}")
+    final_outputs.extend(
         [
-            "Final outputs:",
-            f"* Report: {outputs['report']}",
+            f"* Markdown report: {outputs['report']}",
             f"* Status: {outputs['status']}",
             f"* Runbook: {outputs['runbook']}",
             f"* Pipeline metadata: {outputs['pipeline_markdown']}",
             f"* Evidence pack: {outputs['export']}",
+        ]
+    )
+    review_guidance = []
+    if outputs["html_report"] != "not generated":
+        review_guidance.extend(
+            [
+                "* Open the HTML Operator Report:",
+                f"  xdg-open {outputs['html_report']}",
+                "",
+                "Text fallback:",
+            ]
+        )
+    review_guidance.extend(
+        [
+            "* Review the Markdown report:",
+            f"  less {outputs['report']}",
+        ]
+    )
+    lines.extend(
+        [
+            "Final outputs:",
+            *final_outputs,
             "",
             "Recommended next action:",
-            "* Review the Operator Summary:",
-            f"  less {outputs['report']}",
+            *review_guidance,
             "",
             "Optional:",
             "* Preview next safe action:",
@@ -883,6 +918,12 @@ def _final_output_paths(result: PipelineResult) -> dict[str, str]:
         for step in result.steps
     )
     return {
+        "html_report": (
+            str(output_dir / "report.html")
+            if (output_dir / "report.html").is_file()
+            and not (output_dir / "report.html").is_symlink()
+            else "not generated"
+        ),
         "report": result.report_path or "not generated",
         "status": (
             str(output_dir / "recon_status.md")
@@ -1921,6 +1962,8 @@ def _refresh_final_pipeline_outputs(
             Path(result.export_path),
             **export_kwargs,
         )
+    write_project_html_report(output_dir)
+    write_project_pipeline_result(result)
 
 
 def _reconcile_failed_pipeline_outputs(

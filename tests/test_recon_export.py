@@ -67,6 +67,20 @@ def test_export_refuses_overwrite_without_force_and_allows_force(tmp_path: Path)
     assert zipfile.is_zipfile(output_path)
 
 
+def test_export_deliberately_excludes_project_local_html_report(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "report.html").write_text(
+        "<!doctype html><title>Local derived view</title>\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "pack.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    with zipfile.ZipFile(output_path) as archive:
+        assert "report.html" not in archive.namelist()
+
+
 def test_export_failure_preserves_existing_pack_and_removes_temporary_file(
     tmp_path: Path,
     monkeypatch,
