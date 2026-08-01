@@ -9,7 +9,14 @@ import warnings
 from bugslyce.core.models import ReconManifest, ReconManifestArtifact
 
 
-SUPPORTED_ARTIFACT_TYPES = {"nmap", "gobuster", "http_headers", "robots", "html"}
+SUPPORTED_ARTIFACT_TYPES = {
+    "nmap",
+    "gobuster",
+    "content_discovery_internal",
+    "http_headers",
+    "robots",
+    "html",
+}
 
 
 def parse_recon_manifest(path: Path, input_dir: Path | None = None) -> ReconManifest | None:

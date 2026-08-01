@@ -486,6 +486,17 @@ class ReconPathFollowupExecutionResult:
 
 
 @dataclass(frozen=True)
+class ContentDiscoveryOriginDecision:
+    """Bounded negative-baseline decision for one planned HTTP origin."""
+
+    origin: str
+    classification: str
+    selected_policy: str
+    baseline_equivalent_candidates: int = 0
+    retained_candidates: int = 0
+
+
+@dataclass(frozen=True)
 class ReconContentDiscoveryExecutionResult:
     """Metadata for approved root content discovery plan execution."""
 
@@ -516,6 +527,9 @@ class ReconContentDiscoveryExecutionResult:
     no_arbitrary_urls: bool
     no_exploitation: bool
     warnings: list[str]
+    baseline_artifact_path: str | None = None
+    origin_decisions: list[ContentDiscoveryOriginDecision] = field(default_factory=list)
+    baseline_limitations: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -403,7 +403,10 @@ def _score_discovered_path(record: DiscoveredPath, url: str) -> int:
 
 
 def _is_content_discovery_record(record: DiscoveredPath) -> bool:
-    return Path(record.source).name.startswith("gobuster-")
+    return (
+        Path(record.source).name.startswith("gobuster-")
+        or "internal_exact_body_comparator" in record.tags
+    )
 
 
 def _already_followed_urls(manifest: dict[str, object]) -> set[str]:

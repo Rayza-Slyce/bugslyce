@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, replace
+import hashlib
 import json
 from pathlib import Path
+import re
+import secrets
 import shutil
 import time
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
+from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import (
+    ContentDiscoveryOriginDecision,
     ContentDiscoveryPlan,
     ContentDiscoveryStep,
     ReconContentDiscoveryExecutionResult,
     ReconPlannedArtifact,
 )
+from bugslyce.core.programme_scope import ProgrammeScopePolicy
 from bugslyce.core.project import build_project_state
+from bugslyce.project_session import (
+    PROJECT_FILENAME,
+    load_project,
+    load_project_engagement_policy,
+    load_project_programme_scope_policy,
+)
 from bugslyce.recon.content_commands import build_live_content_discovery_command
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_CREATED_BY,
@@ -29,6 +41,18 @@ from bugslyce.recon.content_plan import (
     get_content_discovery_profile,
 )
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
+from bugslyce.recon.http_enforcement import (
+    HTTPEnforcementConfiguration,
+    HTTPExecutorClosed,
+    HTTPProgrammeScopeRefused,
+    HTTPRateRejected,
+    HTTPRedirectRefused,
+    HTTPTransportFailure,
+    InternalHTTPExecutionError,
+    InternalHTTPExecutor,
+    InternalHTTPResponse,
+    build_http_enforcement_configuration,
+)
 from bugslyce.recon.runner import LiveContentDiscoveryRunner
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
@@ -40,6 +64,269 @@ class ContentDiscoveryExecutionIncomplete(ValueError):
     def __init__(self, message: str, result: ReconContentDiscoveryExecutionResult) -> None:
         super().__init__(message)
         self.result = result
+
+
+class ContentDiscoveryBaselineRefused(ValueError):
+    """Raised after baseline evidence proves discovery cannot proceed safely."""
+
+    def __init__(
+        self,
+        baseline_artifact_path: Path,
+        decisions: tuple[ContentBaselineDecision, ...],
+    ) -> None:
+        super().__init__(
+            "Content discovery stopped because a negative-response baseline "
+            "was unstable or incomplete. No content discovery was attempted."
+        )
+        self.baseline_artifact_path = baseline_artifact_path
+        self.decisions = decisions
+
+
+class ContentDiscoveryComparatorIncomplete(ValueError):
+    """Raised after a stable-baseline comparison stops before completion."""
+
+    def __init__(
+        self,
+        baseline_artifact_path: Path,
+        decision: ContentBaselineDecision,
+    ) -> None:
+        super().__init__(
+            "Content discovery stopped because internal exact-body comparison "
+            "did not complete. Updated baseline evidence was retained."
+        )
+        self.baseline_artifact_path = baseline_artifact_path
+        self.decision = decision
+
+
+BASELINE_REQUEST_COUNT = 3
+BASELINE_REQUEST_TIMEOUT_SECONDS = 10
+BASELINE_MAXIMUM_RESPONSE_BYTES = 1_000_000
+BASELINE_ARTIFACT_NAME = "content_discovery_baseline.json"
+BASELINE_CLASSIFICATION_CONVENTIONAL = "conventional_negative"
+BASELINE_CLASSIFICATION_STABLE_FALLBACK = "stable_fallback"
+BASELINE_CLASSIFICATION_STABLE_REDIRECT = "stable_redirect_fallback"
+BASELINE_CLASSIFICATION_UNSTABLE = "unstable"
+BASELINE_CLASSIFICATION_FAILED = "failed"
+BASELINE_POLICY_GOBUSTER = "gobuster"
+BASELINE_POLICY_INTERNAL_COMPARATOR = "internal_exact_body_comparator"
+BASELINE_POLICY_REFUSE = "refuse"
+INTERNAL_COMPARATOR_ARTIFACT_TYPE = "content_discovery_internal"
+INTERNAL_COMPARATOR_TAG = "internal_exact_body_comparator"
+MAX_INTERNAL_COMPARATOR_CANDIDATES = 4096
+_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True)
+class ContentBaselineObservation:
+    """One body-bounded negative-path observation without retained content."""
+
+    request_url: str
+    observation_status: str
+    terminal_http_status: int | None
+    response_bytes: int | None
+    body_sha256: str | None
+    final_url: str | None
+    redirect_hops: tuple[tuple[int, str], ...]
+    failure_reason: str | None
+
+    @classmethod
+    def complete(
+        cls,
+        request_url: str,
+        response: InternalHTTPResponse,
+    ) -> ContentBaselineObservation:
+        return cls(
+            request_url=request_url,
+            observation_status="complete",
+            terminal_http_status=response.status_code,
+            response_bytes=len(response.body),
+            body_sha256=hashlib.sha256(response.body).hexdigest(),
+            final_url=response.final_url,
+            redirect_hops=tuple(
+                (hop.status_code, hop.destination_url) for hop in response.redirects
+            ),
+            failure_reason=None,
+        )
+
+    @classmethod
+    def failed(cls, request_url: str, reason: str) -> ContentBaselineObservation:
+        return cls(
+            request_url=request_url,
+            observation_status="failed",
+            terminal_http_status=None,
+            response_bytes=None,
+            body_sha256=None,
+            final_url=None,
+            redirect_hops=(),
+            failure_reason=reason,
+        )
+
+
+ContentComparisonSignature = tuple[
+    int,
+    int,
+    str,
+    str,
+    tuple[tuple[int, str], ...],
+]
+
+
+@dataclass(frozen=True)
+class ContentBaselineDecision:
+    """Deterministic policy selected from one origin's negative baseline."""
+
+    origin: str
+    classification: str
+    selected_policy: str
+    required_observations: int
+    completed_observations: int
+    observations: tuple[ContentBaselineObservation, ...]
+    failure_or_instability_reason: str | None
+    limitations: tuple[str, ...]
+    comparison_signature: ContentComparisonSignature | None = None
+    baseline_equivalent_candidates: int = 0
+    retained_candidates: int = 0
+
+
+@dataclass(frozen=True)
+class _ContentArtifactSource:
+    step_id: str
+    path: Path
+    partial: bool
+    artifact_type: str
+    description: str
+    tags: tuple[str, ...]
+
+
+class _ComparatorStopped(Exception):
+    def __init__(self, decision: ContentBaselineDecision) -> None:
+        super().__init__("Internal exact-body comparison stopped.")
+        self.decision = decision
+
+
+def collect_content_discovery_baseline(
+    origin: str,
+    executor: InternalHTTPExecutor,
+    *,
+    token_factory: Callable[[], str] | None = None,
+) -> ContentBaselineDecision:
+    """Collect exactly three bounded negative paths through the enforced executor."""
+
+    request_urls = _negative_request_urls(origin, token_factory or _default_token)
+    observations: list[ContentBaselineObservation] = []
+    for request_url in request_urls:
+        try:
+            response = executor.request(
+                request_url,
+                method="GET",
+                timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
+                maximum_response_bytes=BASELINE_MAXIMUM_RESPONSE_BYTES,
+                allow_query_strings=False,
+            )
+        except InternalHTTPExecutionError as exc:
+            observations.append(
+                ContentBaselineObservation.failed(
+                    request_url,
+                    _baseline_failure_reason(exc),
+                )
+            )
+        else:
+            observations.append(ContentBaselineObservation.complete(request_url, response))
+    return classify_content_discovery_baseline(origin, tuple(observations))
+
+
+def classify_content_discovery_baseline(
+    origin: str,
+    observations: tuple[ContentBaselineObservation, ...],
+) -> ContentBaselineDecision:
+    """Select conventional, exact-comparator, or fail-closed discovery."""
+
+    completed = sum(item.observation_status == "complete" for item in observations)
+    if len(observations) != BASELINE_REQUEST_COUNT or completed != BASELINE_REQUEST_COUNT:
+        return ContentBaselineDecision(
+            origin=origin,
+            classification=BASELINE_CLASSIFICATION_FAILED,
+            selected_policy=BASELINE_POLICY_REFUSE,
+            required_observations=BASELINE_REQUEST_COUNT,
+            completed_observations=completed,
+            observations=observations,
+            failure_or_instability_reason="One or more required baseline observations failed.",
+            limitations=(
+                "No content discovery was attempted because the negative baseline was incomplete.",
+            ),
+        )
+
+    statuses = {item.terminal_http_status for item in observations}
+    if (
+        len(statuses) == 1
+        and next(iter(statuses)) in {404, 410}
+        and all(not item.redirect_hops for item in observations)
+    ):
+        return ContentBaselineDecision(
+            origin=origin,
+            classification=BASELINE_CLASSIFICATION_CONVENTIONAL,
+            selected_policy=BASELINE_POLICY_GOBUSTER,
+            required_observations=BASELINE_REQUEST_COUNT,
+            completed_observations=completed,
+            observations=observations,
+            failure_or_instability_reason=None,
+            limitations=(
+                "Conventional 404/410 responses may contain request-specific body content.",
+            ),
+        )
+
+    signatures = {_observation_comparison_signature(item) for item in observations}
+    if len(signatures) == 1:
+        signature = next(iter(signatures))
+        has_redirect = any(item.redirect_hops for item in observations)
+        return ContentBaselineDecision(
+            origin=origin,
+            classification=(
+                BASELINE_CLASSIFICATION_STABLE_REDIRECT
+                if has_redirect
+                else BASELINE_CLASSIFICATION_STABLE_FALLBACK
+            ),
+            selected_policy=BASELINE_POLICY_INTERNAL_COMPARATOR,
+            required_observations=BASELINE_REQUEST_COUNT,
+            completed_observations=completed,
+            observations=observations,
+            failure_or_instability_reason=None,
+            limitations=(
+                "Exact baseline equivalence is indistinguishable from a catch-all response; "
+                "suppression is not evidence that a path is absent.",
+            ),
+            comparison_signature=signature,
+        )
+
+    return ContentBaselineDecision(
+        origin=origin,
+        classification=BASELINE_CLASSIFICATION_UNSTABLE,
+        selected_policy=BASELINE_POLICY_REFUSE,
+        required_observations=BASELINE_REQUEST_COUNT,
+        completed_observations=completed,
+        observations=observations,
+        failure_or_instability_reason=(
+            "Successful baseline observations varied in status, length, body hash, "
+            "final URL, or redirect sequence."
+        ),
+        limitations=(
+            "No content discovery was attempted because the negative baseline was unstable.",
+        ),
+    )
+
+
+def response_comparison_signature(
+    response: InternalHTTPResponse,
+) -> ContentComparisonSignature:
+    """Return the complete body-bounded signature used for exact suppression."""
+
+    return (
+        response.status_code,
+        len(response.body),
+        hashlib.sha256(response.body).hexdigest(),
+        _relative_final_url_marker(response.requested_url, response.final_url),
+        tuple((hop.status_code, hop.destination_url) for hop in response.redirects),
+    )
 
 
 def load_content_discovery_plan(path: Path) -> ContentDiscoveryPlan:
@@ -128,6 +415,9 @@ def run_content_discovery_workflow(
     wordlist_check: Callable[[Path], bool] | None = None,
     step_id: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    http_executor: InternalHTTPExecutor | None = None,
+    token_factory: Callable[[], str] | None = None,
+    comparator_monotonic: Callable[[], float] = time.monotonic,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
 
@@ -164,28 +454,130 @@ def run_content_discovery_workflow(
             f"Approved content discovery wordlist does not exist: {profile_definition.wordlist}"
         )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    commands = [
-        build_live_content_discovery_command(step, plan)
-        for step in selected_steps
-    ]
-    live_runner = runner or LiveContentDiscoveryRunner(
-        output_dir,
-        target,
-        {step.origin for step in selected_steps},
-        plan.profile,
+    owns_executor = http_executor is None
+    enforced_executor = http_executor or _build_project_http_executor(
+        input_dir=input_dir,
+        scope_file=scope_file,
+        target=target,
+        engagement_context=state_before.engagement_context,
+        approved_origins=tuple(step.origin for step in selected_steps),
     )
+    try:
+        return _execute_content_discovery(
+            plan_path=plan_path,
+            plan=plan,
+            scope_file=scope_file,
+            target=target,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            selected_steps=selected_steps,
+            profile_definition=profile_definition,
+            enforced_executor=enforced_executor,
+            token_factory=token_factory,
+            comparator_monotonic=comparator_monotonic,
+            runner=runner,
+            step_id=step_id,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if owns_executor:
+            enforced_executor.close()
+
+
+def _execute_content_discovery(
+    *,
+    plan_path: Path,
+    plan: ContentDiscoveryPlan,
+    scope_file: Path,
+    target: str,
+    input_dir: Path,
+    output_dir: Path,
+    selected_steps: list[ContentDiscoveryStep],
+    profile_definition,
+    enforced_executor: InternalHTTPExecutor,
+    token_factory: Callable[[], str] | None,
+    comparator_monotonic: Callable[[], float],
+    runner: LiveContentDiscoveryRunner | None,
+    step_id: str | None,
+    progress_callback: Callable[[str], None] | None,
+) -> ReconContentDiscoveryExecutionResult:
+    baseline_decisions = tuple(
+        collect_content_discovery_baseline(
+            step.origin,
+            enforced_executor,
+            token_factory=token_factory,
+        )
+        for step in selected_steps
+    )
+    baseline_artifact_path = input_dir / BASELINE_ARTIFACT_NAME
+    _write_baseline_artifact(baseline_artifact_path, baseline_decisions)
+    if any(decision.selected_policy == BASELINE_POLICY_REFUSE for decision in baseline_decisions):
+        raise ContentDiscoveryBaselineRefused(
+            baseline_artifact_path,
+            baseline_decisions,
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    decision_by_origin = {decision.origin: decision for decision in baseline_decisions}
+    conventional_steps = [
+        step
+        for step in selected_steps
+        if decision_by_origin[step.origin].selected_policy == BASELINE_POLICY_GOBUSTER
+    ]
+    live_runner = runner
+    if conventional_steps and live_runner is None:
+        live_runner = LiveContentDiscoveryRunner(
+            output_dir,
+            target,
+            {step.origin for step in conventional_steps},
+            plan.profile,
+        )
     command_results = []
-    total_commands = len(commands)
-    for index, command in enumerate(commands, start=1):
-        step = next(step for step in selected_steps if step.step_id == command.id)
+    artifact_sources: list[_ContentArtifactSource] = []
+    discovery_started_origins: set[str] = set()
+    total_steps = len(selected_steps)
+    for index, step in enumerate(selected_steps, start=1):
+        decision = decision_by_origin[step.origin]
+        if decision.selected_policy == BASELINE_POLICY_INTERNAL_COMPARATOR:
+            try:
+                artifact_source, decision = _run_internal_exact_body_comparator(
+                    step,
+                    profile_definition.wordlist,
+                    output_dir,
+                    enforced_executor,
+                    decision,
+                    timeout_seconds=profile_definition.timeout_seconds,
+                    monotonic=comparator_monotonic,
+                    on_first_request=lambda origin=step.origin: discovery_started_origins.add(
+                        origin
+                    ),
+                )
+            except _ComparatorStopped as stopped:
+                decision_by_origin[step.origin] = stopped.decision
+                updated_decisions = tuple(
+                    decision_by_origin[item.origin] for item in selected_steps
+                )
+                _write_baseline_artifact(baseline_artifact_path, updated_decisions)
+                raise ContentDiscoveryComparatorIncomplete(
+                    baseline_artifact_path,
+                    stopped.decision,
+                ) from None
+            artifact_sources.append(artifact_source)
+            decision_by_origin[step.origin] = decision
+            _write_baseline_artifact(
+                baseline_artifact_path,
+                tuple(decision_by_origin[item.origin] for item in selected_steps),
+            )
+            continue
+
+        command = build_live_content_discovery_command(step, plan)
         _emit_progress(
             progress_callback,
             "\n".join(
                 [
                     "BugSlyce content discovery step starting",
                     f"Step: {step.step_id}",
-                    f"Progress: {index}/{total_commands}",
+                    f"Progress: {index}/{total_steps}",
                     f"Origin: {step.origin}",
                     f"Profile: {plan.profile}",
                     f"Timeout: {command.timeout_seconds} seconds",
@@ -193,19 +585,17 @@ def run_content_discovery_workflow(
             ),
         )
         started = time.monotonic()
+        assert live_runner is not None
+        discovery_started_origins.add(step.origin)
         result = live_runner.run(command)
         elapsed = max(0.0, time.monotonic() - started)
         if result.executed:
             command_results.append(result)
         if _is_timeout_result(result):
-            partial_sources = [
-                (previous.command_id, Path(previous.output_file), False)
-                for previous in command_results[:-1]
-                if previous.exit_code == 0 and not previous.error
-            ]
+            partial_sources = list(artifact_sources)
             output_path = Path(result.output_file)
             if output_path.is_file() and output_path.stat().st_size > 0:
-                partial_sources.append((result.command_id, output_path, True))
+                partial_sources.append(_gobuster_artifact_source(step, output_path, True))
             execution_result = _finalize_execution(
                 plan_path,
                 plan,
@@ -214,6 +604,15 @@ def run_content_discovery_workflow(
                 partial_sources,
                 timed_out_result=result,
                 selected_step_id=step_id,
+                baseline_artifact_path=baseline_artifact_path,
+                baseline_decisions=tuple(
+                    decision_by_origin[item.origin] for item in selected_steps
+                ),
+                discovery_started_origins=[
+                    item.origin
+                    for item in selected_steps
+                    if item.origin in discovery_started_origins
+                ],
             )
             partial_imported = any(
                 Path(path).name == Path(result.output_file).name
@@ -261,10 +660,12 @@ def run_content_discovery_workflow(
                 ]
             ),
         )
-    artifact_sources = [
-        (result.command_id, Path(result.output_file), False)
-        for result in command_results
-    ]
+        artifact_sources.append(_gobuster_artifact_source(step, output_path, False))
+
+    final_decisions = tuple(
+        decision_by_origin[step.origin] for step in selected_steps
+    )
+    _write_baseline_artifact(baseline_artifact_path, final_decisions)
     return _finalize_execution(
         plan_path,
         plan,
@@ -273,6 +674,54 @@ def run_content_discovery_workflow(
         artifact_sources,
         timed_out_result=None,
         selected_step_id=step_id,
+        baseline_artifact_path=baseline_artifact_path,
+        baseline_decisions=final_decisions,
+        discovery_started_origins=[
+            item.origin
+            for item in selected_steps
+            if item.origin in discovery_started_origins
+        ],
+    )
+
+
+def _build_project_http_executor(
+    *,
+    input_dir: Path,
+    scope_file: Path,
+    target: str,
+    engagement_context: str,
+    approved_origins: tuple[str, ...],
+) -> InternalHTTPExecutor:
+    if engagement_context != BUG_BOUNTY_CONTEXT:
+        return InternalHTTPExecutor(None)
+
+    project = load_project(input_dir / PROJECT_FILENAME)
+    if Path(project.output_dir).expanduser().resolve() != input_dir.resolve():
+        raise ValueError("Project output directory does not match the content plan.")
+    if Path(project.scope_file).expanduser().resolve() != scope_file.expanduser().resolve():
+        raise ValueError("Project scope file does not match the content workflow.")
+    if project.target != target:
+        raise ValueError("Project target does not match the content plan.")
+    engagement_policy = load_project_engagement_policy(project)
+    if engagement_policy is None:
+        raise ValueError("Programme-scoped content discovery requires engagement policy.")
+    programme_scope_policy = load_project_programme_scope_policy(project)
+    if programme_scope_policy is None:
+        raise ValueError("Programme-scoped content discovery requires programme scope.")
+    configuration = build_http_enforcement_configuration(
+        engagement_policy,
+        approved_origins=approved_origins,
+    )
+    return _create_project_http_executor(configuration, programme_scope_policy)
+
+
+def _create_project_http_executor(
+    configuration: HTTPEnforcementConfiguration,
+    programme_scope_policy: ProgrammeScopePolicy,
+) -> InternalHTTPExecutor:
+    return InternalHTTPExecutor(
+        configuration,
+        programme_scope_policy=programme_scope_policy,
     )
 
 
@@ -327,7 +776,8 @@ def render_content_discovery_execution_markdown(
             f"- Commands timed out: {result.commands_timed_out}",
             f"- Timed-out step ID: `{result.timed_out_step_id or 'none'}`",
             f"- Timed-out origin: `{result.timed_out_origin or 'none'}`",
-            f"- Gobuster artefacts written: {len(result.artifact_paths)}",
+            f"- Content discovery artefacts written: {len(result.artifact_paths)}",
+            f"- Baseline artefact: `{result.baseline_artifact_path or 'none'}`",
             f"- Partial artefacts imported: {result.partial_artifacts_imported}",
             f"- Completed artefacts imported: {result.completed_artifacts_imported}",
             f"- Report: `{result.report_path}`",
@@ -336,7 +786,7 @@ def render_content_discovery_execution_markdown(
             (
                 "Root content discovery timed out after starting."
                 if result.commands_timed_out
-                else "Root content discovery commands were executed."
+                else "Bounded root content discovery was executed."
             ),
             "No recursion, dynamic Gobuster extension expansion (`-x`), brute force, exploitation, or form submission was run.",
             "",
@@ -364,7 +814,8 @@ def render_content_discovery_execution_summary(
             f"Commands timed out: {result.commands_timed_out}",
             f"Timed-out step ID: {result.timed_out_step_id or 'none'}",
             f"Timed-out origin: {result.timed_out_origin or 'none'}",
-            f"Gobuster artefacts written: {len(result.artifact_paths)}",
+            f"Content discovery artefacts written: {len(result.artifact_paths)}",
+            f"Baseline artefact: {result.baseline_artifact_path or 'none'}",
             f"Partial artefacts imported: {result.partial_artifacts_imported}",
             f"Completed artefacts imported: {result.completed_artifacts_imported}",
             f"Report path: {result.report_path}",
@@ -372,10 +823,318 @@ def render_content_discovery_execution_summary(
             (
                 "Root content discovery timed out after starting."
                 if result.commands_timed_out
-                else "Root content discovery commands were executed."
+                else "Bounded root content discovery was executed."
             ),
             "No recursion, dynamic Gobuster extension expansion (`-x`), brute force, exploitation, or form submission was run.",
         ]
+    )
+
+
+def _negative_request_urls(
+    origin: str,
+    token_factory: Callable[[], str],
+) -> tuple[str, ...]:
+    parsed_origin = urlparse(origin)
+    if (
+        parsed_origin.scheme not in {"http", "https"}
+        or not parsed_origin.hostname
+        or parsed_origin.path != "/"
+        or parsed_origin.params
+        or parsed_origin.query
+        or parsed_origin.fragment
+    ):
+        raise ValueError("Content baseline requires a canonical HTTP root origin.")
+    tokens = tuple(token_factory() for _ in range(BASELINE_REQUEST_COUNT))
+    if len(set(tokens)) != BASELINE_REQUEST_COUNT:
+        raise ValueError("Content baseline token factory must produce distinct tokens.")
+    if any(
+        not isinstance(token, str)
+        or not token
+        or len(token) > 128
+        or _TOKEN_PATTERN.fullmatch(token) is None
+        for token in tokens
+    ):
+        raise ValueError("Content baseline token factory produced an unsafe token.")
+    return tuple(
+        urljoin(origin, f".bugslyce-negative-{token}") for token in tokens
+    )
+
+
+def _default_token() -> str:
+    return secrets.token_hex(16)
+
+
+def _baseline_failure_reason(exc: InternalHTTPExecutionError) -> str:
+    if isinstance(exc, HTTPProgrammeScopeRefused):
+        return f"programme_scope_refused:{exc.reason_code}"
+    if isinstance(exc, HTTPTransportFailure):
+        return f"transport_failure:{exc.category}"
+    if isinstance(exc, HTTPRedirectRefused):
+        return "redirect_refused"
+    if isinstance(exc, HTTPRateRejected):
+        return "rate_rejected"
+    if isinstance(exc, HTTPExecutorClosed):
+        return "executor_closed"
+    return "internal_http_failure"
+
+
+def _observation_comparison_signature(
+    observation: ContentBaselineObservation,
+) -> ContentComparisonSignature:
+    if (
+        observation.observation_status != "complete"
+        or observation.terminal_http_status is None
+        or observation.response_bytes is None
+        or observation.body_sha256 is None
+        or observation.final_url is None
+    ):
+        raise ValueError("Incomplete content baseline observation has no signature.")
+    return (
+        observation.terminal_http_status,
+        observation.response_bytes,
+        observation.body_sha256,
+        _relative_final_url_marker(observation.request_url, observation.final_url),
+        observation.redirect_hops,
+    )
+
+
+def _relative_final_url_marker(request_url: str, final_url: str) -> str:
+    return "requested_url" if final_url == request_url else final_url
+
+
+def _write_baseline_artifact(
+    path: Path,
+    decisions: tuple[ContentBaselineDecision, ...],
+) -> None:
+    payload = {
+        "schema_version": "1.0",
+        "created_by": "bugslyce-r2-content-baseline",
+        "required_observations_per_origin": BASELINE_REQUEST_COUNT,
+        "origins": [_baseline_decision_payload(decision) for decision in decisions],
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _baseline_decision_payload(decision: ContentBaselineDecision) -> dict[str, object]:
+    return {
+        "origin": decision.origin,
+        "generated_negative_request_urls": [
+            observation.request_url for observation in decision.observations
+        ],
+        "observations": [
+            {
+                "request_url": observation.request_url,
+                "observation_status": observation.observation_status,
+                "terminal_http_status": observation.terminal_http_status,
+                "response_bytes": observation.response_bytes,
+                "body_sha256": observation.body_sha256,
+                "final_url": observation.final_url,
+                "redirect_hops": [
+                    {"status_code": status, "destination_url": destination}
+                    for status, destination in observation.redirect_hops
+                ],
+                "failure_reason": observation.failure_reason,
+            }
+            for observation in decision.observations
+        ],
+        "classification": decision.classification,
+        "selected_policy": decision.selected_policy,
+        "required_observations": decision.required_observations,
+        "completed_observations": decision.completed_observations,
+        "failure_or_instability_reason": decision.failure_or_instability_reason,
+        "limitations": list(decision.limitations),
+        "baseline_equivalent_candidate_count": decision.baseline_equivalent_candidates,
+        "retained_candidate_count": decision.retained_candidates,
+    }
+
+
+def _run_internal_exact_body_comparator(
+    step: ContentDiscoveryStep,
+    wordlist: Path,
+    output_dir: Path,
+    executor: InternalHTTPExecutor,
+    baseline: ContentBaselineDecision,
+    *,
+    timeout_seconds: int,
+    monotonic: Callable[[], float],
+    on_first_request: Callable[[], None],
+) -> tuple[_ContentArtifactSource, ContentBaselineDecision]:
+    if baseline.comparison_signature is None:
+        raise ValueError("Stable fallback baseline lacks a comparison signature.")
+    entries = _load_internal_comparator_entries(wordlist)
+    retained_lines: list[str] = []
+    suppressed = 0
+    retained = 0
+    deadline = monotonic() + timeout_seconds
+    request_started = False
+    for entry in entries:
+        remaining_timeout = min(
+            BASELINE_REQUEST_TIMEOUT_SECONDS,
+            int(deadline - monotonic()),
+        )
+        if remaining_timeout <= 0:
+            stopped = replace(
+                baseline,
+                baseline_equivalent_candidates=suppressed,
+                retained_candidates=retained,
+                failure_or_instability_reason=(
+                    "Internal exact-body comparison reached the content-discovery "
+                    "time limit before completing the approved wordlist."
+                ),
+                limitations=tuple(
+                    dict.fromkeys(
+                        (
+                            *baseline.limitations,
+                            "Candidate comparison is not complete; no comparator "
+                            "artefact was imported.",
+                        )
+                    )
+                ),
+            )
+            raise _ComparatorStopped(stopped)
+        candidate_url = _wordlist_candidate_url(step.origin, entry)
+        if not request_started:
+            on_first_request()
+            request_started = True
+        try:
+            response = executor.request(
+                candidate_url,
+                method="GET",
+                timeout_seconds=remaining_timeout,
+                maximum_response_bytes=BASELINE_MAXIMUM_RESPONSE_BYTES,
+                allow_query_strings=False,
+            )
+        except InternalHTTPExecutionError as exc:
+            reason = _baseline_failure_reason(exc)
+            stopped = replace(
+                baseline,
+                baseline_equivalent_candidates=suppressed,
+                retained_candidates=retained,
+                failure_or_instability_reason=(
+                    "Internal exact-body comparison stopped before completing the "
+                    f"approved wordlist: {reason}."
+                ),
+                limitations=tuple(
+                    dict.fromkeys(
+                        (
+                            *baseline.limitations,
+                            "Candidate comparison is not complete; no comparator "
+                            "artefact was imported.",
+                        )
+                    )
+                ),
+            )
+            raise _ComparatorStopped(stopped) from None
+        if response_comparison_signature(response) == baseline.comparison_signature:
+            suppressed += 1
+            continue
+        retained += 1
+        retained_lines.append(_comparator_output_line(candidate_url, response))
+
+    output_path = output_dir / _internal_comparator_filename(step.origin)
+    output_path.write_text("".join(retained_lines), encoding="utf-8")
+    updated = replace(
+        baseline,
+        baseline_equivalent_candidates=suppressed,
+        retained_candidates=retained,
+    )
+    return (
+        _ContentArtifactSource(
+            step_id=step.step_id,
+            path=output_path,
+            partial=False,
+            artifact_type=INTERNAL_COMPARATOR_ARTIFACT_TYPE,
+            description=(
+                "Bounded content discovery using the internal exact-body comparator"
+            ),
+            tags=(INTERNAL_COMPARATOR_TAG,),
+        ),
+        updated,
+    )
+
+
+def _load_internal_comparator_entries(wordlist: Path) -> tuple[str, ...]:
+    try:
+        entries = tuple(
+            line.strip()
+            for line in wordlist.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Approved content discovery wordlist could not be read.") from exc
+    if not entries or len(entries) > MAX_INTERNAL_COMPARATOR_CANDIDATES:
+        raise ValueError("Approved content discovery wordlist is outside comparator bounds.")
+    return entries
+
+
+def _wordlist_candidate_url(origin: str, entry: str) -> str:
+    parsed_entry = urlparse(entry)
+    if (
+        parsed_entry.scheme
+        or parsed_entry.netloc
+        or parsed_entry.params
+        or parsed_entry.query
+        or parsed_entry.fragment
+        or any(part == ".." for part in parsed_entry.path.split("/"))
+    ):
+        raise ValueError("Approved content discovery wordlist contains an unsafe entry.")
+    candidate = urljoin(origin, entry.lstrip("/"))
+    parsed_origin = urlparse(origin)
+    parsed_candidate = urlparse(candidate)
+    if (
+        parsed_candidate.scheme != parsed_origin.scheme
+        or parsed_candidate.netloc != parsed_origin.netloc
+    ):
+        raise ValueError("Content comparator candidate escaped its planned origin.")
+    return candidate
+
+
+def _comparator_output_line(
+    candidate_url: str,
+    response: InternalHTTPResponse,
+) -> str:
+    parsed = urlparse(candidate_url)
+    path = parsed.path or "/"
+    redirect = (
+        f" [--> {response.final_url}]"
+        if response.final_url != candidate_url
+        else ""
+    )
+    return (
+        f"{path} (Status: {response.status_code}) "
+        f"[Size: {len(response.body)}]{redirect}\n"
+    )
+
+
+def _internal_comparator_filename(origin: str) -> str:
+    parsed = urlparse(origin)
+    safe_host = "".join(
+        character if character.isalnum() or character in ".-" else "-"
+        for character in (parsed.hostname or "host").lower()
+    ).strip(".-") or "host"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return f"content-discovery-internal-{safe_host}-{port}-root.txt"
+
+
+def _gobuster_artifact_source(
+    step: ContentDiscoveryStep,
+    path: Path,
+    partial: bool,
+) -> _ContentArtifactSource:
+    return _ContentArtifactSource(
+        step_id=step.step_id,
+        path=path,
+        partial=partial,
+        artifact_type="gobuster",
+        description=(
+            "Partial gobuster output from timed-out approved content discovery command"
+            if partial
+            else "Bounded root content discovery from approved BugSlyce content plan"
+        ),
+        tags=("partial", "timed_out") if partial else (),
     )
 
 
@@ -487,12 +1246,12 @@ def _load_manifest_payload(path: Path) -> dict[str, object]:
 def _updated_manifest(
     manifest: dict[str, object],
     plan: ContentDiscoveryPlan,
-    artifacts_to_import: list[tuple[ContentDiscoveryStep, Path, bool]],
+    artifacts_to_import: list[tuple[ContentDiscoveryStep, _ContentArtifactSource]],
 ) -> dict[str, object]:
     payload = dict(manifest)
     existing = payload.get("artifacts")
     artifacts = list(existing) if isinstance(existing, list) else []
-    generated_names = {path.name for _step, path, _partial in artifacts_to_import}
+    generated_names = {source.path.name for _step, source in artifacts_to_import}
     artifacts = [
         artifact
         for artifact in artifacts
@@ -501,18 +1260,14 @@ def _updated_manifest(
             and artifact.get("file") in generated_names
         )
     ]
-    for step, artifact_path, partial in artifacts_to_import:
+    for step, source in artifacts_to_import:
         artifacts.append(
             {
-                "type": "gobuster",
-                "file": artifact_path.name,
+                "type": source.artifact_type,
+                "file": source.path.name,
                 "base_url": step.origin,
-                "description": (
-                    "Partial gobuster output from timed-out approved content discovery command"
-                    if partial
-                    else "Bounded root content discovery from approved BugSlyce content plan"
-                ),
-                "tags": ["partial", "timed_out"] if partial else [],
+                "description": source.description,
+                "tags": list(source.tags),
             }
         )
     if artifacts_to_import:
@@ -536,17 +1291,20 @@ def _finalize_execution(
     plan: ContentDiscoveryPlan,
     scope_file: Path,
     command_results,
-    artifact_sources: list[tuple[str, Path, bool]],
+    artifact_sources: list[_ContentArtifactSource],
     timed_out_result,
     selected_step_id: str | None,
+    baseline_artifact_path: Path,
+    baseline_decisions: tuple[ContentBaselineDecision, ...],
+    discovery_started_origins: list[str],
 ) -> ReconContentDiscoveryExecutionResult:
     input_dir = Path(plan.input_dir)
     output_dir = Path(plan.output_dir)
     step_by_id = {step.step_id: step for step in plan.steps}
-    copied: list[tuple[ContentDiscoveryStep, Path, bool]] = []
-    for command_id, source_value, partial in artifact_sources:
-        source = source_value.resolve()
-        step = step_by_id[command_id]
+    copied: list[tuple[ContentDiscoveryStep, _ContentArtifactSource]] = []
+    for artifact_source in artifact_sources:
+        source = artifact_source.path.resolve()
+        step = step_by_id[artifact_source.step_id]
         destination = (input_dir / source.name).resolve()
         try:
             destination.relative_to(input_dir.resolve())
@@ -554,7 +1312,7 @@ def _finalize_execution(
             raise ValueError("Content discovery artifact destination escaped the recon directory.") from exc
         if source != destination:
             shutil.copy2(source, destination)
-        copied.append((step, destination, partial))
+        copied.append((step, replace(artifact_source, path=destination)))
 
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)
@@ -569,11 +1327,6 @@ def _finalize_execution(
 
     completed = sum(result.exit_code == 0 and not result.error for result in command_results)
     timed_out = 1 if timed_out_result is not None else 0
-    started_steps = [
-        step_by_id[result.command_id]
-        for result in command_results
-        if result.command_id in step_by_id
-    ]
     return ReconContentDiscoveryExecutionResult(
         mode="content-run",
         plan_path=str(plan_path),
@@ -581,8 +1334,8 @@ def _finalize_execution(
         profile=plan.profile,
         input_dir=str(input_dir),
         output_dir=str(output_dir),
-        origins=[step.origin for step in started_steps],
-        artifact_paths=[str(path) for _step, path, _partial in copied],
+        origins=discovery_started_origins,
+        artifact_paths=[str(source.path) for _step, source in copied],
         manifest_path=str(manifest_path),
         report_path=str(report_path),
         project_state_path=str(project_state_path),
@@ -596,9 +1349,9 @@ def _finalize_execution(
             if selected_step_id is not None
             else None
         ),
-        partial_artifacts_imported=sum(partial for _step, _path, partial in copied),
+        partial_artifacts_imported=sum(source.partial for _step, source in copied),
         completed_artifacts_imported=sum(
-            not partial for _step, _path, partial in copied
+            not source.partial for _step, source in copied
         ),
         timed_out_step_id=timed_out_result.command_id if timed_out_result else None,
         timed_out_origin=(
@@ -612,6 +1365,24 @@ def _finalize_execution(
         no_arbitrary_urls=True,
         no_exploitation=True,
         warnings=project_state.warnings,
+        baseline_artifact_path=str(baseline_artifact_path),
+        origin_decisions=[
+            ContentDiscoveryOriginDecision(
+                origin=decision.origin,
+                classification=decision.classification,
+                selected_policy=decision.selected_policy,
+                baseline_equivalent_candidates=decision.baseline_equivalent_candidates,
+                retained_candidates=decision.retained_candidates,
+            )
+            for decision in baseline_decisions
+        ],
+        baseline_limitations=list(
+            dict.fromkeys(
+                limitation
+                for decision in baseline_decisions
+                for limitation in decision.limitations
+            )
+        ),
     )
 
 

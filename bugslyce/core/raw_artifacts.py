@@ -105,7 +105,7 @@ def assemble_raw_artifacts(
                 host_tags,
                 endpoint_tags,
             )
-        elif context.type == "gobuster":
+        elif context.type in {"gobuster", "content_discovery_internal"}:
             _assemble_gobuster(
                 context,
                 default_host,
@@ -474,7 +474,7 @@ def _assemble_html(
 def _context_url(context: _ArtifactContext, default_host: str | None, artifact_kind: str) -> str:
     metadata = context.metadata
     if metadata:
-        if artifact_kind == "gobuster" and metadata.base_url:
+        if artifact_kind in {"gobuster", "content_discovery_internal"} and metadata.base_url:
             return normalise_url(metadata.base_url)
         if metadata.url:
             return normalise_url(metadata.url)
