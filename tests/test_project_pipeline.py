@@ -1367,6 +1367,24 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
 
+    def body_fetch_with_operational_warning(*_args, **_kwargs):
+        calls.append("body-fetch")
+        return SimpleNamespace(
+            artifact_paths=[
+                str(output_dir / "body.html.partial"),
+                str(output_dir / "body.html.stderr.log"),
+            ],
+            report_path=str(output_dir / "report.md"),
+            failed_transfers=1,
+            partial_bodies_retained=1,
+            warnings=["One selective body-fetch transfer failed."],
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_body_fetch_workflow",
+        body_fetch_with_operational_warning,
+    )
+
     source_collection = SimpleNamespace(
         kind="source-collection",
         total_considered=3,
@@ -1785,6 +1803,16 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         assert requirements[0].owner_id == "DEEP-CONTENT-0001"
         assert requirements[0].evidence_ids == ("EVID-DEEP-CONTENT",)
     assert calls.index("body-fetch") < calls.index("deep-source-collect")
+    assert calls.index("body-fetch-write") < calls.index("deep-source-collect")
+    body_step = next(
+        step for step in result.steps if step.step_id == "PIPELINE-STEP-009"
+    )
+    assert body_step.status == "completed"
+    assert "1 failed transfer" in body_step.message
+    assert "1 partial body" in body_step.message
+    assert str(output_dir / "body.html.partial") in body_step.output_paths
+    assert str(output_dir / "body.html.stderr.log") in body_step.output_paths
+    assert str(output_dir / "body-fetch-write.json") in body_step.output_paths
     assert calls.index("deep-shallow-collect") < calls.index("deep-orchestrate")
     assert calls.index("deep-orchestration-write") < calls.index("deep-report-write")
     assert calls.index("deep-orchestration-write") < calls.index("export")
@@ -1798,7 +1826,33 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
             "utf-8"
         )
         packed_status = json.loads(archive.read("recon_status.json").decode("utf-8"))
-    assert packed_status["artifact_overview"]["deep_pipeline_phases_detected"] == 2
+        assert packed_status["artifact_overview"]["deep_pipeline_phases_detected"] == 2
+
+
+def test_nonrecoverable_body_fetch_failure_still_fails_pipeline_step_009(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_body_fetch_workflow",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("Curl exited with code 23.")
+        ),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+
+    body_step = next(
+        step for step in exc_info.value.result.steps if step.step_id == "PIPELINE-STEP-009"
+    )
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-009"
+    assert body_step.status == "failed"
+    assert "status" not in calls
+    assert "export" not in calls
 
 
 def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(

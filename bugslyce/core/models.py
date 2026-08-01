@@ -581,6 +581,9 @@ class ReconBodyFetchExecutionResult:
     no_form_submission: bool
     no_exploitation: bool
     warnings: list[str]
+    failed_transfers: int = 0
+    partial_bodies_retained: int = 0
+    partial_body_bytes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

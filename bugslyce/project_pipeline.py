@@ -1491,8 +1491,18 @@ def _step_runners(
     def body_fetch():
         result = run_body_fetch_workflow(output_dir, scope_file)
         metadata = write_body_fetch_execution_result(result, output_dir)
+        failed_transfers = getattr(result, "failed_transfers", 0)
+        partial_bodies_retained = getattr(result, "partial_bodies_retained", 0)
+        if failed_transfers:
+            message = (
+                "Selective body fetch completed with warnings: "
+                f"{failed_transfers} failed transfer(s), "
+                f"{partial_bodies_retained} partial body/bodies retained."
+            )
+        else:
+            message = "Selective body fetch completed."
         return (
-            "Selective body fetch completed.",
+            message,
             [*result.artifact_paths, *(str(path) for path in metadata)],
             {"report_path": result.report_path},
         )

@@ -354,6 +354,170 @@ def test_body_fetch_workflow_writes_html_manifest_report_and_metadata(tmp_path: 
     )
 
 
+def test_body_fetch_continues_after_partial_transfer_and_records_truthful_evidence(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    runner = _PartialTransferThenSuccessRunner()
+
+    result = run_body_fetch_workflow(input_dir, scope, runner=runner)
+    execution_json, _execution_markdown = write_body_fetch_execution_result(
+        result,
+        input_dir,
+    )
+    payload = json.loads(execution_json.read_text(encoding="utf-8"))
+    manifest = _manifest(input_dir)
+    failed = result.command_results[1]
+    partial_path = Path(failed.output_file)
+    completed_files = {
+        artifact["file"]
+        for artifact in manifest["artifacts"]
+        if artifact.get("type") == "html"
+    }
+
+    assert len(runner.command_ids) == len(result.body_urls_selected)
+    assert len(set(runner.command_ids)) == len(runner.command_ids)
+    assert result.commands_started == len(result.body_urls_selected)
+    assert result.commands_completed == result.commands_started - 1
+    assert result.failed_transfers == 1
+    assert result.partial_bodies_retained == 1
+    assert result.commands_timed_out == 0
+    assert failed.exit_code == 18
+    assert failed.error == "Curl exited with code 18."
+    assert failed.stderr_path is not None
+    assert Path(failed.stderr_path).is_file()
+    assert partial_path.name.endswith(".html.partial")
+    assert partial_path.is_file()
+    assert partial_path.stat().st_size == 8905
+    assert not Path(str(partial_path).removesuffix(".partial")).exists()
+    assert partial_path.name not in completed_files
+    assert Path(result.command_results[0].output_file).name in completed_files
+    assert Path(result.command_results[2].output_file).name in completed_files
+    manifest_url_by_file = {
+        artifact["file"]: artifact.get("url")
+        for artifact in manifest["artifacts"]
+        if artifact.get("type") == "html"
+    }
+    assert manifest_url_by_file[Path(result.command_results[0].output_file).name] == (
+        result.body_urls_selected[0]
+    )
+    assert manifest_url_by_file[Path(result.command_results[2].output_file).name] == (
+        result.body_urls_selected[2]
+    )
+    assert str(partial_path) in result.artifact_paths
+    assert failed.stderr_path in result.artifact_paths
+    assert result.partial_body_bytes == {str(partial_path): 8905}
+    assert payload["failed_transfers"] == 1
+    assert payload["partial_bodies_retained"] == 1
+    assert payload["command_results"][1]["exit_code"] == 18
+    assert payload["command_results"][1]["stderr_path"] == failed.stderr_path
+    assert any("failed transfer" in warning.lower() for warning in result.warnings)
+    assert not any(
+        path["source"].endswith(".partial")
+        for path in json.loads(
+            (input_dir / "project_state.json").read_text(encoding="utf-8")
+        )["project_state"]["discovered_paths"]
+    )
+
+
+def test_body_fetch_all_operational_failures_remain_nonfatal_and_unimported(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    runner = _AllPartialTransferRunner()
+
+    result = run_body_fetch_workflow(input_dir, scope, runner=runner)
+    manifest = _manifest(input_dir)
+
+    assert result.commands_started == len(result.body_urls_selected)
+    assert result.commands_completed == 0
+    assert result.failed_transfers == result.commands_started
+    assert result.partial_bodies_retained == result.commands_started
+    assert len(runner.command_ids) == result.commands_started
+    assert not any(
+        artifact.get("description", "").startswith("Bounded body request")
+        for artifact in manifest["artifacts"]
+    )
+
+
+def test_body_fetch_established_timeout_is_recoverable_and_counted(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    runner = _TimeoutThenSuccessRunner()
+
+    result = run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert len(runner.command_ids) == len(result.body_urls_selected)
+    assert result.failed_transfers == 1
+    assert result.commands_timed_out == 1
+    assert result.commands_completed == result.commands_started - 1
+    assert result.command_results[0].exit_code is None
+    assert result.command_results[0].error == "Selective body fetch exceeded 10 seconds."
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "error"),
+    [
+        (23, "Curl exited with code 23."),
+        (3, "Curl exited with code 3."),
+        (0, "Unexpected post-execution error."),
+        (None, "Unexpected internal runner failure."),
+        (None, None),
+    ],
+)
+def test_body_fetch_nonrecoverable_executed_failures_stop_after_partial_hygiene(
+    tmp_path: Path,
+    exit_code: int | None,
+    error: str | None,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    runner = _HardFailureBodyFetchRunner(exit_code, error)
+
+    with pytest.raises(ValueError):
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert runner.command_ids == ["CMD-BODY-FETCH-001"]
+    completed_path = Path(runner.output_file)
+    partial_path = Path(f"{completed_path}.partial")
+    assert not completed_path.exists()
+    assert partial_path.is_file()
+    assert partial_path.read_bytes() == b"incomplete"
+    assert completed_path.with_suffix(".html.stderr.log").is_file()
+
+
+def test_body_fetch_keeps_integrity_and_unexpected_failures_hard(
+    tmp_path: Path,
+) -> None:
+    unsafe_dir = tmp_path / "unsafe"
+    input_dir, scope = _body_fetch_input(unsafe_dir)
+
+    with pytest.raises(ValueError, match="does not match its approved command"):
+        run_body_fetch_workflow(input_dir, scope, runner=_UnsafeResultBodyFetchRunner(tmp_path))
+
+    unexpected_dir = tmp_path / "unexpected"
+    input_dir, scope = _body_fetch_input(unexpected_dir)
+    with pytest.raises(RuntimeError, match="unexpected runner failure"):
+        run_body_fetch_workflow(input_dir, scope, runner=_UnexpectedBodyFetchRunner())
+
+
+def test_body_fetch_manifest_write_failure_remains_hard(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir, scope = _body_fetch_input(tmp_path)
+    original_write_text = Path.write_text
+
+    def fail_manifest_write(path: Path, *args, **kwargs):
+        if path == input_dir / "recon_manifest.json":
+            raise OSError("fixture manifest write failure")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_manifest_write)
+    with pytest.raises(OSError, match="fixture manifest write failure"):
+        run_body_fetch_workflow(input_dir, scope, runner=_MockBodyFetchRunner())
+
+
 def test_body_fetch_refuses_missing_input_scope_and_no_eligible_evidence(tmp_path: Path) -> None:
     input_dir, _scope = _body_fetch_input(tmp_path)
     other_scope = tmp_path / "scope.md"
@@ -408,6 +572,168 @@ class _MockBodyFetchRunner:
             simulated=False,
             error=None,
         )
+
+
+class _PartialTransferThenSuccessRunner:
+    def __init__(self) -> None:
+        self.command_ids: list[str] = []
+
+    def run(self, command):
+        self.command_ids.append(command.id)
+        output_path = Path(command.output_file)
+        if len(self.command_ids) == 2:
+            output_path.write_bytes(b"x" * 8905)
+            stderr_path = output_path.with_suffix(output_path.suffix + ".stderr.log")
+            stderr_path.write_text(
+                "curl: (18) end of response with 3 bytes missing\n",
+                encoding="utf-8",
+            )
+            return ReconCommandResult(
+                command_id=command.id,
+                tool=command.tool,
+                exit_code=18,
+                stdout_path=None,
+                stderr_path=str(stderr_path),
+                output_file=command.output_file,
+                started_at="2026-06-12T00:00:00+00:00",
+                ended_at="2026-06-12T00:00:01+00:00",
+                duration_seconds=1.0,
+                executed=True,
+                simulated=False,
+                error="Curl exited with code 18.",
+            )
+        output_path.write_text("<title>Complete body</title>", encoding="utf-8")
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-06-12T00:00:00+00:00",
+            ended_at="2026-06-12T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+
+class _AllPartialTransferRunner:
+    def __init__(self) -> None:
+        self.command_ids: list[str] = []
+
+    def run(self, command):
+        self.command_ids.append(command.id)
+        output_path = Path(command.output_file)
+        output_path.write_bytes(b"partial")
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=18,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-06-12T00:00:00+00:00",
+            ended_at="2026-06-12T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error="Curl exited with code 18.",
+        )
+
+
+class _TimeoutThenSuccessRunner:
+    def __init__(self) -> None:
+        self.command_ids: list[str] = []
+
+    def run(self, command):
+        self.command_ids.append(command.id)
+        if len(self.command_ids) == 1:
+            return ReconCommandResult(
+                command_id=command.id,
+                tool=command.tool,
+                exit_code=None,
+                stdout_path=None,
+                stderr_path=None,
+                output_file=command.output_file,
+                started_at="2026-06-12T00:00:00+00:00",
+                ended_at="2026-06-12T00:00:10+00:00",
+                duration_seconds=10.0,
+                executed=True,
+                simulated=False,
+                error="Selective body fetch exceeded 10 seconds.",
+            )
+        Path(command.output_file).write_text("<title>Complete body</title>", encoding="utf-8")
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=0,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=command.output_file,
+            started_at="2026-06-12T00:00:00+00:00",
+            ended_at="2026-06-12T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=None,
+        )
+
+
+class _HardFailureBodyFetchRunner:
+    def __init__(self, exit_code: int | None, error: str | None) -> None:
+        self.exit_code = exit_code
+        self.error = error
+        self.command_ids: list[str] = []
+        self.output_file = ""
+
+    def run(self, command):
+        self.command_ids.append(command.id)
+        self.output_file = command.output_file
+        Path(command.output_file).write_bytes(b"incomplete")
+        stderr_path = Path(command.output_file).with_suffix(".html.stderr.log")
+        stderr_path.write_text("bounded fixture diagnostic\n", encoding="utf-8")
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=self.exit_code,
+            stdout_path=None,
+            stderr_path=str(stderr_path),
+            output_file=command.output_file,
+            started_at="2026-06-12T00:00:00+00:00",
+            ended_at="2026-06-12T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=self.error,
+        )
+
+
+class _UnsafeResultBodyFetchRunner:
+    def __init__(self, outside: Path) -> None:
+        self.outside = outside
+
+    def run(self, command):
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=18,
+            stdout_path=None,
+            stderr_path=None,
+            output_file=str(self.outside / "outside.html"),
+            started_at="2026-06-12T00:00:00+00:00",
+            ended_at="2026-06-12T00:00:01+00:00",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error="Curl exited with code 18.",
+        )
+
+
+class _UnexpectedBodyFetchRunner:
+    def run(self, _command):
+        raise RuntimeError("unexpected runner failure")
 
 
 class _NeverRunBodyFetchRunner:

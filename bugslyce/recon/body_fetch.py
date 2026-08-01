@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse, urlunparse
@@ -164,31 +164,57 @@ def run_body_fetch_workflow(
         set(selected_urls),
     )
     command_results = []
+    completed_results = []
+    retained_paths: list[str] = []
+    partial_body_bytes: dict[str, int] = {}
+    failed_transfers = 0
+    timed_out = 0
+    operational_warnings: list[str] = []
     for command in commands:
         result = live_runner.run(command)
-        if result.executed:
-            command_results.append(result)
-        if result.executed and result.exit_code is None and result.error:
-            completed_results = [
-                item for item in command_results if item.exit_code == 0 and not item.error
-            ]
-            execution_result = _finalize_execution(
-                input_dir,
-                scope_file,
-                target,
-                manifest_path,
-                manifest,
-                considered,
-                selected_urls,
-                command_results,
-                completed_results,
-                timed_out=1,
-            )
-            raise BodyFetchExecutionIncomplete(result.error, execution_result)
-        if result.error or result.exit_code != 0:
+        if result.command_id != command.id or result.output_file != command.output_file:
+            raise ValueError("Selective body-fetch result does not match its approved command.")
+        if not result.executed:
             raise ValueError(result.error or "Selective body fetch did not complete successfully.")
-        if not Path(result.output_file).is_file():
+        if result.error or result.exit_code != 0:
+            recoverable_failure = _is_recoverable_transfer_failure(result, command)
+            if result.error is None:
+                result = replace(
+                    result,
+                    error=(
+                        "Selective body fetch returned an incomplete execution result."
+                        if result.exit_code is None
+                        else f"Curl exited with code {result.exit_code}."
+                    ),
+                )
+            partial_path, retained_bytes = _retain_partial_body(
+                Path(command.output_file),
+                input_dir,
+            )
+            if partial_path is not None:
+                result = replace(result, output_file=str(partial_path))
+                retained_paths.append(str(partial_path))
+                partial_body_bytes[str(partial_path)] = retained_bytes
+            stderr_path = _validated_stderr_sidecar(result.stderr_path, input_dir)
+            if not recoverable_failure:
+                raise ValueError(result.error)
+            failed_transfers += 1
+            if result.exit_code is None:
+                timed_out += 1
+            if stderr_path is not None:
+                retained_paths.append(str(stderr_path))
+            command_results.append(result)
+            operational_warnings.append(
+                f"Selective body-fetch command {command.id} had a failed transfer; "
+                "any incomplete response was retained as partial evidence."
+            )
+            continue
+        output_path = Path(result.output_file)
+        if output_path.is_symlink() or not output_path.is_file():
             raise ValueError("Selective body fetch completed without creating its expected output file.")
+        command_results.append(result)
+        completed_results.append(result)
+        retained_paths.append(result.output_file)
 
     return _finalize_execution(
         input_dir,
@@ -199,8 +225,12 @@ def run_body_fetch_workflow(
         considered,
         selected_urls,
         command_results,
-        command_results,
-        timed_out=0,
+        completed_results,
+        retained_paths,
+        timed_out=timed_out,
+        failed_transfers=failed_transfers,
+        partial_body_bytes=partial_body_bytes,
+        operational_warnings=operational_warnings,
     )
 
 
@@ -214,10 +244,13 @@ def _finalize_execution(
     selected_urls: list[str],
     command_results,
     artifact_results,
+    retained_paths: list[str],
     timed_out: int,
+    failed_transfers: int,
+    partial_body_bytes: dict[str, int],
+    operational_warnings: list[str],
 ) -> ReconBodyFetchExecutionResult:
-    completed_urls = selected_urls[: len(artifact_results)]
-    updated_manifest = _updated_manifest(manifest, completed_urls, artifact_results)
+    updated_manifest = _updated_manifest(manifest, selected_urls, artifact_results)
     manifest_path.write_text(
         json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -232,7 +265,7 @@ def _finalize_execution(
         input_dir=str(input_dir),
         candidate_urls_considered=considered,
         body_urls_selected=selected_urls,
-        artifact_paths=[result.output_file for result in artifact_results],
+        artifact_paths=retained_paths,
         manifest_path=str(manifest_path),
         report_path=str(report_path),
         project_state_path=str(project_state_path),
@@ -245,7 +278,10 @@ def _finalize_execution(
         no_arbitrary_urls=True,
         no_form_submission=True,
         no_exploitation=True,
-        warnings=project_state.warnings,
+        warnings=[*project_state.warnings, *operational_warnings],
+        failed_transfers=failed_transfers,
+        partial_bodies_retained=len(partial_body_bytes),
+        partial_body_bytes=partial_body_bytes,
     )
 
 
@@ -275,6 +311,8 @@ def render_body_fetch_execution_markdown(result: ReconBodyFetchExecutionResult) 
             f"- Body URLs selected: {len(result.body_urls_selected)}",
             f"- Commands started: {result.commands_started}",
             f"- Commands completed: {result.commands_completed}",
+            f"- Failed transfers: {result.failed_transfers}",
+            f"- Partial bodies retained: {result.partial_bodies_retained}",
             f"- Commands timed out: {result.commands_timed_out}",
             f"- Artefacts written: {len(result.artifact_paths)}",
             f"- Report: `{result.report_path}`",
@@ -297,6 +335,8 @@ def render_body_fetch_execution_summary(result: ReconBodyFetchExecutionResult) -
             f"Input/output directory: {result.input_dir}",
             f"Candidate URLs considered: {result.candidate_urls_considered}",
             f"Body URLs selected: {len(result.body_urls_selected)}",
+            f"Failed transfers: {result.failed_transfers}",
+            f"Partial bodies retained: {result.partial_bodies_retained}",
             f"Artefacts written: {len(result.artifact_paths)}",
             f"Report path: {result.report_path}",
             f"JSON path: {result.project_state_path}",
@@ -448,14 +488,52 @@ def _updated_manifest(
                 ),
             }
         )
-    original_profile = payload.get("profile")
-    suffix = "-plus-body-fetch"
-    if isinstance(original_profile, str) and original_profile:
-        payload["profile"] = (
-            original_profile if original_profile.endswith(suffix) else f"{original_profile}{suffix}"
-        )
+    if command_results:
+        original_profile = payload.get("profile")
+        suffix = "-plus-body-fetch"
+        if isinstance(original_profile, str) and original_profile:
+            payload["profile"] = (
+                original_profile
+                if original_profile.endswith(suffix)
+                else f"{original_profile}{suffix}"
+            )
     payload["artifacts"] = artifacts
     return payload
+
+
+def _retain_partial_body(output_path: Path, input_dir: Path) -> tuple[Path | None, int]:
+    if output_path.parent.resolve() != input_dir.resolve():
+        raise ValueError("Selective body-fetch output escaped its approved directory.")
+    if output_path.is_symlink():
+        raise ValueError("Selective body-fetch output must not be a symbolic link.")
+    if not output_path.exists():
+        return None, 0
+    if not output_path.is_file():
+        raise ValueError("Selective body-fetch output is not a regular file.")
+    partial_path = Path(f"{output_path}.partial")
+    if partial_path.exists() or partial_path.is_symlink():
+        raise ValueError("Selective body-fetch partial output already exists.")
+    output_path.rename(partial_path)
+    return partial_path, partial_path.stat().st_size
+
+
+def _is_recoverable_transfer_failure(result, command) -> bool:
+    expected_timeout_error = (
+        f"Selective body fetch exceeded {command.timeout_seconds} seconds."
+    )
+    return result.exit_code == 18 or (
+        result.exit_code is None
+        and result.error == expected_timeout_error
+    )
+
+
+def _validated_stderr_sidecar(value: str | None, input_dir: Path) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value)
+    if path.parent.resolve() != input_dir.resolve() or path.is_symlink() or not path.is_file():
+        raise ValueError("Selective body-fetch stderr sidecar is unsafe or missing.")
+    return path
 
 
 def _load_manifest_payload(path: Path) -> dict[str, object]:
