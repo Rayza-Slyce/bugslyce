@@ -93,6 +93,73 @@ def test_failed_stage_and_command_do_not_use_success_wording() -> None:
         "project_pipeline.json",
         "recon_execution.json",
     }
+    command = next(notice for notice in notices if "COMMAND" in notice.notice_id)
+    assert command.title == "Collection command failed: CMD-TEST"
+    assert command.direct_fact == "The `local-collector` command `CMD-TEST` failed: exit code 2."
+
+
+def test_recoverable_body_fetch_exit_18_uses_partial_evidence_wording() -> None:
+    notices = build_collection_confidence_notices(
+        _state(),
+        command_results=(
+            {
+                "command_id": "CMD-BODY-FETCH-001",
+                "tool": "curl",
+                "exit_code": 18,
+                "error": "Curl exited with code 18.",
+                "executed": True,
+                "confidence_execution_mode": "body-fetch",
+                "confidence_partial_body_retained": True,
+            },
+        ),
+    )
+
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.category == FAILED
+    assert notice.notice_id == "CONFIDENCE-COMMAND-CMD-BODY-FETCH-001"
+    assert notice.title == "Incomplete body-fetch transfer"
+    assert notice.direct_fact == (
+        "CMD-BODY-FETCH-001 returned curl exit code 18. "
+        "The incomplete response was retained as partial evidence and the pipeline continued."
+    )
+    assert notice.direct_fact.count("CMD-BODY-FETCH-001") == 1
+    assert "failed with Curl exited" not in notice.direct_fact
+    assert ".." not in notice.direct_fact
+
+    report = render_collection_confidence_markdown(notices)
+    runbook = render_collection_confidence_runbook(notices)
+    assert report is not None
+    assert runbook is not None
+    assert notice.direct_fact in report
+    assert notice.direct_fact in runbook
+
+
+def test_recoverable_body_fetch_timeout_uses_exact_timeout_wording() -> None:
+    notices = build_collection_confidence_notices(
+        _state(),
+        command_results=(
+            {
+                "command_id": "CMD-BODY-FETCH-002",
+                "tool": "curl",
+                "exit_code": None,
+                "error": "Selective body fetch exceeded 10 seconds.",
+                "executed": True,
+                "confidence_execution_mode": "body-fetch",
+                "confidence_partial_body_retained": False,
+            },
+        ),
+    )
+
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.title == "Incomplete body-fetch transfer"
+    assert notice.direct_fact == (
+        "CMD-BODY-FETCH-002 exceeded its approved 10-second selective body-fetch timeout. "
+        "No partial response was retained and the pipeline continued."
+    )
+    assert "exit code 18" not in notice.direct_fact
+    assert ".." not in notice.direct_fact
 
 
 def test_bounded_profile_and_failed_execution_do_not_contradict() -> None:
@@ -341,6 +408,54 @@ def test_project_loader_uses_structured_pipeline_and_execution_metadata(
     for reference in ("project_pipeline.json", "recon_execution_content_run.json"):
         assert reference in report
         assert reference in runbook
+
+
+def test_project_loader_renders_recoverable_body_fetch_without_rewriting_json(
+    tmp_path: Path,
+) -> None:
+    execution_path = tmp_path / "recon_execution.json"
+    raw_error = "Curl exited with code 18."
+    execution_path.write_text(
+        json.dumps(
+            {
+                "mode": "body-fetch",
+                "failed_transfers": 1,
+                "partial_body_bytes": {
+                    str(tmp_path / "body.html.partial"): 8905,
+                },
+                "command_results": [
+                    {
+                        "command_id": "CMD-BODY-FETCH-001",
+                        "tool": "curl",
+                        "exit_code": 18,
+                        "error": raw_error,
+                        "executed": True,
+                        "output_file": str(tmp_path / "body.html.partial"),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    before = execution_path.read_text(encoding="utf-8")
+
+    notices = build_collection_confidence_notices_from_project(_state(), tmp_path)
+    report = render_collection_confidence_markdown(notices)
+    runbook = render_collection_confidence_runbook(notices)
+
+    assert execution_path.read_text(encoding="utf-8") == before
+    assert json.loads(before)["command_results"][0]["error"] == raw_error
+    assert len(notices) == 1
+    assert notices[0].category == FAILED
+    assert report is not None
+    assert runbook is not None
+    assert notices[0].direct_fact in report
+    assert notices[0].direct_fact in runbook
+    assert "failed with Curl exited" not in report
+    assert ".." not in report
 
 
 def _state(

@@ -1494,10 +1494,9 @@ def _step_runners(
         failed_transfers = getattr(result, "failed_transfers", 0)
         partial_bodies_retained = getattr(result, "partial_bodies_retained", 0)
         if failed_transfers:
-            message = (
-                "Selective body fetch completed with warnings: "
-                f"{failed_transfers} failed transfer(s), "
-                f"{partial_bodies_retained} partial body/bodies retained."
+            message = _body_fetch_warning_message(
+                failed_transfers,
+                partial_bodies_retained,
             )
         else:
             message = "Selective body fetch completed."
@@ -1506,7 +1505,6 @@ def _step_runners(
             [*result.artifact_paths, *(str(path) for path in metadata)],
             {"report_path": result.report_path},
         )
-
     def deep_collection():
         project_state = build_project_state(output_dir)
         plan = build_deep_collection_request_plan_from_project_state(project_state)
@@ -1664,6 +1662,19 @@ def _step_runners(
         "PIPELINE-STEP-011": runbook,
         "PIPELINE-STEP-012": export,
     }
+
+
+def _body_fetch_warning_message(
+    failed_transfers: int,
+    partial_bodies_retained: int,
+) -> str:
+    transfer_noun = "transfer" if failed_transfers == 1 else "transfers"
+    body_noun = "body" if partial_bodies_retained == 1 else "bodies"
+    return (
+        "Selective body fetch completed with warnings: "
+        f"{failed_transfers} {transfer_noun} failed; "
+        f"{partial_bodies_retained} partial {body_noun} retained."
+    )
 
 
 def _deep_outputs_from_context(context: dict[str, object]) -> DeepPipelineOutputs:

@@ -37,6 +37,9 @@ _FOLLOWUP_CAP = re.compile(
     r"^Discovered-path follow-up capped at (?P<count>[1-9][0-9]*) URLs?\.$",
     re.IGNORECASE,
 )
+_BODY_FETCH_TIMEOUT = re.compile(
+    r"^Selective body fetch exceeded (?P<seconds>[1-9][0-9]*) seconds\.$"
+)
 
 
 @dataclass(frozen=True)
@@ -125,10 +128,26 @@ def build_collection_confidence_notices_from_project(
         raw_results = payload.get("command_results", ())
         if not isinstance(raw_results, list):
             continue
+        execution_mode = payload.get("mode")
+        partial_body_bytes = payload.get("partial_body_bytes")
+        partial_paths = (
+            frozenset(partial_body_bytes)
+            if isinstance(partial_body_bytes, dict)
+            else frozenset()
+        )
         for raw_result in raw_results:
             if not isinstance(raw_result, dict):
                 continue
-            command_results.append({**raw_result, "confidence_artifact": path.name})
+            command_results.append(
+                {
+                    **raw_result,
+                    "confidence_artifact": path.name,
+                    "confidence_execution_mode": execution_mode,
+                    "confidence_partial_body_retained": (
+                        raw_result.get("output_file") in partial_paths
+                    ),
+                }
+            )
     return build_collection_confidence_notices(
         project_state,
         source_collection=source_collection,
@@ -401,13 +420,23 @@ def _command_result_notices(
             continue
         if (exit_code in {0, None}) and not error:
             continue
+        recoverable_body_fetch = _recoverable_body_fetch_notice(
+            result,
+            command_id=command_id,
+            tool=tool,
+            artefact=artefact,
+        )
+        if recoverable_body_fetch is not None:
+            notices.append(recoverable_body_fetch)
+            continue
         reason = str(error).strip() if error else f"exit code {exit_code}"
+        reason = reason.rstrip(".")
         notices.append(
             CollectionConfidenceNotice(
                 notice_id=f"CONFIDENCE-COMMAND-{_identifier(command_id)}",
                 category=FAILED,
                 title=f"Collection command failed: {command_id}",
-                direct_fact=f"The `{tool}` command `{command_id}` failed with {reason}.",
+                direct_fact=f"The `{tool}` command `{command_id}` failed: {reason}.",
                 operator_implication=(
                     "Expected evidence from this command may be absent; do not infer a "
                     "negative result."
@@ -417,6 +446,55 @@ def _command_result_notices(
             )
         )
     return tuple(notices)
+
+
+def _recoverable_body_fetch_notice(
+    result: object,
+    *,
+    command_id: str,
+    tool: str,
+    artefact: str,
+) -> CollectionConfidenceNotice | None:
+    if _field(result, "confidence_execution_mode") != "body-fetch":
+        return None
+    exit_code = _field(result, "exit_code")
+    error = _field(result, "error")
+    timeout_match = (
+        _BODY_FETCH_TIMEOUT.fullmatch(error)
+        if isinstance(error, str)
+        else None
+    )
+    if exit_code != 18 and not (exit_code is None and timeout_match is not None):
+        return None
+
+    partial_retained = _field(result, "confidence_partial_body_retained") is True
+    if partial_retained:
+        evidence_fact = (
+            "The incomplete response was retained as partial evidence and the pipeline "
+            "continued."
+        )
+    else:
+        evidence_fact = "No partial response was retained and the pipeline continued."
+    if exit_code == 18:
+        direct_fact = f"{command_id} returned curl exit code 18. {evidence_fact}"
+    else:
+        seconds = timeout_match.group("seconds")
+        direct_fact = (
+            f"{command_id} exceeded its approved {seconds}-second selective body-fetch "
+            f"timeout. {evidence_fact}"
+        )
+    return CollectionConfidenceNotice(
+        notice_id=f"CONFIDENCE-COMMAND-{_identifier(command_id)}",
+        category=FAILED,
+        title="Incomplete body-fetch transfer",
+        direct_fact=direct_fact,
+        operator_implication=(
+            "The complete response is unavailable; review any retained partial evidence "
+            "without treating it as a completed body fetch."
+        ),
+        stage_or_tool=tool,
+        artefact_references=(artefact,),
+    )
 
 
 def _dedupe_and_sort(

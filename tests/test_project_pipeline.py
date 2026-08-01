@@ -35,6 +35,7 @@ from bugslyce.project_pipeline import (
     PipelineStep,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
+    _body_fetch_warning_message,
     format_exception_diagnostic,
     render_project_pipeline_summary,
     run_project_pipeline,
@@ -48,7 +49,10 @@ from bugslyce.recon.content_plan import (
     DEEP_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_PROFILE,
 )
-from bugslyce.recon.collection_confidence import CollectionConfidenceNotice
+from bugslyce.recon.collection_confidence import (
+    CollectionConfidenceNotice,
+    build_collection_confidence_notices,
+)
 from bugslyce.recon.path_followup import PathFollowupNoWork
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
 from bugslyce.reports.markdown import render_markdown_report
@@ -337,6 +341,59 @@ def test_compact_run_summary_retains_failed_notice_fact_without_success_wording(
     assert "Collection stage failed" in rendered
     assert "reports exit code 2" in rendered
     assert "collection succeeded" not in rendered.lower()
+
+
+@pytest.mark.parametrize(
+    ("failed_transfers", "partial_bodies", "expected"),
+    [
+        (1, 1, "1 transfer failed; 1 partial body retained."),
+        (2, 2, "2 transfers failed; 2 partial bodies retained."),
+        (2, 1, "2 transfers failed; 1 partial body retained."),
+    ],
+)
+def test_body_fetch_warning_message_uses_natural_count_wording(
+    failed_transfers: int,
+    partial_bodies: int,
+    expected: str,
+) -> None:
+    rendered = _body_fetch_warning_message(failed_transfers, partial_bodies)
+
+    assert rendered == f"Selective body fetch completed with warnings: {expected}"
+    assert "transfer(s)" not in rendered
+    assert "body/bodies" not in rendered
+
+
+def test_compact_run_summary_uses_recoverable_body_fetch_wording_once() -> None:
+    notice = build_collection_confidence_notices(
+        SimpleNamespace(recon_manifest=None, evidence=(), warnings=()),
+        command_results=(
+            {
+                "command_id": "CMD-BODY-FETCH-001",
+                "tool": "curl",
+                "exit_code": 18,
+                "error": "Curl exited with code 18.",
+                "executed": True,
+                "confidence_execution_mode": "body-fetch",
+                "confidence_partial_body_retained": True,
+            },
+        ),
+    )[0]
+    completion = PipelineCompletionSummary(
+        collection_confidence_notices=(notice,),
+        operator_summary=OperatorSummary(review_first=[], low_signal=[], coverage=[]),
+    )
+
+    rendered = render_project_pipeline_summary(
+        _summary_result(completion_summary=completion)
+    )
+
+    assert "Incomplete body-fetch transfer" in rendered
+    assert "returned curl exit code 18" in rendered
+    assert "retained as partial evidence" in rendered
+    assert "pipeline continued" in rendered
+    assert rendered.count("CMD-BODY-FETCH-001") == 1
+    assert "Collection command failed" not in rendered
+    assert ".." not in rendered
 
 
 def test_pipeline_summary_unavailable_preserves_existing_completion_output() -> None:
@@ -1808,8 +1865,10 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         step for step in result.steps if step.step_id == "PIPELINE-STEP-009"
     )
     assert body_step.status == "completed"
-    assert "1 failed transfer" in body_step.message
-    assert "1 partial body" in body_step.message
+    assert body_step.message == (
+        "Selective body fetch completed with warnings: "
+        "1 transfer failed; 1 partial body retained."
+    )
     assert str(output_dir / "body.html.partial") in body_step.output_paths
     assert str(output_dir / "body.html.stderr.log") in body_step.output_paths
     assert str(output_dir / "body-fetch-write.json") in body_step.output_paths
