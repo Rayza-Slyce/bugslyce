@@ -211,8 +211,14 @@ def render_deep_collection_review_bundle_markdown(
         "",
     ]
     for label, value in (
-        ("Metadata responses collected", bundle.summary_counts.metadata_responses_collected),
-        ("Metadata requests skipped", bundle.summary_counts.metadata_requests_skipped),
+        (
+            "Metadata response records collected",
+            bundle.summary_counts.metadata_responses_collected,
+        ),
+        (
+            "Metadata requests not collected",
+            bundle.summary_counts.metadata_requests_skipped,
+        ),
         ("Metadata review leads", bundle.summary_counts.metadata_review_leads),
         ("Metadata requests delegated", bundle.summary_counts.metadata_requests_delegated),
         (
@@ -224,11 +230,11 @@ def render_deep_collection_review_bundle_markdown(
             bundle.summary_counts.metadata_delegations_uncollected,
         ),
         (
-            "Source/route responses collected",
+            "Source/route response records collected",
             bundle.summary_counts.source_route_responses_collected,
         ),
         (
-            "Source/route requests skipped",
+            "Source/route requests not collected",
             bundle.summary_counts.source_route_requests_skipped,
         ),
         ("Source/route review leads", bundle.summary_counts.source_route_review_leads),
@@ -300,13 +306,13 @@ def render_deep_collection_review_bundle_markdown(
             "### Review Source Overview",
             "",
             "- Metadata collection review: "
-            f"{bundle.summary_counts.metadata_review_leads} lead(s), "
-            f"{bundle.summary_counts.metadata_responses_collected} collected response(s), "
-            f"{bundle.summary_counts.metadata_requests_skipped} skipped request(s).",
+            f"{_counted_phrase(bundle.summary_counts.metadata_review_leads, 'review lead')}, "
+            f"{_counted_phrase(bundle.summary_counts.metadata_responses_collected, 'response record')} collected, "
+            f"{_counted_phrase(bundle.summary_counts.metadata_requests_skipped, 'request')} not collected.",
             "- Source/route collection review: "
-            f"{bundle.summary_counts.source_route_review_leads} lead(s), "
-            f"{bundle.summary_counts.source_route_responses_collected} collected response(s), "
-            f"{bundle.summary_counts.source_route_requests_skipped} skipped request(s).",
+            f"{_counted_phrase(bundle.summary_counts.source_route_review_leads, 'review lead')}, "
+            f"{_counted_phrase(bundle.summary_counts.source_route_responses_collected, 'response record')} collected, "
+            f"{_counted_phrase(bundle.summary_counts.source_route_requests_skipped, 'request')} not collected.",
             "",
             "### Safety Notes",
             "",
@@ -379,6 +385,10 @@ def _summary_counts(
         metadata_delegations_completed=source_route_review.metadata_delegations_completed,
         metadata_delegations_uncollected=source_route_review.metadata_delegations_uncollected,
     )
+
+
+def _counted_phrase(count: int, noun: str) -> str:
+    return f"{count} {noun if count == 1 else noun + 's'}"
 
 
 def _dedupe_pending_priorities(

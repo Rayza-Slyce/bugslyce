@@ -110,7 +110,7 @@ def test_builder_threads_real_metadata_collection_into_review_and_fingerprints()
 
     assert result.collection_review_bundle.summary_counts.metadata_responses_collected == 1
     assert result.http_fingerprint_summary.summary_counts.metadata_responses == 1
-    assert "Metadata responses collected: 1" in result.deep_recon_markdown
+    assert "Metadata response records collected: 1" in result.deep_recon_markdown
 
 
 def test_successful_content_reviews_are_built_from_persisted_collection_fields() -> None:

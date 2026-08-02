@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 import json
@@ -16,6 +17,13 @@ from bugslyce.recon.deep_source_route_collection_export import (
 from bugslyce.recon.deep_metadata_collection_export import (
     DEEP_METADATA_COLLECTION_JSON,
     load_deep_metadata_collection_result,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectionResult,
+    render_deep_source_route_skip_reason,
+)
+from bugslyce.recon.deep_successful_content import (
+    build_successful_deep_content_reviews,
 )
 
 
@@ -305,9 +313,12 @@ def _bounded_deep_notice(
     metadata_delegated = tuple(
         item for item in skipped_items if getattr(item, "reason", None) == "metadata_request"
     )
-    response_too_large = sum(
-        1 for item in skipped_items if getattr(item, "reason", None) == "response_too_large"
+    reason_counts = Counter(
+        str(reason)
+        for item in skipped_items
+        if (reason := getattr(item, "reason", None))
     )
+    response_too_large = reason_counts["response_too_large"]
     completed_metadata = {
         (str(getattr(item, "method", "")).upper(), str(getattr(item, "url", "")))
         for item in tuple(getattr(metadata_collection, "collected", ()))
@@ -318,7 +329,17 @@ def _bounded_deep_notice(
     }
     metadata_completed = len(delegated_keys & completed_metadata)
     metadata_uncollected = len(delegated_keys) - metadata_completed
-    other_skipped = max(0, skipped - len(metadata_delegated) - response_too_large)
+    exact_other_reasons = tuple(
+        (reason, count)
+        for reason, count in sorted(reason_counts.items())
+        if reason not in {"metadata_request", "response_too_large"}
+    )
+    other_skipped = sum(count for _, count in exact_other_reasons)
+    promoted_successful = (
+        len(build_successful_deep_content_reviews(source_collection))
+        if isinstance(source_collection, DeepSourceRouteCollectionResult)
+        else None
+    )
     evidence_ids = tuple(
         sorted(
             {
@@ -334,9 +355,21 @@ def _bounded_deep_notice(
         )
     )
     direct_facts = [
-        f"Deep source-route collection considered {considered} requests and collected "
-        f"{collected} {_counted_noun(collected, 'response', 'responses')}."
+        f"Deep source/route collection considered {considered} requests and collected "
+        f"{collected} source/route "
+        f"{_counted_noun(collected, 'response record', 'response records')}."
     ]
+    if promoted_successful:
+        direct_facts.append(
+            f"{promoted_successful} successful 2xx "
+            f"{_counted_noun(promoted_successful, 'response', 'responses')} "
+            f"{_counted_verb(promoted_successful, 'was', 'were')} promoted for priority "
+            "content review."
+        )
+    elif promoted_successful == 0:
+        direct_facts.append(
+            "No successful 2xx content was promoted for priority review."
+        )
     if metadata_delegated:
         direct_facts.append(
             f"It delegated {len(metadata_delegated)} metadata "
@@ -349,16 +382,18 @@ def _bounded_deep_notice(
             f"It excluded {response_too_large} "
             f"{_counted_noun(response_too_large, 'response', 'responses')} under the body-size limit."
         )
-    if other_skipped:
+    for reason, count in exact_other_reasons:
         direct_facts.append(
-            f"It skipped {other_skipped} other "
-            f"{_counted_noun(other_skipped, 'request', 'requests')} for the recorded reasons."
+            f"It did not collect {count} {_counted_noun(count, 'request', 'requests')}: "
+            f"{render_deep_source_route_skip_reason(reason)} (`{reason}`)."
         )
     counts = [
         ("considered", considered),
         ("collected", collected),
         ("skipped", skipped),
     ]
+    if promoted_successful is not None:
+        counts.append(("successful_2xx_promoted", promoted_successful))
     if metadata_delegated or response_too_large:
         counts.extend(
             (
@@ -369,6 +404,10 @@ def _bounded_deep_notice(
                 ("other_skipped", other_skipped),
             )
         )
+    counts.extend(
+        (f"not_collected:{reason}", count)
+        for reason, count in exact_other_reasons
+    )
     artefact_references = ["deep_source_route_collection.json"]
     if metadata_collection is not None:
         artefact_references.append(DEEP_METADATA_COLLECTION_JSON)

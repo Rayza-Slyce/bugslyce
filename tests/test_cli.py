@@ -2259,8 +2259,8 @@ def test_cli_recon_deep_collection_review_bundle_loads_both_artifacts_stdout_onl
     assert captured.err == ""
     assert captured.out.rstrip() == expected
     assert captured.out.startswith("## Deep Collection Review Bundle")
-    assert "Metadata responses collected: 2" in captured.out
-    assert "Source/route responses collected: 3" in captured.out
+    assert "Metadata response records collected: 2" in captured.out
+    assert "Source/route response records collected: 3" in captured.out
     assert "redirect_to_login" in captured.out
     assert "metadata_found" in captured.out
     assert sorted(path.name for path in input_dir.iterdir()) == before_listing
@@ -2283,8 +2283,8 @@ def test_cli_recon_deep_collection_review_bundle_metadata_only(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "Metadata responses collected: 2" in captured.out
-    assert "Source/route responses collected: 0" in captured.out
+    assert "Metadata response records collected: 2" in captured.out
+    assert "Source/route response records collected: 0" in captured.out
     assert "metadata_found" in captured.out
     assert "source_route_collection_review" not in captured.out
     assert sorted(path.name for path in input_dir.iterdir()) == [
@@ -2308,8 +2308,8 @@ def test_cli_recon_deep_collection_review_bundle_source_route_only(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "Metadata responses collected: 0" in captured.out
-    assert "Source/route responses collected: 3" in captured.out
+    assert "Metadata response records collected: 0" in captured.out
+    assert "Source/route response records collected: 3" in captured.out
     assert "redirect_to_login" in captured.out
     assert "metadata_collection_review" not in captured.out
     assert sorted(path.name for path in input_dir.iterdir()) == [

@@ -174,12 +174,12 @@ def render_deep_source_route_collection_review_markdown(
         "",
         "### Summary",
         "",
-        f"- Source/route responses collected: {summary.total_collected}",
+        f"- Source/route response records collected: {summary.total_collected}",
         f"- Requests not collected by this collector: {summary.total_skipped}",
         f"- Metadata requests delegated: {summary.metadata_requests_delegated}",
         f"- Metadata delegations completed: {summary.metadata_delegations_completed}",
         f"- Metadata delegations uncollected: {summary.metadata_delegations_uncollected}",
-        "- Other source/route requests skipped: "
+        "- Other source/route requests not collected: "
         f"{max(0, summary.total_skipped - summary.metadata_requests_delegated)}",
         "",
         "### Status Buckets",

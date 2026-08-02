@@ -640,7 +640,7 @@ def _http_section(model: HtmlReportModel) -> str:
         else _empty("No structured HTTP service or retained response record is available.")
     )
     if model.successful_content:
-        content += '<h3>Successful retained Deep content</h3>' + "".join(
+        content += '<h3>Successful 2xx content promoted for priority review</h3>' + "".join(
             _detail_card(
                 review.canonical_url,
                 (

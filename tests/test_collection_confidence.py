@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from bugslyce.recon.collection_confidence import (
+    CollectionConfidenceNotice,
     FAILED,
     INTENTIONALLY_BOUNDED,
     PARTIAL_OR_DEGRADED,
@@ -20,6 +21,11 @@ from bugslyce.recon.collection_confidence import (
 from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectedItem,
     DeepMetadataCollectionResult,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectedItem,
+    DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
 )
 
 
@@ -113,6 +119,75 @@ def test_deep_confidence_separates_metadata_delegation_from_body_size_exclusion(
     assert "delegated 1 metadata request; 1 was completed" in notice.direct_fact
     assert "excluded 1 response under the body-size limit" in notice.direct_fact
     assert "intentionally skipped 2" not in notice.direct_fact
+
+
+def test_deep_confidence_distinguishes_collected_records_from_promoted_content() -> None:
+    source = _structured_deep_source(
+        collected=(
+            _collected_response("https://app.example.test/docs", 200, "a"),
+            _collected_response("https://app.example.test/moved", 302, "b"),
+            _collected_response("https://app.example.test/private", 401, "c"),
+            _collected_response("https://app.example.test/fallback-a", 500, "d"),
+        )
+    )
+
+    notice = _deep_notice(source)
+
+    assert "collected 4 source/route response records" in notice.direct_fact
+    assert (
+        "1 successful 2xx response was promoted for priority content review"
+        in notice.direct_fact
+    )
+    assert ("successful_2xx_promoted", 1) in notice.counts
+
+
+def test_deep_confidence_does_not_erase_collected_non_2xx_records() -> None:
+    source = _structured_deep_source(
+        collected=(
+            _collected_response("https://app.example.test/moved", 302, "a"),
+            _collected_response("https://app.example.test/private", 403, "b"),
+            _collected_response("https://app.example.test/fallback-a", 500, "c"),
+        )
+    )
+
+    notice = _deep_notice(source)
+
+    assert "collected 3 source/route response records" in notice.direct_fact
+    assert "No successful 2xx content was promoted for priority review" in notice.direct_fact
+    assert "no Deep responses were collected" not in notice.direct_fact
+
+
+def test_deep_confidence_preserves_exact_non_collection_reasons() -> None:
+    source = _structured_deep_source(
+        skipped=(
+            _skipped_request("https://app.example.test/large-file", "response_too_large"),
+            _skipped_request("https://app.example.test/private", "policy_blocked"),
+            _skipped_request(
+                "https://app.example.test/origin-budget",
+                "per_origin_limit_exceeded",
+            ),
+            _skipped_request(
+                "https://app.example.test/total-budget",
+                "total_request_limit_exceeded",
+            ),
+            _skipped_request("https://app.example.test/post", "method_not_allowed"),
+            _skipped_request("https://app.example.test/failure", "fetch_error"),
+        )
+    )
+
+    notice = _deep_notice(source)
+
+    assert "excluded 1 response under the body-size limit" in notice.direct_fact
+    for reason in (
+        "policy_blocked",
+        "per_origin_limit_exceeded",
+        "total_request_limit_exceeded",
+        "method_not_allowed",
+        "fetch_error",
+    ):
+        assert reason in notice.direct_fact
+        assert (f"not_collected:{reason}", 1) in notice.counts
+    assert "other requests for the recorded reasons" not in notice.direct_fact
 
 
 def test_structured_followup_cap_is_degraded_not_failed() -> None:
@@ -565,4 +640,61 @@ def _deep_source(*, reverse: bool = False) -> SimpleNamespace:
         total_skipped=2,
         collected=collected,
         skipped=skipped,
+    )
+
+
+def _structured_deep_source(
+    *,
+    collected: tuple[DeepSourceRouteCollectedItem, ...] = (),
+    skipped: tuple[DeepSourceRouteSkippedItem, ...] = (),
+) -> DeepSourceRouteCollectionResult:
+    return DeepSourceRouteCollectionResult(
+        collected=collected,
+        skipped=skipped,
+        total_considered=len(collected) + len(skipped),
+        total_collected=len(collected),
+        total_skipped=len(skipped),
+    )
+
+
+def _collected_response(
+    url: str,
+    status_code: int,
+    body_marker: str,
+) -> DeepSourceRouteCollectedItem:
+    body = f"response-{body_marker}"
+    return DeepSourceRouteCollectedItem(
+        url=url,
+        method="GET",
+        status_code=status_code,
+        final_url=url,
+        headers=(("Content-Type", "text/plain"),),
+        body_preview=body,
+        body_sha256=(body_marker * 64)[:64],
+        body_bytes=len(body),
+        elapsed_seconds=0.01,
+        source="source_route_coverage",
+        reason="synthetic collection",
+        evidence_ids=(f"EVID-{body_marker.upper()}",),
+    )
+
+
+def _skipped_request(url: str, reason: str) -> DeepSourceRouteSkippedItem:
+    return DeepSourceRouteSkippedItem(
+        url=url,
+        method="GET",
+        reason=reason,
+        source="source_route_coverage",
+        evidence_ids=(f"EVID-{reason.upper()}",),
+    )
+
+
+def _deep_notice(source: DeepSourceRouteCollectionResult) -> CollectionConfidenceNotice:
+    return next(
+        notice
+        for notice in build_collection_confidence_notices(
+            _state(),
+            source_collection=source,
+        )
+        if notice.notice_id == "CONFIDENCE-DEEP-SOURCE-ROUTES"
     )

@@ -19,6 +19,7 @@ from bugslyce.reports.html import (
     write_project_html_report,
 )
 from bugslyce.reports.markdown import export_project_state_json
+from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
 from bugslyce.recon.deep_source_route_collection_export import (
     deep_source_route_collection_result_to_dict,
 )
@@ -243,7 +244,7 @@ def test_html_report_rebuilds_existing_deep_review_models(tmp_path: Path) -> Non
     html = render_html_report(build_html_report_model(pack))
 
     assert "Existing dashboard title" in html
-    assert "Successful retained Deep content" in html
+    assert "Successful 2xx content promoted for priority review" in html
     assert "Redirect and authentication-flow review" in html
     assert "Route relationships" in html
     assert "Response similarity" in html
@@ -484,7 +485,7 @@ def test_html_report_reconstructs_persisted_deep_operator_summary_and_disclosure
     for route in ("/api/user", "/api/jobs", "/api/applications"):
         assert route in html
     assert "No request was generated from these values." in html
-    assert "1 successfully retained Deep response is available" in html
+    assert "1 successful 2xx response was promoted for priority content review" in html
     assert "Operator summary reconstructed from complete structured Deep inputs" in html
 
 
@@ -994,6 +995,64 @@ def test_html_report_requires_structured_metadata_result_for_completed_delegatio
     )
     assert "completed by Deep metadata collection" in html
     assert "body-size limit" in html
+
+
+def test_html_and_markdown_share_truthful_deep_collection_facts(tmp_path: Path) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/docs",
+                200,
+                "a" * 64,
+                evidence_ids=("EVID-DOCS",),
+            ),
+            _deep_item(
+                "https://portal.example.test/private",
+                401,
+                "b" * 64,
+                evidence_ids=("EVID-PRIVATE",),
+            ),
+        ),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/large-file",
+                method="GET",
+                reason="response_too_large",
+                source="source_route_coverage",
+                evidence_ids=("EVID-LARGE",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/blocked",
+                method="GET",
+                reason="policy_blocked",
+                source="source_route_coverage",
+                evidence_ids=("EVID-BLOCKED",),
+            ),
+        ),
+        total_considered=4,
+        total_collected=2,
+        total_skipped=2,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    markdown = render_collection_confidence_markdown(model.confidence_notices)
+    html = render_html_report(model)
+
+    assert markdown is not None
+    shared_facts = (
+        "collected 2 source/route response records",
+        "1 successful 2xx response was promoted for priority content review",
+        "excluded 1 response under the body-size limit",
+        "policy_blocked",
+    )
+    for fact in shared_facts:
+        assert fact in markdown
+        assert fact in html
 
 
 def _write_deep_interpretation_pack(root: Path) -> Path:

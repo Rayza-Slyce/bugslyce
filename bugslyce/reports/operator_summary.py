@@ -169,14 +169,14 @@ def build_deep_operator_summary_leads(
             }
         )
         response_count = len(successful_content_reviews)
-        verb = "is" if response_count == 1 else "are"
+        verb = "was" if response_count == 1 else "were"
         leads.append(
             OperatorSummaryLead(
                 title="Successfully collected Deep content available offline",
                 why=(
-                    f"{response_count} successfully retained Deep "
-                    f"response{'s' if response_count != 1 else ''} {verb} available "
-                    "for offline review in "
+                    f"{response_count} successful 2xx "
+                    f"response{'s' if response_count != 1 else ''} {verb} promoted "
+                    "for priority content review from "
                     + ", ".join(f"`{reference}`" for reference in artefact_references)
                     + "."
                 ),

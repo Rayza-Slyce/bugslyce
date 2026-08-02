@@ -1,4 +1,4 @@
-"""Bounded primary-triage views of successfully retained Deep content."""
+"""Bounded priority-review views of successful 2xx Deep content."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from bugslyce.recon.http_origin import http_origin_from_url, same_http_origin
 
 @dataclass(frozen=True)
 class SuccessfulDeepContentReview:
-    """One successful retained Deep response eligible for primary review."""
+    """One successful 2xx Deep response promoted for priority content review."""
 
     review_id: str
     canonical_url: str
@@ -99,8 +99,9 @@ def render_successful_deep_content_runbook(
         "## Successful Deep Content Review",
         "",
         (
-            "These bounded responses were collected successfully and retained for "
-            "offline manual review. They are direct response evidence, not confirmed findings."
+            "These successful 2xx responses were promoted for priority offline content "
+            "review. Other status classes may still have collected response records. "
+            "These are direct response evidence, not confirmed findings."
         ),
         "",
     ]

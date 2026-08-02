@@ -1071,7 +1071,7 @@ def test_successful_deep_content_uses_one_operator_summary_slot(
     assert len(deep_leads) == 1
     aggregate = deep_leads[0]
     assert aggregate.title == "Successfully collected Deep content available offline"
-    assert "3 successfully retained Deep responses" in aggregate.why
+    assert "3 successful 2xx responses were promoted for priority content review" in aggregate.why
     assert aggregate.endpoints == sorted(review.canonical_url for review in reviews)
     assert aggregate.evidence_ids == [
         "EVID-DEEP-1",
@@ -1172,7 +1172,7 @@ def test_many_successful_deep_responses_cannot_consume_multiple_summary_slots(
     )
 
     assert len(deep_leads) == 1
-    assert "10 successfully retained Deep responses" in deep_leads[0].why
+    assert "10 successful 2xx responses were promoted for priority content review" in deep_leads[0].why
     assert len(summary.review_first) == 8
     assert sum(
         lead.title == "Successfully collected Deep content available offline"
@@ -1201,8 +1201,8 @@ def test_successful_deep_content_summary_uses_singular_and_plural_grammar() -> N
         (review, replace(review, review_id="DEEP-CONTENT-0002")),
     )[0].why
 
-    assert "1 successfully retained Deep response is available" in singular
-    assert "2 successfully retained Deep responses are available" in plural
+    assert "1 successful 2xx response was promoted for priority content review" in singular
+    assert "2 successful 2xx responses were promoted for priority content review" in plural
 
 
 def test_operator_summary_treats_documentation_encoded_match_as_noise() -> None:
