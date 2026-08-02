@@ -9,21 +9,45 @@ Recon.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, quote, urlparse
+from hashlib import sha256
+from html import escape, unescape
+from html.parser import HTMLParser
+from itertools import combinations
+import json
+import re
+from urllib.parse import parse_qsl, quote, unquote, urlparse
 
 from bugslyce.recon.deep_http_fingerprint_summary import (
     DeepHttpFingerprintSummary,
     DeepHttpResponseFingerprint,
 )
+from bugslyce.recon.deep_metadata_collector import (
+    MAX_BODY_PREVIEW_CHARS as DEEP_METADATA_BODY_PREVIEW_CHARS,
+)
 from bugslyce.recon.deep_redirect_auth_flow_review import (
     DeepRedirectAuthFlowObservation,
     DeepRedirectAuthFlowReview,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    MAX_BODY_PREVIEW_CHARS as DEEP_SOURCE_ROUTE_BODY_PREVIEW_CHARS,
 )
 
 
 MAX_RENDERED_VALUES = 6
 MAX_RENDERED_VALUE_CHARS = 120
 MAX_UNIQUE_SUCCESS_RESPONSES = 12
+MIN_REQUEST_REFLECTION_COMPARABLE_CHARS = 320
+PERCENT_ESCAPE_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+URL_UNRESERVED_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+)
+URL_TOKEN_CHARS = r"A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-"
+HTML_REFERENCE_ATTRIBUTE_RE = re.compile(
+    r"(?P<prefix>\b(?P<name>href|src|action|formaction)\s*=\s*)"
+    r"(?:(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|"
+    r"(?P<unquoted>[^\s'\"=<>`]+))",
+    re.IGNORECASE | re.DOTALL,
+)
 BODY_SIZE_BAND_ORDER = (
     "empty",
     "1-255",
@@ -36,6 +60,7 @@ BODY_SIZE_BAND_ORDER = (
 GROUP_CATEGORY_ORDER = {
     "exact_body_hash_group": 0,
     "redirect_pattern_group": 1,
+    "request_reflecting_template_group": 2,
     "candidate_default_template_group": 3,
     "client_error_signature_group": 4,
     "response_signature_group": 5,
@@ -46,6 +71,8 @@ SAFETY_NOTES = (
     "No responses were fetched.",
     "No redirects were followed.",
     "Groups represent shared bounded evidence signatures, not confirmed semantic identity.",
+    "Request-reflecting families require sufficient retained HTML preview evidence and exact agreement across every member pair's complete mutually retained safely comparable region after request-specific replacement.",
+    "Responses without demonstrated request-derived reflection remain ungrouped by the request-reflecting family rule.",
     "Candidate default/template groups are review hypotheses only.",
     "Unique 2xx responses are comparison context, not findings.",
     "This stage produces static manual-review context only.",
@@ -76,6 +103,10 @@ class DeepResponseSimilarityGroup:
     auth_path_transitions: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     interpretation: str
+    representative_fingerprint_id: str | None = None
+    representative_requested_url: str | None = None
+    member_count: int = 0
+    structural_signals: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -110,6 +141,7 @@ class DeepResponseSimilaritySummaryCounts:
     total_grouped_fingerprints: int
     unique_ungrouped_2xx_responses: int
     responses_in_multiple_retained_groups: int
+    request_reflecting_template_groups: int = 0
 
 
 @dataclass(frozen=True)
@@ -143,6 +175,20 @@ class _PendingGroup:
     auth_path_transitions: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     interpretation: str
+    representative_fingerprint_id: str
+    representative_requested_url: str
+    member_count: int
+    structural_signals: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RequestReflectingEvidence:
+    fingerprint: DeepHttpResponseFingerprint
+    coarse_signature: tuple[str, ...]
+    normalised_preview: str
+    retained_preview_chars: int
+    preview_truncated: bool
+    reference_signature: tuple[str, ...]
 
 
 def build_deep_response_similarity_review(
@@ -155,6 +201,7 @@ def build_deep_response_similarity_review(
     pending = [
         *_exact_body_hash_groups(http_summary, fingerprints_by_id),
         *_redirect_pattern_groups(redirect_review, fingerprints_by_id),
+        *_request_reflecting_template_groups(http_summary.fingerprints),
         *_response_signature_groups(http_summary.fingerprints),
         *_client_error_signature_groups(http_summary.fingerprints),
         *_candidate_default_template_groups(http_summary.fingerprints),
@@ -201,6 +248,8 @@ def render_deep_response_similarity_review_markdown(
         f"- Redirect observations considered: {counts.total_redirect_observations_considered}",
         f"- Exact body hash groups: {counts.exact_body_hash_groups}",
         f"- Redirect pattern groups: {counts.redirect_pattern_groups}",
+        "- Request-reflecting template groups: "
+        f"{counts.request_reflecting_template_groups}",
         "- Repeated auth-looking redirect groups: "
         f"{counts.repeated_auth_looking_redirect_groups}",
         "- Candidate default/template groups: "
@@ -236,6 +285,8 @@ def render_deep_response_similarity_review_markdown(
             "### Grouping Interpretation Notes",
             "",
             "- Groups represent shared bounded evidence signatures, not confirmed semantic identity.",
+            "- Request-reflecting families require sufficient retained HTML preview evidence and exact agreement across every member pair's complete mutually retained safely comparable region after request-specific replacement.",
+            "- Responses without demonstrated request-derived reflection remain ungrouped by the request-reflecting family rule.",
             "- Candidate default/template groups are review hypotheses only.",
             "- Unique 2xx responses are comparison context, not findings.",
             "- Query values, fragments, URL credentials, and cookie values are not used.",
@@ -429,6 +480,74 @@ def _candidate_default_template_groups(
     return tuple(groups)
 
 
+def _request_reflecting_template_groups(
+    fingerprints: tuple[DeepHttpResponseFingerprint, ...],
+) -> tuple[_PendingGroup, ...]:
+    grouped: dict[tuple[str, ...], list[_RequestReflectingEvidence]] = {}
+    for fingerprint in fingerprints:
+        evidence = _request_reflecting_evidence(fingerprint)
+        if evidence is None:
+            continue
+        key = (*evidence.coarse_signature, *evidence.reference_signature)
+        grouped.setdefault(key, []).append(evidence)
+
+    groups: list[_PendingGroup] = []
+    for key in sorted(grouped):
+        for family in _partition_request_reflecting_evidence(grouped[key]):
+            comparison = _complete_comparable_signature(family)
+            if comparison is None:
+                continue
+            signature, structural_signals = comparison
+            fingerprints_in_family = tuple(item.fingerprint for item in family)
+            distinct_urls = {
+                _safe_requested_url(fingerprint.requested_url)
+                for fingerprint in fingerprints_in_family
+            }
+            if len(fingerprints_in_family) < 2 or len(distinct_urls) < 2:
+                continue
+            groups.append(
+                _group_from_fingerprints(
+                    category="request_reflecting_template_group",
+                    title="Repeated request-reflecting response template",
+                    reason=(
+                        f"{len(fingerprints_in_family)} collected response records "
+                        "share one stable request-reflecting template across every "
+                        "pairwise safely comparable bounded region."
+                    ),
+                    signature=signature,
+                    fingerprints=fingerprints_in_family,
+                    structural_signals=structural_signals,
+                    interpretation=(
+                        "Request-derived text was replaced only for this offline "
+                        "comparison. Every member pair agrees exactly across its "
+                        "complete mutually retained safely comparable region; "
+                        "unavailable content beyond a truncated preview is not "
+                        "assumed identical. The family is response-similarity "
+                        "context, not a route-validity, soft-404, vulnerability, "
+                        "or server-defect conclusion."
+                    ),
+                )
+            )
+    return tuple(groups)
+
+
+def _partition_request_reflecting_evidence(
+    values: list[_RequestReflectingEvidence],
+) -> tuple[tuple[_RequestReflectingEvidence, ...], ...]:
+    families: list[list[_RequestReflectingEvidence]] = []
+    for candidate in sorted(values, key=_request_reflecting_evidence_sort_key):
+        for family in families:
+            if all(
+                _pairwise_comparable_signature(candidate, member) is not None
+                for member in family
+            ):
+                family.append(candidate)
+                break
+        else:
+            families.append([candidate])
+    return tuple(tuple(family) for family in families)
+
+
 def _group_from_fingerprints(
     *,
     category: str,
@@ -441,7 +560,9 @@ def _group_from_fingerprints(
     source_repeated_body_group_ids: tuple[str, ...] = (),
     redirect_origin_relationships: tuple[str, ...] = (),
     auth_path_transitions: tuple[str, ...] = (),
+    structural_signals: tuple[str, ...] = (),
 ) -> _PendingGroup:
+    representative = min(fingerprints, key=_representative_sort_key)
     return _PendingGroup(
         category=category,
         title=title,
@@ -514,6 +635,12 @@ def _group_from_fingerprints(
             )
         ),
         interpretation=interpretation,
+        representative_fingerprint_id=representative.fingerprint_id,
+        representative_requested_url=_safe_requested_url(
+            representative.requested_url
+        ),
+        member_count=len(fingerprints),
+        structural_signals=structural_signals,
     )
 
 
@@ -538,7 +665,7 @@ def _order_and_suppress_duplicates(
 def _assign_group_ids(groups: tuple[_PendingGroup, ...]) -> tuple[DeepResponseSimilarityGroup, ...]:
     return tuple(
         DeepResponseSimilarityGroup(
-            group_id=f"DEEP-SIM-GRP-{index:04d}",
+            group_id=_group_id(group, index),
             category=group.category,
             title=group.title,
             reason=group.reason,
@@ -558,6 +685,10 @@ def _assign_group_ids(groups: tuple[_PendingGroup, ...]) -> tuple[DeepResponseSi
             auth_path_transitions=group.auth_path_transitions,
             evidence_ids=group.evidence_ids,
             interpretation=group.interpretation,
+            representative_fingerprint_id=group.representative_fingerprint_id,
+            representative_requested_url=group.representative_requested_url,
+            member_count=group.member_count,
+            structural_signals=group.structural_signals,
         )
         for index, group in enumerate(groups, start=1)
     )
@@ -635,7 +766,562 @@ def _summary_counts(
         responses_in_multiple_retained_groups=sum(
             1 for count in fingerprint_memberships.values() if count > 1
         ),
+        request_reflecting_template_groups=_count_category(
+            groups,
+            "request_reflecting_template_group",
+        ),
     )
+
+
+def _request_reflecting_evidence(
+    fingerprint: DeepHttpResponseFingerprint,
+) -> _RequestReflectingEvidence | None:
+    preview = fingerprint.bounded_body_preview
+    media_type = _normalise_content_type(fingerprint.content_type)
+    origin = _canonical_origin(fingerprint.requested_url)
+    if (
+        fingerprint.body_empty
+        or len(preview) < MIN_REQUEST_REFLECTION_COMPARABLE_CHARS
+        or media_type not in {"text/html", "application/xhtml+xml"}
+        or origin is None
+        or fingerprint.redirect_location is not None
+        or _safe_requested_url(fingerprint.final_url)
+        != _safe_requested_url(fingerprint.requested_url)
+    ):
+        return None
+
+    variants = _request_reflection_variants(fingerprint.requested_url)
+    if not variants:
+        return None
+    request_normalised_preview, preview_replacements = _replace_request_reflections(
+        preview,
+        variants,
+    )
+    title = fingerprint.title_observed_in_bounded_preview
+    normalised_title, title_replacements = _replace_request_reflections(
+        title or "",
+        variants,
+    )
+    if preview_replacements == 0 or title_replacements == 0:
+        return None
+
+    reference_evidence = _safe_html_reference_evidence(
+        request_normalised_preview,
+        fingerprint.requested_url,
+    )
+    if reference_evidence is None:
+        return None
+    normalised_preview, retained_references = reference_evidence
+    if len(normalised_preview) < MIN_REQUEST_REFLECTION_COMPARABLE_CHARS:
+        return None
+    html_structure = _html_structure_signature(normalised_preview)
+    if len(html_structure) < 4 or not any(
+        event.startswith("start:title[") for event in html_structure
+    ):
+        return None
+    return _RequestReflectingEvidence(
+        fingerprint=fingerprint,
+        coarse_signature=(
+            f"origin={origin}",
+            f"method={fingerprint.method.upper()}",
+            f"status={fingerprint.status_code}",
+            f"content_type={media_type}",
+            f"server_family={_normalise_server_family(fingerprint.server)}",
+            f"body_size_band={_body_size_band(fingerprint.body_bytes)}",
+            f"normalised_title={_normalise_title(normalised_title)}",
+        ),
+        normalised_preview=normalised_preview,
+        retained_preview_chars=len(preview),
+        preview_truncated=_preview_is_boundary_limited(fingerprint, preview),
+        reference_signature=retained_references,
+    )
+
+
+def _preview_is_boundary_limited(
+    fingerprint: DeepHttpResponseFingerprint,
+    preview: str,
+) -> bool:
+    limits = {
+        "metadata_collection": DEEP_METADATA_BODY_PREVIEW_CHARS,
+        "source_route_collection": DEEP_SOURCE_ROUTE_BODY_PREVIEW_CHARS,
+    }
+    limit = limits.get(
+        fingerprint.collection_section,
+        min(DEEP_METADATA_BODY_PREVIEW_CHARS, DEEP_SOURCE_ROUTE_BODY_PREVIEW_CHARS),
+    )
+    return len(preview) >= limit
+
+
+def _complete_comparable_signature(
+    values: tuple[_RequestReflectingEvidence, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    if len(values) < 2:
+        return None
+    pairwise_proofs = tuple(
+        proof
+        for left, right in combinations(values, 2)
+        if (proof := _pairwise_comparable_signature(left, right)) is not None
+    )
+    expected_pair_count = len(values) * (len(values) - 1) // 2
+    if len(pairwise_proofs) != expected_pair_count:
+        return None
+
+    comparable_lengths = tuple(int(proof[0]) for proof in pairwise_proofs)
+    truncated = values[0].preview_truncated
+    retained_boundary_signature = (
+        "truncated_chars=" + str(values[0].retained_preview_chars)
+        if truncated
+        else "complete"
+    )
+    retained_boundary_signal = (
+        "equivalent raw retained preview boundary"
+        if truncated
+        else "complete retained previews"
+    )
+    canonical_pairwise_proofs = tuple(sorted(pairwise_proofs))
+    pairwise_proof_digest = sha256(
+        json.dumps(
+            canonical_pairwise_proofs,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+    signature = (
+        *values[0].coarse_signature,
+        "retained_preview_boundary=" + retained_boundary_signature,
+        f"member_count={len(values)}",
+        f"pairwise_comparisons={expected_pair_count}",
+        "pairwise_comparable_chars="
+        + f"{min(comparable_lengths)}-{max(comparable_lengths)}",
+        "pairwise_proof_sha256=" + pairwise_proof_digest,
+        "retained_html_references=" + json.dumps(
+            values[0].reference_signature,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ),
+    )
+    return signature, (
+        "same canonical origin",
+        "same request method",
+        "same HTTP status",
+        "compatible HTML content type",
+        "same server-family observation",
+        "same bounded body-size band",
+        "direct response without retained redirect evidence",
+        "request-derived reflection replaced",
+        retained_boundary_signal,
+        f"all {expected_pair_count} member pairs exactly match across each complete mutually retained normalised region",
+        "same HTML structure across every pairwise comparable region",
+        "same redacted structural HTML-reference signature",
+    )
+
+
+def _pairwise_comparable_signature(
+    left: _RequestReflectingEvidence,
+    right: _RequestReflectingEvidence,
+) -> tuple[str, ...] | None:
+    if (
+        left.coarse_signature != right.coarse_signature
+        or left.reference_signature != right.reference_signature
+        or left.preview_truncated != right.preview_truncated
+        or (
+            left.preview_truncated
+            and left.retained_preview_chars != right.retained_preview_chars
+        )
+    ):
+        return None
+
+    comparable_chars = min(
+        len(left.normalised_preview),
+        len(right.normalised_preview),
+    )
+    if comparable_chars < MIN_REQUEST_REFLECTION_COMPARABLE_CHARS:
+        return None
+    left_region = left.normalised_preview[:comparable_chars]
+    right_region = right.normalised_preview[:comparable_chars]
+    if left_region != right_region:
+        return None
+    if not left.preview_truncated and left.normalised_preview != right.normalised_preview:
+        return None
+
+    left_structure = _html_structure_signature(left_region)
+    right_structure = _html_structure_signature(right_region)
+    if len(left_structure) < 4 or left_structure != right_structure:
+        return None
+    return (
+        str(comparable_chars),
+        sha256(left_region.encode("utf-8")).hexdigest(),
+        sha256(
+            json.dumps(
+                left_structure,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ).hexdigest(),
+    )
+
+
+def _request_reflecting_evidence_sort_key(
+    evidence: _RequestReflectingEvidence,
+) -> tuple[object, ...]:
+    fingerprint = evidence.fingerprint
+    return (
+        _safe_requested_url(fingerprint.requested_url),
+        fingerprint.method.upper(),
+        fingerprint.status_code,
+        fingerprint.fingerprint_id,
+        fingerprint.body_sha256,
+        tuple(sorted(fingerprint.evidence_ids)),
+    )
+
+
+def _canonical_origin(url: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    effective_port = port or (443 if parsed.scheme.lower() == "https" else 80)
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parsed.scheme.lower()}://{host}:{effective_port}"
+
+
+def _request_reflection_variants(requested_url: str) -> tuple[str, ...]:
+    try:
+        parsed = urlparse(requested_url)
+    except ValueError:
+        return ()
+    candidates = [requested_url, parsed.path]
+    decoded_path = _unambiguous_percent_decoded_path(parsed.path)
+    if decoded_path is not None:
+        candidates.append(decoded_path)
+    candidates.extend(escape(value, quote=False) for value in tuple(candidates))
+    return tuple(
+        sorted(
+            {
+                value
+                for value in candidates
+                if value and value != "/" and len(value) >= 2
+            },
+            key=lambda value: (-len(value), value),
+        )
+    )
+
+
+def _unambiguous_percent_decoded_path(value: str) -> str | None:
+    matches = tuple(PERCENT_ESCAPE_RE.finditer(value))
+    if (
+        not matches
+        or re.search(r"%(?![0-9A-Fa-f]{2})", value)
+        or any(
+            chr(int(match.group(1), 16)) not in URL_UNRESERVED_CHARS
+            for match in matches
+        )
+    ):
+        return None
+    decoded = unquote(value, errors="strict")
+    if not decoded.startswith("/") or any(ord(character) < 32 for character in decoded):
+        return None
+    return decoded
+
+
+def _replace_request_reflections(
+    value: str,
+    variants: tuple[str, ...],
+) -> tuple[str, int]:
+    rendered = value
+    replacements = 0
+    for variant in variants:
+        pattern = re.compile(
+            rf"(?<![{URL_TOKEN_CHARS}]){re.escape(variant)}(?![{URL_TOKEN_CHARS}])"
+        )
+        rendered, count = pattern.subn("{REQUEST}", rendered)
+        replacements += count
+    return rendered, replacements
+
+
+class _HtmlStructureParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.events: list[str] = []
+        self.references: list[tuple[str, str]] = []
+        self.raw_start_tags: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        names = ",".join(sorted(name.lower() for name, _value in attrs))
+        self.events.append(f"start:{tag.lower()}[{names}]")
+        self.raw_start_tags.append(self.get_starttag_text())
+        self.references.extend(
+            (name.lower(), value)
+            for name, value in attrs
+            if name.lower() in {"action", "formaction", "href", "src"}
+            and value is not None
+        )
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        names = ",".join(sorted(name.lower() for name, _value in attrs))
+        self.events.append(f"empty:{tag.lower()}[{names}]")
+        self.raw_start_tags.append(self.get_starttag_text())
+        self.references.extend(
+            (name.lower(), value)
+            for name, value in attrs
+            if name.lower() in {"action", "formaction", "href", "src"}
+            and value is not None
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        self.events.append(f"end:{tag.lower()}")
+
+
+def _html_structure_signature(value: str) -> tuple[str, ...]:
+    parser = _HtmlStructureParser()
+    try:
+        parser.feed(value)
+    except (AssertionError, ValueError):
+        return ()
+    return tuple(parser.events)
+
+
+def _safe_html_reference_evidence(
+    value: str,
+    requested_url: str,
+) -> tuple[str, tuple[str, ...]] | None:
+    parser = _HtmlStructureParser()
+    try:
+        parser.feed(value)
+    except (AssertionError, ValueError):
+        return None
+    safe_references: list[str] = []
+    for attribute, reference in parser.references:
+        safe = _safe_html_reference(attribute, reference, requested_url)
+        if safe is None:
+            return None
+        safe_references.append(safe)
+    normalised = _replace_html_reference_attributes(
+        value,
+        parser.raw_start_tags,
+        requested_url,
+        expected_reference_count=len(parser.references),
+    )
+    if normalised is None:
+        return None
+    return normalised, tuple(sorted(safe_references))
+
+
+def _replace_html_reference_attributes(
+    value: str,
+    raw_start_tags: list[str],
+    requested_url: str,
+    *,
+    expected_reference_count: int,
+) -> str | None:
+    parts: list[str] = []
+    cursor = 0
+    replaced_references = 0
+    for raw_tag in raw_start_tags:
+        position = value.find(raw_tag, cursor)
+        if position < 0:
+            return None
+        invalid = False
+
+        def replace_attribute(match: re.Match[str]) -> str:
+            nonlocal invalid, replaced_references
+            raw_reference = match.group("quoted")
+            if raw_reference is None:
+                raw_reference = match.group("unquoted") or ""
+            safe = _safe_html_reference(
+                match.group("name").lower(),
+                unescape(raw_reference),
+                requested_url,
+            )
+            if safe is None:
+                invalid = True
+                return match.group(0)
+            replaced_references += 1
+            digest = sha256(safe.encode("utf-8")).hexdigest()
+            quote_character = match.group("quote") or "\""
+            return (
+                f"{match.group('prefix')}{quote_character}"
+                f"{{HTML_REFERENCE:{digest}}}{quote_character}"
+            )
+
+        normalised_tag = HTML_REFERENCE_ATTRIBUTE_RE.sub(
+            replace_attribute,
+            raw_tag,
+        )
+        if invalid:
+            return None
+        parts.extend((value[cursor:position], normalised_tag))
+        cursor = position + len(raw_tag)
+    parts.append(value[cursor:])
+    if replaced_references != expected_reference_count:
+        return None
+    return "".join(parts)
+
+
+def _safe_html_reference(
+    attribute: str,
+    reference: str,
+    requested_url: str,
+) -> str | None:
+    stripped = reference.strip()
+    if any(ord(character) < 32 for character in stripped):
+        return None
+    if not stripped:
+        return _canonical_reference_payload(
+            {"attribute": attribute, "form": "empty"}
+        )
+
+    try:
+        parsed = urlparse(stripped)
+    except ValueError:
+        return None
+    if stripped.startswith("//"):
+        form = "scheme_relative"
+    elif stripped.startswith("/"):
+        form = "root_relative"
+    elif stripped.startswith("?"):
+        form = "query_relative"
+    elif stripped.startswith("#"):
+        form = "fragment_relative"
+    elif parsed.scheme:
+        form = "absolute_http" if parsed.scheme.lower() == "http" else (
+            "absolute_https" if parsed.scheme.lower() == "https" else "unsupported_scheme"
+        )
+    else:
+        form = "path_relative"
+
+    query_names = _safe_query_parameter_names(parsed.query)
+    if query_names is None:
+        return None
+    payload: dict[str, object] = {
+        "attribute": attribute,
+        "form": form,
+        "query_parameter_names": query_names,
+    }
+    if form == "fragment_relative":
+        return _canonical_reference_payload(payload)
+    if form in {"root_relative", "path_relative", "query_relative"}:
+        path = parsed.path
+        if any(ord(character) < 32 for character in path):
+            return None
+        payload["path"] = path
+        return _canonical_reference_payload(payload)
+
+    scheme = parsed.scheme.lower()
+    if form == "scheme_relative":
+        try:
+            scheme = urlparse(requested_url).scheme.lower()
+        except ValueError:
+            return None
+    if form == "unsupported_scheme" and parsed.hostname is None:
+        payload.update(
+            {
+                "scheme": scheme,
+                "opaque_path_sha256": sha256(parsed.path.encode("utf-8")).hexdigest(),
+            }
+        )
+        return _canonical_reference_payload(payload)
+
+    hostname = parsed.hostname.lower() if parsed.hostname else None
+    if hostname is None:
+        return None
+    try:
+        explicit_port = parsed.port
+    except ValueError:
+        return None
+    effective_port = explicit_port
+    if effective_port is None and scheme in {"http", "https"}:
+        effective_port = 443 if scheme == "https" else 80
+    path = parsed.path or "/"
+    if any(ord(character) < 32 for character in path):
+        return None
+    payload.update(
+        {
+            "scheme": scheme,
+            "hostname": hostname,
+            "explicit_port": explicit_port,
+            "effective_port": effective_port,
+            "path": path,
+            "userinfo_present_and_omitted": (
+                parsed.username is not None or parsed.password is not None
+            ),
+        }
+    )
+    return _canonical_reference_payload(payload)
+
+
+def _safe_query_parameter_names(query: str) -> tuple[str, ...] | None:
+    if not query:
+        return ()
+    try:
+        names = [
+            name
+            for name, _value in parse_qsl(query, keep_blank_values=True)
+            if name
+        ]
+    except ValueError:
+        return None
+    if not names:
+        names = [
+            part.split("=", 1)[0]
+            for part in query.split("&")
+            if part.split("=", 1)[0]
+        ]
+    if any(
+        len(name) > MAX_RENDERED_VALUE_CHARS
+        or any(ord(character) < 32 for character in name)
+        for name in names
+    ):
+        return None
+    return tuple(sorted(set(names)))
+
+
+def _canonical_reference_payload(payload: dict[str, object]) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _representative_sort_key(
+    fingerprint: DeepHttpResponseFingerprint,
+) -> tuple[object, ...]:
+    return (
+        _safe_requested_url(fingerprint.requested_url),
+        fingerprint.method.upper(),
+        fingerprint.status_code,
+        fingerprint.fingerprint_id,
+        tuple(sorted(fingerprint.evidence_ids)),
+    )
+
+
+def _group_id(group: _PendingGroup, index: int) -> str:
+    if group.category != "request_reflecting_template_group":
+        return f"DEEP-SIM-GRP-{index:04d}"
+    canonical = json.dumps(
+        group.grouping_signature,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    digest = sha256(canonical.encode("ascii")).hexdigest()[:16].upper()
+    return f"DEEP-RESP-FAM-{digest}"
 
 
 def _redirect_signature(observation: DeepRedirectAuthFlowObservation) -> tuple:
@@ -770,9 +1456,10 @@ def _target_path_pattern(safe_url: str | None) -> str:
 def _duplicate_precedence(group: _PendingGroup) -> int:
     precedence = {
         "exact_body_hash_group": 0,
-        "candidate_default_template_group": 1,
-        "client_error_signature_group": 2,
-        "response_signature_group": 3,
+        "request_reflecting_template_group": 1,
+        "candidate_default_template_group": 2,
+        "client_error_signature_group": 3,
+        "response_signature_group": 4,
     }
     return precedence.get(group.category, 10)
 
@@ -807,8 +1494,33 @@ def _render_group(group: DeepResponseSimilarityGroup) -> list[str]:
         f"- Reason: {group.reason}",
         f"- Response count: {len(group.fingerprint_ids)}",
         "- Grouping signature: " + _format_compact_values(group.grouping_signature),
-        "- Fingerprints: " + _format_compact_values(group.fingerprint_ids),
     ]
+    if group.category == "request_reflecting_template_group":
+        lines.extend(
+            [
+                "- Representative fingerprint: "
+                f"`{group.representative_fingerprint_id or 'none'}`",
+                "- Representative request: "
+                f"`{_compact_single(group.representative_requested_url or 'none')}`",
+                "- Structural signals: "
+                + _format_compact_values(group.structural_signals),
+                "- Member fingerprints:",
+                *(f"  - `{value}`" for value in group.fingerprint_ids),
+                "- Member requested URLs:",
+                *(f"  - {_markdown_code(value)}" for value in group.requested_urls),
+            ]
+        )
+        if group.evidence_ids:
+            lines.extend(
+                [
+                    "- Member evidence IDs:",
+                    *(f"  - `{value}`" for value in group.evidence_ids),
+                ]
+            )
+    else:
+        lines.append(
+            "- Fingerprints: " + _format_compact_values(group.fingerprint_ids)
+        )
     if group.redirect_observation_ids:
         lines.append(
             "- Redirect observations: "
@@ -819,12 +1531,11 @@ def _render_group(group: DeepResponseSimilarityGroup) -> list[str]:
             "- Source repeated body groups: "
             + _format_compact_values(group.source_repeated_body_group_ids)
         )
-    lines.extend(
-        [
-            "- URLs: " + _format_compact_values(group.requested_urls),
-            "- Status codes: "
-            + _format_compact_values(tuple(str(value) for value in group.status_codes)),
-        ]
+    if group.category != "request_reflecting_template_group":
+        lines.append("- URLs: " + _format_compact_values(group.requested_urls))
+    lines.append(
+        "- Status codes: "
+        + _format_compact_values(tuple(str(value) for value in group.status_codes))
     )
     if group.titles_observed_in_bounded_previews:
         lines.append(
@@ -849,7 +1560,7 @@ def _render_group(group: DeepResponseSimilarityGroup) -> list[str]:
             "- Auth path transitions: "
             + _format_compact_values(group.auth_path_transitions)
         )
-    if group.evidence_ids:
+    if group.evidence_ids and group.category != "request_reflecting_template_group":
         lines.append("- Evidence: " + _format_compact_values(group.evidence_ids))
     lines.extend([f"- Interpretation: {group.interpretation}", ""])
     return lines
@@ -899,6 +1610,16 @@ def _compact_single(value: str, *, max_chars: int = MAX_RENDERED_VALUE_CHARS) ->
     if len(compact) <= max_chars:
         return compact
     return compact[: max_chars - 24].rstrip() + " ... [truncated]"
+
+
+def _markdown_code(value: str) -> str:
+    longest_run = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", value)),
+        default=0,
+    )
+    fence = "`" * (longest_run + 1)
+    padding = " " if value.startswith("`") or value.endswith("`") else ""
+    return f"{fence}{padding}{value}{padding}{fence}"
 
 
 def _safe_requested_url(raw_url: str) -> str:

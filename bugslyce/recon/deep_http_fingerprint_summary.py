@@ -7,7 +7,7 @@ flows, perform fuzzy similarity, or make Deep Recon available.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from html import unescape
 import re
@@ -96,6 +96,7 @@ class DeepHttpResponseFingerprint:
     headers_not_observed: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     cookie_summaries: tuple[str, ...] = ()
+    bounded_body_preview: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,7 @@ def build_deep_http_fingerprint_summary(
             interesting_headers=fingerprint.interesting_headers,
             headers_not_observed=fingerprint.headers_not_observed,
             evidence_ids=fingerprint.evidence_ids,
+            bounded_body_preview=fingerprint.bounded_body_preview,
         )
         for index, fingerprint in enumerate(ordered, start=1)
     )
@@ -283,6 +285,7 @@ class _PendingFingerprint:
     interesting_headers: tuple[DeepHttpHeaderObservation, ...]
     headers_not_observed: tuple[str, ...]
     evidence_ids: tuple[str, ...]
+    bounded_body_preview: str
 
 
 def _fingerprint_from_collected_item(
@@ -324,6 +327,7 @@ def _fingerprint_from_collected_item(
             content_type,
         ),
         evidence_ids=tuple(_dedupe(list(item.evidence_ids))),
+        bounded_body_preview=item.body_preview,
     )
 
 

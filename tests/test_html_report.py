@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from html import unescape
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -34,6 +36,9 @@ from bugslyce.recon.deep_metadata_collection_export import (
 from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectedItem,
     DeepMetadataCollectionResult,
+)
+from bugslyce.recon.deep_response_similarity_review import (
+    render_deep_response_similarity_review_markdown,
 )
 from bugslyce.triage.candidates import generate_candidates
 
@@ -255,6 +260,72 @@ def test_html_report_rebuilds_existing_deep_review_models(tmp_path: Path) -> Non
     assert "Per-service request budget exhausted" in html
     assert "EVID-SKIPPED-0001" in html
     _assert_category_filter_complete(html)
+
+
+def test_html_and_markdown_share_request_reflecting_family_facts(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    urls = tuple(
+        f"https://app.example.test/missing-{index:02d}"
+        for index in range(1, 8)
+    ) + (
+        "https://app.example.test/missing-08?"
+        + "&".join(
+            f"long-safe-parameter-name-{index:02d}=value-{index:02d}"
+            for index in range(1, 7)
+        ),
+    )
+    collection = DeepSourceRouteCollectionResult(
+        collected=tuple(
+            _deep_item(
+                url,
+                500,
+                f"distinct-raw-hash-{index}",
+                preview=_request_reflecting_html(url),
+                evidence_ids=(f"EVID-FAMILY-{index}",),
+            )
+            for index, url in enumerate(urls, start=1)
+        ),
+        skipped=(),
+        total_considered=8,
+        total_collected=8,
+        total_skipped=0,
+    )
+    collection_path = pack / "deep_source_route_collection.json"
+    collection_path.write_text(
+        json.dumps(
+            deep_source_route_collection_result_to_dict(collection),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    before = collection_path.read_bytes()
+
+    model = build_html_report_model(pack)
+    markdown = render_deep_response_similarity_review_markdown(
+        model.similarity_review
+    )
+    html = render_html_report(model)
+
+    family = next(
+        group
+        for group in model.similarity_review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+    assert family.member_count == 8
+    assert family.representative_requested_url == urls[0]
+    for expected in (
+        family.group_id,
+        family.reason,
+        family.representative_requested_url,
+        *family.fingerprint_ids,
+        *family.requested_urls,
+        *family.evidence_ids,
+    ):
+        assert expected in markdown
+        assert expected in unescape(html)
+    assert collection_path.read_bytes() == before
 
 
 def test_html_report_is_deterministic_and_preserves_existing_reasoning(
@@ -1271,4 +1342,18 @@ def _deep_item(
         source="source_route_coverage",
         reason="existing structured review input",
         evidence_ids=evidence_ids,
+    )
+
+
+def _request_reflecting_html(url: str) -> str:
+    path = urlsplit(url).path
+    return (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title>"
+        "<style>html,body{margin:0;padding:0}main{display:block}"
+        ".message{font-family:sans-serif;color:#222}</style></head>"
+        "<body><main><h1>Request could not be completed</h1>"
+        f"<p class='message'>The requested resource {path} was not handled.</p>"
+        "<a href='/public/help'>Documentation</a>"
+        "</main></body></html>"
     )

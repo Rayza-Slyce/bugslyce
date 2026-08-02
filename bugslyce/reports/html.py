@@ -733,6 +733,29 @@ def _similarity_section(model: HtmlReportModel) -> str:
                     ("Group ID", group.group_id),
                     ("Category", _human_label(group.category)),
                     ("Reason", group.reason),
+                    *(
+                        (
+                            (
+                                "Representative request",
+                                group.representative_requested_url or "Not recorded",
+                            ),
+                            ("Member count", str(group.member_count)),
+                            (
+                                "Member fingerprints",
+                                _joined(group.fingerprint_ids),
+                            ),
+                            (
+                                "Member evidence IDs",
+                                _joined(group.evidence_ids),
+                            ),
+                            (
+                                "Structural signals",
+                                _joined(group.structural_signals),
+                            ),
+                        )
+                        if group.category == "request_reflecting_template_group"
+                        else ()
+                    ),
                     ("URLs", _joined(group.requested_urls)),
                     ("Statuses", _joined(tuple(str(value) for value in group.status_codes))),
                     ("Existing interpretation", group.interpretation),

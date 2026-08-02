@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from html import escape
 import inspect
+from urllib.parse import unquote, urlsplit
 
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_http_fingerprint_summary import (
@@ -593,6 +595,995 @@ def test_public_model_reversal_keeps_complete_review_identical() -> None:
     assert reversed_review.summary_counts == normal.summary_counts
 
 
+def test_request_reflecting_templates_form_one_traceable_family() -> None:
+    items = tuple(
+        _item(
+            f"https://app.example.test/missing-{name}",
+            500,
+            content_type="text/html; charset=utf-8",
+            body_preview=_reflected_template_body(
+                f"https://app.example.test/missing-{name}"
+            ),
+            body_hash=f"raw-hash-{name}",
+            body_bytes=2400 + index,
+            evidence_ids=(f"EVID-{name.upper()}",),
+        )
+        for index, name in enumerate(("alpha", "beta", "gamma"), start=1)
+    )
+    http_summary, redirect_review = _inputs(*items)
+    before = http_summary
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    families = [
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    ]
+    assert len(families) == 1
+    family = families[0]
+    assert family.member_count == 3
+    assert family.group_id.startswith("DEEP-RESP-FAM-")
+    assert family.representative_requested_url == (
+        "https://app.example.test/missing-alpha"
+    )
+    assert family.requested_urls == tuple(sorted(item.url for item in items))
+    assert family.body_hashes == (
+        "raw-hash-alpha",
+        "raw-hash-beta",
+        "raw-hash-gamma",
+    )
+    assert family.evidence_ids == ("EVID-ALPHA", "EVID-BETA", "EVID-GAMMA")
+    assert "request-derived reflection replaced" in family.structural_signals
+    assert review.summary_counts.request_reflecting_template_groups == 1
+    rendered = render_deep_response_similarity_review_markdown(review)
+    assert (
+        "3 collected response records share one stable request-reflecting template "
+        "across every pairwise safely comparable bounded region."
+    ) in rendered
+    assert "Representative request: `https://app.example.test/missing-alpha`" in rendered
+    assert "Member count" not in rendered
+    assert "Request-reflecting template groups: 1" in rendered
+    for item in items:
+        assert item.url in rendered
+    assert http_summary == before
+
+
+def test_fifty_reflected_templates_group_without_absorbing_distinct_responses() -> None:
+    reflected = tuple(
+        _item(
+            f"https://app.example.test/missing-{index:02d}",
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                f"https://app.example.test/missing-{index:02d}"
+            ),
+            body_hash=f"reflected-{index:02d}",
+            body_bytes=2300 + index,
+        )
+        for index in range(50)
+    )
+    distinct = _item(
+        "https://app.example.test/account",
+        500,
+        content_type="text/html",
+        body_preview=(
+            "<html><head><title>Account service unavailable</title></head>"
+            "<body><main><h1>Account service unavailable</h1>"
+            "<p>This response has materially different structure and meaning.</p>"
+            "</main></body></html>"
+        ),
+        body_hash="distinct-account",
+        body_bytes=2325,
+    )
+    http_summary, redirect_review = _inputs(*reflected, distinct)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    families = [
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    ]
+    assert len(families) == 1
+    assert families[0].member_count == 50
+    assert "https://app.example.test/account" not in families[0].requested_urls
+
+
+def test_request_reflection_variants_use_only_the_record_own_request_value() -> None:
+    urls = (
+        "https://app.example.test/missing-alpha",
+        "https://app.example.test/missing-%62eta",
+        "https://app.example.test/missing-gamma&mode=plain",
+    )
+    reflected_values = (
+        urls[0],
+        unquote(urlsplit(urls[1]).path),
+        escape(urlsplit(urls[2]).path),
+    )
+    items = tuple(
+        _item(
+            url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(url, reflected_value=value),
+            body_hash=f"variant-{index}",
+            body_bytes=2400,
+        )
+        for index, (url, value) in enumerate(zip(urls, reflected_values, strict=True))
+    )
+    http_summary, redirect_review = _inputs(*items)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    families = [
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    ]
+    assert len(families) == 1
+    assert families[0].member_count == 3
+
+
+def test_request_reflecting_family_is_deterministic_for_reversed_inputs() -> None:
+    items = tuple(
+        _item(
+            f"https://app.example.test/missing-{name}",
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                f"https://app.example.test/missing-{name}"
+            ),
+            body_hash=f"hash-{name}",
+            body_bytes=2400,
+            evidence_ids=(f"EVID-{name.upper()}",),
+        )
+        for name in ("gamma", "alpha", "beta")
+    )
+    normal_http, normal_redirect = _inputs(*items)
+    reversed_http, reversed_redirect = _inputs(*reversed(items))
+
+    normal = build_deep_response_similarity_review(normal_http, normal_redirect)
+    reversed_review = build_deep_response_similarity_review(
+        reversed_http,
+        reversed_redirect,
+    )
+
+    assert reversed_review == normal
+    family = next(
+        group
+        for group in normal.groups
+        if group.category == "request_reflecting_template_group"
+    )
+    assert family.representative_requested_url.endswith("/missing-alpha")
+
+
+def test_request_reflecting_family_false_merge_guards() -> None:
+    same_length_unrelated = (
+        _item(
+            "https://app.example.test/alpha",
+            500,
+            content_type="text/html",
+            body_preview="<html><head><title>Alpha report</title></head><body>" + "A" * 300,
+            body_hash="unrelated-a",
+            body_bytes=500,
+        ),
+        _item(
+            "https://app.example.test/bravo",
+            500,
+            content_type="text/html",
+            body_preview="<html><head><title>Bravo report</title></head><body>" + "B" * 300,
+            body_hash="unrelated-b",
+            body_bytes=500,
+        ),
+    )
+    reflected_base = _item(
+        "https://app.example.test/missing-alpha",
+        500,
+        content_type="text/html",
+        body_preview=_reflected_template_body(
+            "https://app.example.test/missing-alpha",
+            unrelated_path="/public/documentation",
+        ),
+        body_hash="base",
+        body_bytes=2400,
+    )
+    guards = (
+        replace(
+            reflected_base,
+            url="https://portal.example.test:8443/missing-beta",
+            final_url="https://portal.example.test:8443/missing-beta",
+            body_preview=_reflected_template_body(
+                "https://portal.example.test:8443/missing-beta",
+                unrelated_path="/public/documentation",
+            ),
+            body_sha256="other-origin",
+        ),
+        replace(reflected_base, status_code=401, body_sha256="different-status"),
+        replace(reflected_base, status_code=200, body_sha256="successful-document"),
+        replace(
+            reflected_base,
+            body_preview="<html><title>/public/documentation</title></html>",
+            body_sha256="insufficient",
+            body_bytes=48,
+        ),
+    )
+    http_summary, redirect_review = _inputs(
+        *same_length_unrelated,
+        reflected_base,
+        *guards,
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_unrelated_path_like_content_is_not_normalised() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-beta"
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                first_url,
+                unrelated_path="/public/alpha-guide",
+            ),
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                second_url,
+                unrelated_path="/public/beta-guide",
+            ),
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_request_path_prefix_inside_unrelated_route_is_not_replaced() -> None:
+    first_url = "https://app.example.test/api"
+    second_url = "https://app.example.test/docs"
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                first_url,
+                unrelated_path="/api/reference",
+            ),
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(
+                second_url,
+                unrelated_path="/docs/reference",
+            ),
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_different_content_after_shared_normalised_prefix_remains_separate() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-beta"
+    common_padding = "Stable bounded template text. " * 16
+    first_body = _late_difference_template(
+        first_url,
+        common_padding=common_padding,
+        late_content="<section><p>First material conclusion.</p></section>",
+    )
+    second_body = _late_difference_template(
+        second_url,
+        common_padding=common_padding,
+        late_content="<section><p>Second material conclusion.</p></section>",
+    )
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=first_body,
+            body_hash="late-difference-a",
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second_body,
+            body_hash="late-difference-b",
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert len(first_body) > 320
+    assert len(second_body) > 320
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_different_structure_after_shared_normalised_prefix_remains_separate() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-beta"
+    common_padding = "Stable bounded template text. " * 16
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=_late_difference_template(
+                first_url,
+                common_padding=common_padding,
+                late_content="<section><p>Shared conclusion.</p></section>",
+            ),
+            body_hash="late-structure-a",
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=_late_difference_template(
+                second_url,
+                common_padding=common_padding,
+                late_content="<aside><h2>Shared conclusion.</h2></aside>",
+            ),
+            body_hash="late-structure-b",
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_unequal_truncated_retained_boundaries_fail_closed() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-bravo"
+    first_body = _fixed_boundary_reflected_template(first_url, retained_chars=456)
+    second_prefix = _fixed_boundary_reflected_template(
+        second_url,
+        retained_chars=456,
+    )
+
+    for index, retained_suffix in enumerate(
+        (
+            "Materially different retained plain text after the shorter boundary.",
+            "<section><h2>Materially different retained structure</h2></section>",
+        ),
+        start=1,
+    ):
+        second_body = second_prefix + retained_suffix
+        http_summary, redirect_review = _inputs(
+            _item(
+                first_url,
+                500,
+                content_type="text/html",
+                body_preview=first_body,
+                body_hash=f"unequal-boundary-short-{index}",
+                body_bytes=2400,
+            ),
+            _item(
+                second_url,
+                500,
+                content_type="text/html",
+                body_preview=second_body,
+                body_hash=f"unequal-boundary-long-{index}",
+                body_bytes=2400,
+            ),
+        )
+
+        review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+        assert len(first_body) == 456
+        assert len(second_body) > len(first_body)
+        assert not any(
+            group.category == "request_reflecting_template_group"
+            for group in review.groups
+        )
+
+
+def test_unequal_boundary_safe_reference_path_remains_discriminating() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-bravo"
+    first_body = _fixed_boundary_reflected_template(first_url, retained_chars=456)
+    second_body = _fixed_boundary_reflected_template(
+        second_url,
+        retained_chars=456,
+    ) + "<a href='/different/safe-path'>Different retained reference</a>"
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=first_body,
+            body_hash="unequal-reference-short",
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second_body,
+            body_hash="unequal-reference-long",
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_complete_previews_require_complete_normalised_equality() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-bravo"
+    first_body = _fixed_boundary_reflected_template(first_url, retained_chars=456)
+    second_body = _fixed_boundary_reflected_template(second_url, retained_chars=456)
+    matching_http, matching_redirect = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=first_body,
+            body_bytes=len(first_body.encode("utf-8")),
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second_body,
+            body_bytes=len(second_body.encode("utf-8")),
+        ),
+    )
+    different_http, different_redirect = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=first_body,
+            body_bytes=len(first_body.encode("utf-8")),
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second_body[:-1] + "Y",
+            body_bytes=len(second_body.encode("utf-8")),
+        ),
+    )
+
+    matching = build_deep_response_similarity_review(
+        matching_http,
+        matching_redirect,
+    )
+    different = build_deep_response_similarity_review(
+        different_http,
+        different_redirect,
+    )
+
+    assert any(
+        group.category == "request_reflecting_template_group"
+        for group in matching.groups
+    )
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in different.groups
+    )
+
+
+def test_mixed_complete_and_truncated_previews_fail_closed() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-bravo"
+    first_body = _fixed_boundary_reflected_template(first_url, retained_chars=456)
+    second_body = _fixed_boundary_reflected_template(second_url, retained_chars=456)
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=first_body,
+            body_bytes=len(first_body.encode("utf-8")),
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second_body,
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_replacement_decoded_boundary_preview_is_not_labelled_complete() -> None:
+    urls = (
+        "https://app.example.test/missing-alpha",
+        "https://app.example.test/missing-bravo",
+    )
+    items = tuple(
+        _item(
+            url,
+            500,
+            content_type="text/html",
+            body_preview=_replacement_boundary_template(url),
+            body_hash=f"replacement-boundary-{index}",
+            body_bytes=600,
+            evidence_ids=(f"EVID-REPLACEMENT-{index}",),
+        )
+        for index, url in enumerate(urls, start=1)
+    )
+    http_summary, redirect_review = _inputs(*items)
+    evidence = tuple(
+        similarity_module._request_reflecting_evidence(fingerprint)
+        for fingerprint in http_summary.fingerprints
+    )
+
+    assert all(item is not None for item in evidence)
+    assert all(len(item.body_preview) == 500 for item in items)
+    assert all(len(item.body_preview.encode("utf-8")) > 600 for item in items)
+    assert all(item.preview_truncated for item in evidence if item is not None)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+    family = next(
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+    assert "retained_preview_boundary=truncated_chars=500" in family.grouping_signature
+    assert "retained_preview_boundary=complete" not in family.grouping_signature
+    assert "unavailable content beyond a truncated preview is not assumed identical" in (
+        family.interpretation
+    )
+
+
+def test_exact_500_character_complete_body_is_conservatively_boundary_limited() -> None:
+    url = "https://app.example.test/missing-alpha"
+    preview = _fixed_boundary_reflected_template(url, retained_chars=500)
+    http_summary, _redirect_review = _inputs(
+        _item(
+            url,
+            500,
+            content_type="text/html",
+            body_preview=preview,
+            body_bytes=len(preview.encode("utf-8")),
+        )
+    )
+
+    evidence = similarity_module._request_reflecting_evidence(
+        http_summary.fingerprints[0]
+    )
+
+    assert evidence is not None
+    assert evidence.retained_preview_chars == 500
+    assert evidence.preview_truncated
+
+
+def test_short_complete_multibyte_previews_are_stable_under_reversal() -> None:
+    urls = (
+        "https://app.example.test/missing-alpha",
+        "https://app.example.test/missing-bravo",
+    )
+    pending: list[DeepSourceRouteCollectedItem] = []
+    for index, url in enumerate(urls, start=1):
+        body = _complete_reflected_template(
+            url,
+            conclusion="Résumé content remains complete and deterministic.",
+        )
+        assert len(body) < 500
+        pending.append(
+            _item(
+                url,
+                500,
+                content_type="text/html",
+                body_preview=body,
+                body_hash=f"multibyte-complete-{index}",
+                body_bytes=len(body.encode("utf-8")),
+                evidence_ids=(f"EVID-MULTIBYTE-{index}",),
+            )
+        )
+    forward_http, forward_redirect = _inputs(*pending)
+    reverse_http, reverse_redirect = _inputs(*reversed(pending))
+
+    forward_evidence = tuple(
+        similarity_module._request_reflecting_evidence(fingerprint)
+        for fingerprint in forward_http.fingerprints
+    )
+    forward = build_deep_response_similarity_review(forward_http, forward_redirect)
+    reverse = build_deep_response_similarity_review(reverse_http, reverse_redirect)
+
+    assert all(item is not None for item in forward_evidence)
+    assert all(
+        not item.preview_truncated
+        for item in forward_evidence
+        if item is not None
+    )
+    assert reverse == forward
+
+
+def test_shortest_member_does_not_hide_later_plain_text_differences() -> None:
+    items = _shortest_member_false_merge_items(
+        second_tail="Second retained plain-text conclusion.",
+        third_tail="Third retained plain-text conclusion.",
+    )
+    http_summary, redirect_review = _inputs(*items)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+    families = tuple(
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+
+    assert len({len(item.body_preview) for item in items}) == 1
+    assert not any(family.member_count == 3 for family in families)
+    assert not any(
+        items[1].url in family.requested_urls
+        and items[2].url in family.requested_urls
+        for family in families
+    )
+
+
+def test_shortest_member_does_not_hide_later_structure_differences() -> None:
+    items = _shortest_member_false_merge_items(
+        second_tail="<section><h2>Second retained structure</h2></section>",
+        third_tail="<aside><p>Third retained structure</p></aside>",
+    )
+    http_summary, redirect_review = _inputs(*items)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+    families = tuple(
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+
+    assert not any(family.member_count == 3 for family in families)
+    assert not any(
+        items[1].url in family.requested_urls
+        and items[2].url in family.requested_urls
+        for family in families
+    )
+
+
+def test_same_coarse_outlier_does_not_suppress_valid_complete_family() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-bravo"
+    outlier_url = "https://app.example.test/missing-charlie"
+    shared = _complete_reflected_template(first_url, conclusion="Shared conclusion.")
+    second = _complete_reflected_template(second_url, conclusion="Shared conclusion.")
+    outlier = _complete_reflected_template(
+        outlier_url,
+        conclusion="Materially different conclusion.",
+    )
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=shared,
+            body_bytes=len(shared.encode("utf-8")),
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=second,
+            body_bytes=len(second.encode("utf-8")),
+        ),
+        _item(
+            outlier_url,
+            500,
+            content_type="text/html",
+            body_preview=outlier,
+            body_bytes=len(outlier.encode("utf-8")),
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+    families = tuple(
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+
+    assert len(families) == 1
+    assert families[0].requested_urls == (first_url, second_url)
+    assert outlier_url not in families[0].requested_urls
+
+
+def test_one_coarse_bucket_partitions_into_two_disjoint_families() -> None:
+    urls = tuple(
+        f"https://app.example.test/missing-{name}"
+        for name in ("alpha", "bravo", "delta", "foxtrot")
+    )
+    conclusions = ("First family.", "First family.", "Second family.", "Second family.")
+    pending_items: list[DeepSourceRouteCollectedItem] = []
+    for index, (url, conclusion) in enumerate(
+        zip(urls, conclusions, strict=True),
+        start=1,
+    ):
+        body = _complete_reflected_template(url, conclusion=conclusion)
+        pending_items.append(
+            _item(
+                url,
+                500,
+                content_type="text/html",
+                body_preview=body,
+                body_hash=f"partition-{index}",
+                body_bytes=len(body.encode("utf-8")),
+                evidence_ids=(f"EVID-PARTITION-{index}",),
+            )
+        )
+    items = tuple(pending_items)
+    forward_http, forward_redirect = _inputs(*items)
+    reverse_http, reverse_redirect = _inputs(*reversed(items))
+
+    forward = build_deep_response_similarity_review(forward_http, forward_redirect)
+    reverse = build_deep_response_similarity_review(reverse_http, reverse_redirect)
+    families = tuple(
+        group
+        for group in forward.groups
+        if group.category == "request_reflecting_template_group"
+    )
+
+    assert reverse == forward
+    assert len(families) == 2
+    assert len({family.group_id for family in families}) == 2
+    assert {family.requested_urls for family in families} == {
+        (urls[0], urls[1]),
+        (urls[2], urls[3]),
+    }
+    memberships = [
+        fingerprint_id
+        for family in families
+        for fingerprint_id in family.fingerprint_ids
+    ]
+    assert len(memberships) == len(set(memberships)) == 4
+    evidence_by_fingerprint_id = {
+        evidence.fingerprint.fingerprint_id: evidence
+        for evidence in (
+            similarity_module._request_reflecting_evidence(fingerprint)
+            for fingerprint in forward_http.fingerprints
+        )
+        if evidence is not None
+    }
+    for family in families:
+        member_evidence = tuple(
+            evidence_by_fingerprint_id[fingerprint_id]
+            for fingerprint_id in family.fingerprint_ids
+        )
+        for index, left in enumerate(member_evidence):
+            for right in member_evidence[index + 1 :]:
+                assert (
+                    similarity_module._pairwise_comparable_signature(left, right)
+                    is not None
+                )
+
+
+def test_html_reference_signature_omits_query_values_fragments_and_credentials() -> None:
+    urls = (
+        "https://app.example.test/missing-alpha",
+        "https://app.example.test/missing-beta",
+    )
+    references = (
+        "/continue?token=secret-value&mode=review#private-section",
+        "https://operator:password@app.example.test:443/next?code=private-code#account",
+    )
+    items = tuple(
+        _item(
+            url,
+            500,
+            content_type="text/html",
+            body_preview=_reference_template_body(url, references),
+            body_hash=f"reference-{index}",
+            body_bytes=2400,
+        )
+        for index, url in enumerate(urls, start=1)
+    )
+    http_summary, redirect_review = _inputs(*items)
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+    family = next(
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    )
+    signature = "\n".join(family.grouping_signature)
+    rendered = render_deep_response_similarity_review_markdown(review)
+
+    for forbidden in (
+        "secret-value",
+        "private-section",
+        "operator",
+        "password",
+        "private-code",
+        "#account",
+    ):
+        assert forbidden not in signature
+        assert forbidden not in rendered
+
+
+def test_reference_query_values_fragments_and_credentials_do_not_split_family() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-beta"
+    first_references = (
+        "/continue?token=first-value&mode=review#first-fragment",
+        "https://first-user:first-pass@app.example.test/next?code=first-code#one",
+    )
+    second_references = (
+        "/continue?token=second-value&mode=review#second-fragment",
+        "https://second-user:second-pass@app.example.test/next?code=second-code#two",
+    )
+    http_summary, redirect_review = _inputs(
+        _item(
+            first_url,
+            500,
+            content_type="text/html",
+            body_preview=_reference_template_body(first_url, first_references),
+            body_hash="safe-reference-a",
+            body_bytes=2400,
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=_reference_template_body(second_url, second_references),
+            body_hash="safe-reference-b",
+            body_bytes=2400,
+        ),
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    families = [
+        group
+        for group in review.groups
+        if group.category == "request_reflecting_template_group"
+    ]
+    assert len(families) == 1
+    signature = "\n".join(families[0].grouping_signature)
+    for forbidden in (
+        "first-value",
+        "second-value",
+        "first-fragment",
+        "second-fragment",
+        "first-user",
+        "second-user",
+        "first-pass",
+        "second-pass",
+        "first-code",
+        "second-code",
+    ):
+        assert forbidden not in signature
+
+
+def test_insufficient_safely_comparable_previews_do_not_form_family() -> None:
+    urls = (
+        "https://app.example.test/missing-alpha",
+        "https://app.example.test/missing-beta",
+    )
+    http_summary, redirect_review = _inputs(
+        *(
+            _item(
+                url,
+                500,
+                content_type="text/html",
+                body_preview=(
+                    "<html><head>"
+                    f"<title>Request failed for {urlsplit(url).path}</title>"
+                    "</head><body>Insufficient retained structure.</body></html>"
+                ),
+                body_hash=f"short-{index}",
+                body_bytes=2400,
+            )
+            for index, url in enumerate(urls, start=1)
+        )
+    )
+
+    review = build_deep_response_similarity_review(http_summary, redirect_review)
+
+    assert not any(
+        group.category == "request_reflecting_template_group"
+        for group in review.groups
+    )
+
+
+def test_missing_content_type_method_and_redirect_variants_fail_closed() -> None:
+    first_url = "https://app.example.test/missing-alpha"
+    second_url = "https://app.example.test/missing-beta"
+    first = _item(
+        first_url,
+        500,
+        content_type="text/html",
+        body_preview=_reflected_template_body(first_url),
+        body_bytes=2400,
+    )
+    variants = (
+        replace(
+            _item(
+                second_url,
+                500,
+                body_preview=_reflected_template_body(second_url),
+                body_bytes=2400,
+            ),
+            body_sha256="missing-content-type",
+        ),
+        _item(
+            second_url,
+            500,
+            content_type="text/html",
+            body_preview=_reflected_template_body(second_url),
+            body_bytes=2400,
+            method="HEAD",
+        ),
+        replace(
+            _item(
+                second_url,
+                500,
+                location="/error",
+                content_type="text/html",
+                body_preview=_reflected_template_body(second_url),
+                body_bytes=2400,
+            ),
+            final_url="https://app.example.test/error",
+            body_sha256="redirected",
+        ),
+    )
+
+    for variant in variants:
+        http_summary, redirect_review = _inputs(first, variant)
+        review = build_deep_response_similarity_review(http_summary, redirect_review)
+        assert not any(
+            group.category == "request_reflecting_template_group"
+            for group in review.groups
+        )
+
+
 def test_unique_success_evidence_ids_are_canonical_for_reversed_public_model() -> None:
     http_summary, redirect_review = _inputs(
         _item(
@@ -778,9 +1769,11 @@ def _item(
     content_type: str | None = None,
     server: str | None = None,
     title: str | None = None,
+    body_preview: str | None = None,
     body_hash: str | None = None,
     body_bytes: int = 100,
     evidence_ids: tuple[str, ...] = ("EVID-1",),
+    method: str = "GET",
 ) -> DeepSourceRouteCollectedItem:
     headers: list[tuple[str, str]] = []
     if location is not None:
@@ -789,22 +1782,167 @@ def _item(
         headers.append(("Content-Type", content_type))
     if server is not None:
         headers.append(("Server", server))
-    body_preview = ""
-    if title is not None:
-        body_preview = f"<html><head><title>{title}</title></head>"
+    rendered_body_preview = body_preview or ""
+    if body_preview is None and title is not None:
+        rendered_body_preview = f"<html><head><title>{title}</title></head>"
     return DeepSourceRouteCollectedItem(
         url=url,
-        method="GET",
+        method=method,
         status_code=status_code,
         final_url=url,
         headers=tuple(headers),
-        body_preview=body_preview,
+        body_preview=rendered_body_preview,
         body_sha256=body_hash or f"hash-{url}-{status_code}",
         body_bytes=body_bytes,
         elapsed_seconds=0.01,
         source="source_route_coverage",
         reason="test",
         evidence_ids=evidence_ids,
+    )
+
+
+def _reflected_template_body(
+    request_url: str,
+    *,
+    reflected_value: str | None = None,
+    unrelated_path: str = "/public/help",
+) -> str:
+    reflected = reflected_value or urlsplit(request_url).path
+    body = (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {reflected}</title>"
+        "<style>html,body{margin:0;padding:0}main{display:block}"
+        ".message{font-family:sans-serif;color:#222}</style></head>"
+        "<body><main><h1>Request could not be completed</h1>"
+        f"<p class='message'>The requested resource {reflected} was not handled.</p>"
+        f"<a href='{unrelated_path}'>Documentation</a>"
+        "</main></body></html>"
+    )
+    return _collector_sized_preview(body)
+
+
+def _late_difference_template(
+    request_url: str,
+    *,
+    common_padding: str,
+    late_content: str,
+) -> str:
+    path = urlsplit(request_url).path
+    return (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title></head>"
+        f"<body><main><p>The requested resource {path} was not handled.</p>"
+        f"<div>{common_padding}</div>{late_content}</main></body></html>"
+    )
+
+
+def _fixed_boundary_reflected_template(
+    request_url: str,
+    *,
+    retained_chars: int,
+) -> str:
+    path = urlsplit(request_url).path
+    prefix = (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title></head>"
+        "<body><main><h1>Request could not be completed</h1>"
+        f"<p>The requested resource {path} was not handled.</p><div>"
+    )
+    assert len(prefix) < retained_chars
+    return prefix + ("X" * (retained_chars - len(prefix)))
+
+
+def _replacement_boundary_template(request_url: str) -> str:
+    path = urlsplit(request_url).path
+    prefix = (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title></head>"
+        "<body><main><h1>Request could not be completed</h1>"
+        f"<p>The requested resource {path} was not handled.</p><div>"
+    )
+    assert len(prefix) < 500
+    return prefix + ("�" * (500 - len(prefix)))
+
+
+def _reference_template_body(
+    request_url: str,
+    references: tuple[str, ...],
+) -> str:
+    path = urlsplit(request_url).path
+    links = "".join(
+        f"<a href='{reference}'>Continue</a>" for reference in references
+    )
+    body = (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title>"
+        "</head>"
+        "<body><main><h1>Request could not be completed</h1>"
+        f"<p class='message'>The requested resource {path} was not handled.</p>"
+        f"{links}</main></body></html>"
+    )
+    return _collector_sized_preview(body)
+
+
+def _collector_sized_preview(body: str) -> str:
+    assert len(body) <= 500
+    return body + (" " * (500 - len(body)))
+
+
+def _shortest_member_false_merge_items(
+    *,
+    second_tail: str,
+    third_tail: str,
+) -> tuple[DeepSourceRouteCollectedItem, ...]:
+    urls = (
+        "https://app.example.test/"
+        + "long-reflected-request-value-"
+        + ("x" * 35),
+        "https://app.example.test/a",
+        "https://app.example.test/b",
+    )
+    tails = ("Shortest member does not retain this suffix.", second_tail, third_tail)
+    items: list[DeepSourceRouteCollectedItem] = []
+    for index, (url, tail) in enumerate(zip(urls, tails, strict=True), start=1):
+        path = urlsplit(url).path
+        source = (
+            "<html><head><meta charset='utf-8'>"
+            f"<title>Request failed for {path}</title></head>"
+            "<body><main><h1>Request could not be completed</h1>"
+            f"<p>The requested resource {path} was not handled.</p>"
+            "<div>"
+            + ("X" * 285)
+            + tail
+            + ("Y" * 200)
+            + "</div></main></body></html>"
+        )
+        preview = source[:500]
+        assert len(preview) == 500
+        items.append(
+            _item(
+                url,
+                500,
+                content_type="text/html",
+                body_preview=preview,
+                body_hash=f"shortest-member-{index}",
+                body_bytes=2400,
+                evidence_ids=(f"EVID-SHORTEST-{index}",),
+            )
+        )
+    return tuple(items)
+
+
+def _complete_reflected_template(request_url: str, *, conclusion: str) -> str:
+    path = urlsplit(request_url).path
+    return (
+        "<html><head><meta charset='utf-8'>"
+        f"<title>Request failed for {path}</title>"
+        "<style>main{display:block}.message{font-family:sans-serif}</style>"
+        "</head><body><main><h1>Request could not be completed</h1>"
+        f"<p>The requested resource {path} was not handled.</p>"
+        f"<section><p>{conclusion}</p></section>"
+        "<div>Stable complete retained comparison padding. "
+        "Stable complete retained comparison padding.</div>"
+        "</main></body></html>"
     )
 
 
