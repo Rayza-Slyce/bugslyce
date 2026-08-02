@@ -13,6 +13,10 @@ from bugslyce.recon.deep_source_route_collection_export import (
     deep_source_route_collection_result_from_dict,
     deep_source_route_collection_result_to_dict,
 )
+from bugslyce.recon.deep_metadata_collector import (
+    DeepMetadataCollectedItem,
+    DeepMetadataCollectionResult,
+)
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
@@ -725,12 +729,62 @@ def test_skip_reason_leads_and_counts_are_deterministic() -> None:
     assert "metadata_request_skipped" in categories
     assert "policy_blocked_skipped" in categories
     assert "fetch_error_skipped" in categories
-    assert "metadata is handled by the Deep metadata collection path" in metadata_lead.reason
+    assert "0 were completed by Deep metadata collection" in metadata_lead.reason
+    assert "1 remained uncollected" in metadata_lead.reason
 
     rendered = render_deep_source_route_collection_review_markdown(summary)
     assert "Per-service request budget exhausted" in rendered
     assert "(`per_origin_limit_exceeded`): 1" in rendered
     assert "Blocked by Deep collection policy (`policy_blocked`): 1" in rendered
+
+
+def test_metadata_delegation_wording_requires_corresponding_collection_result() -> None:
+    source = _result(
+        skipped=(
+            _skipped("https://app.example.test/sitemap.xml", "metadata_request"),
+            _skipped("https://app.example.test/humans.txt", "metadata_request"),
+            _skipped("https://app.example.test/large", "response_too_large"),
+        )
+    )
+    metadata = DeepMetadataCollectionResult(
+        collected=(
+            DeepMetadataCollectedItem(
+                url="https://app.example.test/sitemap.xml",
+                method="GET",
+                status_code=200,
+                final_url="https://app.example.test/sitemap.xml",
+                headers=(("Content-Type", "application/xml"),),
+                body_preview="<urlset/>",
+                body_sha256="a" * 64,
+                body_bytes=9,
+                elapsed_seconds=0.1,
+                source="metadata_coverage",
+                reason="planned_uncollected_metadata",
+                evidence_ids=("EVID-META-0001",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    summary = build_deep_source_route_collection_review(
+        source,
+        metadata_collection=metadata,
+    )
+    metadata_lead = next(
+        lead for lead in summary.review_leads if lead.category == "metadata_request_skipped"
+    )
+
+    assert summary.metadata_requests_delegated == 2
+    assert summary.metadata_delegations_completed == 1
+    assert summary.metadata_delegations_uncollected == 1
+    assert "1 was completed by Deep metadata collection" in metadata_lead.reason
+    assert "1 remained uncollected" in metadata_lead.reason
+    assert metadata_lead.evidence_ids == ("EVID-SKIP", "EVID-META-0001")
+    assert "response_too_large" in dict(summary.skip_reasons)
+    assert "metadata is handled" not in metadata_lead.reason
 
 
 def test_renderer_sections_compact_urls_safety_and_no_full_body() -> None:

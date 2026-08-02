@@ -17,6 +17,10 @@ from bugslyce.recon.collection_confidence import (
     render_collection_confidence_markdown,
     render_collection_confidence_runbook,
 )
+from bugslyce.recon.deep_metadata_collector import (
+    DeepMetadataCollectedItem,
+    DeepMetadataCollectionResult,
+)
 
 
 def test_bounded_content_and_deep_collection_remain_distinct() -> None:
@@ -50,6 +54,65 @@ def test_bounded_content_and_deep_collection_remain_distinct() -> None:
     )
     assert "not exhaustive" in notices[0].operator_implication
     assert "remain unknown" in notices[1].operator_implication
+
+
+def test_deep_confidence_separates_metadata_delegation_from_body_size_exclusion() -> None:
+    source = SimpleNamespace(
+        total_considered=3,
+        total_collected=1,
+        total_skipped=2,
+        collected=(SimpleNamespace(evidence_ids=("EVID-ROUTE",)),),
+        skipped=(
+            SimpleNamespace(
+                url="https://app.example.test/sitemap.xml",
+                method="GET",
+                reason="metadata_request",
+                evidence_ids=(),
+            ),
+            SimpleNamespace(
+                url="https://app.example.test/large",
+                method="GET",
+                reason="response_too_large",
+                evidence_ids=("EVID-LARGE",),
+            ),
+        ),
+    )
+    metadata = DeepMetadataCollectionResult(
+        collected=(
+            DeepMetadataCollectedItem(
+                url="https://app.example.test/sitemap.xml",
+                method="GET",
+                status_code=404,
+                final_url="https://app.example.test/sitemap.xml",
+                headers=(),
+                body_preview="not found",
+                body_sha256="b" * 64,
+                body_bytes=9,
+                elapsed_seconds=0.1,
+                source="metadata_coverage",
+                reason="planned_uncollected_metadata",
+                evidence_ids=(),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    notice = next(
+        item
+        for item in build_collection_confidence_notices(
+            _state(),
+            source_collection=source,
+            metadata_collection=metadata,
+        )
+        if item.notice_id == "CONFIDENCE-DEEP-SOURCE-ROUTES"
+    )
+
+    assert "delegated 1 metadata request; 1 was completed" in notice.direct_fact
+    assert "excluded 1 response under the body-size limit" in notice.direct_fact
+    assert "intentionally skipped 2" not in notice.direct_fact
 
 
 def test_structured_followup_cap_is_degraded_not_failed() -> None:

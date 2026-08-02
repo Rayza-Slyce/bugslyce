@@ -21,6 +21,7 @@ from bugslyce.project_session import scaffold_project
 from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.content_plan import DEEP_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
+from bugslyce.recon.deep_collection_policy import DeepCollectionRequest
 from bugslyce.recon.deep_shallow_route_followup import DEFAULT_MAX_REQUESTS
 
 
@@ -76,7 +77,7 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     scaffold = scaffold_project("coverage-pipeline", "10.10.10.10", tmp_path / "projects")
     project_file = Path(scaffold.project_file)
     output_dir = Path(scaffold.project.output_dir)
-    fetch_urls: list[str] = []
+    fetch_records: list[tuple[str, str]] = []
 
     _patch_local_base_pipeline(monkeypatch, output_dir)
     monkeypatch.setattr(
@@ -100,10 +101,11 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_deep_http_fetcher",
-        lambda: lambda request, bounds: _deep_fetcher(request, fetch_urls),
+        lambda: lambda request, bounds: _deep_fetcher(request, fetch_records),
     )
 
     result = run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
+    fetch_urls = [url for _source, url in fetch_records]
 
     assert result.final_status == "completed"
     assert "http://10.10.10.10/sitemap/" in fetch_urls
@@ -111,7 +113,9 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "http://10.10.10.10/application-overview.html" in fetch_urls
     assert "https://external.example.test/offsite.html" not in fetch_urls
     assert "http://10.10.10.10/subscribe" not in fetch_urls
-    shallow_urls = [url for url in fetch_urls if url != "http://10.10.10.10/sitemap/"]
+    shallow_urls = [
+        url for source, url in fetch_records if source == "shallow_route_followup"
+    ]
     assert 1 <= len(shallow_urls) <= DEFAULT_MAX_REQUESTS
 
     source_json = json.loads(
@@ -487,8 +491,11 @@ def _write_sitemap_content_followup(input_dir: Path):
     )
 
 
-def _deep_fetcher(request, fetch_urls: list[str]) -> DeepHTTPResponse:
-    fetch_urls.append(request.url)
+def _deep_fetcher(
+    request: DeepCollectionRequest,
+    fetch_records: list[tuple[str, str]],
+) -> DeepHTTPResponse:
+    fetch_records.append((request.source, request.url))
     if request.url == "http://10.10.10.10/sitemap/":
         body = SITEMAP_HTML
         headers = (

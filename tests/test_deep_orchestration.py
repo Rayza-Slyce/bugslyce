@@ -23,6 +23,10 @@ from bugslyce.recon.deep_orchestration import (
     build_deep_recon_orchestration,
     write_deep_recon_orchestration_artifacts,
 )
+from bugslyce.recon.deep_metadata_collector import (
+    DeepMetadataCollectedItem,
+    DeepMetadataCollectionResult,
+)
 from bugslyce.recon.deep_shallow_route_followup import (
     DeepShallowRouteFollowupCollectedItem,
     DeepShallowRouteFollowupResult,
@@ -72,6 +76,41 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
         item.canonical_url for item in result.successful_content_reviews
     ) == ("http://example.test/source",)
     assert "Bounded Deep collection completion is not established." in result.deep_recon_markdown
+
+
+def test_builder_threads_real_metadata_collection_into_review_and_fingerprints() -> None:
+    metadata = DeepMetadataCollectionResult(
+        collected=(
+            DeepMetadataCollectedItem(
+                url="https://app.example.test/sitemap.xml",
+                method="GET",
+                status_code=200,
+                final_url="https://app.example.test/sitemap.xml",
+                headers=(("Content-Type", "application/xml"),),
+                body_preview="<urlset/>",
+                body_sha256="c" * 64,
+                body_bytes=9,
+                elapsed_seconds=0.1,
+                source="metadata_coverage",
+                reason="planned_uncollected_metadata",
+                evidence_ids=("EVID-META-0001",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(),
+        metadata_collection=metadata,
+    )
+
+    assert result.collection_review_bundle.summary_counts.metadata_responses_collected == 1
+    assert result.http_fingerprint_summary.summary_counts.metadata_responses == 1
+    assert "Metadata responses collected: 1" in result.deep_recon_markdown
 
 
 def test_successful_content_reviews_are_built_from_persisted_collection_fields() -> None:

@@ -27,6 +27,13 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectionResult,
     DeepSourceRouteSkippedItem,
 )
+from bugslyce.recon.deep_metadata_collection_export import (
+    write_deep_metadata_collection_artifacts,
+)
+from bugslyce.recon.deep_metadata_collector import (
+    DeepMetadataCollectedItem,
+    DeepMetadataCollectionResult,
+)
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -911,6 +918,82 @@ def test_html_report_humanises_visible_identifier_fields_without_changing_raw_va
     assert '<option value="form_or_parameter">Form or parameter</option>' in html
     assert "https://portal.example.test/search?query=bounded" in html
     assert "EVID-REDIRECT-LABEL" in html
+
+
+def test_html_report_requires_structured_metadata_result_for_completed_delegation(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/sitemap.xml",
+                method="GET",
+                reason="metadata_request",
+                source="metadata_coverage",
+                evidence_ids=("EVID-DELEGATION",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="https://portal.example.test/large",
+                method="GET",
+                reason="response_too_large",
+                source="source_route_coverage",
+                evidence_ids=("EVID-LARGE",),
+            ),
+        ),
+        total_considered=2,
+        total_collected=0,
+        total_skipped=2,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(deep_source_route_collection_result_to_dict(collection), sort_keys=True),
+        encoding="utf-8",
+    )
+    write_deep_metadata_collection_artifacts(
+        DeepMetadataCollectionResult(
+            collected=(
+                DeepMetadataCollectedItem(
+                    url="https://portal.example.test/sitemap.xml",
+                    method="GET",
+                    status_code=200,
+                    final_url="https://portal.example.test/sitemap.xml",
+                    headers=(("Content-Type", "application/xml"),),
+                    body_preview="<urlset/>",
+                    body_sha256="a" * 64,
+                    body_bytes=9,
+                    elapsed_seconds=0.1,
+                    source="metadata_coverage",
+                    reason="planned_uncollected_metadata",
+                    evidence_ids=("EVID-METADATA",),
+                ),
+            ),
+            skipped=(),
+            total_considered=1,
+            total_collected=1,
+            total_skipped=0,
+        ),
+        pack,
+    )
+
+    model = build_html_report_model(pack)
+    notice = next(
+        item
+        for item in model.confidence_notices
+        if item.notice_id == "CONFIDENCE-DEEP-SOURCE-ROUTES"
+    )
+    html = render_html_report(model)
+
+    assert ("metadata_completed", 1) in notice.counts
+    assert ("metadata_uncollected", 0) in notice.counts
+    assert ("response_too_large", 1) in notice.counts
+    assert notice.evidence_ids == (
+        "EVID-DELEGATION",
+        "EVID-LARGE",
+        "EVID-METADATA",
+    )
+    assert "completed by Deep metadata collection" in html
+    assert "body-size limit" in html
 
 
 def _write_deep_interpretation_pack(root: Path) -> Path:

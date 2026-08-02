@@ -9,8 +9,10 @@ from urllib.parse import urlparse
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
     render_deep_source_route_skip_reason,
 )
+from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.deep_structured_body_review import (
     DeepStructuredBodyDisclosure,
     analyse_deep_structured_body,
@@ -107,6 +109,9 @@ class DeepSourceRouteCollectionReviewSummary:
     skip_reasons: tuple[tuple[str, int], ...]
     review_leads: tuple[DeepSourceRouteReviewLead, ...]
     safety_notes: tuple[str, ...]
+    metadata_requests_delegated: int = 0
+    metadata_delegations_completed: int = 0
+    metadata_delegations_uncollected: int = 0
 
 
 @dataclass(frozen=True)
@@ -127,17 +132,21 @@ def build_deep_source_route_collection_review(
     result: DeepSourceRouteCollectionResult,
     *,
     additional_collected: tuple[DeepShallowRouteFollowupCollectedItem, ...] = (),
+    metadata_collection: DeepMetadataCollectionResult | None = None,
 ) -> DeepSourceRouteCollectionReviewSummary:
     """Build a deterministic offline review summary from source/route output."""
 
     status_buckets = _build_status_buckets(result.collected)
     body_signatures = _build_body_signatures(result.collected)
     skip_reasons = _build_skip_reasons(result)
+    metadata_delegations = _metadata_delegation_counts(result, metadata_collection)
     review_leads = _build_review_leads(
         result,
         body_signatures,
         skip_reasons,
         additional_collected=additional_collected,
+        metadata_delegations=metadata_delegations,
+        metadata_collection=metadata_collection,
     )
     return DeepSourceRouteCollectionReviewSummary(
         total_collected=result.total_collected,
@@ -147,6 +156,9 @@ def build_deep_source_route_collection_review(
         skip_reasons=skip_reasons,
         review_leads=review_leads,
         safety_notes=SAFETY_NOTES,
+        metadata_requests_delegated=metadata_delegations[0],
+        metadata_delegations_completed=metadata_delegations[1],
+        metadata_delegations_uncollected=metadata_delegations[2],
     )
 
 
@@ -163,7 +175,12 @@ def render_deep_source_route_collection_review_markdown(
         "### Summary",
         "",
         f"- Source/route responses collected: {summary.total_collected}",
-        f"- Requests skipped: {summary.total_skipped}",
+        f"- Requests not collected by this collector: {summary.total_skipped}",
+        f"- Metadata requests delegated: {summary.metadata_requests_delegated}",
+        f"- Metadata delegations completed: {summary.metadata_delegations_completed}",
+        f"- Metadata delegations uncollected: {summary.metadata_delegations_uncollected}",
+        "- Other source/route requests skipped: "
+        f"{max(0, summary.total_skipped - summary.metadata_requests_delegated)}",
         "",
         "### Status Buckets",
         "",
@@ -308,6 +325,8 @@ def _build_review_leads(
     skip_reasons: tuple[tuple[str, int], ...],
     *,
     additional_collected: tuple[DeepShallowRouteFollowupCollectedItem, ...],
+    metadata_delegations: tuple[int, int, int],
+    metadata_collection: DeepMetadataCollectionResult | None,
 ) -> tuple[DeepSourceRouteReviewLead, ...]:
     pending: list[_PendingLead] = []
     collected = result.collected
@@ -461,8 +480,8 @@ def _build_review_leads(
         (
             "metadata_request",
             "metadata_request_skipped",
-            "Metadata requests were skipped by source/route collection",
-            "These metadata requests were intentionally skipped by source/route collection because metadata is handled by the Deep metadata collection path.",
+            "Metadata requests were delegated by source/route collection",
+            _metadata_delegation_reason(metadata_delegations),
         ),
         (
             "policy_blocked",
@@ -485,13 +504,80 @@ def _build_review_leads(
                     category=category,
                     title=title,
                     urls=tuple(_dedupe([item.url for item in items])),
-                    evidence_ids=_skipped_evidence_ids(result, skip_reason),
+                    evidence_ids=(
+                        _metadata_delegation_evidence_ids(items, metadata_collection)
+                        if skip_reason == "metadata_request"
+                        else _skipped_evidence_ids(result, skip_reason)
+                    ),
                     reason=reason,
                     signals=(f"{skip_reason}: {reason_counts[skip_reason]}",),
                 )
             )
 
     return _assign_lead_ids(tuple(pending))
+
+
+def _metadata_delegation_counts(
+    result: DeepSourceRouteCollectionResult,
+    metadata_collection: DeepMetadataCollectionResult | None,
+) -> tuple[int, int, int]:
+    delegated = {
+        (item.method.upper(), item.url)
+        for item in result.skipped
+        if item.reason == "metadata_request"
+    }
+    completed = (
+        set()
+        if metadata_collection is None
+        else {
+            (item.method.upper(), item.url)
+            for item in metadata_collection.collected
+        }
+    )
+    completed_count = len(delegated & completed)
+    return len(delegated), completed_count, len(delegated) - completed_count
+
+
+def _metadata_delegation_evidence_ids(
+    delegated_items: tuple[DeepSourceRouteSkippedItem, ...],
+    metadata_collection: DeepMetadataCollectionResult | None,
+) -> tuple[str, ...]:
+    delegated_keys = {
+        (item.method.upper(), item.url) for item in delegated_items
+    }
+    evidence_ids = [
+        evidence_id
+        for item in delegated_items
+        for evidence_id in item.evidence_ids
+    ]
+    if metadata_collection is not None:
+        evidence_ids.extend(
+            evidence_id
+            for item in metadata_collection.collected
+            if (item.method.upper(), item.url) in delegated_keys
+            for evidence_id in item.evidence_ids
+        )
+    return tuple(_dedupe(evidence_ids))
+
+
+def _metadata_delegation_reason(counts: tuple[int, int, int]) -> str:
+    delegated, completed, uncollected = counts
+    if delegated == 0:
+        return "No metadata requests were delegated by source/route collection."
+    return (
+        f"Source/route collection delegated {delegated} metadata "
+        f"{_noun(delegated, 'request', 'requests')}; {completed} "
+        f"{_verb(completed, 'was', 'were')} completed by Deep metadata collection "
+        f"and {uncollected} remained uncollected."
+    )
+
+
+def _noun(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _verb(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
 
 
 def _lead_from_items(

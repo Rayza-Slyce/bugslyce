@@ -91,6 +91,9 @@ class DeepCollectionReviewSummaryCounts:
     source_route_requests_skipped: int
     source_route_review_leads: int
     generated_unified_priorities: int
+    metadata_requests_delegated: int = 0
+    metadata_delegations_completed: int = 0
+    metadata_delegations_uncollected: int = 0
 
 
 @dataclass(frozen=True)
@@ -211,6 +214,15 @@ def render_deep_collection_review_bundle_markdown(
         ("Metadata responses collected", bundle.summary_counts.metadata_responses_collected),
         ("Metadata requests skipped", bundle.summary_counts.metadata_requests_skipped),
         ("Metadata review leads", bundle.summary_counts.metadata_review_leads),
+        ("Metadata requests delegated", bundle.summary_counts.metadata_requests_delegated),
+        (
+            "Metadata delegations completed",
+            bundle.summary_counts.metadata_delegations_completed,
+        ),
+        (
+            "Metadata delegations uncollected",
+            bundle.summary_counts.metadata_delegations_uncollected,
+        ),
         (
             "Source/route responses collected",
             bundle.summary_counts.source_route_responses_collected,
@@ -363,6 +375,9 @@ def _summary_counts(
         source_route_requests_skipped=source_route_review.total_skipped,
         source_route_review_leads=len(source_route_review.review_leads),
         generated_unified_priorities=priority_count,
+        metadata_requests_delegated=source_route_review.metadata_requests_delegated,
+        metadata_delegations_completed=source_route_review.metadata_delegations_completed,
+        metadata_delegations_uncollected=source_route_review.metadata_delegations_uncollected,
     )
 
 

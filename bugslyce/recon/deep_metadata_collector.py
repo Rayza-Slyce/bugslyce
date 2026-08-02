@@ -118,7 +118,7 @@ def collect_deep_metadata_from_plan(
             skipped.append(_skip_from_request(request, "method_not_allowed"))
             continue
         if not decision.allowed:
-            skipped.append(_skip_from_request(request, "policy_blocked"))
+            skipped.append(_skip_from_request(request, decision.reason))
             continue
         if request.source != "metadata_coverage":
             skipped.append(_skip_from_request(request, "non_metadata_request"))

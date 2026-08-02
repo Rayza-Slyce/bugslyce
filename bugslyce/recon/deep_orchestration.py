@@ -18,7 +18,6 @@ from bugslyce.core.sensitive_evidence import (
 from bugslyce.recon.deep_collection_review_bundle import (
     DeepCollectionReviewBundle,
     build_deep_collection_review_bundle,
-    empty_deep_metadata_collection_review_summary,
     render_deep_collection_review_bundle_markdown,
 )
 from bugslyce.recon.deep_form_inventory import (
@@ -42,6 +41,9 @@ from bugslyce.recon.deep_javascript_route_extraction import (
     render_deep_javascript_route_extraction_markdown,
 )
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
+from bugslyce.recon.deep_metadata_collection_review import (
+    build_deep_metadata_collection_review,
+)
 from bugslyce.recon.deep_parameter_inventory import (
     DeepParameterInventoryResult,
     build_deep_parameter_inventory,
@@ -128,22 +130,28 @@ def build_deep_recon_orchestration(
     source_collection: DeepSourceRouteCollectionResult,
     shallow_followups: DeepShallowRouteFollowupResult,
     *,
+    metadata_collection: DeepMetadataCollectionResult | None = None,
     deep_profile_selected: bool = False,
     deep_collection_completed: bool | None = None,
 ) -> DeepReconOrchestrationResult:
     """Compose completed offline Deep review stages without collection or IO."""
 
-    empty_metadata = _empty_metadata_collection_result()
+    metadata_result = (
+        _empty_metadata_collection_result()
+        if metadata_collection is None
+        else metadata_collection
+    )
     source_review = build_deep_source_route_collection_review(
         source_collection,
         additional_collected=shallow_followups.collected,
+        metadata_collection=metadata_result,
     )
     collection_bundle = build_deep_collection_review_bundle(
-        empty_deep_metadata_collection_review_summary(),
+        build_deep_metadata_collection_review(metadata_result),
         source_review,
     )
     http_summary = build_deep_http_fingerprint_summary(
-        empty_metadata,
+        metadata_result,
         source_collection,
     )
     redirect_review = build_deep_redirect_auth_flow_review(http_summary)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 import json
 from pathlib import Path
@@ -52,12 +53,22 @@ from bugslyce.recon.collection_confidence import (
     render_collection_confidence_runbook,
 )
 from bugslyce.recon.deep_collection_request_plan import (
+    DeepCollectionRequestPlan,
     build_deep_collection_request_plan_from_project_state,
 )
 from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_javascript_route_extraction import (
     build_deep_javascript_route_extraction,
+)
+from bugslyce.recon.deep_metadata_collection_export import (
+    DEEP_METADATA_COLLECTION_JSON,
+    DEEP_METADATA_COLLECTION_MARKDOWN,
+    write_deep_metadata_collection_artifacts,
+)
+from bugslyce.recon.deep_metadata_collector import (
+    DeepMetadataCollectionResult,
+    collect_deep_metadata_from_plan,
 )
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
@@ -160,9 +171,18 @@ PARTIAL_DEEP_RESUME_MESSAGE = (
     "in-memory collection results are not persisted. Start a clean Deep run "
     "rather than repeating bounded network collection."
 )
+LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES = (
+    DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    DEEP_RECON_REVIEW_MARKDOWN,
+    DEEP_RECON_RUNBOOK_MARKDOWN,
+    DEEP_RECON_ORCHESTRATION_JSON,
+)
 DEEP_FIXED_ARTEFACT_FILENAMES = (
     DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
     DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    DEEP_METADATA_COLLECTION_MARKDOWN,
+    DEEP_METADATA_COLLECTION_JSON,
     DEEP_RECON_REVIEW_MARKDOWN,
     DEEP_RECON_RUNBOOK_MARKDOWN,
     DEEP_RECON_ORCHESTRATION_JSON,
@@ -219,6 +239,7 @@ class DeepPipelineOutputs:
     """In-memory Deep pipeline outputs shared between adjacent steps."""
 
     source_collection: DeepSourceRouteCollectionResult | None = None
+    metadata_collection: DeepMetadataCollectionResult | None = None
     shallow_followups: DeepShallowRouteFollowupResult | None = None
     orchestration: DeepReconOrchestrationResult | None = None
     deep_artifact_paths: tuple[Path, ...] = ()
@@ -1210,15 +1231,48 @@ def _deep_completed_resume_verified(
         return False
     if Path(recorded_export).expanduser().resolve() != export_path:
         return False
+    required_deep_names = _completed_deep_artefact_names(prior_pipeline)
+    if required_deep_names == LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES and any(
+        (output_dir / name).exists()
+        for name in (
+            DEEP_METADATA_COLLECTION_MARKDOWN,
+            DEEP_METADATA_COLLECTION_JSON,
+        )
+    ):
+        return False
     required = (
         output_dir / "report.md",
         output_dir / "recon_status.md",
         output_dir / "recon_status.json",
         output_dir / "runbook.md",
-        *(output_dir / name for name in DEEP_FIXED_ARTEFACT_FILENAMES),
+        *(output_dir / name for name in required_deep_names),
         export_path,
     )
     return all(path.is_file() for path in required)
+
+
+def _completed_deep_artefact_names(
+    prior_pipeline: dict[str, object],
+) -> tuple[str, ...]:
+    raw_steps = prior_pipeline.get("steps")
+    if not isinstance(raw_steps, list):
+        return DEEP_FIXED_ARTEFACT_FILENAMES
+    for step in raw_steps:
+        if not isinstance(step, dict) or step.get("step_id") != "PIPELINE-STEP-010D":
+            continue
+        output_paths = step.get("output_paths")
+        if not isinstance(output_paths, list):
+            break
+        recorded_names = {
+            Path(path).name for path in output_paths if isinstance(path, str)
+        }
+        if {
+            DEEP_METADATA_COLLECTION_MARKDOWN,
+            DEEP_METADATA_COLLECTION_JSON,
+        } & recorded_names:
+            return DEEP_FIXED_ARTEFACT_FILENAMES
+        return LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES
+    return LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES
 
 
 def _completed_deep_resume_skipped_steps(
@@ -1582,6 +1636,15 @@ def _step_runners(
             source_collection,
             output_dir,
         )
+        metadata_plan = _deep_plan_for_source(plan, "metadata_coverage")
+        metadata_collection = collect_deep_metadata_from_plan(
+            metadata_plan,
+            fetcher=fetcher,
+        )
+        metadata_paths = write_deep_metadata_collection_artifacts(
+            metadata_collection,
+            output_dir,
+        )
         html_routes = build_deep_html_route_extraction(source_collection)
         javascript_routes = build_deep_javascript_route_extraction(source_collection)
         followup_plan = build_deep_shallow_route_followup_plan(
@@ -1596,22 +1659,28 @@ def _step_runners(
         context["deep_outputs"] = replace(
             current,
             source_collection=source_collection,
+            metadata_collection=metadata_collection,
             shallow_followups=shallow_followups,
-            deep_artifact_paths=_dedupe_paths(tuple(source_paths)),
+            deep_artifact_paths=_dedupe_paths((*source_paths, *metadata_paths)),
         )
         return (
-            "Deep bounded source-route collection and shallow same-origin follow-up completed.",
-            [str(path) for path in source_paths],
+            "Deep bounded source-route and metadata collection, with shallow same-origin follow-up, completed.",
+            [str(path) for path in (*source_paths, *metadata_paths)],
             {},
         )
 
     def deep_orchestration():
         current = _deep_outputs_from_context(context)
-        if current.source_collection is None or current.shallow_followups is None:
+        if (
+            current.source_collection is None
+            or current.metadata_collection is None
+            or current.shallow_followups is None
+        ):
             raise ValueError("Deep collection results are required before orchestration.")
         orchestration = build_deep_recon_orchestration(
             current.source_collection,
             current.shallow_followups,
+            metadata_collection=current.metadata_collection,
             deep_profile_selected=profile == DEEP_PIPELINE_PROFILE,
             deep_collection_completed=profile == DEEP_PIPELINE_PROFILE,
         )
@@ -1750,6 +1819,42 @@ def _deep_outputs_from_context(context: dict[str, object]) -> DeepPipelineOutput
     return outputs
 
 
+def _deep_plan_for_source(
+    plan: DeepCollectionRequestPlan,
+    source: str,
+) -> DeepCollectionRequestPlan:
+    """Project an evaluated plan without re-evaluating its policy decisions."""
+
+    requests = tuple(
+        request for request in plan.proposed_requests if request.source == source
+    )
+    request_keys = {(request.method.upper(), request.url) for request in requests}
+    decisions = tuple(
+        decision
+        for decision in plan.policy_summary.decisions
+        if (decision.method.upper(), decision.url) in request_keys
+    )
+    blocked_reasons = Counter(
+        decision.reason for decision in decisions if not decision.allowed
+    )
+    policy_summary = replace(
+        plan.policy_summary,
+        decisions=decisions,
+        allowed_count=sum(decision.allowed for decision in decisions),
+        blocked_count=sum(not decision.allowed for decision in decisions),
+        blocked_reasons=tuple(sorted(blocked_reasons.items())),
+    )
+    source_counts = tuple(
+        count for count in plan.source_counts if count.source == source
+    )
+    return replace(
+        plan,
+        proposed_requests=requests,
+        policy_summary=policy_summary,
+        source_counts=source_counts,
+    )
+
+
 def _deep_runbook_markdown_required(
     profile: str,
     context: dict[str, object],
@@ -1816,6 +1921,7 @@ def _write_interpretation_report_if_needed(
         project_state,
         output_dir,
         source_collection=_deep_source_collection_if_available(profile, context),
+        metadata_collection=_deep_metadata_collection_if_available(profile, context),
     )
     candidates = generate_candidates(project_state)
     workflow_leads = build_grouped_workflow_leads(project_state, orchestration)
@@ -2208,6 +2314,7 @@ def _build_standard_investigation_runbook_section_if_needed(
             project_state,
             output_dir,
             source_collection=_deep_source_collection_if_available(profile, context),
+            metadata_collection=_deep_metadata_collection_if_available(profile, context),
         )
     )
     if (
@@ -2236,6 +2343,16 @@ def _deep_source_collection_if_available(
         return None
     outputs = context.get("deep_outputs")
     return outputs.source_collection if isinstance(outputs, DeepPipelineOutputs) else None
+
+
+def _deep_metadata_collection_if_available(
+    profile: str,
+    context: dict[str, object] | None,
+) -> object | None:
+    if profile != DEEP_PIPELINE_PROFILE or context is None:
+        return None
+    outputs = context.get("deep_outputs")
+    return outputs.metadata_collection if isinstance(outputs, DeepPipelineOutputs) else None
 
 
 def _http_route_relationship_clusters_if_available(

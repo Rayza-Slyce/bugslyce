@@ -26,6 +26,10 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
 )
+from bugslyce.recon.deep_metadata_collection_export import (
+    write_deep_metadata_collection_artifacts,
+)
+from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.reports.markdown import export_project_state_json
 
@@ -388,10 +392,22 @@ def test_current_deep_detail_references_resolve_at_their_reported_paths(
     all_deep_names = (
         "deep_source_route_collection.md",
         "deep_source_route_collection.json",
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
         *deep_names,
     )
     write_deep_source_route_collection_artifacts(
         DeepSourceRouteCollectionResult(
+            collected=(),
+            skipped=(),
+            total_considered=0,
+            total_collected=0,
+            total_skipped=0,
+        ),
+        input_dir,
+    )
+    write_deep_metadata_collection_artifacts(
+        DeepMetadataCollectionResult(
             collected=(),
             skipped=(),
             total_considered=0,
@@ -432,9 +448,15 @@ def test_current_deep_detail_references_resolve_at_their_reported_paths(
     with zipfile.ZipFile(output_path) as archive:
         archive.extractall(extracted)
         closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        members = set(archive.namelist())
     closure_paths = {item["portable_path"] for item in closure["references"]}
-    assert set(deep_names).issubset(closure_paths)
-    assert all((extracted / name).is_file() for name in deep_names)
+    assert {
+        *deep_names,
+        "deep_source_route_collection.json",
+        "deep_metadata_collection.json",
+    }.issubset(closure_paths)
+    assert {f"raw/{name}" for name in all_deep_names}.issubset(members)
+    assert all((extracted / "raw" / name).is_file() for name in all_deep_names)
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
 
 

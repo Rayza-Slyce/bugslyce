@@ -13,6 +13,10 @@ from bugslyce.recon.deep_source_route_collection_export import (
     DEEP_SOURCE_ROUTE_COLLECTION_JSON,
     load_deep_source_route_collection_result,
 )
+from bugslyce.recon.deep_metadata_collection_export import (
+    DEEP_METADATA_COLLECTION_JSON,
+    load_deep_metadata_collection_result,
+)
 
 
 INTENTIONALLY_BOUNDED = "intentionally_bounded"
@@ -61,6 +65,7 @@ def build_collection_confidence_notices(
     project_state: ProjectState,
     *,
     source_collection: object | None = None,
+    metadata_collection: object | None = None,
     pipeline_steps: Iterable[object] = (),
     command_results: Iterable[object] = (),
     legacy_status_unknown: bool = False,
@@ -71,7 +76,7 @@ def build_collection_confidence_notices(
     content_notice = _bounded_content_notice(project_state)
     if content_notice is not None:
         notices.append(content_notice)
-    deep_notice = _bounded_deep_notice(source_collection)
+    deep_notice = _bounded_deep_notice(source_collection, metadata_collection)
     if deep_notice is not None:
         notices.append(deep_notice)
     notices.extend(_structured_warning_notices(project_state))
@@ -103,6 +108,7 @@ def build_collection_confidence_notices_from_project(
     input_dir: Path,
     *,
     source_collection: object | None = None,
+    metadata_collection: object | None = None,
 ) -> tuple[CollectionConfidenceNotice, ...]:
     """Build notices from current local structured metadata only."""
 
@@ -116,6 +122,13 @@ def build_collection_confidence_notices_from_project(
                 )
             except (OSError, UnicodeError, ValueError):
                 source_collection = None
+    if metadata_collection is None:
+        metadata_path = root / DEEP_METADATA_COLLECTION_JSON
+        if metadata_path.is_file() and not metadata_path.is_symlink():
+            try:
+                metadata_collection = load_deep_metadata_collection_result(metadata_path)
+            except (OSError, UnicodeError, ValueError):
+                metadata_collection = None
     pipeline = _load_optional_object(root / "project_pipeline.json")
     pipeline_steps = pipeline.get("steps", ()) if pipeline is not None else ()
     if not isinstance(pipeline_steps, list):
@@ -151,6 +164,7 @@ def build_collection_confidence_notices_from_project(
     return build_collection_confidence_notices(
         project_state,
         source_collection=source_collection,
+        metadata_collection=metadata_collection,
         pipeline_steps=pipeline_steps,
         command_results=command_results,
     )
@@ -276,6 +290,7 @@ def _bounded_content_notice(
 
 def _bounded_deep_notice(
     source_collection: object | None,
+    metadata_collection: object | None,
 ) -> CollectionConfidenceNotice | None:
     if source_collection is None:
         return None
@@ -286,6 +301,24 @@ def _bounded_deep_notice(
     if any(not isinstance(value, int) or isinstance(value, bool) for value in values):
         return None
     considered, collected, skipped = values
+    skipped_items = tuple(getattr(source_collection, "skipped", ()))
+    metadata_delegated = tuple(
+        item for item in skipped_items if getattr(item, "reason", None) == "metadata_request"
+    )
+    response_too_large = sum(
+        1 for item in skipped_items if getattr(item, "reason", None) == "response_too_large"
+    )
+    completed_metadata = {
+        (str(getattr(item, "method", "")).upper(), str(getattr(item, "url", "")))
+        for item in tuple(getattr(metadata_collection, "collected", ()))
+    }
+    delegated_keys = {
+        (str(getattr(item, "method", "")).upper(), str(getattr(item, "url", "")))
+        for item in metadata_delegated
+    }
+    metadata_completed = len(delegated_keys & completed_metadata)
+    metadata_uncollected = len(delegated_keys) - metadata_completed
+    other_skipped = max(0, skipped - len(metadata_delegated) - response_too_large)
     evidence_ids = tuple(
         sorted(
             {
@@ -293,33 +326,75 @@ def _bounded_deep_notice(
                 for item in (
                     *tuple(getattr(source_collection, "collected", ())),
                     *tuple(getattr(source_collection, "skipped", ())),
+                    *tuple(getattr(metadata_collection, "collected", ())),
                 )
                 for evidence_id in tuple(getattr(item, "evidence_ids", ()))
                 if isinstance(evidence_id, str) and evidence_id.strip()
             }
         )
     )
+    direct_facts = [
+        f"Deep source-route collection considered {considered} requests and collected "
+        f"{collected} {_counted_noun(collected, 'response', 'responses')}."
+    ]
+    if metadata_delegated:
+        direct_facts.append(
+            f"It delegated {len(metadata_delegated)} metadata "
+            f"{_counted_noun(len(metadata_delegated), 'request', 'requests')}; "
+            f"{metadata_completed} {_counted_verb(metadata_completed, 'was', 'were')} completed "
+            f"by Deep metadata collection and {metadata_uncollected} remained uncollected."
+        )
+    if response_too_large:
+        direct_facts.append(
+            f"It excluded {response_too_large} "
+            f"{_counted_noun(response_too_large, 'response', 'responses')} under the body-size limit."
+        )
+    if other_skipped:
+        direct_facts.append(
+            f"It skipped {other_skipped} other "
+            f"{_counted_noun(other_skipped, 'request', 'requests')} for the recorded reasons."
+        )
+    counts = [
+        ("considered", considered),
+        ("collected", collected),
+        ("skipped", skipped),
+    ]
+    if metadata_delegated or response_too_large:
+        counts.extend(
+            (
+                ("metadata_delegated", len(metadata_delegated)),
+                ("metadata_completed", metadata_completed),
+                ("metadata_uncollected", metadata_uncollected),
+                ("response_too_large", response_too_large),
+                ("other_skipped", other_skipped),
+            )
+        )
+    artefact_references = ["deep_source_route_collection.json"]
+    if metadata_collection is not None:
+        artefact_references.append(DEEP_METADATA_COLLECTION_JSON)
     return CollectionConfidenceNotice(
         notice_id="CONFIDENCE-DEEP-SOURCE-ROUTES",
         category=INTENTIONALLY_BOUNDED,
         title="Intentionally bounded Deep source-route collection",
-        direct_fact=(
-            f"Deep source-route collection considered {considered} requests, collected "
-            f"{collected}, and intentionally skipped {skipped} under its bounded policy."
-        ),
+        direct_fact=" ".join(direct_facts),
         operator_implication=(
-            "Review covers only policy-allowed retained requests; skipped or unconsidered "
-            "routes remain unknown."
+            "Review covers collected responses only; delegated metadata without a "
+            "corresponding collection result and other excluded routes remain unknown "
+            "and uncollected."
         ),
         stage_or_tool="deep_source_route_collection",
         evidence_ids=evidence_ids,
-        artefact_references=("deep_source_route_collection.json",),
-        counts=(
-            ("considered", considered),
-            ("collected", collected),
-            ("skipped", skipped),
-        ),
+        artefact_references=tuple(artefact_references),
+        counts=tuple(counts),
     )
+
+
+def _counted_noun(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _counted_verb(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
 
 
 def _structured_warning_notices(

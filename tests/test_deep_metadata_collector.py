@@ -62,7 +62,7 @@ def test_collector_fetches_only_allowed_metadata_requests() -> None:
     assert tuple(item.url for item in result.collected) == ("http://example.test/robots.txt",)
     assert tuple(item.reason for item in result.skipped) == (
         "non_metadata_request",
-        "policy_blocked",
+        "query_string_not_allowed",
     )
     assert result.total_considered == 3
     assert result.total_collected == 1

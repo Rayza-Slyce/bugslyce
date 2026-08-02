@@ -370,6 +370,24 @@ def test_collected_metadata_does_not_create_duplicate_metadata_request() -> None
     assert len([url for url in urls if url.endswith(".txt") or url.endswith(".xml") or url.endswith(".ico")]) == 7
 
 
+def test_observed_metadata_evidence_does_not_create_duplicate_metadata_request() -> None:
+    plan = build_deep_collection_request_plan_from_project_state(
+        _project_state(
+            http_services=[_service("https://portal.example.test:8443/", "EVID-HTTP-0001")],
+            endpoints=[
+                _endpoint(
+                    "https://portal.example.test:8443/sitemap.xml",
+                    "EVID-ENDPOINT-0001",
+                )
+            ],
+        )
+    )
+
+    urls = tuple(request.url for request in plan.proposed_requests)
+    assert "https://portal.example.test:8443/sitemap.xml" not in urls
+    assert "https://portal.example.test:8443/humans.txt" in urls
+
+
 def test_discovered_unfetched_routes_create_requests_before_metadata() -> None:
     plan = build_deep_collection_request_plan_from_project_state(
         _project_state(

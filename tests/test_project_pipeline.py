@@ -36,12 +36,14 @@ from bugslyce.project_pipeline import (
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
     _body_fetch_warning_message,
+    _step_runners,
     format_exception_diagnostic,
     render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
     write_project_pipeline_result,
 )
+from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.project_session import scaffold_project
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
@@ -1590,9 +1592,32 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         total_skipped=2,
         collected=(SimpleNamespace(evidence_ids=("EVID-COLLECTED",)),),
         skipped=(
-            SimpleNamespace(evidence_ids=("EVID-SKIPPED-A",)),
-            SimpleNamespace(evidence_ids=("EVID-SKIPPED-B",)),
+            SimpleNamespace(
+                method="GET",
+                url="https://example.test/sitemap.xml",
+                reason="metadata_request",
+                evidence_ids=("EVID-SKIPPED-A",),
+            ),
+            SimpleNamespace(
+                method="GET",
+                url="https://example.test/large",
+                reason="response_too_large",
+                evidence_ids=("EVID-SKIPPED-B",),
+            ),
         ),
+    )
+    metadata_collection = SimpleNamespace(
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+        collected=(
+            SimpleNamespace(
+                method="GET",
+                url="https://example.test/sitemap.xml",
+                evidence_ids=("EVID-METADATA",),
+            ),
+        ),
+        skipped=(),
     )
     shallow_followups = SimpleNamespace(kind="shallow-followups")
     orchestration = SimpleNamespace(
@@ -1670,6 +1695,33 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
         fake_collect_source,
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._deep_plan_for_source",
+        lambda plan, source: SimpleNamespace(kind=source),
+    )
+
+    def fake_collect_metadata(plan, *, fetcher):
+        calls.append("deep-metadata-collect")
+        identities["metadata_fetcher"] = fetcher
+        return metadata_collection
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_metadata_from_plan",
+        fake_collect_metadata,
+    )
+
+    def fake_write_metadata(result, output_path):
+        calls.append("deep-metadata-write")
+        assert result is metadata_collection
+        return _write_named_files(
+            output_path,
+            ("deep_metadata_collection.md", "deep_metadata_collection.json"),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_metadata_collection_artifacts",
+        fake_write_metadata,
+    )
 
     def fake_write_source(result, output_path):
         calls.append("deep-source-write")
@@ -1716,6 +1768,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         source_arg,
         shallow_arg,
         *,
+        metadata_collection=None,
         deep_profile_selected=False,
         deep_collection_completed=None,
     ):
@@ -1723,6 +1776,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         assert deep_profile_selected is True
         assert deep_collection_completed is True
         identities["orchestration_source"] = source_arg
+        identities["orchestration_metadata"] = metadata_collection
         identities["orchestration_shallow"] = shallow_arg
         return orchestration
 
@@ -1917,11 +1971,14 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert result.completed_steps == 14
     assert (output_dir / "report.html").is_file()
     assert calls.count("deep-source-collect") == 1
+    assert calls.count("deep-metadata-collect") == 1
     assert calls.count("deep-shallow-collect") == 1
     assert calls.count("deep-orchestrate") == 1
     assert calls.count("deep-orchestration-write") == 1
     assert identities["orchestration_source"] is source_collection
+    assert identities["orchestration_metadata"] is metadata_collection
     assert identities["orchestration_shallow"] is shallow_followups
+    assert identities["source_fetcher"] is identities["metadata_fetcher"]
     assert identities["source_fetcher"] is identities["shallow_fetcher"]
     assert len(captured_report) == 1
     assert captured_report[0] is not None
@@ -1956,14 +2013,21 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         "### CONFIDENCE-DEEP-SOURCE-ROUTES: Intentionally bounded Deep "
         "source-route collection\n\n"
         "- Category: `intentionally_bounded`\n"
-        "- Direct fact: Deep source-route collection considered 3 requests, "
-        "collected 1, and intentionally skipped 2 under its bounded policy.\n"
-        "- Operator implication: Review covers only policy-allowed retained "
-        "requests; skipped or unconsidered routes remain unknown.\n"
+        "- Direct fact: Deep source-route collection considered 3 requests and "
+        "collected 1 response. It delegated 1 metadata request; 1 was completed "
+        "by Deep metadata collection and 0 remained uncollected. It excluded 1 response "
+        "under the body-size limit.\n"
+        "- Operator implication: Review covers collected responses only; delegated "
+        "metadata without a corresponding collection result and other excluded routes "
+        "remain unknown and uncollected.\n"
         "- Stage/tool: `deep_source_route_collection`\n"
-        "- Counts: considered `3`; collected `1`; skipped `2`\n"
-        "- Evidence: `EVID-COLLECTED`, `EVID-SKIPPED-A`, `EVID-SKIPPED-B`\n"
-        "- Retained artefact: `deep_source_route_collection.json`\n"
+        "- Counts: considered `3`; collected `1`; skipped `2`; metadata_delegated `1`; "
+        "metadata_completed `1`; metadata_uncollected `0`; response_too_large `1`; "
+        "other_skipped `0`\n"
+        "- Evidence: `EVID-COLLECTED`, `EVID-METADATA`, `EVID-SKIPPED-A`, "
+        "`EVID-SKIPPED-B`\n"
+        "- Retained artefact: `deep_source_route_collection.json`, "
+        "`deep_metadata_collection.json`\n"
     ]
     assert captured_runbook == [
         orchestration.deep_recon_runbook_markdown,
@@ -1983,12 +2047,14 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert "deep_source_route_collection.json" in runbook_standard
     assert "## Collection Confidence Review" in runbook_standard
     assert "CONFIDENCE-DEEP-SOURCE-ROUTES" in runbook_standard
-    assert "considered 3 requests, collected 1" in runbook_standard
-    assert "intentionally skipped 2" in runbook_standard
+    assert "considered 3 requests and collected 1" in runbook_standard
+    assert "excluded 1 response under the body-size limit" in runbook_standard
     assert "curl " not in runbook_standard
     expected_deep_paths = (
         output_dir / "deep_source_route_collection.md",
         output_dir / "deep_source_route_collection.json",
+        output_dir / "deep_metadata_collection.md",
+        output_dir / "deep_metadata_collection.json",
         output_dir / "deep_recon_review.md",
         output_dir / "deep_recon_runbook.md",
         output_dir / "deep_recon_orchestration.json",
@@ -2075,6 +2141,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
         "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
         lambda plan, *, fetcher: SimpleNamespace(),
     )
+    _patch_minimal_metadata_collection(monkeypatch)
 
     def write_source(result, output_path):
         paths = (
@@ -2485,6 +2552,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
         "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
         lambda plan, *, fetcher: SimpleNamespace(),
     )
+    _patch_minimal_metadata_collection(monkeypatch)
 
     def fake_write_source_for_profile(result, output_path):
         paths = (
@@ -2595,8 +2663,112 @@ def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
     hints = get_type_hints(DeepPipelineOutputs)
 
     assert "DeepSourceRouteCollectionResult" in str(hints["source_collection"])
+    assert "DeepMetadataCollectionResult" in str(hints["metadata_collection"])
     assert "DeepShallowRouteFollowupResult" in str(hints["shallow_followups"])
     assert "DeepReconOrchestrationResult" in str(hints["orchestration"])
+
+
+def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "project"
+    output_dir.mkdir()
+    state = SimpleNamespace(
+        http_services=(
+            SimpleNamespace(
+                url="https://app.example.test/",
+                status_code=200,
+                title="Synthetic application",
+                evidence_ids=("EVID-HTTP-0001",),
+            ),
+        ),
+        endpoints=(),
+        http_artifacts=(
+            HTTPArtifact(
+                url="https://app.example.test/sitemap.xml",
+                artifact_type="body",
+                value="retained metadata",
+                source_file="sitemap.xml",
+                evidence_ids=["EVID-METADATA-EXISTING"],
+                tags=["metadata"],
+            ),
+        ),
+        discovered_paths=(),
+    )
+    fetch_calls: list[str] = []
+
+    def fetcher(request, _bounds):
+        fetch_calls.append(request.url)
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=404,
+            headers=(("Content-Type", "text/plain"),),
+            body=b"not found",
+            elapsed_seconds=0.01,
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_state",
+        lambda _path: state,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_http_fetcher",
+        lambda: fetcher,
+    )
+    context: dict[str, object] = {
+        "output_dir": output_dir,
+        "scope_file": tmp_path / "scope.md",
+        "plan_dir": tmp_path / "plan",
+        "plan_path": tmp_path / "plan" / "content_discovery_plan.json",
+        "export_path": tmp_path / "pack.zip",
+        "target": "app.example.test",
+        "project_file": tmp_path / "bugslyce_project.json",
+        "resume": False,
+        "profile": DEEP_PIPELINE_PROFILE,
+        "deep_outputs": DeepPipelineOutputs(),
+    }
+    runners = _step_runners(context, None)
+
+    collection_message, collection_paths, _updates = runners["PIPELINE-STEP-010D"]()
+
+    assert fetch_calls == [
+        "https://app.example.test/robots.txt",
+        "https://app.example.test/security.txt",
+        "https://app.example.test/.well-known/security.txt",
+        "https://app.example.test/humans.txt",
+        "https://app.example.test/crossdomain.xml",
+        "https://app.example.test/clientaccesspolicy.xml",
+        "https://app.example.test/favicon.ico",
+    ]
+    assert "metadata" in collection_message.lower()
+    assert {Path(path).name for path in collection_paths} == {
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
+    }
+    outputs = context["deep_outputs"]
+    assert isinstance(outputs, DeepPipelineOutputs)
+    assert outputs.source_collection is not None
+    assert outputs.source_collection.total_collected == 0
+    assert {
+        item.reason for item in outputs.source_collection.skipped
+    } == {"metadata_request"}
+    assert outputs.metadata_collection is not None
+    assert outputs.metadata_collection.total_collected == 7
+
+    runners["PIPELINE-STEP-011D"]()
+
+    outputs = context["deep_outputs"]
+    assert isinstance(outputs, DeepPipelineOutputs)
+    assert outputs.orchestration is not None
+    assert (
+        outputs.orchestration.collection_review_bundle.summary_counts.metadata_responses_collected
+        == 7
+    )
+    assert (output_dir / "deep_metadata_collection.json").is_file()
 
 
 @pytest.mark.parametrize(
@@ -2632,6 +2804,8 @@ def test_deep_partial_resume_rejects_before_live_calls(
     (
         "deep_source_route_collection.md",
         "deep_source_route_collection.json",
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
         "deep_recon_review.md",
         "deep_recon_runbook.md",
         "deep_recon_orchestration.json",
@@ -2657,6 +2831,7 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     project_file, output_dir = _fresh_project(tmp_path)
     export_path = Path(f"{output_dir}-evidence-pack.zip")
     _write_completed_deep_resume_state(project_file, output_dir, export_path)
+    assert not (output_dir / "deep_metadata_collection.json").exists()
     _patch_plan_loader_for_profile(
         monkeypatch,
         project_file,
@@ -2715,6 +2890,7 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     assert f"- Runbook: `{output_dir / 'runbook.md'}`" in markdown
     assert f"- Evidence pack: `{export_path}`" in markdown
     assert {path: path.read_bytes() for path in canonical_paths} == before
+    assert not (output_dir / "deep_metadata_collection.json").exists()
     prior_payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     prior_statuses = {
         step["step_id"]: step["status"]
@@ -2740,6 +2916,76 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     assert second_result.completed_steps == 1
     assert second_result.skipped_steps == 13
     assert {path: path.read_bytes() for path in canonical_paths} == before
+
+
+def test_new_completed_deep_resume_requires_recorded_metadata_artefacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(
+        project_file,
+        output_dir,
+        export_path,
+        include_metadata=True,
+    )
+    (output_dir / "deep_metadata_collection.json").unlink()
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+def test_legacy_completed_resume_rejects_unrecorded_metadata_partial_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(project_file, output_dir, export_path)
+    (output_dir / "deep_metadata_collection.json").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+    _patch_live_calls_to_fail(monkeypatch)
+
+    with pytest.raises(ValueError, match="Partial Deep pipeline state"):
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, resume=True)
+
+
+def test_new_completed_deep_resume_does_not_repeat_metadata_collection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+    _write_completed_deep_resume_state(
+        project_file,
+        output_dir,
+        export_path,
+        include_metadata=True,
+    )
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE),
+        DEEP_BOUNDED_CORE_PROFILE,
+    )
+    _patch_live_calls_to_fail(monkeypatch)
+    before = (output_dir / "deep_metadata_collection.json").read_bytes()
+
+    result = run_project_pipeline(
+        project_file,
+        DEEP_PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-010D"] == "skipped_existing"
+    assert (output_dir / "deep_metadata_collection.json").read_bytes() == before
 
 
 def test_deep_completed_resume_requires_all_fixed_artefacts(
@@ -2796,6 +3042,8 @@ def test_deep_completed_resume_rejects_mismatched_recorded_export_path(
     (
         "deep_source_route_collection.md",
         "deep_source_route_collection.json",
+        "deep_metadata_collection.md",
+        "deep_metadata_collection.json",
         "deep_recon_review.md",
         "deep_recon_runbook.md",
         "deep_recon_orchestration.json",
@@ -3843,6 +4091,8 @@ def _write_completed_deep_resume_state(
     project_file: Path,
     output_dir: Path,
     export_path: Path,
+    *,
+    include_metadata: bool = False,
 ) -> None:
     _write_resume_evidence(
         output_dir,
@@ -3856,6 +4106,18 @@ def _write_completed_deep_resume_state(
             "body-fetch-10.10.10.10-80-admin.html",
         ],
     )
+    deep_names = (
+        "deep_source_route_collection.md",
+        "deep_source_route_collection.json",
+        *(
+            ("deep_metadata_collection.md", "deep_metadata_collection.json")
+            if include_metadata
+            else ()
+        ),
+        "deep_recon_review.md",
+        "deep_recon_runbook.md",
+        "deep_recon_orchestration.json",
+    )
     _write_named_files(
         output_dir,
         (
@@ -3863,11 +4125,7 @@ def _write_completed_deep_resume_state(
             "recon_status.md",
             "recon_status.json",
             "runbook.md",
-            "deep_source_route_collection.md",
-            "deep_source_route_collection.json",
-            "deep_recon_review.md",
-            "deep_recon_runbook.md",
-            "deep_recon_orchestration.json",
+            *deep_names,
         ),
     )
     export_path.write_bytes(b"zip")
@@ -3893,6 +4151,24 @@ def _write_completed_deep_resume_state(
             "PIPELINE-STEP-012": "completed",
         },
     )
+    if include_metadata:
+        payload_path = output_dir / PIPELINE_JSON_FILENAME
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        collection_step = next(
+            step
+            for step in payload["steps"]
+            if step["step_id"] == "PIPELINE-STEP-010D"
+        )
+        collection_step["output_paths"] = [
+            str(output_dir / name)
+            for name in (
+                "deep_source_route_collection.md",
+                "deep_source_route_collection.json",
+                "deep_metadata_collection.md",
+                "deep_metadata_collection.json",
+            )
+        ]
+        payload_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
 def _patch_live_calls_to_fail(monkeypatch) -> None:
@@ -3909,6 +4185,7 @@ def _patch_live_calls_to_fail(monkeypatch) -> None:
         "run_content_followup_workflow",
         "run_body_fetch_workflow",
         "collect_deep_source_routes_from_plan",
+        "collect_deep_metadata_from_plan",
         "collect_deep_shallow_route_followups",
         "build_deep_recon_orchestration",
         "export_recon_evidence_pack",
@@ -3939,6 +4216,7 @@ def _patch_minimal_deep_collection(monkeypatch, calls: list[str]) -> None:
         "bugslyce.project_pipeline.collect_deep_source_routes_from_plan",
         lambda plan, *, fetcher: SimpleNamespace(),
     )
+    _patch_minimal_metadata_collection(monkeypatch)
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_deep_html_route_extraction",
         lambda result: SimpleNamespace(),
@@ -3960,5 +4238,30 @@ def _patch_minimal_deep_collection(monkeypatch, calls: list[str]) -> None:
         lambda source, shallow, **kwargs: SimpleNamespace(
             deep_recon_markdown="## Deep\n",
             deep_recon_runbook_markdown="## Guide\n",
+        ),
+    )
+
+
+def _patch_minimal_metadata_collection(monkeypatch) -> None:
+    metadata_collection = SimpleNamespace(
+        total_considered=0,
+        total_collected=0,
+        total_skipped=0,
+        collected=(),
+        skipped=(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._deep_plan_for_source",
+        lambda plan, source: SimpleNamespace(kind=source),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_deep_metadata_from_plan",
+        lambda plan, *, fetcher: metadata_collection,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_metadata_collection_artifacts",
+        lambda result, output_path: _write_named_files(
+            output_path,
+            ("deep_metadata_collection.md", "deep_metadata_collection.json"),
         ),
     )
