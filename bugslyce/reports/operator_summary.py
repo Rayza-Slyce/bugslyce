@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from hashlib import sha256
+import json
 from pathlib import Path
 from typing import Protocol, Sequence
 from urllib.parse import urlparse
@@ -53,7 +55,7 @@ INTERESTING_SEGMENTS = {
 
 @dataclass(frozen=True)
 class OperatorSummaryLead:
-    """One compact report lead grounded in existing evidence IDs."""
+    """One canonical ranked lead grounded in existing evidence IDs."""
 
     title: str
     why: str
@@ -62,6 +64,21 @@ class OperatorSummaryLead:
     next_action: str
     signal: str
     score: int
+    lead_type: str = "operator_summary_lead"
+    lead_id: str = field(default="", compare=False)
+    rank: int = field(default=0, compare=False)
+
+    @property
+    def rationale(self) -> str:
+        """Return the canonical rationale without breaking the legacy field name."""
+
+        return self.why
+
+    @property
+    def suggested_next_action(self) -> str:
+        """Return the canonical action without breaking the legacy field name."""
+
+        return self.next_action
 
 
 @dataclass(frozen=True)
@@ -81,6 +98,12 @@ class OperatorSummary:
     review_first: list[OperatorSummaryLead]
     low_signal: list[OperatorSummaryNoise]
     coverage: list[str]
+
+    @property
+    def ranked_leads(self) -> tuple[OperatorSummaryLead, ...]:
+        """Return the immutable canonical ordered lead collection."""
+
+        return tuple(self.review_first)
 
 
 class DeepSummaryDisclosure(Protocol):
@@ -146,6 +169,7 @@ def build_deep_operator_summary_leads(
                 ),
                 signal="high",
                 score=score,
+                lead_type=disclosure.category,
             )
         )
     if successful_content_reviews:
@@ -189,6 +213,7 @@ def build_deep_operator_summary_leads(
                 ),
                 signal="direct retained response",
                 score=72,
+                lead_type="successful_deep_content",
             )
         )
     return tuple(leads)
@@ -228,16 +253,44 @@ def build_operator_summary(
         leads.append(robots_lead)
     leads.extend(_non_http_service_leads(project_state))
 
+    normalised = [_normalise_lead_membership(lead) for lead in leads]
     deduped: dict[tuple[str, tuple[str, ...]], OperatorSummaryLead] = {}
-    for lead in leads:
+    for lead in normalised:
         key = (lead.title, tuple(lead.endpoints))
         current = deduped.get(key)
-        if current is None or lead.score > current.score:
+        if current is None:
             deduped[key] = lead
-    ranked = sorted(
+            continue
+        preferred = min(
+            (current, lead),
+            key=lambda item: (
+                -item.score,
+                item.lead_type,
+                item.why,
+                item.next_action,
+                item.signal,
+            ),
+        )
+        deduped[key] = replace(
+            preferred,
+            evidence_ids=sorted(
+                {*current.evidence_ids, *lead.evidence_ids},
+            ),
+        )
+    ranked_unfinalised = sorted(
         deduped.values(),
-        key=lambda item: (-item.score, item.title, item.endpoints),
+        key=lambda item: (
+            -item.score,
+            item.title,
+            tuple(item.endpoints),
+            item.lead_type,
+            item.why,
+        ),
     )[:8]
+    ranked = [
+        _finalise_ranked_lead(lead, rank)
+        for rank, lead in enumerate(ranked_unfinalised, start=1)
+    ]
 
     return OperatorSummary(
         review_first=ranked,
@@ -275,6 +328,7 @@ def _candidate_service_lead(
             ),
             signal="high" if high_signal else "medium",
             score=(98 if homepage_context else 96) if high_signal else 84,
+            lead_type=candidate.candidate_type,
         )
     if candidate.candidate_type == "high_port_http_service":
         if _candidate_is_unconfirmed_default_service(
@@ -290,6 +344,7 @@ def _candidate_service_lead(
             next_action="Compare its metadata and functionality with other HTTP services before deeper manual review.",
             signal="medium",
             score=85,
+            lead_type=candidate.candidate_type,
         )
     if candidate.candidate_type == "multiple_http_services":
         if effective_candidate_priority(project_state, candidate) == "low":
@@ -302,6 +357,7 @@ def _candidate_service_lead(
             next_action="Compare titles, technologies, and application behaviour across the service origins.",
             signal="medium",
             score=78,
+            lead_type=candidate.candidate_type,
         )
     return None
 
@@ -362,6 +418,7 @@ def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
                 next_action="Review the saved HTML and linked artefacts in context before escalating any lead.",
                 signal="medium" if interesting or body_fetch else "low",
                 score=82 if interesting or body_fetch else 58,
+                lead_type="fetched_application_page",
             )
         )
     return leads
@@ -399,6 +456,7 @@ def _encoded_artifact_lead(project_state: ProjectState) -> OperatorSummaryLead |
         next_action="Review surrounding saved HTML before decoding, interpreting, or escalating these artefacts.",
         signal="medium" if likely_count else "low",
         score=68 if likely_count else 52,
+        lead_type="encoded_or_hidden_artifact",
     )
 
 
@@ -422,6 +480,7 @@ def _unusual_robots_lead(project_state: ProjectState) -> OperatorSummaryLead | N
         next_action="Review the robots content and correlate it with other collected artefacts.",
         signal="low",
         score=48,
+        lead_type="unusual_robots_user_agent",
     )
 
 
@@ -451,9 +510,45 @@ def _non_http_service_leads(project_state: ProjectState) -> list[OperatorSummary
                 next_action="Record expected service purpose and version context; do not brute force.",
                 signal="low",
                 score=45 if non_standard else 38,
+                lead_type="non_http_service_context",
             )
         )
     return leads
+
+
+def _normalise_lead_membership(lead: OperatorSummaryLead) -> OperatorSummaryLead:
+    return replace(
+        lead,
+        endpoints=sorted({value for value in lead.endpoints if value}),
+        evidence_ids=sorted({value for value in lead.evidence_ids if value}),
+        lead_id="",
+        rank=0,
+    )
+
+
+def _finalise_ranked_lead(
+    lead: OperatorSummaryLead,
+    rank: int,
+) -> OperatorSummaryLead:
+    identity = {
+        "lead_type": lead.lead_type,
+        "title": lead.title,
+        "rationale": lead.why,
+        "signal": lead.signal,
+        "score": lead.score,
+        "endpoints": lead.endpoints,
+        "evidence_ids": lead.evidence_ids,
+        "suggested_next_action": lead.next_action,
+    }
+    digest = sha256(
+        json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16].upper()
+    return replace(lead, lead_id=f"LEAD-{digest}", rank=rank)
 
 
 def _low_signal_items(

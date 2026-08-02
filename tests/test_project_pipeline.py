@@ -1305,7 +1305,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-        lambda brief: "## Human Triage Brief\n\nNo high-confidence manual triage leads were identified from the collected evidence.\n",
+        lambda brief, **kwargs: "## Human Triage Brief\n\nNo high-confidence manual triage leads were identified from the collected evidence.\n",
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
@@ -1532,7 +1532,7 @@ def test_project_pipeline_selects_standard_bounded_core_content_profile(
             )
             monkeypatch.setattr(
                 "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-                lambda brief: "",
+                lambda brief, **kwargs: "",
             )
             monkeypatch.setattr(
                 "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
@@ -1838,7 +1838,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-        lambda brief: "## Human Triage Brief\n\nStandard triage.\n",
+        lambda brief, **kwargs: "## Human Triage Brief\n\nStandard triage.\n",
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
@@ -2199,7 +2199,10 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     monkeypatch.setattr("bugslyce.project_pipeline.build_route_source_review", lambda *args, **kwargs: ())
     monkeypatch.setattr("bugslyce.project_pipeline.render_route_source_review_markdown", lambda *args, **kwargs: "")
     monkeypatch.setattr("bugslyce.project_pipeline.build_human_triage_brief", lambda *args, **kwargs: SimpleNamespace())
-    monkeypatch.setattr("bugslyce.project_pipeline.render_human_triage_brief_markdown", lambda brief: "")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.render_human_triage_brief_markdown",
+        lambda brief, **kwargs: "",
+    )
     monkeypatch.setattr("bugslyce.project_pipeline.render_readable_evidence_cards_markdown", lambda brief: "")
     monkeypatch.setattr("bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section", lambda *args, **kwargs: "")
     monkeypatch.setattr(
@@ -2636,7 +2639,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-        lambda brief: "",
+        lambda brief, **kwargs: "",
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",

@@ -33,6 +33,7 @@ from bugslyce.reports.human_triage import (
     render_readable_evidence_cards_markdown,
 )
 from bugslyce.reports.markdown import render_markdown_report
+from bugslyce.reports.operator_summary import build_operator_summary
 from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
 
@@ -85,13 +86,18 @@ def render_standard_interpretation_report(
         route_source_leads,
         engagement_context=project_state.engagement_context,
     )
+    operator_summary = build_operator_summary(project_state, candidates_list)
     human_triage_brief = build_human_triage_brief(
         project_state,
         candidates_list,
         engagement_context=project_state.engagement_context,
         workflow_leads=workflow_leads,
+        ranked_leads=operator_summary.ranked_leads,
     )
-    human_triage_markdown = render_human_triage_brief_markdown(human_triage_brief)
+    human_triage_markdown = render_human_triage_brief_markdown(
+        human_triage_brief,
+        include_ranked_leads=False,
+    )
     evidence_cards_markdown = render_readable_evidence_cards_markdown(human_triage_brief)
     confidence_notices = build_collection_confidence_notices_from_project(
         project_state,
@@ -107,6 +113,7 @@ def render_standard_interpretation_report(
         route_source_review_markdown=route_source_markdown,
         readable_evidence_cards_markdown=evidence_cards_markdown,
         collection_confidence_markdown=confidence_markdown,
+        operator_summary=operator_summary,
     )
     return StandardInterpretationReport(
         markdown=markdown,

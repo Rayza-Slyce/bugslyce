@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 from html import unescape
 import json
@@ -20,7 +21,12 @@ from bugslyce.reports.html import (
     write_html_report,
     write_project_html_report,
 )
-from bugslyce.reports.markdown import export_project_state_json
+from bugslyce.reports.human_triage import (
+    build_human_triage_brief,
+    render_human_triage_brief_markdown,
+)
+from bugslyce.reports.markdown import export_project_state_json, render_markdown_report
+from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
 from bugslyce.recon.deep_source_route_collection_export import (
     deep_source_route_collection_result_to_dict,
@@ -341,6 +347,73 @@ def test_html_report_is_deterministic_and_preserves_existing_reasoning(
     assert model.candidates
     assert model.candidates[0].rationale in first
     assert model.operator_summary.review_first[0].why in first
+
+
+def test_canonical_ranked_leads_match_human_triage_markdown_and_html(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "pack")
+    model = build_html_report_model(pack)
+    endpoints = tuple(
+        f"https://app.example.test/review/{index:02d}" for index in range(10)
+    )
+    evidence_ids = tuple(f"EVID-CANONICAL-{index:04d}" for index in range(10))
+    summary = build_operator_summary(
+        model.project_state,
+        list(model.candidates),
+        additional_leads=(
+            OperatorSummaryLead(
+                title="Neutral canonical review",
+                why="Directly retained records support bounded offline review.",
+                endpoints=list(reversed(endpoints)),
+                evidence_ids=list(reversed(evidence_ids)),
+                next_action="Review the retained artefacts offline.",
+                signal="direct retained evidence",
+                score=999,
+                lead_type="direct_evidence_review",
+            ),
+        ),
+    )
+    brief = build_human_triage_brief(
+        model.project_state,
+        list(model.candidates),
+        ranked_leads=summary.review_first,
+    )
+    triage = render_human_triage_brief_markdown(brief)
+    embedded_triage = render_human_triage_brief_markdown(
+        brief,
+        include_ranked_leads=False,
+    )
+    markdown = render_markdown_report(
+        model.project_state,
+        list(model.candidates),
+        human_triage_brief_markdown=embedded_triage,
+        operator_summary=summary,
+    )
+    html = unescape(render_html_report(replace(model, operator_summary=summary)))
+
+    lead_ids = [lead.lead_id for lead in summary.review_first]
+    assert [lead.lead_id for lead in brief.ranked_leads] == lead_ids
+    for rendered in (triage, markdown, html):
+        positions = [rendered.index(lead_id) for lead_id in lead_ids]
+        assert positions == sorted(positions)
+    for lead in summary.review_first:
+        for value in (
+            lead.lead_id,
+            lead.lead_type,
+            lead.title,
+            lead.rationale,
+            lead.suggested_next_action,
+            lead.signal,
+        ):
+            assert value in markdown
+            assert value in html
+        assert lead.lead_id in triage
+        assert lead.lead_type in triage
+        assert lead.title in triage
+    for value in (*endpoints, *evidence_ids):
+        assert value in markdown
+        assert value in html
 
 
 def test_html_report_writes_only_requested_output_and_preserves_input(

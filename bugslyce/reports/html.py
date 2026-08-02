@@ -311,20 +311,22 @@ def _overview_section(model: HtmlReportModel) -> str:
 
 def _operator_summary_section(model: HtmlReportModel) -> str:
     summary = model.operator_summary
-    if summary.review_first:
+    if summary.ranked_leads:
         review = "".join(
             _detail_card(
-                lead.title,
+                f"{lead.rank}. {lead.title}",
                 (
-                    ("Why", lead.why),
+                    ("Lead ID", lead.lead_id),
+                    ("Type", lead.lead_type),
+                    ("Rationale", lead.rationale),
                     ("Endpoint(s)", _compact_list(lead.endpoints, "endpoints")),
                     ("Evidence", _compact_list(lead.evidence_ids, "evidence IDs")),
-                    ("Next", lead.next_action),
-                    ("Signal", _human_label(lead.signal)),
+                    ("Suggested next action", lead.suggested_next_action),
+                    ("Signal", lead.signal),
                 ),
                 category=_OPERATOR_SUMMARY_CATEGORY,
             )
-            for lead in summary.review_first
+            for lead in summary.ranked_leads
         )
     else:
         review = _empty("No evidence-backed leads met the existing summary threshold.")
@@ -1007,7 +1009,7 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
             for item in (state.recon_manifest.artifacts if state.recon_manifest else ())
         ),
     }
-    if model.operator_summary.review_first:
+    if model.operator_summary.ranked_leads:
         values.add(_OPERATOR_SUMMARY_CATEGORY)
     if model.metadata_collection.skipped or model.source_collection.skipped:
         values.add(_SKIPPED_COLLECTION_CATEGORY)

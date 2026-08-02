@@ -120,7 +120,8 @@ def test_human_triage_brief_promotes_universal_manual_review_signals() -> None:
     markdown = render_human_triage_brief_markdown(brief)
 
     assert "## Human Triage Brief" in markdown
-    assert "### Start Here" in markdown
+    assert "### Canonical Ranked Leads" in markdown
+    assert "### Supporting Evidence Prompts (not ranked)" in markdown
     assert "### Evidence Values Worth Noting" in markdown
     assert "### Review Next" in markdown
     assert "### Ignore For Now" in markdown
@@ -389,10 +390,9 @@ def test_human_triage_groups_same_source_comment_keyword_clues() -> None:
     brief = build_human_triage_brief(state, [])
     markdown = render_human_triage_brief_markdown(brief)
 
-    start_here = markdown.split("### Start Here", 1)[1].split(
-        "### Evidence Values Worth Noting",
-        1,
-    )[0]
+    start_here = markdown.split(
+        "### Supporting Evidence Prompts (not ranked)", 1
+    )[1].split("### Evidence Values Worth Noting", 1)[0]
 
     assert start_here.count("**Human-authored source comment observed**") == 1
     assert "`EVID-ART-0006`" in markdown
@@ -452,10 +452,9 @@ def test_human_triage_group_absorbs_matching_credential_like_candidate() -> None
 
     markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, [candidate]))
 
-    start_here = markdown.split("### Start Here", 1)[1].split(
-        "### Evidence Values Worth Noting",
-        1,
-    )[0]
+    start_here = markdown.split(
+        "### Supporting Evidence Prompts (not ranked)", 1
+    )[1].split("### Evidence Values Worth Noting", 1)[0]
     assert start_here.count("Human-authored source comment observed") == 1
     assert "Credential-like artefact review in homepage HTML" not in start_here
     assert "`EVID-ART-0006`" in start_here
@@ -566,10 +565,9 @@ def test_human_triage_keeps_source_group_and_robots_value_separate() -> None:
     )
 
     markdown = render_human_triage_brief_markdown(build_human_triage_brief(state, []))
-    start_here = markdown.split("### Start Here", 1)[1].split(
-        "### Evidence Values Worth Noting",
-        1,
-    )[0]
+    start_here = markdown.split(
+        "### Supporting Evidence Prompts (not ranked)", 1
+    )[1].split("### Evidence Values Worth Noting", 1)[0]
 
     assert "Human-authored source comment observed" in start_here
     assert "robots.txt clue-like value observed" in start_here

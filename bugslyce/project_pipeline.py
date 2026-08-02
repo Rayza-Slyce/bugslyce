@@ -863,7 +863,7 @@ def _render_compact_run_summary(
         return None
     if not all(
         isinstance(lead, OperatorSummaryLead)
-        for lead in operator_summary.review_first
+        for lead in operator_summary.ranked_leads
     ):
         return None
 
@@ -886,10 +886,14 @@ def _render_compact_run_summary(
         )
 
     lines.extend(["", "Review first:"])
-    review_first = operator_summary.review_first
+    review_first = operator_summary.ranked_leads
     if review_first:
         for lead in review_first[:5]:
-            lines.extend(_terminal_bullet(f"{lead.title}: {lead.why}"))
+            lines.extend(
+                _terminal_bullet(
+                    f"{lead.rank}. [{lead.lead_id}] {lead.title}: {lead.rationale}"
+                )
+            )
         remaining = len(review_first) - 5
         if remaining > 0:
             noun = "item" if remaining == 1 else "items"
@@ -1944,12 +1948,25 @@ def _write_interpretation_report_if_needed(
         project_state,
         getattr(assembly, "sources", ()),
     )
+    operator_summary = (
+        build_operator_summary(
+            project_state,
+            candidates,
+            additional_leads=operator_summary_leads,
+        )
+        if isinstance(project_state, ProjectState)
+        else None
+    )
+    triage_kwargs: dict[str, object] = {}
+    if operator_summary is not None:
+        triage_kwargs["ranked_leads"] = operator_summary.ranked_leads
     human_triage_brief = build_human_triage_brief(
         project_state,
         candidates,
         engagement_context=engagement_context,
         deep_orchestration=orchestration,
         workflow_leads=workflow_leads,
+        **triage_kwargs,
     )
     relationship_markdown = render_http_route_relationship_clusters_markdown(
         _http_route_relationship_clusters_if_available(
@@ -1961,6 +1978,7 @@ def _write_interpretation_report_if_needed(
     report_kwargs: dict[str, object] = {
         "human_triage_brief_markdown": render_human_triage_brief_markdown(
             human_triage_brief,
+            include_ranked_leads=False,
         ),
         "manual_review_leads_markdown": assembly.manual_review_leads_markdown,
         "investigation_threads_markdown": render_investigation_threads_markdown(
@@ -1975,6 +1993,8 @@ def _write_interpretation_report_if_needed(
             human_triage_brief,
         ),
     }
+    if operator_summary is not None:
+        report_kwargs["operator_summary"] = operator_summary
     confidence_markdown = render_collection_confidence_markdown(confidence_notices)
     if confidence_markdown:
         report_kwargs["collection_confidence_markdown"] = confidence_markdown
@@ -1983,14 +2003,6 @@ def _write_interpretation_report_if_needed(
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
         report_kwargs["operator_summary_leads"] = operator_summary_leads
-    operator_summary = None
-    if isinstance(project_state, ProjectState):
-        operator_summary = build_operator_summary(
-            project_state,
-            candidates,
-            additional_leads=operator_summary_leads,
-        )
-        report_kwargs["operator_summary"] = operator_summary
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,

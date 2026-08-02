@@ -121,7 +121,7 @@ def _operator_summary(
             additional_leads=additional_leads,
         )
     lines.extend(["## Operator Summary", "", "### Review First", ""])
-    if not summary.review_first:
+    if not summary.ranked_leads:
         lines.extend(
             [
                 "No evidence-backed leads met the conservative summary threshold.",
@@ -129,14 +129,16 @@ def _operator_summary(
             ]
         )
     else:
-        for index, lead in enumerate(summary.review_first, start=1):
+        for lead in summary.ranked_leads:
             lines.extend(
                 [
-                    f"{index}. **{_md(lead.title)}**",
-                    f"   - Why: {_md(lead.why)}",
-                    f"   - Endpoint(s): {format_endpoint_list(lead.endpoints)}",
-                    f"   - Evidence: {format_evidence_ids(lead.evidence_ids)}",
-                    f"   - Next: {_md(lead.next_action)}",
+                    f"{lead.rank}. **{_md(lead.title)}**",
+                    f"   - Lead ID: `{_md(lead.lead_id)}`",
+                    f"   - Type: `{_md(lead.lead_type)}`",
+                    f"   - Rationale: {_md(lead.rationale)}",
+                    f"   - Endpoint(s): {_complete_code_list(lead.endpoints)}",
+                    f"   - Evidence: {_complete_code_list(lead.evidence_ids)}",
+                    f"   - Suggested next action: {_md(lead.suggested_next_action)}",
                     f"   - Signal: `{lead.signal}`",
                     "",
                 ]
@@ -164,6 +166,14 @@ def _operator_summary(
     lines.extend(["### Current Coverage", ""])
     lines.extend(f"- {_md(item)}" for item in summary.coverage)
     lines.append("")
+
+
+def _complete_code_list(values: list[str] | tuple[str, ...]) -> str:
+    if not values:
+        return "`none`"
+    return ", ".join(
+        "`" + str(value).replace("`", "'") + "`" for value in values
+    )
 
 
 def write_project_outputs(

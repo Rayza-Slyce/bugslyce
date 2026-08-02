@@ -1342,10 +1342,9 @@ def test_primary_report_plain_forbidden_route_owned_by_operator_summary() -> Non
     triage = render_human_triage_brief_markdown(build_human_triage_brief(state, candidates))
     report = render_markdown_report(state, candidates, human_triage_brief_markdown=triage)
     primary = report.split("## Scope Summary", 1)[0]
-    start_here = primary.split("### Start Here", 1)[1].split(
-        "### Evidence Values Worth Noting",
-        1,
-    )[0]
+    start_here = primary.split(
+        "### Supporting Evidence Prompts (not ranked)", 1
+    )[1].split("### Evidence Values Worth Noting", 1)[0]
 
     assert primary.count("Access-controlled path context") == 1
     assert primary.count(url) == 1

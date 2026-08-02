@@ -417,7 +417,8 @@ def test_standard_report_includes_human_triage_brief_and_cards_before_raw_tables
     report = render_standard_interpretation_report(state, [])
 
     assert "## Human Triage Brief" in report.markdown
-    assert "### Start Here" in report.markdown
+    assert "### Canonical Ranked Leads" in report.markdown
+    assert "### Supporting Evidence Prompts (not ranked)" in report.markdown
     assert "### Evidence Values Worth Noting" in report.markdown
     assert "### Review Next" in report.markdown
     assert "### Ignore For Now" in report.markdown

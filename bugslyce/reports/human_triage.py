@@ -24,6 +24,10 @@ from bugslyce.recon.route_provenance import (
     route_evidence_provenance,
 )
 from bugslyce.recon.robots_policy import robots_policy_review_eligible
+from bugslyce.reports.operator_summary import (
+    OperatorSummaryLead,
+    build_operator_summary,
+)
 from bugslyce.triage.workflow_leads import (
     WorkflowLead,
     build_grouped_workflow_leads,
@@ -268,6 +272,7 @@ class HumanTriageBrief:
     raw_evidence_pointers: tuple[str, ...]
     evidence_cards: tuple[ReadableEvidenceCard, ...]
     successful_deep_content: tuple[SuccessfulDeepContentReview, ...] = ()
+    ranked_leads: tuple[OperatorSummaryLead, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -286,6 +291,7 @@ def build_human_triage_brief(
     engagement_context: str | None = None,
     deep_orchestration: object | None = None,
     workflow_leads: Sequence[WorkflowLead] | None = None,
+    ranked_leads: Sequence[OperatorSummaryLead] | None = None,
 ) -> HumanTriageBrief:
     """Build a deterministic Standard human triage brief from local state."""
 
@@ -308,6 +314,11 @@ def build_human_triage_brief(
     )
     successful_deep_content = tuple(
         getattr(deep_orchestration, "successful_content_reviews", ())
+    )
+    canonical_ranked_leads = tuple(
+        ranked_leads
+        if ranked_leads is not None
+        else build_operator_summary(project_state, candidates).ranked_leads
     )
     grouped_account_urls = {
         url
@@ -357,9 +368,9 @@ def build_human_triage_brief(
         start.append(group.item)
         values.append(group.item)
 
-    start = _rank_items(start)[:MAX_BRIEF_ITEMS]
-    values = _rank_items(values)[:MAX_VALUE_ITEMS]
-    ignore = _rank_items(ignore)[:MAX_IGNORE_ITEMS]
+    start = _order_supporting_items(start)[:MAX_BRIEF_ITEMS]
+    values = _order_supporting_items(values)[:MAX_VALUE_ITEMS]
+    ignore = _order_supporting_items(ignore)[:MAX_IGNORE_ITEMS]
 
     return HumanTriageBrief(
         start_here=tuple(start),
@@ -371,17 +382,24 @@ def build_human_triage_brief(
         raw_evidence_pointers=tuple(_raw_evidence_pointers(project_state, candidates)),
         evidence_cards=tuple(_build_cards(start, values, project_state)[:MAX_CARDS]),
         successful_deep_content=successful_deep_content,
+        ranked_leads=canonical_ranked_leads,
     )
 
 
-def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
+def render_human_triage_brief_markdown(
+    brief: HumanTriageBrief,
+    *,
+    include_ranked_leads: bool = True,
+) -> str:
     """Render the compact Standard Human Triage Brief section."""
 
     successful_deep_content = tuple(
         getattr(brief, "successful_deep_content", ())
     )
+    ranked_leads = tuple(getattr(brief, "ranked_leads", ()))
     if (
-        not brief.start_here
+        not ranked_leads
+        and not brief.start_here
         and not brief.evidence_values
         and not successful_deep_content
     ):
@@ -407,14 +425,39 @@ def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
             "They require local validation and are not confirmed findings."
         ),
         "",
-        "### Start Here",
+        "### Canonical Ranked Leads",
         "",
     ]
-    if brief.start_here:
-        for index, item in enumerate(brief.start_here, start=1):
-            lines.extend(_render_numbered_item(index, item))
+    if include_ranked_leads and ranked_leads:
+        for lead in ranked_leads:
+            lines.extend(_render_ranked_lead(lead))
+    elif ranked_leads:
+        lines.extend(
+            [
+                "Canonical ranked leads are listed in the Operator Summary above.",
+                "",
+            ]
+        )
     else:
-        lines.extend(["No high-confidence start-here prompts were identified.", ""])
+        lines.extend(["No canonical ranked leads were identified.", ""])
+
+    lines.extend(
+        [
+            "### Supporting Evidence Prompts (not ranked)",
+            "",
+            (
+                "These supporting evidence prompts do not define or alter the "
+                "canonical lead ranking above."
+            ),
+            "",
+        ]
+    )
+    if brief.start_here:
+        for item in brief.start_here:
+            lines.extend(_render_supporting_item(item))
+        lines.append("")
+    else:
+        lines.extend(["No additional evidence prompts were identified.", ""])
 
     lines.extend(["### Evidence Values Worth Noting", ""])
     if brief.evidence_values:
@@ -426,8 +469,8 @@ def render_human_triage_brief_markdown(brief: HumanTriageBrief) -> str:
             [
                 (
                     "- No additional source-comment, metadata, or encoded values were "
-                    "promoted in this section; review the Operator Summary and Start "
-                    "Here sections for other direct evidence."
+                    "promoted in this section; review the Operator Summary and "
+                    "Supporting Evidence Prompts sections for other direct evidence."
                 ),
                 "",
             ]
@@ -1204,7 +1247,7 @@ def _artifact_item(
     )
 
 
-def _rank_items(items: list[HumanTriageItem]) -> list[HumanTriageItem]:
+def _order_supporting_items(items: list[HumanTriageItem]) -> list[HumanTriageItem]:
     deduped: dict[tuple[str, str, str], HumanTriageItem] = {}
     for item in items:
         key = (item.category, item.url or "", item.value)
@@ -1459,19 +1502,28 @@ def _category_rank(category: str) -> int:
     return order.get(category, 20)
 
 
-def _render_numbered_item(index: int, item: HumanTriageItem) -> list[str]:
+def _render_ranked_lead(lead: OperatorSummaryLead) -> list[str]:
+    return [
+        f"{lead.rank}. **{_md(lead.title)}**",
+        f"   - Lead ID: `{_md(lead.lead_id)}`",
+        f"   - Type: `{_md(lead.lead_type)}`",
+        f"   - Signal: `{_md(lead.signal)}`",
+        "",
+    ]
+
+
+def _render_supporting_item(item: HumanTriageItem) -> list[str]:
     lines = [
-        f"{index}. **{_md(item.title)}**",
-        f"   - Why it matters: {_md(item.why_it_matters)}",
+        f"- **{_md(item.title)}**",
+        f"  - Why it matters: {_md(item.why_it_matters)}",
     ]
     if item.category in {"account_workflow", "object_reference_surface"}:
-        lines.append(f"   - Direct context: {_code(item.value)}")
+        lines.append(f"  - Direct context: {_code(item.value)}")
     lines.extend(
         [
-            f"   - Evidence: {format_evidence_ids(item.evidence_ids)}",
-            f"   - Suggested manual action: {_md(item.suggested_manual_action)}",
-            f"   - Signal: {_md(item.signal or item.category)}",
-            "",
+            f"  - Evidence: {format_evidence_ids(item.evidence_ids)}",
+            f"  - Suggested manual action: {_md(item.suggested_manual_action)}",
+            f"  - Signal: {_md(item.signal or item.category)}",
         ]
     )
     return lines
