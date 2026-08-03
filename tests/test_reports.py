@@ -792,6 +792,181 @@ def test_direct_structured_disclosures_rank_first_while_generic_service_stays_lo
     )
 
 
+def test_sole_high_port_service_is_context_below_direct_retained_response() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    service_url = "https://app.example-bounty.test:8443/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=service_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Example application",
+                technologies=["HTTP"],
+                content_length=1024,
+                evidence_ids=["EVID-SOLE-HIGH-PORT"],
+                tags=[],
+            )
+        ],
+    )
+    candidate = Candidate(
+        id="CAND-SOLE-HIGH-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["app.example-bounty.test"],
+        affected_endpoints=[service_url],
+        evidence_ids=["EVID-SOLE-HIGH-PORT"],
+        suggested_manual_validation=["Review the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+    direct_response = OperatorSummaryLead(
+        title="Direct retained response review",
+        why="A distinctive response was retained for offline review.",
+        endpoints=[f"{service_url}boundary"],
+        evidence_ids=["EVID-DIRECT-RESPONSE"],
+        next_action="Review the retained response offline.",
+        signal="direct retained response",
+        score=72,
+        lead_type="direct_retained_response",
+    )
+
+    summary = build_operator_summary(
+        state,
+        [candidate],
+        additional_leads=(direct_response,),
+    )
+    high_port = next(
+        lead
+        for lead in summary.ranked_leads
+        if lead.lead_type == "high_port_http_service"
+    )
+    direct = next(
+        lead
+        for lead in summary.ranked_leads
+        if lead.lead_type == "direct_retained_response"
+    )
+
+    assert direct.rank < high_port.rank
+    assert direct.score > high_port.score
+    assert high_port.score == 60
+    assert high_port.signal == "context"
+    assert "separate HTTP service" not in high_port.why
+    assert "does not by itself establish a separate application" in high_port.why
+
+
+def test_additional_high_port_listener_retains_meaningful_priority() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    default_url = "https://app.example-bounty.test/"
+    high_port_url = "https://app.example-bounty.test:8081/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=default_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Primary application",
+                technologies=["HTTP"],
+                content_length=1024,
+                evidence_ids=["EVID-DEFAULT-HTTPS"],
+                tags=[],
+            ),
+            HTTPService(
+                url=high_port_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Additional application",
+                technologies=["HTTP"],
+                content_length=2048,
+                evidence_ids=["EVID-ADDITIONAL-HIGH-PORT"],
+                tags=[],
+            ),
+        ],
+    )
+    candidate = Candidate(
+        id="CAND-ADDITIONAL-HIGH-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["app.example-bounty.test"],
+        affected_endpoints=[high_port_url],
+        evidence_ids=["EVID-ADDITIONAL-HIGH-PORT"],
+        suggested_manual_validation=["Compare the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+
+    summary = build_operator_summary(state, [candidate])
+    high_port = next(
+        lead
+        for lead in summary.ranked_leads
+        if lead.lead_type == "high_port_http_service"
+    )
+
+    assert high_port.score == 85
+    assert high_port.signal == "medium"
+    assert "separate HTTP service" in high_port.why
+    assert high_port.endpoints == [high_port_url]
+    assert high_port.evidence_ids == ["EVID-ADDITIONAL-HIGH-PORT"]
+
+
+def test_unrelated_host_does_not_make_sole_high_port_service_separate() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    high_port_url = "https://app.example-bounty.test:8443/"
+    unrelated_url = "https://other.example-bounty.test/"
+    state = replace(
+        state,
+        http_services=[
+            HTTPService(
+                url=high_port_url,
+                hostname="app.example-bounty.test",
+                status_code=200,
+                title="Example application",
+                technologies=["HTTP"],
+                content_length=1024,
+                evidence_ids=["EVID-SOLE-HIGH-PORT"],
+                tags=[],
+            ),
+            HTTPService(
+                url=unrelated_url,
+                hostname="other.example-bounty.test",
+                status_code=200,
+                title="Unrelated application",
+                technologies=["HTTP"],
+                content_length=2048,
+                evidence_ids=["EVID-UNRELATED-SERVICE"],
+                tags=[],
+            ),
+        ],
+    )
+    candidate = Candidate(
+        id="CAND-SOLE-HIGH-PORT",
+        candidate_type="high_port_http_service",
+        title="High-port HTTP service review",
+        priority="medium",
+        rationale="Structured service evidence records a high port.",
+        affected_assets=["app.example-bounty.test"],
+        affected_endpoints=[high_port_url],
+        evidence_ids=["EVID-SOLE-HIGH-PORT"],
+        suggested_manual_validation=["Review the collected service metadata."],
+        kill_switch_guidance=None,
+    )
+
+    summary = build_operator_summary(state, [candidate])
+    high_port = next(
+        lead
+        for lead in summary.ranked_leads
+        if lead.lead_type == "high_port_http_service"
+    )
+
+    assert high_port.score == 60
+    assert high_port.signal == "context"
+    assert "separate HTTP service" not in high_port.why
+
+
 def test_generic_high_port_landing_page_without_independent_signal_is_low_priority() -> None:
     state = build_project_state(FIXTURES_ROOT / "basic_saas")
     service_url = "https://default.example-bounty.test:9443/"

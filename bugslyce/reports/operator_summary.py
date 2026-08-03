@@ -336,14 +336,46 @@ def _candidate_service_lead(
             project_state,
         ):
             return None
+        candidate_hosts = {
+            host
+            for endpoint in candidate.affected_endpoints
+            if (host := (urlparse(endpoint).hostname or "").lower())
+        }
+        candidate_origins = {
+            origin
+            for endpoint in candidate.affected_endpoints
+            if (origin := http_origin_from_url(endpoint)) is not None
+        }
+        recorded_origins = {
+            origin
+            for service in project_state.http_services
+            if (service_host := (urlparse(service.url).hostname or "").lower())
+            and service_host in candidate_hosts
+            and (origin := http_origin_from_url(service.url)) is not None
+        }
+        multiple_http_origins = len(recorded_origins | candidate_origins) > 1
         return OperatorSummaryLead(
             title=candidate.title,
-            why="A separate HTTP service is recorded on a non-default high port.",
+            why=(
+                "A separate HTTP service is recorded on a non-default high port."
+                if multiple_http_origins
+                else (
+                    "The recorded HTTP service uses a non-default port. Port novelty "
+                    "is contextual and does not by itself establish a separate application."
+                )
+            ),
             endpoints=candidate.affected_endpoints,
             evidence_ids=candidate.evidence_ids,
-            next_action="Compare its metadata and functionality with other HTTP services before deeper manual review.",
-            signal="medium",
-            score=85,
+            next_action=(
+                "Compare its metadata and functionality with other HTTP services before deeper manual review."
+                if multiple_http_origins
+                else (
+                    "Review its retained metadata and functionality in context before "
+                    "deciding whether it warrants deeper manual review."
+                )
+            ),
+            signal="medium" if multiple_http_origins else "context",
+            score=85 if multiple_http_origins else 60,
             lead_type=candidate.candidate_type,
         )
     if candidate.candidate_type == "multiple_http_services":
