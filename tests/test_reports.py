@@ -198,6 +198,97 @@ def test_successful_deep_content_relationship_matches_primary_report_and_runbook
     assert "re-fetch" in runbook
 
 
+def test_confirmed_listing_response_gets_one_specific_canonical_lead() -> None:
+    listing_one = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url="https://portal.example.test/public/",
+        requested_urls=("https://portal.example.test/public/",),
+        status_code=200,
+        content_type="text/html; charset=utf-8",
+        body_bytes=512,
+        body_sha256="1" * 64,
+        body_preview="<html><title>Index of /public/</title></html>",
+        evidence_ids=("EVID-LISTING-ONE",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    listing_two = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0002",
+        canonical_url="https://portal.example.test/downloads",
+        requested_urls=("https://portal.example.test/downloads",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=640,
+        body_sha256="2" * 64,
+        body_preview=(
+            "<html><title>Directory listing for /downloads/</title></html>"
+        ),
+        evidence_ids=("EVID-LISTING-TWO",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    ordinary = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0003",
+        canonical_url="https://portal.example.test/notice",
+        requested_urls=("https://portal.example.test/notice",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=384,
+        body_sha256="3" * 64,
+        body_preview="<html><title>Service notice</title></html>",
+        evidence_ids=("EVID-ORDINARY",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+
+    forward = build_deep_operator_summary_leads(
+        (),
+        (listing_one, listing_two, ordinary),
+    )
+    reverse = build_deep_operator_summary_leads(
+        (),
+        (ordinary, listing_two, listing_one),
+    )
+
+    assert forward == reverse
+    listing = next(
+        lead for lead in forward if lead.lead_type == "directory_listing_response"
+    )
+    general = next(
+        lead for lead in forward if lead.lead_type == "successful_deep_content"
+    )
+
+    assert listing.score == 88
+    assert listing.signal == "direct listing response"
+    assert listing.endpoints == [
+        "https://portal.example.test/downloads",
+        "https://portal.example.test/public/",
+    ]
+    assert listing.evidence_ids == ["EVID-LISTING-ONE", "EVID-LISTING-TWO"]
+    assert "not a confirmed vulnerability" in listing.why
+    assert general.endpoints == ["https://portal.example.test/notice"]
+    assert general.evidence_ids == ["EVID-ORDINARY"]
+    assert not set(listing.endpoints).intersection(general.endpoints)
+    assert not set(listing.evidence_ids).intersection(general.evidence_ids)
+
+
+def test_directory_looking_path_without_listing_title_is_not_promoted() -> None:
+    review = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url="https://portal.example.test/ftp",
+        requested_urls=("https://portal.example.test/ftp",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=256,
+        body_sha256="4" * 64,
+        body_preview="<html><title>Available documents</title></html>",
+        evidence_ids=("EVID-ORDINARY-FTP",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+
+    leads = build_deep_operator_summary_leads((), (review,))
+
+    assert [lead.lead_type for lead in leads] == ["successful_deep_content"]
+    assert leads[0].endpoints == ["https://portal.example.test/ftp"]
+    assert leads[0].evidence_ids == ["EVID-ORDINARY-FTP"]
+
 def test_report_can_include_prerendered_human_triage_and_cards_sections() -> None:
     _report, state, candidates = _basic_saas_report()
     brief_section = "\n".join(

@@ -16,6 +16,7 @@ from bugslyce.recon.deep_source_route_collector import (
 )
 from bugslyce.recon.deep_successful_content import (
     build_successful_deep_content_reviews,
+    directory_listing_title,
     render_successful_deep_content_runbook,
 )
 
@@ -48,6 +49,62 @@ def test_successful_text_and_html_responses_remain_distinct() -> None:
     )
     assert "directory listing" not in render_successful_deep_content_runbook(reviews).lower()
 
+
+def test_directory_listing_title_requires_html_and_exact_path_match() -> None:
+    reviews = build_successful_deep_content_reviews(
+        _result(
+            _item(
+                "https://portal.example.test/public/",
+                body=b"<html><title>Index of /public/</title></html>",
+                content_type="text/html",
+                evidence_ids=("EVID-INDEX",),
+            ),
+            _item(
+                "https://portal.example.test/downloads",
+                body=b"<html><title>Directory listing for /downloads/</title></html>",
+                content_type="text/html; charset=utf-8",
+                evidence_ids=("EVID-DIRECTORY",),
+            ),
+            _item(
+                "https://portal.example.test/shared",
+                body=b"<html><title>listing directory /shared</title></html>",
+                content_type="application/xhtml+xml",
+                evidence_ids=("EVID-LISTING",),
+            ),
+        )
+    )
+
+    assert tuple(directory_listing_title(review) for review in reviews) == (
+        "Directory listing for /downloads/",
+        "Index of /public/",
+        "listing directory /shared",
+    )
+
+def test_directory_listing_title_rejects_pathname_only_and_weak_titles() -> None:
+    reviews = build_successful_deep_content_reviews(
+        _result(
+            _item(
+                "https://portal.example.test/ftp",
+                body=b"<html><title>Available documents</title></html>",
+                content_type="text/html",
+                evidence_ids=("EVID-ORDINARY",),
+            ),
+            _item(
+                "https://portal.example.test/files",
+                body=b"<html><title>Index of /other/</title></html>",
+                content_type="text/html",
+                evidence_ids=("EVID-MISMATCH",),
+            ),
+            _item(
+                "https://portal.example.test/archive",
+                body=b"<html><title>Index of /archive</title></html>",
+                content_type="text/plain",
+                evidence_ids=("EVID-NON-HTML",),
+            ),
+        )
+    )
+
+    assert all(directory_listing_title(review) is None for review in reviews)
 
 def test_negative_failed_redirect_and_empty_responses_are_not_promoted() -> None:
     collected = tuple(

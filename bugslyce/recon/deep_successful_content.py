@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
 from bugslyce.recon.deep_source_route_collection_export import (
@@ -15,6 +16,42 @@ from bugslyce.recon.deep_source_route_collector import (
     PREVIEW_TRUNCATED_MARKER,
 )
 from bugslyce.recon.http_origin import http_origin_from_url, same_http_origin
+
+
+_LISTING_TITLE_PREFIXES = (
+    "index of ",
+    "directory listing for ",
+    "directory listing of ",
+    "listing directory ",
+)
+
+
+class _TitleParser(HTMLParser):
+    """Extract the first HTML title from a retained bounded preview."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._in_title = False
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "title" and not self._parts:
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            compact = " ".join(data.split())
+            if compact:
+                self._parts.append(compact)
+
+    @property
+    def title(self) -> str | None:
+        compact = " ".join(self._parts).strip()
+        return compact or None
 
 
 @dataclass(frozen=True)
@@ -87,6 +124,43 @@ def build_successful_deep_content_reviews(
         )
     return tuple(reviews)
 
+
+def directory_listing_title(
+    review: SuccessfulDeepContentReview,
+) -> str | None:
+    """Return a path-matched listing title from direct retained HTML evidence."""
+
+    if not (200 <= review.status_code <= 299):
+        return None
+    content_type = (review.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        return None
+
+    parser = _TitleParser()
+    parser.feed(review.body_preview)
+    title = parser.title
+    if title is None:
+        return None
+
+    lowered = title.casefold()
+    for prefix in _LISTING_TITLE_PREFIXES:
+        if not lowered.startswith(prefix):
+            continue
+        claimed_path = title[len(prefix) :].strip()
+        if _normalised_listing_path(claimed_path) == _normalised_listing_path(
+            urlsplit(review.canonical_url).path or "/"
+        ):
+            return title
+    return None
+
+
+def _normalised_listing_path(value: str) -> str | None:
+    compact = value.strip()
+    if not compact.startswith("/") or "?" in compact or "#" in compact:
+        return None
+    if compact == "/":
+        return compact
+    return compact.rstrip("/")
 
 def render_successful_deep_content_runbook(
     reviews: tuple[SuccessfulDeepContentReview, ...],

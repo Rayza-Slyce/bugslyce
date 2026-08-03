@@ -19,7 +19,10 @@ from bugslyce.reports.artifact_classifier import (
     is_generic_default_page_text,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
-from bugslyce.recon.deep_successful_content import SuccessfulDeepContentReview
+from bugslyce.recon.deep_successful_content import (
+    SuccessfulDeepContentReview,
+    directory_listing_title,
+)
 from bugslyce.recon.route_provenance import (
     canonical_route_url,
     route_evidence_provenance,
@@ -172,14 +175,62 @@ def build_deep_operator_summary_leads(
                 lead_type=disclosure.category,
             )
         )
-    if successful_content_reviews:
+    listing_reviews: list[SuccessfulDeepContentReview] = []
+    general_reviews: list[SuccessfulDeepContentReview] = []
+    for review in successful_content_reviews:
+        target = (
+            listing_reviews
+            if directory_listing_title(review) is not None
+            else general_reviews
+        )
+        target.append(review)
+    if listing_reviews:
+        listing_count = len(listing_reviews)
+        leads.append(
+            OperatorSummaryLead(
+                title=(
+                    "Directory-listing-style response observed"
+                    if listing_count == 1
+                    else "Directory-listing-style responses observed"
+                ),
+                why=(
+                    f"{listing_count} successful HTML "
+                    f"response{'s' if listing_count != 1 else ''} used a "
+                    "listing-specific page title that matched the retained response "
+                    "path. This is direct response evidence, not a confirmed "
+                    "vulnerability."
+                ),
+                endpoints=sorted(
+                    {review.canonical_url for review in listing_reviews if review.canonical_url}
+                ),
+                evidence_ids=sorted(
+                    {
+                        evidence_id
+                        for review in listing_reviews
+                        for evidence_id in review.evidence_ids
+                        if evidence_id
+                    }
+                ),
+                next_action=(
+                    "Review the retained response metadata and bounded preview offline to "
+                    "confirm the listing-style behaviour and intended access. Do not "
+                    "re-fetch child paths "
+                    "or treat the directory-style response as a vulnerability."
+                ),
+                signal="direct listing response",
+                score=88,
+                lead_type="directory_listing_response",
+            )
+        )
+
+    if general_reviews:
         endpoints = sorted(
-            {review.canonical_url for review in successful_content_reviews if review.canonical_url}
+            {review.canonical_url for review in general_reviews if review.canonical_url}
         )
         evidence_ids = sorted(
             {
                 evidence_id
-                for review in successful_content_reviews
+                for review in general_reviews
                 for evidence_id in review.evidence_ids
                 if evidence_id
             }
@@ -187,12 +238,12 @@ def build_deep_operator_summary_leads(
         artefact_references = sorted(
             {
                 reference
-                for review in successful_content_reviews
+                for review in general_reviews
                 for reference in review.artefact_references
                 if reference
             }
         )
-        response_count = len(successful_content_reviews)
+        response_count = len(general_reviews)
         verb = "was" if response_count == 1 else "were"
         leads.append(
             OperatorSummaryLead(
