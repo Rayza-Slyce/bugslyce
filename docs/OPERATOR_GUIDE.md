@@ -18,9 +18,9 @@ Before typing `YES` to run recon, verify:
 
 BugSlyce safety controls do not replace external rules.
 
-### R0B2 bug bounty engagement policy and enforcement foundations
+### Bug bounty engagement policy and strict project execution
 
-R0B2 retains the local, versioned traffic and identification policy for bug
+BugSlyce retains the local, versioned traffic and identification policy for bug
 bounty projects and applies it to migrated internal Python HTTP requests and
 strict external-tool plans.
 Configuration remains platform-neutral: copy the exact limits and
@@ -46,13 +46,18 @@ effective identity and controlled redirects for migrated Python HTTP paths.
 Curl exchanges use the same aggregate pacing and identity. Compatible Gobuster
 plans use one thread and a conservative delay and run without concurrent HTTP
 components. Strict bug bounty Nmap plans perform bounded TCP port-state
-discovery only. Incompatible optional Gobuster is omitted rather than weakened;
-incompatible required curl or Nmap capability blocks preflight.
+discovery. Service/version enrichment is permitted only when the private
+engagement policy explicitly confirms it, and then only for authorised ports
+observed open by strict discovery. Incompatible optional Gobuster is omitted
+rather than weakened; incompatible required curl or Nmap capability blocks
+preflight.
 
-Every live bug bounty reconnaissance entry point remains blocked even when
-policy setup and tool preflight are complete. R0B3 controlled capture acceptance
-is required before that block can be reconsidered. CTFs and controlled
-authorised labs remain the supported live-testing contexts.
+Standard and Deep bug-bounty project pipelines may execute only after strict
+preflight confirms a ready engagement policy, default-deny programme scope and
+an explicitly authorised project target. Explicit scope exclusions override
+inclusions. Stored configuration alone does not authorise traffic. Unsupported
+direct and modular bug-bounty live entry points remain blocked; use the
+policy-aware project pipeline. BugSlyce remains reconnaissance-only.
 
 ## 2. Interactive Launcher
 

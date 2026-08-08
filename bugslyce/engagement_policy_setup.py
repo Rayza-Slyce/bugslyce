@@ -21,6 +21,8 @@ from bugslyce.core.engagement_policy import (
     NOT_YET_CONFIRMED,
     RATE_SOURCE_CONSERVATIVE,
     RATE_SOURCE_PROGRAMME,
+    SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_PERMITTED,
     TCP_CONSERVATIVE,
     TCP_CUSTOM,
     TCP_FULL,
@@ -86,8 +88,8 @@ def configure_project_policy_interactively(
         "programme brief. No platform preset supersedes those rules."
     )
     print_func(
-        "R0B2 contains internal and external-tool enforcement foundations. Live bug "
-        "bounty project reconnaissance remains blocked pending R0B3 controlled capture."
+        "Standard and Deep project reconnaissance require a ready private policy and "
+        "default-deny programme scope. Direct modular bug-bounty live commands remain blocked."
     )
     print_func("")
 
@@ -208,6 +210,20 @@ def configure_project_policy_interactively(
             "Type YES to confirm the current programme explicitly permits full TCP discovery: ",
         )
 
+    service_choice = _choice(
+        input_func,
+        (
+            "Bounded Nmap service/version detection under the current programme rules "
+            "[1 explicitly permitted, 2 not permitted, 3 not yet confirmed]: "
+        ),
+        {"1", "2", "3"},
+    )
+    service_version_detection = {
+        "1": SERVICE_VERSION_PERMITTED,
+        "2": SERVICE_VERSION_NOT_PERMITTED,
+        "3": NOT_YET_CONFIRMED,
+    }[service_choice]
+
     identification_choice = _choice(
         input_func,
         (
@@ -245,6 +261,7 @@ def configure_project_policy_interactively(
         tcp_discovery_policy=tcp_policy,
         custom_tcp_ports=custom_ports,
         tcp_policy_confirmed=tcp_confirmed,
+        service_version_detection=service_version_detection,
         identification_requirement=identification,
         identification_headers=headers,
         custom_user_agent=user_agent,
@@ -260,14 +277,16 @@ def show_project_policy(project_file: Path) -> str:
         raise ValueError("Engagement-policy view requires a bug bounty project.")
     if project.engagement_policy_file is None:
         return (
-            "No engagement policy is configured. Live bug bounty reconnaissance "
-            "remains blocked."
+            "No engagement policy is configured. Standard and Deep project execution "
+            "is unavailable until a ready policy and authorised programme scope pass "
+            "strict preflight."
         )
     policy_path = Path(project.output_dir) / ENGAGEMENT_POLICY_FILENAME
     if not policy_path.exists() and not policy_path.is_symlink():
         return (
-            "No engagement policy is configured. Live bug bounty reconnaissance "
-            "remains blocked."
+            "No engagement policy is configured. Standard and Deep project execution "
+            "is unavailable until a ready policy and authorised programme scope pass "
+            "strict preflight."
         )
     return render_redacted_policy(load_engagement_policy(Path(project.output_dir)))
 
@@ -285,7 +304,9 @@ def _review_and_save(
         return PolicySetupResult(saved=False, cancelled=True)
     _, policy_path = save_project_engagement_policy(project_file, policy)
     print_func(f"Engagement policy saved privately: {policy_path.name} (mode 0600).")
-    print_func("No recon was executed. Live bug bounty reconnaissance remains blocked.")
+    print_func(
+        "No recon was executed. Standard and Deep remain subject to strict project preflight."
+    )
     return PolicySetupResult(
         saved=True,
         cancelled=False,

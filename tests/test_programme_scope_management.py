@@ -247,8 +247,8 @@ def test_safe_summary_is_exact_deterministic_and_private() -> None:
             "Programme scope is default-deny: destinations without an inclusion "
             "are not authorised.",
             "Explicit exclusions override every inclusion.",
-            "Runtime programme-scope enforcement is not active yet.",
-            "Configuration does not currently authorise live bug-bounty execution.",
+            "Runtime programme-scope enforcement is active for strict Standard and Deep project pipelines.",
+            "Stored configuration authorises traffic only after engagement-policy readiness and target evaluation.",
         )
     )
     assert PRIVATE_NOTE not in rendered

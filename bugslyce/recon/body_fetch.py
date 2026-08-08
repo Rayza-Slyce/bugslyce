@@ -131,6 +131,7 @@ def run_body_fetch_workflow(
     input_dir: Path,
     scope_file: Path,
     runner: LiveBodyFetchRunner | None = None,
+    project_runtime=None,
 ) -> ReconBodyFetchExecutionResult:
     """Run bounded GET requests for selected prior content-followup URLs."""
 
@@ -148,7 +149,19 @@ def run_body_fetch_workflow(
     target = validate_explicit_nmap_target_scope(target_value.strip().lower(), scope_file)
 
     initial_state = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    else:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "curl",
+        )
     considered, selected_urls = select_body_fetch_urls(initial_state, target, manifest)
     if considered == 0:
         raise ValueError("No prior content-followup header artefacts were found.")

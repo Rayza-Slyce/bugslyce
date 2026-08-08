@@ -54,10 +54,14 @@ class DeepHTTPFetcher:
 def build_deep_http_fetcher(
     configuration: HTTPEnforcementConfiguration | None = None,
     *,
+    executor: InternalHTTPExecutor | None = None,
     transport: HTTPTransport | None = None,
 ) -> DeepHTTPFetcher:
     """Build one shareable Deep fetcher for an invocation or pipeline run."""
-
+    if executor is not None:
+        if configuration is not None or transport is not None:
+            raise ValueError("Injected Deep HTTP executor cannot be combined with new configuration.")
+        return DeepHTTPFetcher(executor)
     return DeepHTTPFetcher(InternalHTTPExecutor(configuration, transport=transport))
 
 

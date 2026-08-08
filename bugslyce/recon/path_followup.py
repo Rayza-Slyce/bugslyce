@@ -72,6 +72,7 @@ def run_path_followup_workflow(
     input_dir: Path,
     scope_file: Path,
     runner: LivePathFollowupRunner | None = None,
+    project_runtime=None,
 ) -> ReconPathFollowupExecutionResult:
     """Run HEAD checks for previously discovered same-origin paths."""
 
@@ -91,11 +92,23 @@ def run_path_followup_workflow(
         )
 
     initial_state = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     target_value = manifest.get("target")
     if not isinstance(target_value, str) or not target_value.strip():
         raise ValueError("Recon manifest does not contain a target.")
     target = validate_explicit_nmap_target_scope(target_value.strip().lower(), scope_file)
+    if project_runtime is not None:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "curl",
+        )
 
     allowed_origins = _discovered_origins(initial_state, target)
     if not allowed_origins:

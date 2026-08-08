@@ -101,7 +101,7 @@ def test_show_missing_policy_and_wrong_context_are_safe(tmp_path: Path) -> None:
         project_file, print_func=output.append, error_func=errors.append
     ) == 0
     assert "Programme scope is not configured." in output
-    assert "bug-bounty execution remains blocked" in " ".join(output).lower()
+    assert "execution remains unavailable" in " ".join(output).lower()
     assert errors == []
 
     wrong = _project(tmp_path / "ctf", context="ctf_lab")

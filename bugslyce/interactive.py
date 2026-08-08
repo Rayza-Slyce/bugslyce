@@ -231,8 +231,7 @@ def _start_new_project(
         if profile is not None:
             print_func(
                 f"{_profile_display_name(profile)} was selected but not started. "
-                "Live bug bounty reconnaissance remains blocked pending R0B3 "
-                "controlled capture acceptance."
+                "Use the strict project pipeline after engagement policy and programme scope are ready."
             )
         else:
             print_func("Manual setup was saved. No recon was started.")
@@ -313,7 +312,7 @@ def _resume_existing_project(
                 print_func("No commands were executed.")
                 print_func("No network requests were made.")
                 return 2
-        print_func("Resume was not started. Live bug bounty reconnaissance remains blocked.")
+        print_func("Resume was not started. Standard and Deep require strict project preflight.")
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 0

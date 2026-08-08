@@ -1,10 +1,4 @@
-"""Policy-aware command planning and execution for external network tools.
-
-The strict bug bounty paths in this module are deliberately separate from the
-existing authorised-lab command builders. R0B2 keeps every live bug bounty CLI
-entry point blocked; R0B3 will decide whether these plans pass controlled
-capture acceptance.
-"""
+"""Policy-aware command planning and execution for external network tools."""
 
 from __future__ import annotations
 
@@ -27,6 +21,7 @@ from bugslyce.core.engagement_policy import (
     TCP_CUSTOM,
     TCP_FULL,
     TCP_SKIP,
+    SERVICE_VERSION_PERMITTED,
     EngagementPolicy,
     IdentificationHeader,
     assess_engagement_policy,
@@ -64,6 +59,7 @@ from bugslyce.recon.http_enforcement import (
     resolve_policy_redirect,
     select_programme_scope_ipv4_peer,
 )
+from bugslyce.parsers.nmap import parse_nmap_normal
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.modes import (
     DEEP_RECON_PROFILE,
@@ -144,6 +140,7 @@ _GOBUSTER_REQUIRED_OPTIONS = frozenset(
 _NMAP_REQUIRED_OPTIONS = frozenset(
     {"-sT", "-Pn", "-n", "-p", "--max-rate", "--max-retries", "-oN"}
 )
+_NMAP_CAPABILITY_OPTIONS = _NMAP_REQUIRED_OPTIONS | {"-sV"}
 
 
 @dataclass(frozen=True)
@@ -409,12 +406,19 @@ class BugBountyExternalEnforcementSession:
         programme_scope_policy: ProgrammeScopePolicy | None = None,
         ipv4_resolver: IPv4Resolver | None = None,
         http_executor: InternalHTTPExecutor | None = None,
+        nmap_only: bool = False,
     ) -> None:
         self._token = object()
         self.policy = policy_from_dict(policy.to_dict())
-        self.configuration = build_http_enforcement_configuration(
-            self.policy,
-            approved_origins=approved_origins,
+        if nmap_only and (approved_origins or http_executor is not None):
+            raise ValueError("Nmap-only enforcement cannot bind HTTP origins or an executor.")
+        self.configuration = (
+            None
+            if nmap_only
+            else build_http_enforcement_configuration(
+                self.policy,
+                approved_origins=approved_origins,
+            )
         )
         self.preflight = build_bug_bounty_external_preflight(
             policy=self.policy,
@@ -438,13 +442,24 @@ class BugBountyExternalEnforcementSession:
             raise ValueError("Strict curl IPv4 resolver is invalid.")
         self._programme_scope_policy = canonical_programme_scope_policy
         self._ipv4_resolver = ipv4_resolver or _system_ipv4_resolver
-        self.http_executor = http_executor or InternalHTTPExecutor(self.configuration)
+        self.http_executor = (
+            None
+            if nmap_only
+            else http_executor or InternalHTTPExecutor(self.configuration)
+        )
         self._registered_plans: dict[int, ExternalCommandPlan] = {}
         self._registered_plan_states: dict[int, tuple[object, ...]] = {}
-        if self.http_executor.configuration != self.configuration:
+        self._observed_nmap_ports: tuple[int, ...] = ()
+        self._observed_nmap_target_ipv4: str | None = None
+        if (
+            self.http_executor is not None
+            and self.http_executor.configuration != self.configuration
+        ):
             raise ValueError("HTTP executor does not match the policy-derived configuration.")
 
     def build_curl_plan(self, **kwargs: object) -> ExternalCommandPlan:
+        if self.configuration is None:
+            raise ValueError("Nmap-only enforcement cannot plan curl execution.")
         if self._programme_scope_policy is None:
             raise ValueError("Strict curl planning requires programme scope policy.")
         return self._register_plan(build_bug_bounty_curl_plan(
@@ -457,6 +472,8 @@ class BugBountyExternalEnforcementSession:
         ))
 
     def build_gobuster_plan(self, **kwargs: object) -> ExternalCommandPlan:
+        if self.configuration is None:
+            raise ValueError("Nmap-only enforcement cannot plan Gobuster execution.")
         if self._programme_scope_policy is None:
             raise ValueError("Strict Gobuster planning requires programme scope policy.")
         return self._register_plan(build_bug_bounty_gobuster_plan(
@@ -477,6 +494,60 @@ class BugBountyExternalEnforcementSession:
             _provenance_token=self._token,
             **kwargs,
         ))
+
+    def build_nmap_service_plan(self, **kwargs: object) -> ExternalCommandPlan:
+        if "observed_open_ports" in kwargs:
+            raise ValueError(
+                "Strict service/version ports come from session-bound discovery evidence."
+            )
+        if not self._observed_nmap_ports:
+            raise ValueError(
+                "Strict service/version detection lacks session-bound open-port evidence."
+            )
+        return self._register_plan(build_bug_bounty_nmap_service_plan(
+            policy=self.policy,
+            capabilities=self.nmap_capabilities,
+            programme_scope_policy=self._programme_scope_policy,
+            ipv4_resolver=self._ipv4_resolver,
+            observed_open_ports=self._observed_nmap_ports,
+            _provenance_token=self._token,
+            **kwargs,
+        ))
+
+    @property
+    def nmap_discovery_observations(self) -> tuple[tuple[int, ...], str | None]:
+        return self._observed_nmap_ports, self._observed_nmap_target_ipv4
+
+    def _record_nmap_discovery(self, plan: ExternalCommandPlan) -> None:
+        self._require_plan(plan)
+        if plan.purpose != "tcp_port_state_discovery":
+            raise ValueError("Open-port evidence requires a strict discovery plan.")
+        self._restore_nmap_discovery_evidence(
+            Path(plan.expected_artefacts[0]),
+            plan.private_argv[-1],
+        )
+
+    def _restore_nmap_discovery_evidence(
+        self,
+        discovery_path: Path,
+        expected_target_ipv4: str,
+    ) -> None:
+        try:
+            canonical_peer = str(ipaddress.IPv4Address(expected_target_ipv4))
+        except ValueError:
+            raise ValueError("Strict discovery target peer is invalid.") from None
+        records = parse_nmap_normal(discovery_path, canonical_peer)
+        peers = {item.host for item in records if item.host}
+        if peers and peers != {canonical_peer}:
+            raise ValueError("Strict discovery evidence contains an unexpected target peer.")
+        self._observed_nmap_ports = tuple(sorted({
+            item.port
+            for item in records
+            if item.host == canonical_peer
+            and item.protocol == "tcp"
+            and item.state == "open"
+        }))
+        self._observed_nmap_target_ipv4 = canonical_peer
 
     def _register_plan(self, plan: ExternalCommandPlan) -> ExternalCommandPlan:
         """Keep a strong reference to the exact in-memory plan instance."""
@@ -499,11 +570,18 @@ class BugBountyExternalEnforcementSession:
         if component is None or component.status != COMPONENT_SUPPORTED:
             raise ValueError("External command component was not approved by preflight.")
         if plan.tool == "curl":
+            if self.configuration is None:
+                raise ValueError("Nmap-only enforcement cannot execute curl.")
             _validate_bound_curl_plan(plan, self.configuration)
         elif plan.tool == "gobuster":
+            if self.configuration is None:
+                raise ValueError("Nmap-only enforcement cannot execute Gobuster.")
             _validate_bound_gobuster_plan(plan, self.configuration)
         elif plan.tool == "nmap":
-            _validate_bound_nmap_plan(plan, policy=self.policy)
+            if plan.purpose == "service_version_detection":
+                _validate_bound_nmap_service_plan(plan, policy=self.policy)
+            else:
+                _validate_bound_nmap_plan(plan, policy=self.policy)
         else:
             raise ValueError("External command plan uses an unsupported tool.")
 
@@ -538,11 +616,22 @@ class BugBountyExternalToolRuntime:
     def run(self, plan: ExternalCommandPlan) -> ExternalProcessResult:
         self.session._require_plan(plan)
         if plan.tool == "curl":
+            if self.http_executor is None:
+                raise ValueError("Strict curl execution requires a bound HTTP executor.")
             return run_bug_bounty_curl(plan, self.http_executor, self.runner)
         if plan.tool == "gobuster":
+            if self.http_executor is None:
+                raise ValueError("Strict Gobuster execution requires a bound HTTP executor.")
             return run_bug_bounty_gobuster(plan, self.http_executor, self.runner)
         if plan.tool == "nmap":
-            return self.runner.run(plan)
+            result = self.runner.run(plan)
+            if (
+                plan.purpose == "tcp_port_state_discovery"
+                and result.return_code == 0
+                and result.error is None
+            ):
+                self.session._record_nmap_discovery(plan)
+            return result
         raise ValueError("External command plan uses an unsupported tool.")
 
 
@@ -563,7 +652,7 @@ def assess_tool_capabilities(
     required = {
         "curl": _CURL_REQUIRED_OPTIONS,
         "gobuster": _GOBUSTER_REQUIRED_OPTIONS,
-        "nmap": _NMAP_REQUIRED_OPTIONS,
+        "nmap": _NMAP_CAPABILITY_OPTIONS,
     }[tool]
     supported = frozenset(
         option for option in required if _help_mentions_option(help_text, option)
@@ -1104,6 +1193,88 @@ def build_bug_bounty_nmap_plan(
     )
 
 
+def build_bug_bounty_nmap_service_plan(
+    *,
+    target: str,
+    observed_open_ports: tuple[int, ...],
+    output_file: Path,
+    policy: EngagementPolicy,
+    capabilities: ToolCapabilities,
+    timeout_seconds: int = 1200,
+    programme_scope_policy: ProgrammeScopePolicy | None = None,
+    ipv4_resolver: IPv4Resolver | None = None,
+    _provenance_token: object | None = None,
+) -> ExternalCommandPlan:
+    """Build one strict service/version scan over trusted observed open ports."""
+
+    canonical = policy_from_dict(policy.to_dict())
+    if canonical.service_version_detection != SERVICE_VERSION_PERMITTED:
+        raise ValueError("Nmap service/version detection is not explicitly permitted.")
+    if not observed_open_ports or any(
+        isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+        for port in observed_open_ports
+    ):
+        raise ValueError("Strict service/version detection requires observed open TCP ports.")
+    ports = tuple(sorted(set(observed_open_ports)))
+    authorised = _authorised_tcp_ports(canonical)
+    if not set(ports).issubset(authorised):
+        raise ValueError("Observed open ports exceed the engagement-policy TCP authority.")
+    if programme_scope_policy is None:
+        raise ValueError("Strict service/version planning requires programme scope policy.")
+    canonical_scope = _canonical_programme_scope_policy(programme_scope_policy)
+    normalised_target = _normalise_target(target)
+    try:
+        ipaddress.IPv4Address(normalised_target)
+    except ValueError:
+        destination_kind = DESTINATION_HOSTNAME
+    else:
+        destination_kind = DESTINATION_IPV4
+    decision = evaluate_raw_scope_destination(
+        canonical_scope, destination_kind, normalised_target
+    )
+    if decision.outcome != OUTCOME_ALLOWED:
+        raise HTTPProgrammeScopeRefused("initial", decision)
+    selected_target = (
+        select_programme_scope_ipv4_peer(
+            canonical_scope, decision, ipv4_resolver or _system_ipv4_resolver,
+            resolver_port=0,
+        )
+        if destination_kind == DESTINATION_HOSTNAME
+        else normalised_target
+    )
+    reason = _capability_reason(
+        capabilities, "nmap", _NMAP_REQUIRED_OPTIONS | {"-sV"}
+    )
+    if reason:
+        return _unsupported_plan(
+            "nmap", "service_version_detection", COMPONENT_INCOMPATIBLE, reason
+        )
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or not 1 <= timeout_seconds <= 1200
+    ):
+        raise ValueError("Strict service/version timeout must be between 1 and 1200 seconds.")
+    _require_safe_local_path(output_file, label="Strict service/version output path")
+    argv = (
+        "nmap", "-sT", "-sV", "-Pn", "-n", "-p", ",".join(map(str, ports)),
+        "--max-rate", str(MAXIMUM_NMAP_PACKET_RATE),
+        "--max-retries", str(NMAP_MAX_RETRIES), "-oN", str(output_file),
+        selected_target,
+    )
+    _validate_strict_nmap_service_argv(argv, policy=canonical)
+    return ExternalCommandPlan(
+        tool="nmap",
+        purpose="service_version_detection",
+        compatibility_status=COMPONENT_SUPPORTED,
+        redacted_argv=argv,
+        process_timeout_seconds=timeout_seconds,
+        expected_artefacts=(str(output_file),),
+        _private_argv=argv,
+        _provenance_token=_provenance_token,
+    )
+
+
 def build_bug_bounty_external_preflight(
     *,
     policy: EngagementPolicy,
@@ -1191,7 +1362,12 @@ def build_bug_bounty_external_preflight(
         nmap_reason = "TCP discovery is deliberately skipped by policy."
         nmap_required = False
     else:
-        nmap_reason = _capability_reason(nmap_capabilities, "nmap", _NMAP_REQUIRED_OPTIONS)
+        nmap_options = (
+            _NMAP_REQUIRED_OPTIONS | {"-sV"}
+            if canonical.service_version_detection == SERVICE_VERSION_PERMITTED
+            else _NMAP_REQUIRED_OPTIONS
+        )
+        nmap_reason = _capability_reason(nmap_capabilities, "nmap", nmap_options)
         nmap_status = COMPONENT_INCOMPATIBLE if nmap_reason else COMPONENT_SUPPORTED
         nmap_reason = nmap_reason or "Strict TCP port-state discovery controls are available."
         nmap_required = True
@@ -1243,10 +1419,10 @@ def render_external_preflight(preflight: ExternalExecutionPreflight) -> str:
     )
     lines.append(
         "Preflight result: "
-        + ("supported for controlled capture planning" if preflight.ready else "refused")
+        + ("supported for strict project execution" if preflight.ready else "refused")
     )
     lines.append(
-        "Live bug bounty reconnaissance remains blocked pending R0B3 controlled capture acceptance."
+        "Strict Standard and Deep project execution additionally requires programme-scope preflight."
     )
     return "\n".join(lines)
 
@@ -1519,6 +1695,63 @@ def _validate_strict_nmap_argv(
     _require_safe_local_path(Path(argv[argv.index("-oN") + 1]), label="Strict Nmap output path")
 
 
+def _validate_strict_nmap_service_argv(
+    argv: tuple[str, ...], *, policy: EngagementPolicy
+) -> None:
+    prohibited = {
+        "-sC", "--script", "-A", "-O", "--traceroute", "-sU", "-T4",
+        "-T5", "--min-rate", "-p-", "-sS",
+    }
+    if any(value in prohibited or value.startswith("--script=") for value in argv):
+        raise ValueError("Strict service/version Nmap plan contains a prohibited flag.")
+    required = {
+        "nmap", "-sT", "-sV", "-Pn", "-n", "-p", "--max-rate",
+        "--max-retries", "-oN",
+    }
+    if not required.issubset(argv) or len(argv) != 14:
+        raise ValueError("Strict service/version Nmap plan lacks required controls.")
+    if policy.service_version_detection != SERVICE_VERSION_PERMITTED:
+        raise ValueError("Nmap service/version detection is not explicitly permitted.")
+    ports = tuple(int(value) for value in argv[argv.index("-p") + 1].split(","))
+    if (
+        not ports
+        or tuple(sorted(set(ports))) != ports
+        or not set(ports).issubset(_authorised_tcp_ports(policy))
+    ):
+        raise ValueError("Strict service/version ports exceed policy authority.")
+    if int(argv[argv.index("--max-rate") + 1]) > MAXIMUM_NMAP_PACKET_RATE:
+        raise ValueError("Strict service/version Nmap maximum packet rate is too high.")
+    try:
+        canonical_target = str(ipaddress.IPv4Address(argv[-1]))
+    except ValueError:
+        raise ValueError("Strict service/version Nmap target is invalid.") from None
+    if argv[-1] != canonical_target:
+        raise ValueError("Strict service/version Nmap target is invalid.")
+    _require_safe_local_path(
+        Path(argv[argv.index("-oN") + 1]),
+        label="Strict service/version output path",
+    )
+
+
+def _authorised_tcp_ports(policy: EngagementPolicy) -> frozenset[int]:
+    if policy.tcp_discovery_policy == TCP_SKIP:
+        return frozenset()
+    if policy.tcp_discovery_policy == TCP_CONSERVATIVE:
+        return frozenset(BUG_BOUNTY_COMMON_WEB_PORTS)
+    if policy.tcp_discovery_policy == TCP_FULL:
+        return frozenset(range(1, 65536))
+    if policy.custom_tcp_ports is None:
+        return frozenset()
+    ports: set[int] = set()
+    for item in policy.custom_tcp_ports.split(","):
+        if "-" in item:
+            start, end = map(int, item.split("-", 1))
+            ports.update(range(start, end + 1))
+        else:
+            ports.add(int(item))
+    return frozenset(ports)
+
+
 def _validate_bound_curl_plan(
     plan: ExternalCommandPlan,
     configuration: HTTPEnforcementConfiguration,
@@ -1664,6 +1897,34 @@ def _validate_bound_nmap_plan(
         or argv[argv.index("-oN") + 1] != plan.expected_artefacts[0]
     ):
         raise ValueError("Strict Nmap plan metadata is invalid.")
+    _validate_redacted_argv(plan)
+
+
+def _validate_bound_nmap_service_plan(
+    plan: ExternalCommandPlan, *, policy: EngagementPolicy
+) -> None:
+    argv = plan.private_argv
+    _validate_strict_nmap_service_argv(argv, policy=policy)
+    _require_exact_option_counts(
+        argv,
+        {
+            "-sT": 1,
+            "-sV": 1,
+            "-Pn": 1,
+            "-n": 1,
+            "-p": 1,
+            "--max-rate": 1,
+            "--max-retries": 1,
+            "-oN": 1,
+        },
+    )
+    if (
+        argv[argv.index("--max-rate") + 1] != str(MAXIMUM_NMAP_PACKET_RATE)
+        or argv[argv.index("--max-retries") + 1] != str(NMAP_MAX_RETRIES)
+        or len(plan.expected_artefacts) != 1
+        or argv[argv.index("-oN") + 1] != plan.expected_artefacts[0]
+    ):
+        raise ValueError("Strict service/version Nmap plan metadata is invalid.")
     _validate_redacted_argv(plan)
 
 

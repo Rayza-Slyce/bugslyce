@@ -49,6 +49,7 @@ def run_nmap_service_workflow(
     input_dir: Path,
     scope_file: Path,
     runner: LiveNmapServiceRunner | None = None,
+    project_runtime=None,
 ) -> ReconNmapServiceExecutionResult:
     """Run one service/version command against previously discovered open ports."""
 
@@ -59,7 +60,8 @@ def run_nmap_service_workflow(
         raise ValueError(f"Input path is not a directory: {input_dir}")
 
     project_state = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(project_state.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(project_state.engagement_context)
 
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)
@@ -72,6 +74,17 @@ def run_nmap_service_workflow(
     if not ports:
         raise ValueError(f"No open TCP ports were found in {discovery_path.name}.")
     target = validate_explicit_nmap_target_scope(target, scope_file)
+    if project_runtime is not None:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "nmap_service",
+        )
 
     command = build_live_nmap_service_scan_command(target, ports, input_dir)
     command_result = (runner or LiveNmapServiceRunner(input_dir)).run(command)

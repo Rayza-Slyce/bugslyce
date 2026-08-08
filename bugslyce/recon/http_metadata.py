@@ -49,6 +49,7 @@ def run_http_metadata_workflow(
     input_dir: Path,
     scope_file: Path,
     runner: LiveHTTPMetadataRunner | None = None,
+    project_runtime=None,
 ) -> ReconHTTPMetadataExecutionResult:
     """Collect headers, robots.txt, and homepage HTML from discovered services."""
 
@@ -61,9 +62,21 @@ def run_http_metadata_workflow(
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)
     initial_state = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
     target = _resolve_target(manifest, initial_state)
     target = validate_explicit_nmap_target_scope(target, scope_file)
+    if project_runtime is not None:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "curl",
+        )
     all_origins = discover_http_origins(
         initial_state,
         target,

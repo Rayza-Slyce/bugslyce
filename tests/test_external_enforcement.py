@@ -17,6 +17,8 @@ from bugslyce.core.engagement_policy import (
     IDENTIFICATION_HEADERS_AND_USER_AGENT,
     IDENTIFICATION_NONE,
     NOT_YET_CONFIRMED,
+    SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_PERMITTED,
     TCP_CONSERVATIVE,
     TCP_CUSTOM,
     TCP_FULL,
@@ -47,6 +49,7 @@ from bugslyce.recon.external_enforcement import (
     build_bug_bounty_external_preflight,
     build_bug_bounty_gobuster_plan,
     build_bug_bounty_nmap_plan,
+    build_bug_bounty_nmap_service_plan,
     gobuster_delay_for_rate,
     render_external_preflight,
     resolve_bug_bounty_curl_redirect,
@@ -119,7 +122,7 @@ Flags:
       --follow-redirect (default false)
             Follow redirects
 """
-NMAP_HELP = "-sT -Pn -n -p --max-rate --max-retries -oN"
+NMAP_HELP = "-sT -sV -Pn -n -p --max-rate --max-retries -oN"
 COMPACT_NMAP_HELP = """
 -sS/sT/sA/sW/sM: TCP scan techniques
 -Pn: Treat all hosts as online
@@ -1954,6 +1957,37 @@ def test_nmap_policy_modes_build_strict_tcp_only_plan(
     assert plan.expected_artefacts == (str(tmp_path / "nmap-allports.txt"),)
 
 
+def test_strict_service_version_plan_requires_permission_and_observed_ports(
+    tmp_path: Path,
+) -> None:
+    kwargs = {
+        "target": "example.test",
+        "observed_open_ports": (80, 443),
+        "output_file": tmp_path / "nmap-services-all.txt",
+        "capabilities": _capabilities("nmap"),
+        "programme_scope_policy": _programme_policy(),
+        "ipv4_resolver": lambda _hostname, _port: ("192.0.2.10",),
+    }
+    with pytest.raises(ValueError, match="service/version"):
+        build_bug_bounty_nmap_service_plan(
+            policy=_policy(service_version_detection=SERVICE_VERSION_NOT_PERMITTED),
+            **kwargs,
+        )
+
+    plan = build_bug_bounty_nmap_service_plan(
+        policy=_policy(service_version_detection=SERVICE_VERSION_PERMITTED),
+        **kwargs,
+    )
+
+    assert plan.purpose == "service_version_detection"
+    assert plan.private_argv == (
+        "nmap", "-sT", "-sV", "-Pn", "-n", "-p", "80,443", "--max-rate",
+        str(MAXIMUM_NMAP_PACKET_RATE), "--max-retries", "2", "-oN",
+        str(tmp_path / "nmap-services-all.txt"), "192.0.2.10",
+    )
+    assert not {"-sC", "--script", "-A", "-O", "-sU", "-T4", "-T5", "--min-rate", "-p-"} & set(plan.private_argv)
+
+
 def test_nmap_skip_requires_no_executable_or_process(tmp_path: Path) -> None:
     plan = build_bug_bounty_nmap_plan(
         target="example.test",
@@ -2028,7 +2062,7 @@ def test_complete_preflight_is_deterministic_and_secret_safe() -> None:
         "Proxy routing is not enabled unless explicitly supported and configured "
         "by BugSlyce."
     ) in rendered
-    assert "R0B3 controlled capture" in rendered
+    assert "Strict Standard and Deep project execution" in rendered
 
 
 def test_optional_gobuster_omission_does_not_fail_preflight() -> None:
@@ -2296,15 +2330,18 @@ def test_external_source_audit_keeps_strict_builders_central_and_shell_free() ->
     assert "shell=True" not in strict_source
     assert '"--location"' in strict_source  # rejected by strict argv validation
     assert '"-L"' in strict_source  # rejected by strict argv validation
-    assert strict_source.count('"--min-rate"') == 1  # prohibited audit set only
-    assert "r0b2_bug_bounty_live_refusal_message" in pipeline_source
+    assert strict_source.count('"--min-rate"') == 2  # prohibited in both strict Nmap purposes
+    assert "build_bug_bounty_project_runtime" in pipeline_source
     assert "enforce_r0b2_bug_bounty_live_block(engagement_context)" in cli_source
 
     # Policy-aware external execution must enter through the bound session
     # runtime.  The generic authorised-lab subprocess runners are separately
     # blocked for bug bounty contexts until R0B3.
     for path in root.rglob("*.py"):
-        if path == root / "recon" / "external_enforcement.py":
+        if path in {
+            root / "recon" / "external_enforcement.py",
+            root / "recon" / "project_runtime.py",
+        }:
             continue
         source = path.read_text(encoding="utf-8")
         assert "run_bug_bounty_curl(" not in source, path
@@ -2322,13 +2359,13 @@ def test_non_bug_bounty_contexts_keep_existing_live_policy(
     enforce_r0b2_bug_bounty_live_block(engagement_context)
 
 
-def test_central_bug_bounty_block_names_r0b3_and_is_redacted() -> None:
-    with pytest.raises(ValueError, match="R0B3") as caught:
+def test_direct_bug_bounty_block_is_truthful_and_redacted() -> None:
+    with pytest.raises(ValueError, match="direct or modular") as caught:
         enforce_r0b2_bug_bounty_live_block("bug_bounty", _policy())
 
     assert HEADER_SECRET not in str(caught.value)
     assert USER_AGENT_SECRET not in str(caught.value)
-    assert "controlled capture acceptance" in str(caught.value)
+    assert "policy-aware Standard or Deep project pipeline" in str(caught.value)
 
 
 def test_scoped_nmap_hostname_selects_lowest_authorised_ipv4(
@@ -2787,6 +2824,90 @@ def test_registered_scoped_nmap_shape_tampering_is_refused_before_launch(
         BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
 
     assert process.calls == []
+
+
+@pytest.mark.parametrize(
+    "prohibited",
+    (
+        "-sC",
+        "--script",
+        "--script=safe",
+        "-A",
+        "-O",
+        "--traceroute",
+        "-sU",
+        "-T4",
+        "-T5",
+        "--min-rate",
+        "-p-",
+    ),
+)
+def test_registered_service_version_plan_rejects_shape_tampering_before_launch(
+    tmp_path: Path,
+    prohibited: str,
+) -> None:
+    session = _session(
+        _FakeTime(),
+        policy=_policy(service_version_detection=SERVICE_VERSION_PERMITTED),
+    )
+    discovery = tmp_path / "nmap-allports.txt"
+    discovery.write_text(
+        "Nmap scan report for example.test (192.0.2.10)\n"
+        "PORT    STATE SERVICE\n"
+        "80/tcp  open  http\n"
+        "443/tcp open  https\n",
+        encoding="utf-8",
+    )
+    session._restore_nmap_discovery_evidence(discovery, "192.0.2.10")
+    plan = session.build_nmap_service_plan(
+        target="example.test",
+        output_file=tmp_path / "nmap-services-all.txt",
+    )
+    object.__setattr__(plan, "_private_argv", (*plan.private_argv, prohibited))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+
+
+def test_unregistered_service_version_plan_cannot_execute(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(service_version_detection=SERVICE_VERSION_PERMITTED)
+    plan = build_bug_bounty_nmap_service_plan(
+        target="example.test",
+        observed_open_ports=(80, 443),
+        output_file=tmp_path / "nmap-services-all.txt",
+        policy=policy,
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+    session = _session(_FakeTime(), policy=policy)
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="not the registered session plan"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+
+
+def test_session_refuses_caller_supplied_service_port_authority(
+    tmp_path: Path,
+) -> None:
+    session = _session(
+        _FakeTime(),
+        policy=_policy(service_version_detection=SERVICE_VERSION_PERMITTED),
+    )
+
+    with pytest.raises(ValueError, match="session-bound discovery evidence"):
+        session.build_nmap_service_plan(
+            target="example.test",
+            observed_open_ports=(80, 443),
+            output_file=tmp_path / "nmap-services-all.txt",
+        )
 
 
 def test_scoped_gobuster_exact_hostname_authority_passes_dns_preflight(
@@ -3624,7 +3745,7 @@ def test_modular_nmap_service_workflow_refuses_before_runner(tmp_path: Path) -> 
     )
     runner = _ProcessRunner()
 
-    with pytest.raises(ValueError, match="R0B3"):
+    with pytest.raises(ValueError, match="direct or modular"):
         run_nmap_service_workflow(
             input_dir,
             tmp_path / "unused-scope.md",
@@ -3639,6 +3760,7 @@ def _policy(
     tcp_mode: str = TCP_CONSERVATIVE,
     custom_ports: str | None = None,
     tcp_confirmed: str = CONFIRMED,
+    service_version_detection: str = SERVICE_VERSION_NOT_PERMITTED,
 ):
     return build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
@@ -3648,6 +3770,7 @@ def _policy(
         tcp_discovery_policy=tcp_mode,
         custom_tcp_ports=custom_ports,
         tcp_policy_confirmed=tcp_confirmed,
+        service_version_detection=service_version_detection,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
         identification_headers=(
             IdentificationHeader("X-Researcher-ID", HEADER_SECRET),

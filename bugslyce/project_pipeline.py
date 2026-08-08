@@ -10,7 +10,7 @@ import textwrap
 from typing import Callable
 
 from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
-from bugslyce.core.engagement_policy import r0b2_bug_bounty_live_refusal_message
+from bugslyce.core.engagement_policy import READINESS_FUTURE_ENFORCEMENT
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import DoctorReport, build_doctor_report, mode_readiness_failures
@@ -19,6 +19,10 @@ from bugslyce.project_session import (
     load_project_engagement_policy,
     load_project,
     write_project_runbook,
+)
+from bugslyce.recon.project_runtime import (
+    BugBountyProjectRuntime,
+    build_bug_bounty_project_runtime,
 )
 from bugslyce.recon.body_fetch import (
     BodyFetchExecutionIncomplete,
@@ -259,6 +263,10 @@ class PipelineStep:
     output_paths: list[str] | None = None
 
 
+class ServiceVersionNoWork(ValueError):
+    """Signal a policy-approved service/version no-op without producing traffic."""
+
+
 @dataclass(frozen=True)
 class PipelineCompletionSummary:
     """Structured report models retained only for terminal completion output."""
@@ -380,24 +388,20 @@ class ResumeAssessment:
     preserve_canonical_pipeline_metadata: bool = False
 
 
-def enforce_project_execution_policy(project: object) -> None:
-    """Refuse bug bounty live execution until R0B3 capture acceptance passes."""
+def enforce_project_execution_policy(
+    project: object,
+    profile: str | None = None,
+) -> BugBountyProjectRuntime | None:
+    """Build the strict runtime for supported bug-bounty project profiles."""
 
     if getattr(project, "engagement_context", None) != BUG_BOUNTY_CONTEXT:
-        return
-    policy = None
-    load_error: str | None = None
-    try:
-        policy = load_project_engagement_policy(project)
-    except ValueError as exc:
-        load_error = str(exc)
-    raise ValueError(
-        r0b2_bug_bounty_live_refusal_message(
-            policy,
-            policy_error=load_error,
-            policy_assessed=True,
+        return None
+    if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
+        raise ValueError(
+            "Bug-bounty live execution is supported only through the policy-aware "
+            "Standard and Deep project pipeline."
         )
-    )
+    return build_bug_bounty_project_runtime(project, profile)
 
 
 def run_project_pipeline(
@@ -418,7 +422,7 @@ def run_project_pipeline(
 
     project_file = project_file.expanduser().resolve()
     project = load_project(project_file)
-    enforce_project_execution_policy(project)
+    project_runtime = enforce_project_execution_policy(project, profile)
     output_dir = Path(project.output_dir).expanduser().resolve()
     scope_file = Path(project.scope_file).expanduser().resolve()
     content_profile = _content_discovery_profile_for_pipeline(profile)
@@ -509,6 +513,7 @@ def run_project_pipeline(
         "resume": resume,
         "profile": profile,
         "deep_outputs": DeepPipelineOutputs(),
+        "project_runtime": project_runtime,
     }
     total_steps = len(result.steps)
     content_step_position = next(
@@ -544,7 +549,12 @@ def run_project_pipeline(
         _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
         try:
             message, output_paths, updates = step_runners[step.step_id]()
-        except (PathFollowupNoWork, ContentFollowupNoWork, BodyFetchNoWork) as outcome:
+        except (
+            ServiceVersionNoWork,
+            PathFollowupNoWork,
+            ContentFollowupNoWork,
+            BodyFetchNoWork,
+        ) as outcome:
             completed_step = replace(
                 started_step,
                 status="noop",
@@ -1109,7 +1119,7 @@ def _assess_resume_state(
         "PIPELINE-STEP-002": "nmap-allports.txt" in artifact_names,
         "PIPELINE-STEP-003": any(
             name.startswith("nmap-services") for name in artifact_names
-        ),
+        ) or prior_statuses.get("PIPELINE-STEP-003") == "noop",
         "PIPELINE-STEP-004": any(
             name.startswith(("homepage-", "robots-", "curl-headers-"))
             and not name.startswith(
@@ -1518,6 +1528,7 @@ def _step_runners(
     project_file = context["project_file"]
     resume = context["resume"]
     profile = context["profile"]
+    project_runtime = context.get("project_runtime")
     assert isinstance(output_dir, Path)
     assert isinstance(scope_file, Path)
     assert isinstance(plan_dir, Path)
@@ -1527,27 +1538,58 @@ def _step_runners(
     assert isinstance(project_file, Path)
     assert isinstance(resume, bool)
     assert isinstance(profile, str)
+    if project_runtime is not None and not isinstance(project_runtime, BugBountyProjectRuntime):
+        raise ValueError("Project runtime is invalid.")
 
     def validation():
         state = "resume provenance" if resume else "fresh output"
         return f"Local readiness, {state}, and exact scope checks passed.", [], {}
 
     def nmap_discover():
-        result = run_nmap_discovery_workflow(
-            target=target,
-            scope_file=scope_file,
-            output_dir=output_dir,
-            profile_name="lab-tcp-full",
+        result = (
+            run_nmap_discovery_workflow(
+                target=target,
+                scope_file=scope_file,
+                output_dir=output_dir,
+                profile_name="lab-tcp-full",
+                runner=project_runtime.nmap_discovery_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_nmap_discovery_workflow(
+                target=target,
+                scope_file=scope_file,
+                output_dir=output_dir,
+                profile_name="lab-tcp-full",
+            )
         )
         metadata = write_nmap_discovery_execution_result(result, output_dir)
         return (
-            "One approved lab-tcp-full discovery completed.",
+            (
+                "Strict policy-authorised TCP discovery completed."
+                if project_runtime
+                else "One approved lab-tcp-full discovery completed."
+            ),
             [result.nmap_output_path, *(str(path) for path in metadata)],
             {"report_path": result.report_path},
         )
 
     def nmap_services():
-        result = run_nmap_service_workflow(output_dir, scope_file)
+        if project_runtime is not None and not project_runtime.service_version_permitted:
+            raise ServiceVersionNoWork(
+                "Nmap service/version enrichment was intentionally skipped because "
+                "the engagement policy does not permit it."
+            )
+        result = (
+            run_nmap_service_workflow(
+                output_dir,
+                scope_file,
+                runner=project_runtime.nmap_service_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_nmap_service_workflow(output_dir, scope_file)
+        )
         metadata = write_nmap_service_execution_result(result, output_dir)
         return (
             "Service/version detection completed on discovered open TCP ports.",
@@ -1556,7 +1598,20 @@ def _step_runners(
         )
 
     def http_metadata():
-        result = run_http_metadata_workflow(output_dir, scope_file)
+        if project_runtime is not None:
+            state = build_project_state(output_dir)
+            from bugslyce.recon.http_metadata import discover_http_origins
+            project_runtime.bind_http_origins(tuple(discover_http_origins(state, target)))
+        result = (
+            run_http_metadata_workflow(
+                output_dir,
+                scope_file,
+                runner=project_runtime.curl_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_http_metadata_workflow(output_dir, scope_file)
+        )
         metadata = write_http_metadata_execution_result(result, output_dir)
         return (
             "HTTP metadata collection completed for discovered services.",
@@ -1565,7 +1620,16 @@ def _step_runners(
         )
 
     def path_followup():
-        result = run_path_followup_workflow(output_dir, scope_file)
+        result = (
+            run_path_followup_workflow(
+                output_dir,
+                scope_file,
+                runner=project_runtime.curl_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_path_followup_workflow(output_dir, scope_file)
+        )
         metadata = write_path_followup_execution_result(result, output_dir)
         return (
             "Evidence-derived same-origin path follow-up completed.",
@@ -1589,10 +1653,21 @@ def _step_runners(
         )
 
     def content_run():
-        result = run_content_discovery_workflow(
-            plan_path,
-            scope_file,
-            comparator_progress_callback=comparator_progress_callback,
+        result = (
+            run_content_discovery_workflow(
+                plan_path,
+                scope_file,
+                comparator_progress_callback=comparator_progress_callback,
+                runner=project_runtime.gobuster_runner(),
+                http_executor=project_runtime.http_executor,
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_content_discovery_workflow(
+                plan_path,
+                scope_file,
+                comparator_progress_callback=comparator_progress_callback,
+            )
         )
         metadata = write_content_discovery_execution_result(result, plan_dir)
         result_profile = getattr(result, "profile", _content_discovery_profile_for_pipeline(profile))
@@ -1603,7 +1678,16 @@ def _step_runners(
         )
 
     def content_followup():
-        result = run_content_followup_workflow(output_dir, scope_file)
+        result = (
+            run_content_followup_workflow(
+                output_dir,
+                scope_file,
+                runner=project_runtime.curl_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_content_followup_workflow(output_dir, scope_file)
+        )
         metadata = write_content_followup_execution_result(result, output_dir)
         return (
             "Content-discovery result follow-up completed.",
@@ -1612,7 +1696,16 @@ def _step_runners(
         )
 
     def body_fetch():
-        result = run_body_fetch_workflow(output_dir, scope_file)
+        result = (
+            run_body_fetch_workflow(
+                output_dir,
+                scope_file,
+                runner=project_runtime.curl_runner(),
+                project_runtime=project_runtime,
+            )
+            if project_runtime
+            else run_body_fetch_workflow(output_dir, scope_file)
+        )
         metadata = write_body_fetch_execution_result(result, output_dir)
         failed_transfers = getattr(result, "failed_transfers", 0)
         partial_bodies_retained = getattr(result, "partial_bodies_retained", 0)
@@ -1630,8 +1723,19 @@ def _step_runners(
         )
     def deep_collection():
         project_state = build_project_state(output_dir)
-        plan = build_deep_collection_request_plan_from_project_state(project_state)
-        fetcher = build_deep_http_fetcher()
+        plan = (
+            build_deep_collection_request_plan_from_project_state(
+                project_state,
+                programme_scope_policy=project_runtime.programme_scope_policy,
+            )
+            if project_runtime
+            else build_deep_collection_request_plan_from_project_state(project_state)
+        )
+        fetcher = (
+            build_deep_http_fetcher(executor=project_runtime.http_executor)
+            if project_runtime
+            else build_deep_http_fetcher()
+        )
         source_collection = collect_deep_source_routes_from_plan(
             plan,
             fetcher=fetcher,
@@ -1651,9 +1755,14 @@ def _step_runners(
         )
         html_routes = build_deep_html_route_extraction(source_collection)
         javascript_routes = build_deep_javascript_route_extraction(source_collection)
-        followup_plan = build_deep_shallow_route_followup_plan(
-            html_routes,
-            javascript_routes,
+        followup_plan = (
+            build_deep_shallow_route_followup_plan(
+                html_routes,
+                javascript_routes,
+                programme_scope_policy=project_runtime.programme_scope_policy,
+            )
+            if project_runtime
+            else build_deep_shallow_route_followup_plan(html_routes, javascript_routes)
         )
         shallow_followups = collect_deep_shallow_route_followups(
             followup_plan,

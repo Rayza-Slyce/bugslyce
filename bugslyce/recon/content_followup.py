@@ -129,6 +129,7 @@ def run_content_followup_workflow(
     input_dir: Path,
     scope_file: Path,
     runner: LiveContentFollowupRunner | None = None,
+    project_runtime=None,
 ) -> ReconContentFollowupExecutionResult:
     """Run bounded HEAD checks for selected content-discovery results."""
 
@@ -146,7 +147,19 @@ def run_content_followup_workflow(
     target = validate_explicit_nmap_target_scope(target_value.strip().lower(), scope_file)
 
     initial_state = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+    else:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "curl",
+        )
     considered, selected_urls = select_content_followup_urls(
         initial_state,
         target,

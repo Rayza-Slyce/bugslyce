@@ -621,6 +621,15 @@ def inspect_project_status(
     output_dir = Path(project.output_dir)
     manifest_path = output_dir / "recon_manifest.json"
     if not manifest_path.is_file():
+        next_action = (
+            "No recon pack exists yet. Use `bugslyce project next` to review the "
+            "strict Standard/Deep engagement-policy and programme-scope preflight."
+            if project.engagement_context == BUG_BOUNTY_CONTEXT
+            else (
+                "No recon pack exists yet. Recommended first safe action: create a "
+                "scoped recon plan or run an existing narrowly scoped discovery command."
+            )
+        )
         return ProjectStatusResult(
             project=project,
             project_file=str(project_file),
@@ -628,10 +637,7 @@ def inspect_project_status(
             recon_status=None,
             status_json_path=None,
             status_markdown_path=None,
-            next_action=(
-                "No recon pack exists yet. Recommended first safe action: create a "
-                "scoped recon plan or run an existing narrowly scoped discovery command."
-            ),
+            next_action=next_action,
         )
 
     status = build_recon_status(output_dir, Path(project.scope_file))
@@ -646,7 +652,12 @@ def inspect_project_status(
         recon_status=status,
         status_json_path=str(json_path) if json_path is not None else None,
         status_markdown_path=str(markdown_path) if markdown_path is not None else None,
-        next_action=status.next_actions[0],
+        next_action=(
+            "Use `bugslyce project next` for strict Standard/Deep pipeline or offline "
+            "review guidance; direct modular bug-bounty live commands remain blocked."
+            if project.engagement_context == BUG_BOUNTY_CONTEXT
+            else status.next_actions[0]
+        ),
     )
 
 
@@ -659,6 +670,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
     scope_file = Path(project.scope_file)
     if project.engagement_context == BUG_BOUNTY_CONTEXT:
         policy_status = "Engagement policy is missing."
+        policy_ready = False
         try:
             policy = load_project_engagement_policy(project)
         except ValueError as exc:
@@ -666,25 +678,29 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
         else:
             if policy is not None:
                 assessment = assess_engagement_policy(policy)
+                policy_ready = not assessment.not_ready_reasons
                 policy_status = (
-                    "Engagement policy is complete for future enforcement."
-                    if not assessment.not_ready_reasons
+                    "Engagement policy is ready for strict enforcement."
+                    if policy_ready
                     else "Engagement policy is incomplete."
                 )
+        scope_status = "Programme scope is missing."
+        scope_ready = False
+        try:
+            programme_scope = load_project_programme_scope_policy(project)
+        except ValueError as exc:
+            scope_status = f"Programme scope unavailable: {exc}"
+        else:
+            if programme_scope is not None:
+                scope_ready = True
+                scope_status = "Programme scope is configured for strict evaluation."
         optional_actions = _bug_bounty_offline_actions(
             project,
             project_file=project_file,
             output_dir=output_dir,
         )
-        return ProjectNextResult(
-            project=project,
-            project_file=str(project_file),
-            recon_pack_exists=(output_dir / "recon_manifest.json").is_file(),
-            status_summary=(
-                f"{policy_status} Live bug bounty reconnaissance remains blocked "
-                "pending R0B3 controlled capture acceptance."
-            ),
-            recommended_action=GuidedProjectAction(
+        if not policy_ready:
+            recommended = GuidedProjectAction(
                 id="configure-engagement-policy",
                 title="Review or configure the private save-only engagement policy.",
                 command_preview=_format_command(
@@ -697,7 +713,52 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                         "--configure",
                     ]
                 ),
+            )
+        elif not scope_ready:
+            recommended = GuidedProjectAction(
+                id="configure-programme-scope",
+                title="Configure private default-deny programme scope.",
+                command_preview=_format_command(
+                    [
+                        "bugslyce",
+                        "project",
+                        "programme-scope",
+                        "configure",
+                        "--project",
+                        str(project_file),
+                    ]
+                ),
+            )
+        else:
+            recommended = GuidedProjectAction(
+                id="run-standard-project-pipeline",
+                title=(
+                    "Run Standard through strict policy, scope, target and local-tool "
+                    "preflight."
+                ),
+                command_preview=_format_command(
+                    [
+                        "bugslyce",
+                        "project",
+                        "run",
+                        "--project",
+                        str(project_file),
+                        "--profile",
+                        "standard-bounded",
+                        "--confirm",
+                    ]
+                ),
+            )
+        return ProjectNextResult(
+            project=project,
+            project_file=str(project_file),
+            recon_pack_exists=(output_dir / "recon_manifest.json").is_file(),
+            status_summary=(
+                f"{policy_status} {scope_status} Standard and Deep require strict "
+                "target and local-tool preflight before live execution; explicit "
+                "programme exclusions override inclusions."
             ),
+            recommended_action=recommended,
             optional_actions=optional_actions,
         )
     manifest_path = output_dir / "recon_manifest.json"

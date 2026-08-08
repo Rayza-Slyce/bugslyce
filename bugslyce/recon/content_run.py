@@ -460,6 +460,7 @@ def run_content_discovery_workflow(
     comparator_monotonic: Callable[[], float] = time.monotonic,
     comparator_progress_callback: Callable[[str], None] | None = None,
     comparator_progress_interval_seconds: float = COMPARATOR_PROGRESS_INTERVAL_SECONDS,
+    project_runtime=None,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
 
@@ -471,7 +472,20 @@ def run_content_discovery_workflow(
     selected_steps = _select_steps(plan, step_id)
 
     state_before = build_project_state(input_dir)
-    enforce_r0b2_bug_bounty_live_block(state_before.engagement_context)
+    if project_runtime is None:
+        enforce_r0b2_bug_bounty_live_block(state_before.engagement_context)
+    else:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            input_dir,
+            scope_file,
+            target,
+            runner,
+            "gobuster",
+            http_executor=http_executor,
+        )
     if (
         state_before.recon_manifest is None
         or state_before.recon_manifest.target.strip().lower() != target

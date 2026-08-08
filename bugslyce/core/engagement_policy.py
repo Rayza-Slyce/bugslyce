@@ -21,7 +21,8 @@ from bugslyce.time_utils import Clock, format_utc_iso, utc_now_iso
 
 
 ENGAGEMENT_POLICY_FILENAME = "engagement_policy.json"
-ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.0"
+ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.1"
+LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.0"
 CONSERVATIVE_HTTP_RATE = Decimal("2")
 CONSERVATIVE_HTTP_CONCURRENCY = 1
 
@@ -31,6 +32,9 @@ NOT_YET_CONFIRMED = "not_yet_confirmed"
 
 AUTOMATION_PERMITTED = "explicitly_permitted"
 AUTOMATION_NOT_PERMITTED = "not_permitted"
+
+SERVICE_VERSION_PERMITTED = "explicitly_permitted"
+SERVICE_VERSION_NOT_PERMITTED = "not_permitted"
 
 RATE_SOURCE_CONSERVATIVE = "bugslyce_conservative_default"
 RATE_SOURCE_PROGRAMME = "programme_published_limit"
@@ -68,6 +72,11 @@ _CONFIRMATION_STATES = {CONFIRMED, NOT_CONFIRMED, NOT_YET_CONFIRMED}
 _AUTOMATION_STATES = {
     AUTOMATION_PERMITTED,
     AUTOMATION_NOT_PERMITTED,
+    NOT_YET_CONFIRMED,
+}
+_SERVICE_VERSION_STATES = {
+    SERVICE_VERSION_PERMITTED,
+    SERVICE_VERSION_NOT_PERMITTED,
     NOT_YET_CONFIRMED,
 }
 _RATE_SOURCES = {RATE_SOURCE_CONSERVATIVE, RATE_SOURCE_PROGRAMME}
@@ -137,6 +146,7 @@ class EngagementPolicy:
     tcp_discovery_policy: str
     custom_tcp_ports: str | None
     tcp_policy_confirmed: str
+    service_version_detection: str
     identification_requirement: str
     identification_headers: tuple[IdentificationHeader, ...] = field(
         default_factory=tuple,
@@ -166,6 +176,7 @@ class EngagementPolicy:
             "programme_rate_confirmed": self.programme_rate_confirmed,
             "programme_rules_reviewed": self.programme_rules_reviewed,
             "schema_version": self.schema_version,
+            "service_version_detection": self.service_version_detection,
             "tcp_discovery_policy": self.tcp_discovery_policy,
             "tcp_policy_confirmed": self.tcp_policy_confirmed,
             "updated_at": self.updated_at,
@@ -343,6 +354,7 @@ def build_bug_bounty_policy(
     tcp_discovery_policy: str = TCP_CONSERVATIVE,
     custom_tcp_ports: str | None = None,
     tcp_policy_confirmed: str = NOT_YET_CONFIRMED,
+    service_version_detection: str = SERVICE_VERSION_NOT_PERMITTED,
     identification_requirement: str = IDENTIFICATION_UNKNOWN,
     identification_headers: tuple[IdentificationHeader, ...] = (),
     custom_user_agent: str | None = None,
@@ -377,6 +389,11 @@ def build_bug_bounty_policy(
         tcp_policy_confirmed,
         _CONFIRMATION_STATES,
         "TCP-policy confirmation",
+    )
+    _require_choice(
+        service_version_detection,
+        _SERVICE_VERSION_STATES,
+        "Service/version-detection permission",
     )
     _require_choice(
         identification_requirement,
@@ -415,6 +432,7 @@ def build_bug_bounty_policy(
         tcp_discovery_policy=tcp_discovery_policy,
         custom_tcp_ports=ports,
         tcp_policy_confirmed=tcp_policy_confirmed,
+        service_version_detection=service_version_detection,
         identification_requirement=identification_requirement,
         identification_headers=headers,
         custom_user_agent=user_agent,
@@ -438,6 +456,7 @@ def assess_engagement_policy(
             tcp_discovery_policy=policy.tcp_discovery_policy,
             custom_tcp_ports=policy.custom_tcp_ports,
             tcp_policy_confirmed=policy.tcp_policy_confirmed,
+            service_version_detection=policy.service_version_detection,
             identification_requirement=policy.identification_requirement,
             headers=policy.identification_headers,
             user_agent=policy.custom_user_agent,
@@ -477,15 +496,21 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
         "programme_rate_confirmed",
         "programme_rules_reviewed",
         "schema_version",
+        "service_version_detection",
         "tcp_discovery_policy",
         "tcp_policy_confirmed",
         "updated_at",
     }
     actual_fields = set(payload)
-    if actual_fields != expected_fields:
-        raise ValueError("Engagement policy fields do not match the canonical schema.")
+    legacy_fields = expected_fields - {"service_version_detection"}
     schema_version = payload.get("schema_version")
-    if schema_version != ENGAGEMENT_POLICY_SCHEMA_VERSION:
+    legacy = schema_version == LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION
+    if actual_fields != (legacy_fields if legacy else expected_fields):
+        raise ValueError("Engagement policy fields do not match the canonical schema.")
+    if schema_version not in {
+        ENGAGEMENT_POLICY_SCHEMA_VERSION,
+        LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION,
+    }:
         raise ValueError("Engagement policy schema version is unsupported.")
     headers_payload = payload.get("identification_headers")
     if not isinstance(headers_payload, list):
@@ -540,6 +565,11 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
         tcp_discovery_policy=payload["tcp_discovery_policy"],
         custom_tcp_ports=custom_ports,
         tcp_policy_confirmed=payload["tcp_policy_confirmed"],
+        service_version_detection=(
+            NOT_YET_CONFIRMED
+            if legacy
+            else payload["service_version_detection"]
+        ),
         identification_requirement=payload["identification_requirement"],
         identification_headers=tuple(headers),
         custom_user_agent=custom_user_agent,
@@ -653,6 +683,7 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
         f"Rate source: {_label(policy.http_rate_source)}",
         f"Maximum HTTP concurrency: {policy.maximum_http_concurrency}",
         f"TCP discovery: {_label(policy.tcp_discovery_policy)}",
+        f"Nmap service/version detection: {_label(policy.service_version_detection)}",
         f"Identification requirement: {_label(policy.identification_requirement)}",
     ]
     if policy.custom_tcp_ports:
@@ -677,10 +708,10 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
     lines.extend(
         (
             "Internal Python HTTP enforcement: available.",
-            "External-tool enforcement foundation: available in R0B2.",
+            "Strict external-tool enforcement: available.",
             (
-                "Controlled capture acceptance has not yet passed. Live bug bounty "
-                "project reconnaissance remains blocked pending R0B3."
+                "Standard and Deep bug-bounty project execution is conditional on "
+                "strict engagement-policy and default-deny programme-scope preflight."
             ),
         )
     )
@@ -699,7 +730,7 @@ def enforce_r0b2_bug_bounty_live_block(
     engagement_context: str,
     policy: EngagementPolicy | None = None,
 ) -> None:
-    """Refuse target traffic until R0B3 controlled capture acceptance passes."""
+    """Refuse unsupported direct or modular bug-bounty live traffic."""
 
     if engagement_context != BUG_BOUNTY_CONTEXT:
         return
@@ -712,7 +743,7 @@ def r0b2_bug_bounty_live_refusal_message(
     policy_error: str | None = None,
     policy_assessed: bool = False,
 ) -> str:
-    """Return the central redacted R0B2 live-refusal message."""
+    """Return the redacted unsupported-entry-point refusal message."""
 
     reasons = (
         bug_bounty_live_refusal_reasons(policy)
@@ -725,11 +756,10 @@ def r0b2_bug_bounty_live_refusal_message(
     if reasons:
         reason_text = " Policy issues: " + " ".join(reasons)
     return (
-        "Live bug bounty reconnaissance remains blocked in R0B2. Internal Python "
-        "HTTP and external curl, Gobuster and Nmap enforcement foundations exist, "
-        "but controlled capture acceptance has not yet passed. Use offline policy, "
-        "planning, status, analysis, reporting or export commands; R0B3 is required "
-        "before live bug bounty execution."
+        "This direct or modular entry point is unsupported for live bug-bounty "
+        "reconnaissance. Use the policy-aware Standard or Deep project pipeline, "
+        "which requires a ready engagement policy and authorised default-deny "
+        "programme scope."
         + reason_text
     )
 
@@ -766,6 +796,7 @@ def _readiness_reasons(
     tcp_discovery_policy: str,
     custom_tcp_ports: str | None,
     tcp_policy_confirmed: str,
+    service_version_detection: str,
     identification_requirement: str,
     headers: tuple[IdentificationHeader, ...],
     user_agent: str | None,
@@ -792,6 +823,8 @@ def _readiness_reasons(
         reasons.append("Custom TCP ports require the programme-approved custom policy.")
     if tcp_discovery_policy == TCP_FULL and tcp_policy_confirmed != CONFIRMED:
         reasons.append("Full TCP discovery permission is not confirmed.")
+    if service_version_detection == NOT_YET_CONFIRMED:
+        reasons.append("Nmap service/version-detection permission is not yet confirmed.")
     needs_headers = identification_requirement in {
         IDENTIFICATION_HEADERS,
         IDENTIFICATION_HEADERS_AND_USER_AGENT,

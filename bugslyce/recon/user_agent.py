@@ -9,9 +9,8 @@ R0B2_POLICY_AWARE_EXTERNAL_BOUNDARIES = (
     "bugslyce.recon.external_enforcement.build_bug_bounty_nmap_plan",
 )
 
-# Existing context-neutral live runners remain authorised-lab interfaces. They
-# are not reachable from a bug bounty project pipeline while the R0B3 block is
-# active and must not be mistaken for policy-aware command boundaries.
+# Existing context-neutral live runners remain authorised-lab interfaces and
+# must not be mistaken for policy-aware project-pipeline command boundaries.
 R0B3_BLOCKED_LEGACY_LIVE_RUNNERS = (
     "bugslyce.recon.runner.LiveCurlHeaderRunner",
     "bugslyce.recon.runner.LiveHTTPMetadataRunner",

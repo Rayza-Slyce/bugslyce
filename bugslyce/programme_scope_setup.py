@@ -63,7 +63,10 @@ def show_project_programme_scope(
         policy = load_project_programme_scope_policy(project)
         if policy is None:
             print_func("Programme scope is not configured.")
-            print_func("Live bug-bounty execution remains blocked.")
+            print_func(
+                "Standard and Deep project execution remains unavailable until "
+                "programme scope is configured and strict preflight succeeds."
+            )
             return 0
         print_func(render_programme_scope_local_summary(project, policy))
         return 0
@@ -129,8 +132,11 @@ def _render_initial_screen(
     print_func(f"Engagement context: {project.engagement_context}")
     print_func(f"Programme scope configured: {'yes' if policy is not None else 'no'}")
     print_func("Copy rules manually from the current authorised programme brief.")
-    print_func("Runtime programme-scope enforcement is not active yet.")
-    print_func("Configuration does not currently enable live bug-bounty reconnaissance.")
+    print_func("Programme scope is enforced by strict Standard and Deep project pipelines.")
+    print_func(
+        "Stored configuration alone does not authorise traffic; strict preflight "
+        "must also validate engagement policy and the project target."
+    )
     if policy is not None:
         print_func("")
         print_func(render_programme_scope_local_summary(project, policy))
@@ -354,7 +360,10 @@ def _review_and_save(
         return 2
     print_func(render_programme_scope_local_summary(updated_project, policy))
     print_func(f"Programme scope saved privately: {policy_path.name} (mode 0600).")
-    print_func("No reconnaissance was executed. Live bug-bounty execution remains blocked.")
+    print_func(
+        "No reconnaissance was executed. Standard and Deep remain subject to strict "
+        "engagement-policy, programme-scope and target preflight."
+    )
     return 0
 
 

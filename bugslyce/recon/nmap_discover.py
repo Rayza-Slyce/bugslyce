@@ -25,6 +25,7 @@ def run_nmap_discovery_workflow(
     output_dir: Path,
     profile_name: str = "lab-tcp-top",
     runner: LiveNmapDiscoveryRunner | None = None,
+    project_runtime=None,
 ) -> ReconNmapDiscoveryExecutionResult:
     """Run one approved nmap discovery command and build recon-pack outputs."""
 
@@ -36,7 +37,19 @@ def run_nmap_discovery_workflow(
 
     output_dir = output_dir.expanduser().resolve()
     target = validate_explicit_nmap_target_scope(target, scope_file)
+    if project_runtime is not None:
+        from bugslyce.recon.project_runtime import require_project_runtime_binding
+
+        require_project_runtime_binding(
+            project_runtime,
+            output_dir,
+            scope_file,
+            target,
+            runner,
+            "nmap_discovery",
+        )
     profile = get_nmap_profile(profile_name)
+    recorded_profile = "bug-bounty-policy-tcp" if project_runtime is not None else profile.name
     command = (
         build_live_nmap_top_ports_command(target, output_dir)
         if profile_name == "lab-tcp-top"
@@ -68,7 +81,7 @@ def run_nmap_discovery_workflow(
                 "target": command.argv[-1],
                 "scope_file": local_scope_path.name,
                 "created_by": "bugslyce-nmap-discover",
-                "profile": profile.name,
+                "profile": recorded_profile,
                 "artifacts": [
                     {
                         "type": "nmap",
@@ -90,7 +103,7 @@ def run_nmap_discovery_workflow(
     return ReconNmapDiscoveryExecutionResult(
         mode="nmap-discover",
         target=command.argv[-1],
-        profile=profile.name,
+        profile=recorded_profile,
         scope_file=str(scope_file),
         output_dir=str(output_dir),
         nmap_output_path=str(nmap_output_path),
@@ -165,4 +178,6 @@ def render_nmap_discovery_execution_summary(
 
 
 def _discovery_label(profile_name: str) -> str:
+    if profile_name == "bug-bounty-policy-tcp":
+        return "policy-authorised TCP discovery"
     return "top-1000 TCP discovery" if profile_name == "lab-tcp-top" else "full TCP discovery"

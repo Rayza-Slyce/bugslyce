@@ -1992,7 +1992,7 @@ def test_direct_bug_bounty_internal_stage_remains_blocked_before_fetcher_constru
         engagement_context="bug_bounty",
     )
     save_project_engagement_policy(project_file, _complete_policy())
-    with pytest.raises(ValueError, match="R0B3"):
+    with pytest.raises(ValueError, match="direct or modular"):
         cli_module._deep_http_fetcher_for_input(
             output_dir,
             "bug_bounty",
@@ -2051,8 +2051,8 @@ def test_bug_bounty_modular_collection_commands_refuse_before_live_fetcher(
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "R0B3" in captured.err
-    assert "controlled capture acceptance" in captured.err
+    assert "direct or modular entry point" in captured.err
+    assert "policy-aware Standard or Deep project pipeline" in captured.err
     assert collection_calls == []
 
 

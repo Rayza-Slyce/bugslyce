@@ -10,36 +10,36 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
-## Temporary production bug bounty warning
+## Production bug bounty preflight
 
 BugSlyce `1.1.1` is a documentation-only safety advisory release. It does
 not change live reconnaissance behaviour.
 
-Controlled testing against a local HTTP capture server found that Standard
-Recon peaked at **154 requests per second** and Deep Recon peaked at **450
-requests per second**. The current implementation also cannot consistently
-apply programme-required researcher-identification headers across every
-HTTP request path.
+Historical controlled testing of `1.1.1` against a local HTTP capture server
+found that Standard Recon peaked at **154 requests per second** and Deep Recon
+peaked at **450 requests per second**. That release also could not consistently
+apply programme-required researcher-identification headers across every HTTP
+request path. The strict v1.2 project runtime replaces those unsafe paths.
 
-**Do not use Standard or Deep Recon against production bug bounty targets
-until request pacing and identification-header support have been added and
-verified. Do not use any live mode where required traffic-identification
-rules cannot be honoured.**
+**Standard and Deep bug-bounty project execution requires a ready private
+engagement policy, default-deny programme scope, an authorised target and
+compatible strict local tools. Unsupported direct and modular live commands
+remain blocked.**
 
 BugSlyce remains suitable for CTFs and controlled authorised labs. No
 production target was involved in discovering these issues.
 
-The unreleased R0B2 source contains central internal HTTP enforcement and
-policy-aware external-tool planning and enforcement foundations. Curl shares
+BugSlyce contains central internal HTTP enforcement and policy-aware
+external-tool planning and enforcement. Curl shares
 aggregate pacing and traffic identity with internal HTTP. Compatible Gobuster
 plans use one thread, a conservative delay and the configured identity. Strict
-bug bounty Nmap plans perform TCP port-state discovery only; incompatible
+bug bounty Nmap plans perform bounded TCP port-state discovery and, only when
+explicitly permitted, service/version enrichment over observed open ports; incompatible
 required curl or Nmap capability blocks preflight, while incompatible optional
 Gobuster is omitted rather than weakened.
 
-All live bug bounty reconnaissance entry points remain blocked pending R0B3
-controlled capture acceptance. Save or update policy configuration without
-running recon:
+Standard and Deep project pipelines may run only after strict preflight. Save
+or update private policy configuration without running recon:
 
 ```bash
 bugslyce project policy --project ./bugslyce_project.json --configure

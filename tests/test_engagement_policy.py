@@ -36,6 +36,8 @@ from bugslyce.core.engagement_policy import (
     RATE_SOURCE_PROGRAMME,
     READINESS_FUTURE_ENFORCEMENT,
     READINESS_INCOMPLETE,
+    SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_PERMITTED,
     TCP_CUSTOM,
     TCP_FULL,
     IdentificationHeader,
@@ -52,6 +54,10 @@ from bugslyce.core.engagement_policy import (
     write_engagement_policy,
 )
 from bugslyce.core.models import ProjectState
+from bugslyce.core.programme_scope import (
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.engagement_policy_setup import (
     configure_project_policy_interactively,
     show_project_policy,
@@ -71,8 +77,10 @@ from bugslyce.project_session import (
     build_project_next,
     build_project_runbook,
     initialize_project,
+    inspect_project_status,
     load_project,
     save_project_engagement_policy,
+    save_project_programme_scope_policy,
 )
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.user_agent import (
@@ -99,6 +107,7 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
     assert policy.maximum_http_requests_per_second == "2"
     assert policy.maximum_http_concurrency == 1
     assert policy.tcp_discovery_policy == "conservative_common_web_ports"
+    assert policy.service_version_detection == SERVICE_VERSION_NOT_PERMITTED
     assert policy.identification_requirement == IDENTIFICATION_UNKNOWN
     assessment = assess_engagement_policy(policy)
     assert assessment.readiness_state == READINESS_INCOMPLETE
@@ -115,6 +124,30 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
         assessment.external_tool_enforcement_state
         == "external_tool_enforcement_foundation_available_r0b2"
     )
+
+
+def test_service_version_permission_is_explicit_and_unconfirmed_is_fail_closed() -> None:
+    permitted = _complete_policy(service_version_detection=SERVICE_VERSION_PERMITTED)
+    unconfirmed = _complete_policy(service_version_detection=NOT_YET_CONFIRMED)
+
+    assert assess_engagement_policy(permitted).readiness_state == READINESS_FUTURE_ENFORCEMENT
+    assert assess_engagement_policy(unconfirmed).readiness_state == READINESS_INCOMPLETE
+    assert any(
+        "service/version" in reason.lower()
+        for reason in assess_engagement_policy(unconfirmed).not_ready_reasons
+    )
+
+
+def test_schema_1_policy_loads_without_implicit_service_version_permission() -> None:
+    payload = _complete_policy().to_dict()
+    payload["schema_version"] = "1.0"
+    payload.pop("service_version_detection")
+
+    loaded = policy_from_dict(payload)
+
+    assert loaded.service_version_detection == NOT_YET_CONFIRMED
+    assert loaded.service_version_detection != SERVICE_VERSION_PERMITTED
+    assert assess_engagement_policy(loaded).readiness_state == READINESS_INCOMPLETE
 
 
 def test_policy_round_trip_is_deterministic_and_sensitive_repr_is_redacted() -> None:
@@ -258,7 +291,7 @@ def test_redacted_rendering_never_exposes_identification_values() -> None:
     assert "Custom User-Agent: configured" in rendered
     assert SENTINEL_HEADER not in rendered
     assert SENTINEL_USER_AGENT not in rendered
-    assert "Live bug bounty project reconnaissance remains blocked" in rendered
+    assert "Standard and Deep bug-bounty project execution" in rendered
 
 
 def test_policy_storage_is_atomic_private_and_refuses_symlinks(tmp_path: Path) -> None:
@@ -293,7 +326,7 @@ def test_policy_read_refuses_group_or_world_permissions(tmp_path: Path) -> None:
 def test_project_metadata_contains_only_relative_policy_reference(tmp_path: Path) -> None:
     project_file = _bug_bounty_project(tmp_path)
     output: list[str] = []
-    answers = iter(["1", "1", "1", "", "2", "1", "YES"])
+    answers = iter(["1", "1", "1", "", "2", "2", "1", "YES"])
 
     result = configure_project_policy_interactively(
         project_file,
@@ -320,8 +353,9 @@ def test_interactive_setup_supports_multiple_headers_and_user_agent_redacted(
             "1",  # automation permitted
             "1",  # conservative rate
             "",  # concurrency 1
-            "2",  # conservative TCP
-            "4",  # headers and User-Agent
+                "2",  # conservative TCP
+                "2",  # service/version not permitted
+                "4",  # headers and User-Agent
             "X-Researcher-ID",
             SENTINEL_HEADER,
             "YES",
@@ -351,7 +385,7 @@ def test_interactive_setup_supports_multiple_headers_and_user_agent_redacted(
     assert SENTINEL_HEADER not in rendered
     assert SENTINEL_USER_AGENT not in rendered
     assert "X-Researcher-ID: configured" in rendered
-    assert "Live bug bounty reconnaissance remains blocked" in rendered
+    assert "Standard and Deep remain subject to strict project preflight" in rendered
 
 
 def test_unreviewed_rules_save_incomplete_policy_without_later_questions(
@@ -417,8 +451,9 @@ def test_existing_sensitive_values_are_preserved_only_after_deliberate_update(
             "1",  # automation permitted
             "1",  # conservative rate
             "",  # concurrency one
-            "2",  # conservative TCP
-            "4",  # headers and User-Agent
+                "2",  # conservative TCP
+                "2",  # service/version not permitted
+                "4",  # headers and User-Agent
             "",  # retain headers
             "",  # retain User-Agent
             "YES",  # save
@@ -452,8 +487,9 @@ def test_wizard_programme_rate_higher_concurrency_and_custom_ports_need_confirma
             "YES",
             "3",
             "443,8000-8002",
-            "YES",
-            "1",
+                "YES",
+                "2",
+                "1",
             "YES",
         ]
     )
@@ -497,7 +533,7 @@ def test_wizard_identification_requirements_unknown_remains_incomplete(
     tmp_path: Path,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
-    answers = iter(["1", "1", "1", "", "2", "5", "YES"])
+    answers = iter(["1", "1", "1", "", "2", "2", "5", "YES"])
 
     result = configure_project_policy_interactively(
         project_file,
@@ -512,7 +548,7 @@ def test_wizard_identification_requirements_unknown_remains_incomplete(
 
 def test_wizard_supports_dedicated_custom_user_agent(tmp_path: Path) -> None:
     project_file = _bug_bounty_project(tmp_path)
-    answers = iter(["1", "1", "1", "", "2", "3", SENTINEL_USER_AGENT, "YES"])
+    answers = iter(["1", "1", "1", "", "2", "2", "3", SENTINEL_USER_AGENT, "YES"])
     output: list[str] = []
 
     result = configure_project_policy_interactively(
@@ -564,14 +600,9 @@ def test_built_in_user_agent_uses_current_version_and_not_stale_identity() -> No
     )
 
 
-@pytest.mark.parametrize(
-    "profile",
-    [PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE],
-)
-def test_bug_bounty_pipeline_profiles_refuse_before_doctor_or_runner(
+def test_bug_bounty_quick_profile_remains_blocked_before_doctor_or_runner(
     tmp_path: Path,
     monkeypatch,
-    profile: str,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
     save_project_engagement_policy(project_file, _complete_policy())
@@ -584,15 +615,25 @@ def test_bug_bounty_pipeline_profiles_refuse_before_doctor_or_runner(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
 
-    with pytest.raises(ValueError, match="blocked in R0B2") as exc_info:
-        run_project_pipeline(project_file, profile)
+    with pytest.raises(ValueError, match="Standard and Deep"):
+        run_project_pipeline(project_file, PIPELINE_PROFILE)
 
     assert called is False
-    assert "external curl, Gobuster and Nmap enforcement foundations" in str(
-        exc_info.value
+
+
+@pytest.mark.parametrize("profile", [STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE])
+def test_bug_bounty_pipeline_requires_programme_scope_before_doctor(
+    tmp_path: Path, monkeypatch, profile: str
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+    save_project_engagement_policy(project_file, _complete_policy())
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: pytest.fail("doctor must not run before programme-scope preflight"),
     )
-    assert "R0B3" in str(exc_info.value)
-    assert "Policy issues:" not in str(exc_info.value)
+
+    with pytest.raises(ValueError, match="Programme scope policy is missing"):
+        run_project_pipeline(project_file, profile)
 
 
 def test_old_bug_bounty_project_without_policy_is_blocked_before_live_work(
@@ -612,7 +653,7 @@ def test_old_bug_bounty_project_without_policy_is_blocked_before_live_work(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
     with pytest.raises(ValueError, match="Engagement policy is missing"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE)
     assert called is False
 
 
@@ -636,7 +677,7 @@ def test_direct_cli_run_reports_non_bypassable_bug_bounty_refusal(
     captured = capsys.readouterr()
 
     assert exit_code == 2
-    assert "blocked in R0B2" in captured.err
+    assert "policy-aware Standard and Deep project pipeline" in captured.err
     assert "No pipeline phase was executed" in captured.err
 
 
@@ -676,7 +717,7 @@ def test_interactive_bug_bounty_quick_standard_and_deep_are_save_only(
 
     assert exit_code == 0
     assert "not started" in rendered
-    assert "Live bug bounty reconnaissance remains blocked" in rendered
+    assert "Use the strict project pipeline" in rendered
     assert "No network requests were made" in rendered
 
 
@@ -752,7 +793,8 @@ def test_policy_sentinels_do_not_enter_runbook_cli_view_or_evidence_pack(
         assert SENTINEL_HEADER not in text
         assert SENTINEL_USER_AGENT not in text
     assert "bugslyce project policy" in runbook.content
-    assert "Live bug bounty reconnaissance remains blocked" in runbook.content
+    assert "Programme scope is missing" in runbook.content
+    assert "strict target and local-tool preflight" in runbook.content
     assert "bugslyce recon nmap-discover" not in runbook.content
     assert SENTINEL_HEADER.encode() not in archive_bytes
     assert SENTINEL_USER_AGENT.encode() not in archive_bytes
@@ -1096,7 +1138,7 @@ def test_bug_bounty_existing_artefacts_keep_safe_offline_actions_only(
     commands = "\n".join(action.command_preview for action in actions)
     runbook = build_project_runbook(project_file).content
 
-    assert result.recommended_action.id == "configure-engagement-policy"
+    assert result.recommended_action.id == "configure-programme-scope"
     assert {
         "inspect-project-status",
         "review-existing-report",
@@ -1114,6 +1156,46 @@ def test_bug_bounty_existing_artefacts_keep_safe_offline_actions_only(
     ):
         assert forbidden not in commands
         assert forbidden not in runbook
+
+
+def test_ready_bug_bounty_project_next_recommends_strict_standard_pipeline(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+    save_project_engagement_policy(project_file, _complete_policy())
+    save_project_programme_scope_policy(
+        project_file,
+        build_programme_scope_policy(
+            (
+                build_programme_scope_rule(
+                    rule_id="target",
+                    action="include",
+                    kind="exact_ipv4",
+                    value="10.10.10.10",
+                ),
+            ),
+            updated_at="2026-08-08T12:00:00Z",
+        ),
+    )
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert "--profile standard-bounded" in result.recommended_action.command_preview
+    assert "--confirm" in result.recommended_action.command_preview
+    assert "explicit programme exclusions override inclusions" in result.status_summary
+
+
+def test_bug_bounty_project_status_points_to_strict_pipeline_guidance(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+
+    result = inspect_project_status(project_file, write_status=False)
+
+    assert "bugslyce project next" in result.next_action
+    assert "strict Standard/Deep" in result.next_action
+    assert "nmap-discover" not in result.next_action
 
 
 @pytest.mark.parametrize("error", [OSError("disk full"), EOFError()])
@@ -1468,18 +1550,22 @@ def _write_minimal_export_input(input_dir: Path) -> None:
     )
 
 
-def _complete_policy():
-    return build_bug_bounty_policy(
-        programme_rules_reviewed=CONFIRMED,
-        automated_reconnaissance=AUTOMATION_PERMITTED,
-        maximum_http_requests_per_second="2",
-        maximum_http_concurrency=1,
-        identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
-        identification_headers=(
+def _complete_policy(**overrides):
+    values = {
+        "programme_rules_reviewed": CONFIRMED,
+        "automated_reconnaissance": AUTOMATION_PERMITTED,
+        "maximum_http_requests_per_second": "2",
+        "maximum_http_concurrency": 1,
+        "identification_requirement": IDENTIFICATION_HEADERS_AND_USER_AGENT,
+        "identification_headers": (
             IdentificationHeader("X-Researcher-ID", SENTINEL_HEADER),
         ),
-        custom_user_agent=SENTINEL_USER_AGENT,
-        updated_at="2026-07-28T10:00:00Z",
+        "custom_user_agent": SENTINEL_USER_AGENT,
+        "updated_at": "2026-07-28T10:00:00Z",
+    }
+    values.update(overrides)
+    return build_bug_bounty_policy(
+        **values,
     )
 
 
