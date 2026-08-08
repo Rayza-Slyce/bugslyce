@@ -57,6 +57,10 @@ from bugslyce.recon.http_route_relationships import (
     build_http_route_relationship_clusters,
 )
 from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
+from bugslyce.reports.human_triage import (
+    HumanTriageBrief,
+    build_human_triage_brief,
+)
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
     build_deep_operator_summary_leads,
@@ -122,6 +126,7 @@ class HtmlReportModel:
     project_state: ProjectState
     candidates: tuple[Candidate, ...]
     operator_summary: OperatorSummary
+    human_triage_brief: HumanTriageBrief
     confidence_notices: tuple[CollectionConfidenceNotice, ...]
     http_fingerprints: DeepHttpFingerprintSummary
     redirect_review: DeepRedirectAuthFlowReview
@@ -182,15 +187,23 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         root,
         source_collection=source_collection,
     )
+    operator_summary = build_operator_summary(
+        project_state,
+        candidates,
+        additional_leads=deep_summary_leads,
+        response_similarity_review=similarities,
+    )
+    human_triage_brief = build_human_triage_brief(
+        project_state,
+        candidates,
+        engagement_context=getattr(project_state, "engagement_context", "unknown"),
+        ranked_leads=operator_summary.ranked_leads,
+    )
     return HtmlReportModel(
         project_state=project_state,
         candidates=tuple(candidates),
-        operator_summary=build_operator_summary(
-            project_state,
-            candidates,
-            additional_leads=deep_summary_leads,
-            response_similarity_review=similarities,
-        ),
+        operator_summary=operator_summary,
+        human_triage_brief=human_triage_brief,
         confidence_notices=notices,
         http_fingerprints=fingerprints,
         redirect_review=redirects,

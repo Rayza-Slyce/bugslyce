@@ -36,6 +36,7 @@ _SOURCE_ARTEFACT_TYPES = frozenset(
     }
 )
 _OPERATOR_SUMMARY_CATEGORY = "operator_summary"
+_HUMAN_TRIAGE_CATEGORY = "human_triage"
 _SKIPPED_COLLECTION_CATEGORY = "skipped_collection"
 _ENDPOINT_CATEGORY = "endpoint"
 _DISCOVERED_PATH_CATEGORY = "discovered_path"
@@ -212,6 +213,7 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
     sections = [
         ("overview", "Overview", _overview_section(model)),
         ("operator-summary", "Operator summary", _operator_summary_section(model)),
+        ("human-triage", "Supporting triage evidence", _human_triage_section(model)),
         ("confidence", "Collection confidence", _confidence_section(model)),
         ("manual-review", "Manual review leads", _candidate_section(model)),
         ("routes", "Routes and provenance", _routes_section(model)),
@@ -367,6 +369,54 @@ def _operator_summary_section(model: HtmlReportModel) -> str:
         + '<details><summary>Current coverage</summary><ul>'
         + coverage
         + "</ul></details>",
+    )
+
+
+def _human_triage_section(model: HtmlReportModel) -> str:
+    brief = model.human_triage_brief
+    supporting = "".join(
+        _detail_card(
+            item.title,
+            (
+                ("Priority", item.priority),
+                ("Category", item.category),
+                ("Source", item.source),
+                ("URL", item.url),
+                ("Value", item.value),
+                ("Why it matters", item.why_it_matters),
+                ("Suggested manual action", item.suggested_manual_action),
+                ("Evidence", _compact_list(item.evidence_ids, "evidence IDs")),
+                ("Signal", item.signal),
+            ),
+            category=_HUMAN_TRIAGE_CATEGORY,
+        )
+        for item in brief.start_here
+    ) or _empty("No additional supporting evidence prompts were identified.")
+    values = "".join(
+        _detail_card(
+            item.title,
+            (
+                ("Source", item.source),
+                ("URL", item.url),
+                ("Value", item.value),
+                ("Why it matters", item.why_it_matters),
+                ("Evidence", _compact_list(item.evidence_ids, "evidence IDs")),
+            ),
+            category=_HUMAN_TRIAGE_CATEGORY,
+        )
+        for item in brief.evidence_values
+    ) or _empty("No additional source-comment, metadata, or encoded values were promoted.")
+    return _section(
+        "human-triage",
+        "Supporting triage evidence",
+        (
+            '<p class="section-note">These supporting evidence prompts do not define or alter '
+            "the canonical lead ranking in the Operator summary.</p>"
+            '<h3>Supporting evidence prompts (not ranked)</h3>'
+            + supporting
+            + '<h3>Evidence values worth noting</h3>'
+            + values
+        ),
     )
 
 
@@ -1011,6 +1061,8 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
     }
     if model.operator_summary.ranked_leads:
         values.add(_OPERATOR_SUMMARY_CATEGORY)
+    if model.human_triage_brief.start_here or model.human_triage_brief.evidence_values:
+        values.add(_HUMAN_TRIAGE_CATEGORY)
     if model.metadata_collection.skipped or model.source_collection.skipped:
         values.add(_SKIPPED_COLLECTION_CATEGORY)
     if state.endpoints:

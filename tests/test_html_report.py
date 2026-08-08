@@ -74,6 +74,102 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert "<details" in html
 
 
+def test_html_report_renders_shared_human_triage_source_context(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "human-triage-source-context")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["http_artifacts"].extend(
+        [
+            {
+                "url": "https://portal.example.test/",
+                "artifact_type": "hidden_element",
+                "value": "credential-context",
+                "source_file": "raw/homepage.html",
+                "evidence_ids": ["EVID-TRIAGE-HIDDEN"],
+                "tags": ["encoded_or_hidden_artifact"],
+            },
+            {
+                "url": "https://portal.example.test/",
+                "artifact_type": "encoded_like_artifact",
+                "value": "Q29uZmlnUmV2aWV3VG9rZW4xMjM0NTY=",
+                "source_file": "raw/homepage.html",
+                "evidence_ids": ["EVID-TRIAGE-ENCODED"],
+                "tags": ["encoded_or_hidden_artifact"],
+            },
+        ]
+    )
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+    markdown = render_human_triage_brief_markdown(
+        model.human_triage_brief,
+        include_ranked_leads=False,
+    )
+
+    assert 'id="human-triage"' in html
+    assert "Supporting triage evidence" in html
+    assert "Supporting evidence prompts (not ranked)" in html
+    assert "Evidence values worth noting" in html
+    assert 'data-category="human_triage"' in html
+    assert '<option value="human_triage">Human triage</option>' in html
+    for value in (
+        "Source credential/context clue group observed",
+        "credential-context",
+        "Q29uZmlnUmV2aWV3VG9rZW4xMjM0NTY=",
+        "EVID-TRIAGE-HIDDEN",
+        "EVID-TRIAGE-ENCODED",
+        "https://portal.example.test/",
+    ):
+        assert value in html
+        assert value in markdown
+
+
+def test_html_report_renders_human_authored_source_comment_prompt(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "human-triage-comment")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["http_artifacts"].append(
+        {
+            "url": "https://portal.example.test/releases.html",
+            "artifact_type": "html_comment",
+            "value": "Ops team: rotate the staging certificate before deployment",
+            "source_file": "raw/releases.html",
+            "evidence_ids": ["EVID-TRIAGE-COMMENT"],
+            "tags": [],
+        }
+    )
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    html = render_html_report(model)
+
+    assert "Human-authored source comment observed" in html
+    assert "Ops team: rotate the staging certificate before deployment" in html
+    assert "https://portal.example.test/releases.html" in html
+    assert "EVID-TRIAGE-COMMENT" in html
+
+
+def test_html_human_triage_does_not_duplicate_canonical_lead_ids(
+    tmp_path: Path,
+) -> None:
+    model = build_html_report_model(_write_current_pack(tmp_path / "no-lead-duplication"))
+    html = render_html_report(model)
+
+    for lead in model.operator_summary.ranked_leads:
+        assert html.count(lead.lead_id) == 1
+
+
 def test_html_report_missing_input_or_required_state_fails_clearly(
     tmp_path: Path,
 ) -> None:
