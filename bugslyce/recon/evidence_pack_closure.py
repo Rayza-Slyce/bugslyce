@@ -18,6 +18,7 @@ from bugslyce.core.models import (
 from bugslyce.recon.collection_confidence import (
     CollectionConfidenceNotice,
     build_collection_confidence_notices_from_project,
+    collection_confidence_command_notice_id,
 )
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
@@ -1053,6 +1054,33 @@ def _validate_portable_confidence_commands(
         != "bugslyce.collection_confidence.command_execution"
     ):
         errors.add(prefix + "generated_by")
+    retained_partial_artefacts = payload.get("retained_partial_artefacts")
+    if retained_partial_artefacts is not None:
+        if payload.get("mode") != "body-fetch":
+            errors.add(prefix + "mode")
+        if not isinstance(retained_partial_artefacts, list):
+            errors.add(prefix + "retained_partial_artefacts")
+        else:
+            for index, item in enumerate(retained_partial_artefacts):
+                item_prefix = f"retained_partial_artefacts[{index}]"
+                if not isinstance(item, dict):
+                    errors.add(prefix + item_prefix)
+                    continue
+                if not isinstance(item.get("command_id"), str) or not item[
+                    "command_id"
+                ].strip():
+                    errors.add(prefix + f"{item_prefix}.command_id")
+                byte_count = item.get("byte_count")
+                if (
+                    isinstance(byte_count, bool)
+                    or not isinstance(byte_count, int)
+                    or byte_count < 0
+                ):
+                    errors.add(prefix + f"{item_prefix}.byte_count")
+                try:
+                    _normalise_portable_path(item.get("portable_path"))
+                except (TypeError, ValueError):
+                    errors.add(prefix + f"{item_prefix}.portable_path")
     for field in (
         "input_dir",
         "manifest_path",
@@ -1550,7 +1578,96 @@ def _collection_confidence_references(
     if project_state is None:
         return ()
     notices = build_collection_confidence_notices_from_project(project_state, root)
-    return evidence_pack_references_from_collection_confidence(notices)
+    references = list(evidence_pack_references_from_collection_confidence(notices))
+    references.extend(
+        _retained_partial_body_references(
+            root,
+            frozenset(notice.notice_id for notice in notices),
+        )
+    )
+    return tuple(
+        sorted(
+            references,
+            key=lambda item: (
+                item.portable_path,
+                item.owner_kind,
+                item.owner_id,
+                item.evidence_ids,
+                item.source_path or "",
+            ),
+        )
+    )
+
+
+def _retained_partial_body_references(
+    root: Path,
+    notice_ids: frozenset[str],
+) -> tuple[EvidencePackReference, ...]:
+    references: list[EvidencePackReference] = []
+    for path in sorted(root.glob("recon_execution*.json")):
+        payload = _load_structured_json_object(
+            root,
+            path,
+            required=False,
+            label=path.name,
+        )
+        if payload is None or payload.get("mode") != "body-fetch":
+            continue
+        if payload.get("portable_confidence_schema") == 1:
+            retained = payload.get("retained_partial_artefacts")
+            if not isinstance(retained, list):
+                continue
+            for item in retained:
+                if not isinstance(item, dict):
+                    continue
+                command_id = item.get("command_id")
+                portable_path = item.get("portable_path")
+                if not isinstance(command_id, str) or not isinstance(
+                    portable_path, str
+                ):
+                    continue
+                owner_id = collection_confidence_command_notice_id(command_id)
+                if owner_id in notice_ids:
+                    references.append(
+                        EvidencePackReference(
+                            portable_path=_normalise_portable_path(portable_path),
+                            owner_kind="collection_confidence_notice",
+                            owner_id=owner_id,
+                        )
+                    )
+            continue
+        partial_body_bytes = payload.get("partial_body_bytes")
+        command_results = payload.get("command_results")
+        if not isinstance(partial_body_bytes, dict) or not isinstance(
+            command_results, list
+        ):
+            continue
+        for result in command_results:
+            if not isinstance(result, dict):
+                continue
+            output_file = result.get("output_file")
+            command_id = result.get("command_id")
+            if (
+                not isinstance(output_file, str)
+                or output_file not in partial_body_bytes
+                or not isinstance(command_id, str)
+                or not command_id.strip()
+            ):
+                continue
+            owner_id = collection_confidence_command_notice_id(command_id)
+            if owner_id not in notice_ids:
+                continue
+            source_path = _project_relative_source(root, output_file)
+            portable_path = _archive_path_for_project_source(source_path)
+            references.append(
+                EvidencePackReference(
+                    portable_path=portable_path,
+                    owner_kind="collection_confidence_notice",
+                    owner_id=owner_id,
+                    source_path=source_path,
+                )
+            )
+    return tuple(references)
 
 
 def _load_relationship_project_state(root: Path) -> ProjectState | None:

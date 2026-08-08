@@ -58,6 +58,36 @@ DEFAULT_PROFILES = {
 }
 SCAFFOLD_SCOPE_FILENAME = "scope.md"
 SCAFFOLD_OWNED_FILENAMES = {PROJECT_FILENAME, SCAFFOLD_SCOPE_FILENAME}
+# These mirror the canonical project-pipeline writer's _pending_steps() layouts.
+# project_pipeline imports this module, so importing that private builder here would
+# create a cycle. Completed-run guidance must fail closed if the layouts drift.
+_STANDARD_COMPLETED_PIPELINE_STEP_IDS = (
+    "PIPELINE-STEP-001",
+    "PIPELINE-STEP-002",
+    "PIPELINE-STEP-003",
+    "PIPELINE-STEP-004",
+    "PIPELINE-STEP-005",
+    "PIPELINE-STEP-006",
+    "PIPELINE-STEP-007",
+    "PIPELINE-STEP-008",
+    "PIPELINE-STEP-009",
+    "PIPELINE-STEP-010",
+    "PIPELINE-STEP-011",
+    "PIPELINE-STEP-012",
+)
+_DEEP_COMPLETED_PIPELINE_STEP_IDS = (
+    *_STANDARD_COMPLETED_PIPELINE_STEP_IDS[:9],
+    "PIPELINE-STEP-010D",
+    "PIPELINE-STEP-011D",
+    *_STANDARD_COMPLETED_PIPELINE_STEP_IDS[9:],
+)
+_COMPLETED_PIPELINE_STEP_IDS_BY_PROFILE = {
+    "standard-bounded": _STANDARD_COMPLETED_PIPELINE_STEP_IDS,
+    "deep-bounded": _DEEP_COMPLETED_PIPELINE_STEP_IDS,
+}
+_SATISFIED_PIPELINE_STEP_STATUSES = frozenset(
+    {"completed", "noop", "skipped_existing"}
+)
 _PROJECT_SCHEMA_1_0_FIELDS = frozenset(
     {
         "schema_version",
@@ -699,6 +729,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
             project_file=project_file,
             output_dir=output_dir,
         )
+        completed_profile = _completed_bug_bounty_pipeline_profile(project, output_dir)
         if not policy_ready:
             recommended = GuidedProjectAction(
                 id="configure-engagement-policy",
@@ -729,6 +760,31 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                     ]
                 ),
             )
+        elif completed_profile is not None:
+            selected_review = next(
+                (
+                    action
+                    for action in optional_actions
+                    if action.id == "review-existing-report"
+                ),
+                GuidedProjectAction(
+                    id="inspect-project-status",
+                    title="Inspect the completed project pipeline and local evidence.",
+                    command_preview=_format_command(
+                        [
+                            "bugslyce",
+                            "project",
+                            "status",
+                            "--project",
+                            str(project_file),
+                        ]
+                    ),
+                ),
+            )
+            recommended = replace(selected_review, optional=False)
+            optional_actions = [
+                action for action in optional_actions if action.id != recommended.id
+            ]
         else:
             recommended = GuidedProjectAction(
                 id="run-standard-project-pipeline",
@@ -754,9 +810,17 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
             project_file=str(project_file),
             recon_pack_exists=(output_dir / "recon_manifest.json").is_file(),
             status_summary=(
-                f"{policy_status} {scope_status} Standard and Deep require strict "
-                "target and local-tool preflight before live execution; explicit "
-                "programme exclusions override inclusions."
+                f"{policy_status} {scope_status} "
+                + (
+                    f"The {completed_profile} project pipeline is completed; review "
+                    "its existing local outputs."
+                    if completed_profile is not None
+                    else (
+                        "Standard and Deep require strict target and local-tool "
+                        "preflight before live execution; explicit programme "
+                        "exclusions override inclusions."
+                    )
+                )
             ),
             recommended_action=recommended,
             optional_actions=optional_actions,
@@ -983,12 +1047,13 @@ def _bug_bounty_offline_actions(
     project_file: Path,
     output_dir: Path,
 ) -> list[GuidedProjectAction]:
-    """Return only local evidence-review actions while live collection is blocked."""
+    """Return local evidence-review actions for a bug-bounty project."""
 
     actions: list[GuidedProjectAction] = []
     manifest_path = output_dir / "recon_manifest.json"
     report_path = output_dir / "report.md"
     state_path = output_dir / "project_state.json"
+    evidence_pack_path = Path(f"{project.output_dir}-evidence-pack.zip")
     if manifest_path.is_file():
         actions.append(
             GuidedProjectAction(
@@ -1028,7 +1093,9 @@ def _bug_bounty_offline_actions(
                 optional=True,
             )
         )
-    if manifest_path.is_file():
+    if manifest_path.is_file() and not (
+        evidence_pack_path.is_file() and not evidence_pack_path.is_symlink()
+    ):
         actions.append(
             GuidedProjectAction(
                 id="export-evidence-pack",
@@ -1048,6 +1115,50 @@ def _bug_bounty_offline_actions(
             )
         )
     return actions
+
+
+def _completed_bug_bounty_pipeline_profile(
+    project: BugSlyceProject,
+    output_dir: Path,
+) -> str | None:
+    """Return the canonical completed profile without inferring from report files."""
+
+    pipeline_path = output_dir / "project_pipeline.json"
+    if pipeline_path.is_symlink() or not pipeline_path.is_file():
+        return None
+    try:
+        payload = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("final_status") != "completed":
+        return None
+    profile = payload.get("profile")
+    if not isinstance(profile, str):
+        return None
+    expected_step_ids = _COMPLETED_PIPELINE_STEP_IDS_BY_PROFILE.get(profile)
+    if expected_step_ids is None:
+        return None
+    if payload.get("target") != project.target:
+        return None
+    recorded_output = payload.get("output_dir")
+    if not isinstance(recorded_output, str):
+        return None
+    try:
+        if Path(recorded_output).expanduser().resolve() != output_dir.resolve():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    steps = payload.get("steps")
+    if not isinstance(steps, list) or len(steps) != len(expected_step_ids):
+        return None
+    for expected_step_id, step in zip(expected_step_ids, steps, strict=True):
+        if (
+            not isinstance(step, dict)
+            or step.get("step_id") != expected_step_id
+            or step.get("status") not in _SATISFIED_PIPELINE_STEP_STATUSES
+        ):
+            return None
+    return profile
 
 
 def build_project_runbook(

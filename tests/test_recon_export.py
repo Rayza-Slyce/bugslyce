@@ -3088,6 +3088,99 @@ def test_export_reconstructs_bounded_and_deep_confidence_owners(tmp_path: Path) 
     assert "deep_source_route_collection.json" in members
 
 
+def test_export_includes_retained_partial_body_from_execution_metadata(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    partial_path = _write_retained_partial_body_execution(input_dir, present=True)
+    output_path = tmp_path / "partial-body.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+    extracted = tmp_path / "partial-body"
+    with zipfile.ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        portable_execution = json.loads(
+            archive.read("recon_execution_body_fetch.json")
+        )
+        archive.extractall(extracted)
+
+    portable_path = f"raw/{partial_path.name}"
+    assert portable_path in names
+    record = next(
+        item for item in closure["references"] if item["portable_path"] == portable_path
+    )
+    assert record["included"] is True
+    assert {
+        (owner["owner_kind"], owner["owner_id"])
+        for owner in record["owners"]
+    } == {
+        (
+            "collection_confidence_notice",
+            "CONFIDENCE-COMMAND-CMD-BODY-FETCH-001",
+        )
+    }
+    assert result.reference_closure_status == "complete"
+    assert portable_execution["retained_partial_artefacts"] == [
+        {
+            "byte_count": 22,
+            "command_id": "CMD-BODY-FETCH-001",
+            "portable_path": portable_path,
+        }
+    ]
+    assert str(input_dir) not in json.dumps(portable_execution)
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_missing_retained_partial_body_makes_reference_closure_incomplete(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    partial_path = _write_retained_partial_body_execution(input_dir, present=False)
+    output_path = tmp_path / "missing-partial-body.zip"
+
+    result = export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+    extracted = tmp_path / "missing-partial-body"
+    with zipfile.ZipFile(output_path) as archive:
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        archive.extractall(extracted)
+
+    portable_path = f"raw/{partial_path.name}"
+    record = next(
+        item for item in closure["references"] if item["portable_path"] == portable_path
+    )
+    assert record["included"] is False
+    assert record["unresolved_reason"] == "missing_source_artefact"
+    assert result.reference_closure_status == "incomplete"
+    assert result.unresolved_reference_paths == (portable_path,)
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "incomplete"
+    assert any(
+        item.portable_path == portable_path
+        for item in validation.unresolved_references
+    )
+
+
+def test_retained_partial_body_export_remains_byte_deterministic(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    _write_retained_partial_body_execution(input_dir, present=True)
+    first = tmp_path / "partial-first.zip"
+    second = tmp_path / "partial-second.zip"
+
+    export_recon_evidence_pack(input_dir, first, clock=lambda: FIXED_TIME)
+    export_recon_evidence_pack(input_dir, second, clock=lambda: FIXED_TIME)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
 def test_failed_pipeline_notice_is_portable_and_required_by_closure(
     tmp_path: Path,
 ) -> None:
@@ -4031,3 +4124,34 @@ def _export_input(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return input_dir
+
+
+def _write_retained_partial_body_execution(
+    input_dir: Path,
+    *,
+    present: bool,
+) -> Path:
+    partial_path = input_dir / "body-fetch-app.example.test-443-docs.html.partial"
+    if present:
+        partial_path.write_bytes(b"partial response body\n")
+    payload = {
+        "mode": "body-fetch",
+        "failed_transfers": 1,
+        "partial_bodies_retained": 1,
+        "partial_body_bytes": {str(partial_path): 22},
+        "command_results": [
+            {
+                "command_id": "CMD-BODY-FETCH-001",
+                "tool": "curl",
+                "executed": True,
+                "exit_code": 18,
+                "error": "Curl exited with code 18.",
+                "output_file": str(partial_path),
+            }
+        ],
+    }
+    (input_dir / "recon_execution_body_fetch.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return partial_path

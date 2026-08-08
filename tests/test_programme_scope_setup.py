@@ -171,6 +171,74 @@ def test_create_supports_every_rule_kind_and_both_actions(
     assert PRIVATE_SOURCE not in rendered
 
 
+def test_new_rule_flow_explains_rule_id_and_every_scope_kind_without_writing(
+    tmp_path: Path,
+) -> None:
+    project_file = _project(tmp_path)
+    before = project_file.read_bytes()
+    output: list[str] = []
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs("1", "CANCEL"),
+        print_func=output.append,
+        error_func=lambda _line: None,
+        now_func=lambda: pytest.fail("guidance must not request a timestamp"),
+    )
+
+    rendered = "\n".join(output)
+    assert result == 0
+    assert "Rule ID is a local operator label" in rendered
+    assert "target-ip" in rendered and "api-prefix" in rendered
+    assert "exact_hostname" in rendered and "app.example.com" in rendered
+    assert "wildcard_subdomain" in rendered and "*.example.com" in rendered
+    assert "exact_http_url" in rendered
+    assert "http_path_prefix" in rendered
+    assert "https://example.com/api/" in rendered
+    assert "http://127.0.0.1:8080/" in rendered
+    assert "not an IPv4 rule" in rendered
+    assert "exact_ipv4" in rendered and "127.0.0.1" in rendered
+    assert "ipv4_cidr" in rendered and "192.0.2.0/24" in rendered
+    assert project_file.read_bytes() == before
+    assert not (project_file.parent / "programme_scope.json").exists()
+
+
+def test_replacement_flow_displays_equivalent_scope_kind_guidance_without_writing(
+    tmp_path: Path,
+) -> None:
+    project_file = _project(tmp_path)
+    save_project_programme_scope_policy(project_file, _policy(private=True))
+    project_before = project_file.read_bytes()
+    policy_path = project_file.parent / "programme_scope.json"
+    policy_before = policy_path.read_bytes()
+    output: list[str] = []
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs("3", "CANCEL"),
+        print_func=output.append,
+        error_func=lambda _line: None,
+        now_func=lambda: pytest.fail("guidance must not request a timestamp"),
+    )
+
+    rendered = "\n".join(output)
+    for kind in (
+        "exact_hostname",
+        "wildcard_subdomain",
+        "exact_http_url",
+        "http_path_prefix",
+        "exact_ipv4",
+        "ipv4_cidr",
+    ):
+        assert kind in rendered
+    assert "Rule ID is a local operator label" in rendered
+    assert PRIVATE_NOTE not in rendered
+    assert PRIVATE_SOURCE not in rendered
+    assert result == 0
+    assert project_file.read_bytes() == project_before
+    assert policy_path.read_bytes() == policy_before
+
+
 def test_creation_rejects_duplicate_and_invalid_rule_without_mutating_draft(
     tmp_path: Path,
 ) -> None:

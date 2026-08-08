@@ -185,6 +185,7 @@ def _configure_loop(
             )
         try:
             if action == "add":
+                _render_rule_entry_guidance(print_func)
                 new_rule = _collect_rule(input_func)
                 rules = add_programme_scope_rule(rules, new_rule)
                 print_func(f"Rule added: {_safe_rule(new_rule)}")
@@ -232,6 +233,7 @@ def _replace_rule(
     input_func: InputFunc,
     print_func: PrintFunc,
 ) -> tuple[ProgrammeScopeRule, ...]:
+    _render_rule_entry_guidance(print_func)
     rule_id = _prompt(input_func, "Existing rule ID: ")
     current = _find_rule(rules, rule_id)
     print_func(f"Current rule: {_safe_rule(current)}")
@@ -246,6 +248,29 @@ def _replace_rule(
     changed = replace_programme_scope_rule(rules, current.rule_id, replacement)
     print_func(f"Rule replaced: {_safe_rule(replacement)}")
     return changed
+
+
+def _render_rule_entry_guidance(print_func: PrintFunc) -> None:
+    print_func(
+        "Rule ID is a local operator label (for example target-ip or api-prefix); "
+        "it does not define scope."
+    )
+    print_func("Rule kinds:")
+    print_func("- exact_hostname: one exact hostname, e.g. app.example.com")
+    print_func(
+        "- wildcard_subdomain: subdomains covered by a programme wildcard, "
+        "e.g. *.example.com"
+    )
+    print_func("- exact_http_url: one exact HTTP/HTTPS URL")
+    print_func(
+        "- http_path_prefix: an HTTP/HTTPS origin/path prefix, e.g. "
+        "https://example.com/api/"
+    )
+    print_func(
+        "  http://127.0.0.1:8080/ is an http_path_prefix entry, not an IPv4 rule."
+    )
+    print_func("- exact_ipv4: one IPv4 address, e.g. 127.0.0.1")
+    print_func("- ipv4_cidr: an IPv4 network/range, e.g. 192.0.2.0/24")
 
 
 def _collect_public_replacement(

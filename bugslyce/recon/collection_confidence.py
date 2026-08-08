@@ -156,6 +156,18 @@ def build_collection_confidence_notices_from_project(
             if isinstance(partial_body_bytes, dict)
             else frozenset()
         )
+        retained_partial_artefacts = payload.get("retained_partial_artefacts")
+        retained_partial_commands = (
+            frozenset(
+                item["command_id"]
+                for item in retained_partial_artefacts
+                if isinstance(item, dict)
+                and isinstance(item.get("command_id"), str)
+                and item["command_id"].strip()
+            )
+            if isinstance(retained_partial_artefacts, list)
+            else frozenset()
+        )
         for raw_result in raw_results:
             if not isinstance(raw_result, dict):
                 continue
@@ -166,6 +178,7 @@ def build_collection_confidence_notices_from_project(
                     "confidence_execution_mode": execution_mode,
                     "confidence_partial_body_retained": (
                         raw_result.get("output_file") in partial_paths
+                        or raw_result.get("command_id") in retained_partial_commands
                     ),
                 }
             )
@@ -517,7 +530,7 @@ def _command_result_notices(
         if executed is False:
             notices.append(
                 CollectionConfidenceNotice(
-                    notice_id=f"CONFIDENCE-COMMAND-{_identifier(command_id)}",
+                    notice_id=collection_confidence_command_notice_id(command_id),
                     category=SKIPPED_OR_UNAVAILABLE,
                     title=f"Collection command was not attempted: {command_id}",
                     direct_fact=(
@@ -547,7 +560,7 @@ def _command_result_notices(
         reason = reason.rstrip(".")
         notices.append(
             CollectionConfidenceNotice(
-                notice_id=f"CONFIDENCE-COMMAND-{_identifier(command_id)}",
+                notice_id=collection_confidence_command_notice_id(command_id),
                 category=FAILED,
                 title=f"Collection command failed: {command_id}",
                 direct_fact=f"The `{tool}` command `{command_id}` failed: {reason}.",
@@ -598,7 +611,7 @@ def _recoverable_body_fetch_notice(
             f"timeout. {evidence_fact}"
         )
     return CollectionConfidenceNotice(
-        notice_id=f"CONFIDENCE-COMMAND-{_identifier(command_id)}",
+        notice_id=collection_confidence_command_notice_id(command_id),
         category=FAILED,
         title="Incomplete body-fetch transfer",
         direct_fact=direct_fact,
@@ -650,6 +663,12 @@ def _field(item: object, name: str) -> object:
 
 def _identifier(value: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "-", value.upper()).strip("-") or "UNKNOWN"
+
+
+def collection_confidence_command_notice_id(command_id: str) -> str:
+    """Return the canonical notice identity for one structured command result."""
+
+    return f"CONFIDENCE-COMMAND-{_identifier(command_id)}"
 
 
 def _render_values(values: tuple[str, ...]) -> str:

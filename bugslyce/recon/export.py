@@ -551,7 +551,7 @@ def _portable_pack_content(
         and archive_name.endswith(".json")
         and "/" not in archive_name
     ):
-        return _portable_confidence_command_content(content)
+        return _portable_confidence_command_content(content, input_dir)
     if archive_name == "bugslyce_project.json":
         try:
             payload = json.loads(content.decode("utf-8"))
@@ -677,11 +677,29 @@ def _portable_confidence_pipeline_content(content: bytes) -> bytes:
     return (json.dumps(portable, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def _portable_confidence_command_content(content: bytes) -> bytes:
+def _portable_confidence_command_content(content: bytes, input_dir: Path) -> bytes:
     payload = _json_object(content, "command confidence metadata")
     results = payload.get("command_results")
     if not isinstance(results, list):
         raise ValueError("Command confidence metadata command_results must be a list.")
+    execution_mode = payload.get("mode")
+    partial_body_bytes = payload.get("partial_body_bytes")
+    portable_partial_paths: dict[str, tuple[str, int]] = {}
+    if execution_mode == "body-fetch" and isinstance(partial_body_bytes, dict):
+        for raw_path, raw_size in sorted(partial_body_bytes.items()):
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("Body-fetch partial artefact path must be non-empty text.")
+            if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
+                raise ValueError("Body-fetch partial artefact size must be non-negative.")
+            _source, relative = _resolve_reference(
+                input_dir,
+                raw_path,
+                "body-fetch partial artefact",
+            )
+            portable_partial_paths[raw_path] = (
+                f"raw/{relative.as_posix()}",
+                raw_size,
+            )
     portable_results = []
     for index, result in enumerate(results, start=1):
         if not isinstance(result, dict):
@@ -749,6 +767,24 @@ def _portable_confidence_command_content(content: bytes) -> bytes:
         "generated_by": "bugslyce.collection_confidence.command_execution",
         "command_results": portable_results,
     }
+    if execution_mode == "body-fetch":
+        portable["mode"] = "body-fetch"
+        portable["retained_partial_artefacts"] = sorted(
+            (
+                {
+                    "byte_count": portable_partial_paths[output_file][1],
+                    "command_id": result["command_id"],
+                    "portable_path": portable_partial_paths[output_file][0],
+                }
+                for result in results
+                if isinstance(result, dict)
+                and isinstance(result.get("command_id"), str)
+                and isinstance(result.get("output_file"), str)
+                and (output_file := result.get("output_file"))
+                in portable_partial_paths
+            ),
+            key=lambda item: (item["command_id"], item["portable_path"]),
+        )
     return (json.dumps(portable, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 

@@ -7,8 +7,46 @@ from pathlib import Path
 
 import pytest
 
+from bugslyce.core.engagement_policy import (
+    AUTOMATION_PERMITTED,
+    CONFIRMED,
+    IDENTIFICATION_NONE,
+    SERVICE_VERSION_NOT_PERMITTED,
+    build_bug_bounty_policy,
+)
+from bugslyce.core.programme_scope import (
+    build_programme_scope_policy,
+    build_programme_scope_rule,
+)
 from bugslyce.cli import main
-from bugslyce.project_session import build_project_next, initialize_project
+from bugslyce.project_session import (
+    build_project_next,
+    initialize_project,
+    save_project_engagement_policy,
+    save_project_programme_scope_policy,
+)
+
+
+_STANDARD_PIPELINE_STEP_IDS = (
+    "PIPELINE-STEP-001",
+    "PIPELINE-STEP-002",
+    "PIPELINE-STEP-003",
+    "PIPELINE-STEP-004",
+    "PIPELINE-STEP-005",
+    "PIPELINE-STEP-006",
+    "PIPELINE-STEP-007",
+    "PIPELINE-STEP-008",
+    "PIPELINE-STEP-009",
+    "PIPELINE-STEP-010",
+    "PIPELINE-STEP-011",
+    "PIPELINE-STEP-012",
+)
+_DEEP_PIPELINE_STEP_IDS = (
+    *_STANDARD_PIPELINE_STEP_IDS[:9],
+    "PIPELINE-STEP-010D",
+    "PIPELINE-STEP-011D",
+    *_STANDARD_PIPELINE_STEP_IDS[9:],
+)
 
 
 def test_project_next_refuses_missing_project_file(tmp_path: Path, capsys) -> None:
@@ -51,6 +89,131 @@ def test_project_next_without_recon_pack_suggests_scoped_nmap_discovery(
     assert "--profile lab-tcp-full" in result.recommended_action.command_preview
     assert "--confirm" in result.recommended_action.command_preview
     assert not Path(f"{output_dir}-content-plan-tiny").exists()
+
+
+def test_ready_fresh_bug_bounty_project_still_recommends_standard(
+    tmp_path: Path,
+) -> None:
+    project_file, _output_dir = _ready_bug_bounty_project(tmp_path)
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
+
+
+@pytest.mark.parametrize("profile", ("standard-bounded", "deep-bounded"))
+def test_completed_bug_bounty_pipeline_recommends_offline_report_review(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile=profile)
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "review-existing-report"
+    assert result.recommended_action.optional is False
+    assert "less" in result.recommended_action.command_preview
+    assert str(output_dir / "report.md") in result.recommended_action.command_preview
+    assert all(
+        action.id != "run-standard-project-pipeline"
+        for action in (result.recommended_action, *result.optional_actions)
+    )
+
+
+@pytest.mark.parametrize("pack_exists", (False, True))
+def test_completed_bug_bounty_pipeline_only_offers_missing_evidence_pack(
+    tmp_path: Path,
+    pack_exists: bool,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile="standard-bounded")
+    pack_path = Path(f"{output_dir}-evidence-pack.zip")
+    if pack_exists:
+        pack_path.write_bytes(b"existing portable pack")
+
+    result = build_project_next(project_file)
+
+    export_actions = [
+        action for action in result.optional_actions if action.id == "export-evidence-pack"
+    ]
+    assert bool(export_actions) is not pack_exists
+
+
+def test_incomplete_bug_bounty_pipeline_is_not_treated_as_completed(
+    tmp_path: Path,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile="deep-bounded")
+    pipeline_path = output_dir / "project_pipeline.json"
+    payload = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    payload["final_status"] = "failed"
+    pipeline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
+
+
+def test_truncated_standard_bug_bounty_pipeline_is_not_treated_as_completed(
+    tmp_path: Path,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile="standard-bounded")
+    pipeline_path = output_dir / "project_pipeline.json"
+    payload = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    payload["steps"] = [
+        step
+        for step in payload["steps"]
+        if step["step_id"] != "PIPELINE-STEP-012"
+    ]
+    pipeline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
+
+
+def test_truncated_deep_bug_bounty_pipeline_is_not_treated_as_completed(
+    tmp_path: Path,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile="deep-bounded")
+    pipeline_path = output_dir / "project_pipeline.json"
+    payload = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    payload["steps"] = [
+        step
+        for step in payload["steps"]
+        if step["step_id"] != "PIPELINE-STEP-010D"
+    ]
+    pipeline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        {"step_id": "PIPELINE-STEP-001", "status": "completed"},
+        {"step_id": "PIPELINE-STEP-999", "status": "completed"},
+    ),
+)
+def test_malformed_bug_bounty_pipeline_step_identity_fails_closed(
+    tmp_path: Path,
+    replacement: dict[str, str],
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile="standard-bounded")
+    pipeline_path = output_dir / "project_pipeline.json"
+    payload = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    payload["steps"][-1] = replacement
+    pipeline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "run-standard-project-pipeline"
 
 
 def test_project_next_discovery_only_suggests_nmap_services(tmp_path: Path) -> None:
@@ -314,6 +477,84 @@ def _project(tmp_path: Path) -> tuple[Path, Path]:
         output_dir,
     )
     return project_file, output_dir
+
+
+def _ready_bug_bounty_project(tmp_path: Path) -> tuple[Path, Path]:
+    scope = tmp_path / "scope.md"
+    scope.write_text("# Scope\n", encoding="utf-8")
+    output_dir = tmp_path / "bug-bounty-output"
+    _project_value, project_file = initialize_project(
+        "guided-bug-bounty",
+        "192.0.2.10",
+        scope,
+        output_dir,
+        engagement_context="bug_bounty",
+    )
+    save_project_engagement_policy(
+        project_file,
+        build_bug_bounty_policy(
+            programme_rules_reviewed=CONFIRMED,
+            automated_reconnaissance=AUTOMATION_PERMITTED,
+            identification_requirement=IDENTIFICATION_NONE,
+            service_version_detection=SERVICE_VERSION_NOT_PERMITTED,
+            updated_at="2026-08-08T12:00:00Z",
+        ),
+    )
+    save_project_programme_scope_policy(
+        project_file,
+        build_programme_scope_policy(
+            (
+                build_programme_scope_rule(
+                    rule_id="target-ip",
+                    action="include",
+                    kind="exact_ipv4",
+                    value="192.0.2.10",
+                ),
+            ),
+            updated_at="2026-08-08T12:00:00Z",
+        ),
+    )
+    return project_file, output_dir
+
+
+def _write_completed_bug_bounty_pipeline(output_dir: Path, *, profile: str) -> None:
+    _write(output_dir / "report.md", "# Operator Report\n")
+    _write(
+        output_dir / "recon_manifest.json",
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "192.0.2.10",
+                "scope_file": "scope.md",
+                "profile": profile,
+                "artifacts": [],
+            }
+        ),
+    )
+    _write(
+        output_dir / "project_pipeline.json",
+        json.dumps(
+            {
+                "target": "192.0.2.10",
+                "output_dir": str(output_dir.resolve()),
+                "profile": profile,
+                "final_status": "completed",
+                "completed_at": "2026-08-08T12:30:00Z",
+                "steps": [
+                    {"step_id": step_id, "status": "completed"}
+                    for step_id in _pipeline_step_ids(profile)
+                ],
+            }
+        ),
+    )
+
+
+def _pipeline_step_ids(profile: str) -> tuple[str, ...]:
+    if profile == "standard-bounded":
+        return _STANDARD_PIPELINE_STEP_IDS
+    if profile == "deep-bounded":
+        return _DEEP_PIPELINE_STEP_IDS
+    raise ValueError(f"Unsupported pipeline profile: {profile}")
 
 
 def _write_pack(output_dir: Path, stage: str, tiny: bool = False) -> None:
