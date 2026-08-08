@@ -1953,6 +1953,11 @@ def _write_interpretation_report_if_needed(
             project_state,
             candidates,
             additional_leads=operator_summary_leads,
+            response_similarity_review=(
+                getattr(orchestration, "response_similarity_review", None)
+                if orchestration is not None
+                else None
+            ),
         )
         if isinstance(project_state, ProjectState)
         else None

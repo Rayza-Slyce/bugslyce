@@ -62,6 +62,11 @@ INTERESTING_SEGMENTS = {
     "config",
     "files",
 }
+REPEATED_CONTENT_GROUP_CATEGORIES = {
+    "exact_body_hash_group",
+    "request_reflecting_template_group",
+    "candidate_default_template_group",
+}
 
 
 @dataclass(frozen=True)
@@ -194,15 +199,17 @@ def build_deep_operator_summary_leads(
     if access_boundary_lead is not None:
         leads.append(access_boundary_lead)
 
+    repeated_response_urls = _repeated_content_group_urls(response_similarity_review)
     listing_reviews: list[SuccessfulDeepContentReview] = []
+    grouped_general_reviews: list[SuccessfulDeepContentReview] = []
     general_reviews: list[SuccessfulDeepContentReview] = []
     for review in successful_content_reviews:
-        target = (
-            listing_reviews
-            if directory_listing_title(review) is not None
-            else general_reviews
-        )
-        target.append(review)
+        if directory_listing_title(review) is not None:
+            listing_reviews.append(review)
+        elif _review_matches_repeated_content_group(review, repeated_response_urls):
+            grouped_general_reviews.append(review)
+        else:
+            general_reviews.append(review)
     if listing_reviews:
         listing_count = len(listing_reviews)
         leads.append(
@@ -263,7 +270,16 @@ def build_deep_operator_summary_leads(
             }
         )
         response_count = len(general_reviews)
+        grouped_count = len(grouped_general_reviews)
         verb = "was" if response_count == 1 else "were"
+        grouped_context = (
+            f" {grouped_count} additional successful "
+            f"response{'s' if grouped_count != 1 else ''} "
+            "are already represented by retained repeated-response families and remain "
+            "available in the detailed offline review."
+            if grouped_count
+            else ""
+        )
         leads.append(
             OperatorSummaryLead(
                 title="Successfully collected Deep content available offline",
@@ -273,6 +289,7 @@ def build_deep_operator_summary_leads(
                     "for priority content review from "
                     + ", ".join(f"`{reference}`" for reference in artefact_references)
                     + "."
+                    + grouped_context
                 ),
                 endpoints=endpoints,
                 evidence_ids=evidence_ids,
@@ -456,10 +473,14 @@ def build_operator_summary(
     candidates: list[Candidate],
     *,
     additional_leads: tuple[OperatorSummaryLead, ...] = (),
+    response_similarity_review: DeepResponseSimilarityReview | None = None,
 ) -> OperatorSummary:
     """Build a conservative ranked summary from structured evidence."""
 
-    body_leads = _body_page_leads(project_state)
+    body_leads = _body_page_leads(
+        project_state,
+        repeated_response_urls=_repeated_content_group_urls(response_similarity_review),
+    )
     leads: list[OperatorSummaryLead] = list(additional_leads)
     candidates_by_type = {
         candidate_type: [
@@ -634,7 +655,11 @@ def _candidate_service_lead(
     return None
 
 
-def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
+def _body_page_leads(
+    project_state: ProjectState,
+    *,
+    repeated_response_urls: set[str] | None = None,
+) -> list[OperatorSummaryLead]:
     artifacts_by_url: dict[str, list[HTTPArtifact]] = {}
     for artifact in project_state.http_artifacts:
         if artifact.url:
@@ -676,20 +701,46 @@ def _body_page_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:
         if is_generic_default_page_text(title):
             continue
         interesting = _interesting_path(parsed.path)
+        repeated_family_member = _response_family_member_url(url) in (
+            repeated_response_urls or set()
+        )
+        base_why = (
+            f"Follow-up evidence records an HTTP 200 response and saved page title "
+            f'"{title}".'
+            if status == 200
+            else f'Saved followed-path HTML records page title "{title}".'
+        )
         leads.append(
             OperatorSummaryLead(
                 title=f"Fetched application page: {parsed.path or '/'}",
                 why=(
-                    f"Follow-up evidence records an HTTP 200 response and saved page title "
-                    f'"{title}".'
-                    if status == 200
-                    else f'Saved followed-path HTML records page title "{title}".'
+                    base_why
+                    + (
+                        " The response is also represented by a retained "
+                        "repeated-response family, so treat this page as family context "
+                        "rather than standalone application evidence."
+                        if repeated_family_member
+                        else ""
+                    )
                 ),
                 endpoints=[url],
                 evidence_ids=evidence_ids,
-                next_action="Review the saved HTML and linked artefacts in context before escalating any lead.",
-                signal="medium" if interesting or body_fetch else "low",
-                score=82 if interesting or body_fetch else 58,
+                next_action=(
+                    "Review the retained response-family evidence and saved HTML offline; "
+                    "do not treat this family member as a standalone application lead."
+                    if repeated_family_member
+                    else "Review the saved HTML and linked artefacts in context before escalating any lead."
+                ),
+                signal=(
+                    "response-family context"
+                    if repeated_family_member
+                    else "medium" if interesting or body_fetch else "low"
+                ),
+                score=(
+                    52
+                    if repeated_family_member
+                    else 82 if interesting or body_fetch else 58
+                ),
                 lead_type="fetched_application_page",
             )
         )
@@ -975,6 +1026,51 @@ def _has_independent_endpoint_reference(project_state: ProjectState, path) -> bo
             path.url,
         ).independent_reference_evidence_ids
     )
+
+
+def _repeated_content_group_urls(
+    similarity_review: DeepResponseSimilarityReview | None,
+) -> set[str]:
+    if similarity_review is None:
+        return set()
+    return {
+        canonical
+        for group in similarity_review.groups
+        if group.category in REPEATED_CONTENT_GROUP_CATEGORIES
+        for value in group.requested_urls
+        if (canonical := _response_family_member_url(value))
+    }
+
+
+def _review_matches_repeated_content_group(
+    review: SuccessfulDeepContentReview,
+    repeated_response_urls: set[str],
+) -> bool:
+    review_urls = {
+        canonical
+        for value in (review.canonical_url, *review.requested_urls)
+        if (canonical := _response_family_member_url(value))
+    }
+    return bool(review_urls & repeated_response_urls)
+
+
+def _response_family_member_url(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+        scheme = parsed.scheme.lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except (TypeError, ValueError):
+        return value
+    if scheme not in {"http", "https"} or not host:
+        return value
+    default_port = 80 if scheme == "http" else 443
+    netloc = host if port in {None, default_port} else f"{host}:{port}"
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{scheme}://{netloc}{path}{query}"
 
 
 def _canonical_summary_url(value: str | None) -> str:

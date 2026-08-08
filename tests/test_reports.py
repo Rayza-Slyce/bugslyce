@@ -1452,6 +1452,79 @@ def test_operator_summary_promotes_generic_body_fetched_200_path(tmp_path: Path)
     assert "Signal: `medium`" in review_first
 
 
+def test_repeated_response_family_demotes_body_fetched_page_without_cross_origin_bleed(
+    tmp_path: Path,
+) -> None:
+    state = _fetched_page_project_state(tmp_path)
+    url = "https://portal.example.test/public/"
+    family = SimpleNamespace(
+        category="candidate_default_template_group",
+        requested_urls=(
+            url,
+            "https://portal.example.test/public/peer",
+        ),
+    )
+    unrelated_family = SimpleNamespace(
+        category="candidate_default_template_group",
+        requested_urls=(
+            "https://other.example.test/public/",
+            "https://other.example.test/public/peer",
+        ),
+    )
+    query_variant_family = SimpleNamespace(
+        category="candidate_default_template_group",
+        requested_urls=(
+            "https://portal.example.test/public/?view=compact",
+            "https://portal.example.test/public/?view=expanded",
+        ),
+    )
+
+    baseline = build_operator_summary(state, [])
+    grouped = build_operator_summary(
+        state,
+        [],
+        response_similarity_review=SimpleNamespace(groups=(family,)),
+    )
+    unrelated = build_operator_summary(
+        state,
+        [],
+        response_similarity_review=SimpleNamespace(groups=(unrelated_family,)),
+    )
+    query_variant = build_operator_summary(
+        state,
+        [],
+        response_similarity_review=SimpleNamespace(groups=(query_variant_family,)),
+    )
+
+    baseline_page = next(
+        lead for lead in baseline.ranked_leads if lead.lead_type == "fetched_application_page"
+    )
+    grouped_page = next(
+        lead for lead in grouped.ranked_leads if lead.lead_type == "fetched_application_page"
+    )
+    unrelated_page = next(
+        lead for lead in unrelated.ranked_leads if lead.lead_type == "fetched_application_page"
+    )
+    query_variant_page = next(
+        lead
+        for lead in query_variant.ranked_leads
+        if lead.lead_type == "fetched_application_page"
+    )
+
+    assert baseline_page.score == 82
+    assert baseline_page.signal == "medium"
+    assert grouped_page.score == 52
+    assert grouped_page.signal == "response-family context"
+    assert "retained repeated-response family" in grouped_page.why
+    assert "standalone application evidence" in grouped_page.why
+    assert grouped_page.endpoints == baseline_page.endpoints == [url]
+    assert grouped_page.evidence_ids == baseline_page.evidence_ids
+    assert unrelated_page.score == baseline_page.score
+    assert unrelated_page.signal == baseline_page.signal
+    assert query_variant_page.score == baseline_page.score
+    assert query_variant_page.signal == baseline_page.signal
+
+
 def test_successful_deep_content_uses_one_operator_summary_slot(
     tmp_path: Path,
 ) -> None:
@@ -1562,6 +1635,130 @@ def test_successful_deep_content_uses_one_operator_summary_slot(
             assert "deep_source_route_collection.json" in rendered
             assert all(evidence_id in rendered for evidence_id in review.evidence_ids)
         assert review.body_preview in human_triage
+
+
+def test_successful_deep_content_excludes_repeated_family_members_from_canonical_aggregate() -> None:
+    repeated_one = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url="https://portal.example.test/catalogue/",
+        requested_urls=("https://portal.example.test/catalogue/",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=512,
+        body_sha256="1" * 64,
+        body_preview="<html><title>Catalogue</title></html>",
+        evidence_ids=("EVID-GROUPED-ONE",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    repeated_two = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0002",
+        canonical_url="https://portal.example.test/catalogue/index.html",
+        requested_urls=("https://portal.example.test/catalogue/index.html",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=512,
+        body_sha256="1" * 64,
+        body_preview="<html><title>Catalogue</title></html>",
+        evidence_ids=("EVID-GROUPED-TWO",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    unique = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0003",
+        canonical_url="https://portal.example.test/notice",
+        requested_urls=("https://portal.example.test/notice",),
+        status_code=200,
+        content_type="text/plain",
+        body_bytes=32,
+        body_sha256="3" * 64,
+        body_preview="Distinct retained notice.",
+        evidence_ids=("EVID-UNIQUE",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    family = SimpleNamespace(
+        category="exact_body_hash_group",
+        requested_urls=(repeated_two.canonical_url, repeated_one.canonical_url),
+    )
+    review = SimpleNamespace(groups=(family,))
+
+    forward = build_deep_operator_summary_leads(
+        (),
+        (repeated_one, repeated_two, unique),
+        response_similarity_review=review,
+    )
+    reverse = build_deep_operator_summary_leads(
+        (),
+        (unique, repeated_two, repeated_one),
+        response_similarity_review=SimpleNamespace(
+            groups=(
+                SimpleNamespace(
+                    category=family.category,
+                    requested_urls=tuple(reversed(family.requested_urls)),
+                ),
+            )
+        ),
+    )
+
+    assert forward == reverse
+    aggregate = next(
+        lead for lead in forward if lead.lead_type == "successful_deep_content"
+    )
+    assert aggregate.endpoints == [unique.canonical_url]
+    assert aggregate.evidence_ids == ["EVID-UNIQUE"]
+    assert aggregate.score == 72
+    assert "1 successful 2xx response was promoted" in aggregate.why
+    assert "2 additional successful responses are already represented" in aggregate.why
+    assert repeated_one.canonical_url not in aggregate.endpoints
+    assert repeated_two.canonical_url not in aggregate.endpoints
+
+    grouped_only = build_deep_operator_summary_leads(
+        (),
+        (repeated_one, repeated_two),
+        response_similarity_review=review,
+    )
+    assert all(
+        lead.lead_type != "successful_deep_content"
+        for lead in grouped_only
+    )
+
+    detailed = render_successful_deep_content_runbook(
+        (repeated_one, repeated_two, unique)
+    )
+    for item in (repeated_one, repeated_two, unique):
+        assert item.review_id in detailed
+        assert item.canonical_url in detailed
+
+
+def test_listing_response_remains_specific_when_also_in_repeated_family() -> None:
+    listing = SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-0001",
+        canonical_url="https://portal.example.test/public/",
+        requested_urls=("https://portal.example.test/public/",),
+        status_code=200,
+        content_type="text/html",
+        body_bytes=128,
+        body_sha256="4" * 64,
+        body_preview="<html><title>Index of /public/</title></html>",
+        evidence_ids=("EVID-LISTING",),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+    family = SimpleNamespace(
+        category="candidate_default_template_group",
+        requested_urls=(
+            listing.canonical_url,
+            "https://portal.example.test/public/index.html",
+        ),
+    )
+
+    leads = build_deep_operator_summary_leads(
+        (),
+        (listing,),
+        response_similarity_review=SimpleNamespace(groups=(family,)),
+    )
+
+    assert [lead.lead_type for lead in leads] == ["directory_listing_response"]
+    assert leads[0].score == 88
+    assert leads[0].endpoints == [listing.canonical_url]
+    assert leads[0].evidence_ids == ["EVID-LISTING"]
 
 
 def test_many_successful_deep_responses_cannot_consume_multiple_summary_slots(

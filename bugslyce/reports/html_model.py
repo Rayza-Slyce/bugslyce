@@ -189,6 +189,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
             project_state,
             candidates,
             additional_leads=deep_summary_leads,
+            response_similarity_review=similarities,
         ),
         confidence_notices=notices,
         http_fingerprints=fingerprints,
