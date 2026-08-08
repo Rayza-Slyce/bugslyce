@@ -36,6 +36,7 @@ from bugslyce.project_pipeline import (
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
     _body_fetch_warning_message,
+    _deep_operator_summary_leads,
     _step_runners,
     format_exception_diagnostic,
     render_project_pipeline_failure_guidance,
@@ -68,6 +69,44 @@ from bugslyce.reports.operator_summary import (
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
+
+def test_deep_operator_summary_leads_receive_response_contrast_models() -> None:
+    fingerprint = SimpleNamespace(
+        fingerprint_id="FP-ACCESS",
+        requested_url="https://portal.example.test/admin",
+        status_code=401,
+        body_empty=False,
+        title_observed_in_bounded_preview=(
+            "Authentication required: bearer token missing"
+        ),
+        interesting_headers=(),
+        evidence_ids=("EVID-ACCESS",),
+    )
+    family = SimpleNamespace(
+        group_id="DEEP-RESP-FAM-TEST",
+        category="request_reflecting_template_group",
+        member_count=3,
+        requested_urls=(
+            "https://portal.example.test/fallback-a",
+            "https://portal.example.test/fallback-b",
+            "https://portal.example.test/fallback-c",
+        ),
+        status_codes=(500,),
+        fingerprint_ids=("FP-A", "FP-B", "FP-C"),
+    )
+    orchestration = SimpleNamespace(
+        source_route_collection_review=SimpleNamespace(review_leads=()),
+        successful_content_reviews=(),
+        http_fingerprint_summary=SimpleNamespace(fingerprints=(fingerprint,)),
+        response_similarity_review=SimpleNamespace(groups=(family,)),
+    )
+
+    leads = _deep_operator_summary_leads(orchestration)
+
+    assert [lead.lead_type for lead in leads] == [
+        "distinctive_access_boundary_response"
+    ]
+    assert leads[0].endpoints == ["https://portal.example.test/admin"]
 
 def test_project_run_help_exists(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:

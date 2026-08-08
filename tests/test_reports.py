@@ -289,6 +289,180 @@ def test_directory_looking_path_without_listing_title_is_not_promoted() -> None:
     assert leads[0].endpoints == ["https://portal.example.test/ftp"]
     assert leads[0].evidence_ids == ["EVID-ORDINARY-FTP"]
 
+
+def _access_fingerprint(
+    *,
+    fingerprint_id: str,
+    url: str,
+    status: int,
+    title: str | None,
+    evidence_ids: tuple[str, ...],
+    header_names: tuple[str, ...] = (),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        fingerprint_id=fingerprint_id,
+        requested_url=url,
+        status_code=status,
+        body_empty=False,
+        title_observed_in_bounded_preview=title,
+        interesting_headers=tuple(
+            SimpleNamespace(name=name, value="retained") for name in header_names
+        ),
+        evidence_ids=evidence_ids,
+    )
+
+
+def _response_family(
+    *,
+    group_id: str = "DEEP-RESP-FAM-TEST",
+    origin: str = "https://portal.example.test",
+    status_codes: tuple[int, ...] = (500,),
+    fingerprint_ids: tuple[str, ...] = ("FP-A", "FP-B", "FP-C"),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        group_id=group_id,
+        category="request_reflecting_template_group",
+        member_count=len(fingerprint_ids),
+        requested_urls=tuple(
+            f"{origin}/fallback-{index}"
+            for index in range(1, len(fingerprint_ids) + 1)
+        ),
+        status_codes=status_codes,
+        fingerprint_ids=fingerprint_ids,
+    )
+
+
+def test_distinctive_access_boundary_gets_one_canonical_context_lead() -> None:
+    url = "https://portal.example.test/admin"
+    fingerprint = _access_fingerprint(
+        fingerprint_id="FP-ACCESS",
+        url=url,
+        status=401,
+        title="Authentication required: bearer token missing",
+        evidence_ids=("EVID-ACCESS-401", "EVID-ACCESS-HEADERS"),
+    )
+    leads = build_deep_operator_summary_leads(
+        (),
+        (),
+        http_fingerprint_summary=SimpleNamespace(fingerprints=(fingerprint,)),
+        response_similarity_review=SimpleNamespace(
+            groups=(_response_family(),),
+        ),
+    )
+
+    assert len(leads) == 1
+    access = leads[0]
+    assert access.lead_type == "distinctive_access_boundary_response"
+    assert access.score == 86
+    assert access.signal == "distinctive access-boundary response"
+    assert access.endpoints == [url]
+    assert access.evidence_ids == ["EVID-ACCESS-401", "EVID-ACCESS-HEADERS"]
+    assert "not evidence of weak access control or a vulnerability" in access.why
+    assert "access-control bypass" in access.next_action
+
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    state = replace(
+        state,
+        evidence=[
+            Evidence(
+                id="EVID-ACCESS-401",
+                source_file="bounded-discovery.txt",
+                evidence_type="discovered_path",
+                value=url,
+                context={"status_code": 401},
+            ),
+            Evidence(
+                id="EVID-ACCESS-HEADERS",
+                source_file="bounded-header-followup.txt",
+                evidence_type="http_headers",
+                value=url,
+                context={"status_code": 401},
+            ),
+        ],
+        endpoints=[
+            Endpoint(
+                url=url,
+                hostname="portal.example.test",
+                path="/admin",
+                query_params=[],
+                evidence_ids=["EVID-ACCESS-401", "EVID-ACCESS-HEADERS"],
+                tags=[],
+            )
+        ],
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=401,
+                content_length=512,
+                redirect_location=None,
+                source="bounded-discovery.txt",
+                evidence_ids=["EVID-ACCESS-401"],
+                tags=[],
+            )
+        ],
+    )
+    summary = build_operator_summary(state, [], additional_leads=(access,))
+
+    assert summary.ranked_leads[0].lead_type == "distinctive_access_boundary_response"
+    assert all(
+        url not in item.endpoints
+        for item in summary.low_signal
+        if item.title == "Access-controlled path context"
+    )
+
+
+def test_generic_or_repeated_access_boundaries_are_not_promoted() -> None:
+    generic = _access_fingerprint(
+        fingerprint_id="FP-GENERIC",
+        url="https://portal.example.test/private",
+        status=403,
+        title="403 Forbidden",
+        evidence_ids=("EVID-GENERIC",),
+    )
+    repeated = _access_fingerprint(
+        fingerprint_id="FP-REPEATED",
+        url="https://portal.example.test/account",
+        status=401,
+        title="Authentication required: token missing",
+        evidence_ids=("EVID-REPEATED",),
+    )
+    family = _response_family(
+        status_codes=(401,),
+        fingerprint_ids=("FP-REPEATED", "FP-B", "FP-C"),
+    )
+
+    leads = build_deep_operator_summary_leads(
+        (),
+        (),
+        http_fingerprint_summary=SimpleNamespace(
+            fingerprints=(generic, repeated),
+        ),
+        response_similarity_review=SimpleNamespace(groups=(family,)),
+    )
+
+    assert leads == ()
+
+
+def test_access_boundary_requires_same_origin_family_contrast() -> None:
+    fingerprint = _access_fingerprint(
+        fingerprint_id="FP-ACCESS",
+        url="https://portal.example.test/admin",
+        status=401,
+        title=None,
+        header_names=("WWW-Authenticate",),
+        evidence_ids=("EVID-ACCESS",),
+    )
+    unrelated_family = _response_family(origin="https://other.example.test")
+
+    leads = build_deep_operator_summary_leads(
+        (),
+        (),
+        http_fingerprint_summary=SimpleNamespace(fingerprints=(fingerprint,)),
+        response_similarity_review=SimpleNamespace(groups=(unrelated_family,)),
+    )
+
+    assert leads == ()
+
 def test_report_can_include_prerendered_human_triage_and_cards_sections() -> None:
     _report, state, candidates = _basic_saas_report()
     brief_section = "\n".join(

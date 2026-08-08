@@ -2281,6 +2281,16 @@ def _deep_operator_summary_leads(
     return build_deep_operator_summary_leads(
         tuple(getattr(source_review, "review_leads", ())),
         tuple(getattr(orchestration, "successful_content_reviews", ())),
+        http_fingerprint_summary=getattr(
+            orchestration,
+            "http_fingerprint_summary",
+            None,
+        ),
+        response_similarity_review=getattr(
+            orchestration,
+            "response_similarity_review",
+            None,
+        ),
     )
 
 

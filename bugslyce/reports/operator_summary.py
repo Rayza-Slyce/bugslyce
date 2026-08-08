@@ -18,6 +18,14 @@ from bugslyce.reports.artifact_classifier import (
     effective_candidate_priority,
     is_generic_default_page_text,
 )
+from bugslyce.recon.deep_http_fingerprint_summary import (
+    DeepHttpFingerprintSummary,
+    DeepHttpResponseFingerprint,
+)
+from bugslyce.recon.deep_response_similarity_review import (
+    DeepResponseSimilarityGroup,
+    DeepResponseSimilarityReview,
+)
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
@@ -123,6 +131,9 @@ class DeepSummaryDisclosure(Protocol):
 def build_deep_operator_summary_leads(
     disclosures: Sequence[DeepSummaryDisclosure],
     successful_content_reviews: Sequence[SuccessfulDeepContentReview],
+    *,
+    http_fingerprint_summary: DeepHttpFingerprintSummary | None = None,
+    response_similarity_review: DeepResponseSimilarityReview | None = None,
 ) -> tuple[OperatorSummaryLead, ...]:
     """Build the existing deterministic Deep additions to Operator Summary."""
 
@@ -175,6 +186,14 @@ def build_deep_operator_summary_leads(
                 lead_type=disclosure.category,
             )
         )
+
+    access_boundary_lead = _distinctive_access_boundary_lead(
+        http_fingerprint_summary,
+        response_similarity_review,
+    )
+    if access_boundary_lead is not None:
+        leads.append(access_boundary_lead)
+
     listing_reviews: list[SuccessfulDeepContentReview] = []
     general_reviews: list[SuccessfulDeepContentReview] = []
     for review in successful_content_reviews:
@@ -270,6 +289,168 @@ def build_deep_operator_summary_leads(
     return tuple(leads)
 
 
+def _distinctive_access_boundary_lead(
+    http_summary: DeepHttpFingerprintSummary | None,
+    similarity_review: DeepResponseSimilarityReview | None,
+) -> OperatorSummaryLead | None:
+    if http_summary is None or similarity_review is None:
+        return None
+
+    grouped_fingerprint_ids = {
+        fingerprint_id
+        for group in similarity_review.groups
+        for fingerprint_id in group.fingerprint_ids
+    }
+    candidates: list[tuple[DeepHttpResponseFingerprint, DeepResponseSimilarityGroup]] = []
+    for fingerprint in http_summary.fingerprints:
+        if (
+            fingerprint.status_code not in {401, 403}
+            or not fingerprint.evidence_ids
+            or fingerprint.body_empty
+            or fingerprint.fingerprint_id in grouped_fingerprint_ids
+            or not _has_explicit_access_boundary_signal(fingerprint)
+        ):
+            continue
+        contrast = _strongest_same_origin_contrast_group(
+            fingerprint,
+            similarity_review.groups,
+        )
+        if contrast is not None:
+            candidates.append((fingerprint, contrast))
+
+    if not candidates:
+        return None
+
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            _canonical_summary_url(item[0].requested_url),
+            item[0].status_code,
+            item[0].fingerprint_id,
+        ),
+    )
+    endpoints = sorted(
+        {
+            _canonical_summary_url(fingerprint.requested_url)
+            for fingerprint, _group in ordered
+            if _canonical_summary_url(fingerprint.requested_url)
+        }
+    )
+    evidence_ids = sorted(
+        {
+            evidence_id
+            for fingerprint, _group in ordered
+            for evidence_id in fingerprint.evidence_ids
+            if evidence_id
+        }
+    )
+    statuses = sorted({fingerprint.status_code for fingerprint, _group in ordered})
+    family_sizes = sorted({group.member_count for _fingerprint, group in ordered})
+    count = len(ordered)
+    return OperatorSummaryLead(
+        title=(
+            "Distinctive access-boundary response observed"
+            if count == 1
+            else "Distinctive access-boundary responses observed"
+        ),
+        why=(
+            f"{count} retained HTTP "
+            f"{'/'.join(str(status) for status in statuses)} "
+            f"response{'s' if count != 1 else ''} used explicit authentication or "
+            "authorisation evidence, remained outside every retained repeated-response "
+            "group, and contrasted with a same-origin response family containing at "
+            f"least {min(family_sizes)} observations. This is access-boundary and "
+            "response-contrast evidence, not evidence of weak access control or a "
+            "vulnerability."
+        ),
+        endpoints=endpoints,
+        evidence_ids=evidence_ids,
+        next_action=(
+            "Review the retained status, title or authentication header and compare it "
+            "with the referenced same-origin response family offline. Do not attempt "
+            "login, credential testing, access-control bypass, brute force, or form "
+            "submission from this lead."
+        ),
+        signal="distinctive access-boundary response",
+        score=86,
+        lead_type="distinctive_access_boundary_response",
+    )
+
+
+def _strongest_same_origin_contrast_group(
+    fingerprint: DeepHttpResponseFingerprint,
+    groups: Sequence[DeepResponseSimilarityGroup],
+) -> DeepResponseSimilarityGroup | None:
+    origin = http_origin_from_url(fingerprint.requested_url)
+    if origin is None:
+        return None
+    eligible_categories = {
+        "exact_body_hash_group",
+        "request_reflecting_template_group",
+        "candidate_default_template_group",
+        "client_error_signature_group",
+        "response_signature_group",
+    }
+    eligible = []
+    for group in groups:
+        same_origin_urls = {
+            url
+            for url in group.requested_urls
+            if http_origin_from_url(url) == origin
+        }
+        if (
+            group.category in eligible_categories
+            and group.member_count >= 3
+            and len(same_origin_urls) >= 3
+            and fingerprint.status_code not in group.status_codes
+        ):
+            eligible.append(group)
+    if not eligible:
+        return None
+    return min(
+        eligible,
+        key=lambda group: (
+            -group.member_count,
+            group.category,
+            group.group_id,
+        ),
+    )
+
+
+def _has_explicit_access_boundary_signal(
+    fingerprint: DeepHttpResponseFingerprint,
+) -> bool:
+    header_names = {
+        header.name.casefold()
+        for header in fingerprint.interesting_headers
+        if header.name
+    }
+    if "www-authenticate" in header_names:
+        return True
+
+    title = (fingerprint.title_observed_in_bounded_preview or "").casefold()
+    explicit_phrases = (
+        "authorization header",
+        "authorisation header",
+        "authentication required",
+        "authentication failed",
+        "not authenticated",
+        "credentials required",
+        "credential required",
+        "token required",
+        "token missing",
+        "missing token",
+        "login required",
+        "sign in required",
+        "permission denied",
+        "insufficient permission",
+        "insufficient privilege",
+        "not authorised",
+        "not authorized",
+    )
+    return any(phrase in title for phrase in explicit_phrases)
+
+
 def build_operator_summary(
     project_state: ProjectState,
     candidates: list[Candidate],
@@ -342,12 +523,20 @@ def build_operator_summary(
         _finalise_ranked_lead(lead, rank)
         for rank, lead in enumerate(ranked_unfinalised, start=1)
     ]
+    promoted_access_boundary_urls = {
+        _canonical_summary_url(endpoint)
+        for lead in ranked
+        if lead.lead_type == "distinctive_access_boundary_response"
+        for endpoint in lead.endpoints
+        if _canonical_summary_url(endpoint)
+    }
 
     return OperatorSummary(
         review_first=ranked,
         low_signal=_low_signal_items(
             project_state,
             candidates,
+            promoted_access_boundary_urls=promoted_access_boundary_urls,
         )[:8],
         coverage=_coverage_lines(project_state),
     )
@@ -637,6 +826,8 @@ def _finalise_ranked_lead(
 def _low_signal_items(
     project_state: ProjectState,
     candidates: list[Candidate],
+    *,
+    promoted_access_boundary_urls: set[str] | None = None,
 ) -> list[OperatorSummaryNoise]:
     items: list[OperatorSummaryNoise] = []
     for candidate in candidates:
@@ -679,10 +870,13 @@ def _low_signal_items(
                 )
             )
 
+    promoted_urls = promoted_access_boundary_urls or set()
     forbidden_paths = [
         path
         for path in project_state.discovered_paths
-        if path.status_code in {401, 403} and path.evidence_ids
+        if path.status_code in {401, 403}
+        and path.evidence_ids
+        and _canonical_summary_url(path.url) not in promoted_urls
         and not _has_independent_endpoint_reference(project_state, path)
     ]
     if forbidden_paths:

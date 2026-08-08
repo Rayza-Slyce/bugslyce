@@ -169,6 +169,8 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     deep_summary_leads = build_deep_operator_summary_leads(
         deep_disclosures,
         successful_content,
+        http_fingerprint_summary=fingerprints,
+        response_similarity_review=similarities,
     )
     relationships = build_http_route_relationship_clusters(
         project_state,

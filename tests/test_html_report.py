@@ -113,6 +113,75 @@ def test_html_report_rejects_malformed_required_and_present_deep_artefacts(
         build_html_report_model(malformed_orchestration)
 
 
+
+def test_html_model_promotes_distinctive_access_boundary_offline(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "access-boundary-pack")
+    repeated_hash = "a" * 64
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/fallback-a",
+                500,
+                repeated_hash,
+                preview="<html><title>Request failed</title></html>",
+                evidence_ids=("EVID-FALLBACK-A",),
+            ),
+            _deep_item(
+                "https://portal.example.test/fallback-b",
+                500,
+                repeated_hash,
+                preview="<html><title>Request failed</title></html>",
+                evidence_ids=("EVID-FALLBACK-B",),
+            ),
+            _deep_item(
+                "https://portal.example.test/fallback-c",
+                500,
+                repeated_hash,
+                preview="<html><title>Request failed</title></html>",
+                evidence_ids=("EVID-FALLBACK-C",),
+            ),
+            _deep_item(
+                "https://portal.example.test/admin",
+                401,
+                "b" * 64,
+                preview=(
+                    "<html><title>Authentication required: bearer token missing"
+                    "</title></html>"
+                ),
+                evidence_ids=("EVID-ACCESS-401",),
+            ),
+        ),
+        skipped=(),
+        total_considered=4,
+        total_collected=4,
+        total_skipped=0,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(
+            deep_source_route_collection_result_to_dict(collection),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    access = next(
+        lead
+        for lead in model.operator_summary.ranked_leads
+        if lead.lead_type == "distinctive_access_boundary_response"
+    )
+
+    assert access.score == 86
+    assert access.endpoints == ["https://portal.example.test/admin"]
+    assert access.evidence_ids == ["EVID-ACCESS-401"]
+    assert access.rank < next(
+        lead.rank
+        for lead in model.operator_summary.ranked_leads
+        if lead.lead_type == "high_port_http_service"
+    )
+
 def test_html_report_escapes_hostile_target_controlled_values(tmp_path: Path) -> None:
     pack = _write_current_pack(tmp_path / "pack")
     state_path = pack / "project_state.json"
