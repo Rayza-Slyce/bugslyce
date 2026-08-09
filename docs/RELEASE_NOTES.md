@@ -1,5 +1,50 @@
 # Release Notes
 
+## 1.2.0rc1
+
+BugSlyce `1.2.0rc1` is the release candidate for the v1.2 reliability and
+production bug-bounty runtime work.
+
+Source-level runtime acceptance has completed in controlled authorised labs and
+under current authorised bug-bounty programme constraints. Packaged candidate
+build, isolated installation and exact-wheel cross-host acceptance remain to be
+completed before any final `1.2.0` release decision.
+
+### Strict bug-bounty project runtime
+
+- Added private engagement-policy configuration for programme-specific
+  automation permission, aggregate HTTP rate, concurrency, TCP discovery,
+  Nmap service/version permission and traffic identification.
+- Added default-deny programme scope with explicit include/exclude rules for
+  hostnames, HTTP URL/path namespaces and IPv4 destinations.
+- Standard and Deep bug-bounty pipelines now require successful strict policy,
+  programme-scope and target preflight before live collection.
+- Added policy-aware internal HTTP, curl, Gobuster and Nmap planning and
+  enforcement, including HTTP-only bug-bounty project support.
+- Integrated the interactive bug-bounty launcher flow from policy setup through
+  programme scope to the final Standard or Deep run decision.
+
+### Deep reliability and evidence
+
+- Added native Deep metadata hand-off so metadata requests are collected by the
+  bounded metadata collector instead of being silently treated as complete.
+- Added bounded sitemap metadata collection and same-origin sitemap route
+  references without persisting or following the full XML body.
+- Tightened response-family evidence, canonical ranked-lead presentation,
+  distinctive access-boundary and confirmed listing evidence.
+- Reduced repeated-family prominence and improved supporting evidence in the
+  HTML Operator Report.
+- Improved completed-project guidance, partial-evidence handling and project
+  status/next-step behaviour.
+
+### Safety boundary
+
+BugSlyce remains reconnaissance and evidence-led triage only. Exploitation,
+credential attacks, form submission, authentication testing, recursive
+uncontrolled discovery and arbitrary command execution remain outside the v1
+scope. Review leads remain observations requiring operator validation, not
+confirmed vulnerability claims.
+
 ## 1.1.1
 
 BugSlyce `1.1.1` is a documentation-only safety advisory release. It does

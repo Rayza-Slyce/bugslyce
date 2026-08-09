@@ -12,8 +12,9 @@ BugSlyce does not claim confirmed vulnerabilities.
 
 ## Production bug bounty preflight
 
-BugSlyce `1.1.1` is a documentation-only safety advisory release. It does
-not change live reconnaissance behaviour.
+BugSlyce `1.2.0rc1` is the release candidate for the v1.2 strict
+bug-bounty runtime. Standard and Deep bug-bounty project execution now uses
+policy-aware traffic controls and default-deny programme-scope enforcement.
 
 Historical controlled testing of `1.1.1` against a local HTTP capture server
 found that Standard Recon peaked at **154 requests per second** and Deep Recon
@@ -46,9 +47,14 @@ bugslyce project policy --project ./bugslyce_project.json --configure
 ```
 
 No platform preset supersedes current programme rules. CTFs and controlled
-authorised labs remain the supported live-testing contexts.
+authorised labs remain supported live-testing contexts. Standard and Deep
+bug-bounty project execution is supported only when the current programme
+policy, default-deny programme scope and strict preflight all permit it.
 
-Current package version: `1.1.1`.
+Current package version: `1.2.0rc1`.
+
+This candidate has completed source-level runtime acceptance. Package build,
+isolated installation and exact-wheel cross-host acceptance remain pending.
 
 ## Authorised Use
 
@@ -219,7 +225,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.1.1`. The deterministic test suite mocks live
+The package version is `1.2.0rc1`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash

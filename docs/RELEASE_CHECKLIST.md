@@ -1,16 +1,50 @@
 # Release Checklist
 
-This checklist records the completed BugSlyce `1.1.0` release.
+This checklist tracks BugSlyce `1.2.0rc1` release-candidate acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **`1.1.0` release is complete.**
+Current decision: **source/runtime acceptance is complete; packaged
+`1.2.0rc1` acceptance is pending.**
 
-The `1.0.0rc1`, `1.0.0rc2` and final `1.0.0` acceptance records below remain
-historical evidence. `v1.0.0rc1` points to commit `96ad586`; no package was
-published from either release candidate. The annotated `v1.1.0` tag points to
-release commit `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`.
+Current source baseline before release-metadata preparation:
+`0372bd9ff616d0ce604408a1ddc5c5a516ae874b`.
 
-## A. Source Integrity
+### Completed source/runtime acceptance
+
+- [x] Standard bug-bounty project flow passed under strict engagement policy
+      and default-deny programme scope.
+- [x] Deep bug-bounty project flow passed under the same strict runtime.
+- [x] Interactive policy -> programme scope -> Standard/Deep run hand-off passed.
+- [x] Prohibited TCP discovery and Nmap service/version stages remained
+      policy-driven no-ops.
+- [x] Deep metadata delegation completed with no uncollected delegated metadata
+      requests in final acceptance.
+- [x] Out-of-scope external destinations were refused by programme-scope
+      enforcement.
+- [x] Sitemap metadata collection and evidence-pack integrity were verified.
+- [x] Pre-release runtime baseline full suite passed: `3,178 passed`.
+
+### Still required for `1.2.0rc1`
+
+- [x] Focused release/documentation validation passed after candidate-version
+      alignment: `255 passed`.
+- [x] Full suite passed after candidate-version alignment: `3,178 passed`;
+      compileall and `git diff --check` also passed.
+- [ ] Candidate wheel and source distribution build from the reviewed state.
+- [ ] Wheel/sdist metadata, member, RECORD and path-safety inspection.
+- [ ] Wheel rebuild from the source distribution.
+- [ ] Fresh isolated local installation outside the checkout.
+- [ ] Exact candidate wheel accepted through temporary pipx on Mint.
+- [ ] The exact same wheel SHA-256 accepted through temporary pipx on Kali.
+- [ ] Packaged acceptance confirms required runtime resources and CLI behaviour.
+- [ ] Packaged authorised-lab acceptance passes.
+- [ ] Candidate commit/tag/release decision is recorded.
+- [ ] Final `1.2.0` remains a separate decision after candidate acceptance.
+
+The completed `1.1.0`, `1.0.0`, `1.0.0rc2` and `1.0.0rc1` records below are
+historical evidence and must not be rewritten as current `1.2.0rc1` results.
+
+## Historical 1.1.0 - A. Source Integrity
 
 - [x] Working tree is clean.
 - [x] Expected base commit is recorded.
@@ -27,7 +61,7 @@ release commit `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`.
       `6ca7366d4faaedba817248727107693e12b3917555664bf86594022f1673957c`.
 - [x] No temporary build output is committed.
 
-## B. Static Safety
+## Historical 1.1.0 - B. Static Safety
 
 - [x] No `shell=True`.
 - [x] No `os.system`.
@@ -43,7 +77,7 @@ release commit `a7f37b3235c27fad0d4f2f9ed2ccf29f4f86380c`.
 - [x] Request counts, response-size caps, redirect limits and Deep bounds are
       unchanged.
 
-## C. Test Matrix
+## Historical 1.1.0 - C. Test Matrix
 
 Run from the repository root:
 
@@ -78,7 +112,7 @@ PYTHON=python3
 git diff --check
 ```
 
-## D. Packaging
+## Historical 1.1.0 - D. Packaging
 
 - [x] Build a local wheel or source distribution where local tooling permits.
 - [x] Create a clean temporary virtual environment.
@@ -93,7 +127,7 @@ git diff --check
 - [x] Confirm documentation files are present in the source repository.
 - [x] Confirm no unrelated files are installed as package data.
 
-## E. Historical rc1 Acceptance
+## Historical 1.1.0 - E. Earlier rc1 Acceptance
 
 - [x] Clean source pull or clean clone.
 - [x] Fresh virtual environment.
@@ -109,7 +143,7 @@ git diff --check
 - [x] Evidence ZIP contents are reviewed.
 - [x] Working tree remains clean after acceptance.
 
-## F. Release Decision
+## Historical 1.1.0 - F. Release Decision
 
 Allowed outcomes:
 
@@ -129,7 +163,7 @@ Release blockers include:
 - Evidence-pack path escape or unrelated local-data inclusion.
 - Partial Deep resume being treated as safe.
 
-## Current Status
+## Historical Release Status
 
 ### 1.1.0 release record
 
