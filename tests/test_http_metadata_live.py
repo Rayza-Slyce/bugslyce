@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -276,6 +277,126 @@ def test_http_metadata_workflow_writes_artifacts_manifest_and_recon_pack(
         artifact["artifact_type"] == "page_title"
         for artifact in exported["project_state"]["http_artifacts"]
     )
+
+
+def test_http_metadata_workflow_uses_bound_programme_scope_seed_without_nmap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = _scope(tmp_path)
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "profile": "bug-bounty-policy-http-seed",
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    origins = ("https://10.10.10.10:8443/",)
+    runtime = SimpleNamespace(
+        tcp_discovery_skipped=True,
+        approved_http_origins=origins,
+        project=SimpleNamespace(target="10.10.10.10"),
+    )
+    runner = _RecordingHTTPMetadataRunner()
+    monkeypatch.setattr(
+        "bugslyce.recon.project_runtime.require_project_runtime_binding",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    result = run_http_metadata_workflow(
+        input_dir,
+        scope,
+        runner=runner,
+        project_runtime=runtime,
+        programme_scope_seed_origins=origins,
+    )
+
+    assert result.http_services == list(origins)
+    assert [command.argv[-1] for command in runner.calls] == [
+        "https://10.10.10.10:8443/",
+        "https://10.10.10.10:8443/robots.txt",
+        "https://10.10.10.10:8443/",
+    ]
+    assert not (input_dir / "nmap-allports.txt").exists()
+    assert not (input_dir / "nmap-services-all.txt").exists()
+
+
+def test_http_metadata_workflow_initialises_fresh_tcp_skip_output_from_bound_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = _scope(tmp_path)
+    origins = ("https://10.10.10.10:8443/",)
+    runtime = SimpleNamespace(
+        tcp_discovery_skipped=True,
+        approved_http_origins=origins,
+        project=SimpleNamespace(target="10.10.10.10"),
+    )
+    runner = _RecordingHTTPMetadataRunner()
+    monkeypatch.setattr(
+        "bugslyce.recon.project_runtime.require_project_runtime_binding",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    result = run_http_metadata_workflow(
+        input_dir,
+        scope,
+        runner=runner,
+        project_runtime=runtime,
+        programme_scope_seed_origins=origins,
+    )
+
+    manifest = json.loads((input_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+    assert result.http_services == list(origins)
+    assert [command.argv[-1] for command in runner.calls] == [
+        "https://10.10.10.10:8443/",
+        "https://10.10.10.10:8443/robots.txt",
+        "https://10.10.10.10:8443/",
+    ]
+    assert manifest["target"] == "10.10.10.10"
+    assert manifest["profile"] == "bug-bounty-policy-http-seed-plus-http-metadata"
+    assert all(artifact["type"] != "nmap" for artifact in manifest["artifacts"])
+    assert not (input_dir / "nmap-allports.txt").exists()
+    assert not (input_dir / "nmap-services-all.txt").exists()
+
+
+def test_http_metadata_workflow_refuses_unbound_programme_scope_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = _scope(tmp_path)
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps({"schema_version": "1.0", "target": "10.10.10.10", "artifacts": []}),
+        encoding="utf-8",
+    )
+    runtime = SimpleNamespace(
+        tcp_discovery_skipped=True,
+        approved_http_origins=("https://10.10.10.10/",),
+    )
+    monkeypatch.setattr(
+        "bugslyce.recon.project_runtime.require_project_runtime_binding",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    with pytest.raises(ValueError, match="do not match the strict project runtime"):
+        run_http_metadata_workflow(
+            input_dir,
+            scope,
+            runner=_MockHTTPMetadataRunner(),
+            project_runtime=runtime,
+            programme_scope_seed_origins=("http://10.10.10.10/",),
+        )
 
 
 def test_http_metadata_workflow_retains_robots_404_status_end_to_end(
@@ -591,6 +712,15 @@ class _MockHTTPMetadataRunner:
             simulated=False,
             error=None,
         )
+
+
+class _RecordingHTTPMetadataRunner(_MockHTTPMetadataRunner):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def run(self, command):
+        self.calls.append(command)
+        return super().run(command)
 
 
 class _StatusHTTPMetadataRunner:

@@ -12,6 +12,7 @@ from bugslyce.core.engagement_policy import (
     IDENTIFICATION_NONE,
     SERVICE_VERSION_NOT_PERMITTED,
     SERVICE_VERSION_PERMITTED,
+    TCP_SKIP,
     build_bug_bounty_policy,
 )
 from bugslyce.core.models import HTTPArtifact, ReconCommand
@@ -37,6 +38,7 @@ import bugslyce.recon.project_runtime as project_runtime_module
 from bugslyce.project_pipeline import (
     DeepPipelineOutputs,
     ServiceVersionNoWork,
+    TCPDiscoveryNoWork,
     _step_runners,
 )
 import bugslyce.project_pipeline as pipeline_module
@@ -138,6 +140,9 @@ def _project(
     *,
     excluded: bool = False,
     service_version_detection: str = SERVICE_VERSION_NOT_PERMITTED,
+    tcp_discovery_policy: str | None = None,
+    http_rules: tuple[tuple[str, str, str], ...] = (),
+    include_target_hostname: bool = True,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     scope = tmp_path / "scope.md"
@@ -149,6 +154,9 @@ def _project(
         tmp_path / "project",
         engagement_context="bug_bounty",
     )
+    policy_kwargs = {}
+    if tcp_discovery_policy is not None:
+        policy_kwargs["tcp_discovery_policy"] = tcp_discovery_policy
     save_project_engagement_policy(
         project_file,
         build_bug_bounty_policy(
@@ -157,16 +165,19 @@ def _project(
             identification_requirement=IDENTIFICATION_NONE,
             service_version_detection=service_version_detection,
             updated_at="2026-08-08T12:00:00Z",
+            **policy_kwargs,
         ),
     )
-    rules = [
-        build_programme_scope_rule(
-            rule_id="include-target",
-            action="include",
-            kind="exact_hostname",
-            value="app.example.test",
+    rules = []
+    if include_target_hostname:
+        rules.append(
+            build_programme_scope_rule(
+                rule_id="include-target",
+                action="include",
+                kind="exact_hostname",
+                value="app.example.test",
+            )
         )
-    ]
     if excluded:
         rules.append(
             build_programme_scope_rule(
@@ -174,6 +185,15 @@ def _project(
                 action="exclude",
                 kind="exact_hostname",
                 value="app.example.test",
+            )
+        )
+    for index, (action, kind, value) in enumerate(http_rules, start=1):
+        rules.append(
+            build_programme_scope_rule(
+                rule_id=f"http-rule-{index}",
+                action=action,
+                kind=kind,
+                value=value,
             )
         )
     save_project_programme_scope_policy(
@@ -256,6 +276,173 @@ def test_ready_authorised_project_builds_strict_runtime(tmp_path: Path, profile:
         _ = runtime.http_executor
 
 
+@pytest.mark.parametrize("profile", [STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE])
+def test_tcp_skip_runtime_uses_explicit_root_http_scope(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(("include", "http_path_prefix", "https://app.example.test/"),),
+        ),
+        profile,
+        capabilities=_capabilities(),
+    )
+
+    assert runtime.tcp_discovery_skipped is True
+    assert runtime.initial_http_origins == ("https://app.example.test/",)
+
+
+def test_tcp_skip_runtime_does_not_guess_scheme_from_hostname_scope(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="explicit allowed root HTTP programme scope"):
+        build_bug_bounty_project_runtime(
+            _project(tmp_path, tcp_discovery_policy=TCP_SKIP),
+            STANDARD_RECON_PROFILE,
+            capabilities=_capabilities(),
+        )
+
+
+def test_tcp_skip_runtime_does_not_broaden_narrow_http_scope(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(("include", "http_path_prefix", "https://app.example.test/api/"),),
+        include_target_hostname=False,
+    )
+
+    with pytest.raises(ValueError, match="not authorised|explicit allowed root HTTP"):
+        build_bug_bounty_project_runtime(
+            project,
+            STANDARD_RECON_PROFILE,
+            capabilities=_capabilities(),
+        )
+
+
+def test_tcp_skip_runtime_honours_root_exclusion(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="explicit allowed root HTTP programme scope"):
+        build_bug_bounty_project_runtime(
+            _project(
+                tmp_path,
+                tcp_discovery_policy=TCP_SKIP,
+                http_rules=(
+                    ("include", "http_path_prefix", "https://app.example.test/"),
+                    ("exclude", "exact_http_url", "https://app.example.test/"),
+                ),
+            ),
+            STANDARD_RECON_PROFILE,
+            capabilities=_capabilities(),
+        )
+
+
+def test_tcp_skip_runtime_rejects_cross_host_http_seed(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="explicit allowed root HTTP programme scope"):
+        build_bug_bounty_project_runtime(
+            _project(
+                tmp_path,
+                tcp_discovery_policy=TCP_SKIP,
+                http_rules=(("include", "http_path_prefix", "https://other.example.test/"),),
+            ),
+            STANDARD_RECON_PROFILE,
+            capabilities=_capabilities(),
+        )
+
+
+def test_tcp_skip_runtime_does_not_require_nmap_capability(tmp_path: Path) -> None:
+    capabilities = _capabilities()
+    capabilities["nmap"] = assess_tool_capabilities("nmap", None, available=False)
+
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            service_version_detection=SERVICE_VERSION_PERMITTED,
+            http_rules=(("include", "http_path_prefix", "https://app.example.test/"),),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=capabilities,
+    )
+
+    assert runtime.tcp_discovery_skipped is True
+    assert runtime.service_version_permitted is True
+
+
+@pytest.mark.parametrize("profile", [STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE])
+def test_tcp_skip_pipeline_runners_noop_nmap_and_use_strict_http_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+) -> None:
+    process = _NmapArtefactProcess()
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        service_version_detection=SERVICE_VERSION_PERMITTED,
+        http_rules=(("include", "http_path_prefix", "https://app.example.test/"),),
+    )
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        profile,
+        capabilities=_capabilities(),
+        process_runner=process,
+    )
+    observed: dict[str, object] = {}
+
+    def metadata(*_args, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(artifact_paths=(), report_path=str(tmp_path / "report.md"))
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "run_nmap_discovery_workflow",
+        lambda *_args, **_kwargs: pytest.fail("Nmap discovery must not run"),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "run_nmap_service_workflow",
+        lambda *_args, **_kwargs: pytest.fail("Nmap service detection must not run"),
+    )
+    monkeypatch.setattr(pipeline_module, "run_http_metadata_workflow", metadata)
+    monkeypatch.setattr(
+        pipeline_module,
+        "write_http_metadata_execution_result",
+        lambda *_args: (),
+    )
+    context: dict[str, object] = {
+        "output_dir": Path(project.output_dir),
+        "scope_file": Path(project.scope_file),
+        "plan_dir": tmp_path / "plan",
+        "plan_path": tmp_path / "plan" / "content_discovery_plan.json",
+        "export_path": tmp_path / "pack.zip",
+        "target": project.target,
+        "project_file": Path(project.output_dir) / "bugslyce_project.json",
+        "resume": False,
+        "profile": profile,
+        "deep_outputs": DeepPipelineOutputs(),
+        "project_runtime": runtime,
+    }
+    runners = _step_runners(context, None)
+
+    with pytest.raises(TCPDiscoveryNoWork, match="intentionally skipped"):
+        runners["PIPELINE-STEP-002"]()
+    with pytest.raises(ServiceVersionNoWork, match="no trusted open-port"):
+        runners["PIPELINE-STEP-003"]()
+    runners["PIPELINE-STEP-004"]()
+
+    assert process.calls == []
+    assert observed["project_runtime"] is runtime
+    assert observed["programme_scope_seed_origins"] == runtime.initial_http_origins
+    assert getattr(observed["runner"], "_bugslyce_project_runtime") is runtime
+    assert runtime.http_executor is runtime._http_session.http_executor
+    assert not (Path(project.output_dir) / "nmap-allports.txt").exists()
+    assert not (Path(project.output_dir) / "nmap-services-all.txt").exists()
+
+
 def test_explicit_programme_exclusion_blocks_runtime_before_tools(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not authorised"):
         build_bug_bounty_project_runtime(
@@ -278,6 +465,28 @@ def test_deep_uses_one_shared_programme_scoped_executor(tmp_path: Path) -> None:
     assert runtime._http_session is not None
     assert runtime._http_session.http_executor is first
     assert build_deep_http_fetcher(executor=first).executor is first
+
+
+def test_tcp_skip_deep_reuses_the_bound_programme_scoped_executor(
+    tmp_path: Path,
+) -> None:
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(("include", "http_path_prefix", "https://app.example.test/"),),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+    )
+
+    executor = runtime.http_executor
+    runtime.bind_http_origins(runtime.initial_http_origins)
+
+    assert runtime.http_executor is executor
+    assert runtime._http_session is not None
+    assert runtime._http_session.http_executor is executor
+    assert build_deep_http_fetcher(executor=executor).executor is executor
 
 
 def test_strict_runtime_derives_service_ports_from_its_discovery_result(

@@ -239,6 +239,26 @@ def test_mode_readiness_shared_tools_block_all_executable_modes(tool: str) -> No
         )
 
 
+def test_mode_readiness_can_omit_only_policy_skipped_nmap() -> None:
+    report = _ready_report_with_missing_tool("nmap")
+
+    assert mode_readiness_failures(
+        report,
+        "standard",
+        nmap_required=False,
+    ) == ()
+    assert mode_readiness_failures(report, "standard") == (
+        "Standard Recon is blocked: required pipeline tool `nmap` is unavailable: "
+        "not found on PATH.",
+    )
+    with pytest.raises(ValueError, match="Nmap requirement must be boolean"):
+        mode_readiness_failures(
+            report,
+            "standard",
+            nmap_required="no",
+        )
+
+
 def test_mode_readiness_core_failure_blocks_all_modes_and_unknown_fails_closed() -> None:
     report = _ready_report(python_version_info=(3, 10, 9))
 

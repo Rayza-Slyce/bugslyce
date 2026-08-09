@@ -267,6 +267,10 @@ class ServiceVersionNoWork(ValueError):
     """Signal a policy-approved service/version no-op without producing traffic."""
 
 
+class TCPDiscoveryNoWork(ValueError):
+    """Signal a policy-approved TCP-discovery no-op without producing traffic."""
+
+
 @dataclass(frozen=True)
 class PipelineCompletionSummary:
     """Structured report models retained only for terminal completion output."""
@@ -440,6 +444,7 @@ def run_project_pipeline(
         build_doctor_report(),
         profile=profile,
         resume=resume,
+        project_runtime=project_runtime,
     )
     preserve_canonical_pipeline_metadata = assessment.preserve_canonical_pipeline_metadata
 
@@ -449,7 +454,7 @@ def run_project_pipeline(
             steps[index] = replace(
                 step,
                 status="skipped_existing",
-                message=SKIPPED_STEP_MESSAGES[step.step_id],
+                message=_skipped_step_message(step.step_id, assessment.prior_pipeline),
             )
     result = PipelineResult(
         project_name=project.name,
@@ -550,6 +555,7 @@ def run_project_pipeline(
         try:
             message, output_paths, updates = step_runners[step.step_id]()
         except (
+            TCPDiscoveryNoWork,
             ServiceVersionNoWork,
             PathFollowupNoWork,
             ContentFollowupNoWork,
@@ -984,11 +990,12 @@ def _validate_pipeline(
     *,
     profile: str,
     resume: bool,
+    project_runtime: BugBountyProjectRuntime | None = None,
 ) -> ResumeAssessment:
     if not output_dir.is_dir():
         raise ValueError(f"Project output directory does not exist: {output_dir}")
     validate_explicit_nmap_target_scope(target, scope_file)
-    _validate_readiness(doctor, profile)
+    _validate_readiness(doctor, profile, project_runtime=project_runtime)
     if not resume:
         if (output_dir / "recon_manifest.json").exists():
             raise ValueError(
@@ -1015,8 +1022,19 @@ def _validate_pipeline(
     )
 
 
-def _validate_readiness(doctor: DoctorReport, profile: str) -> None:
-    failures = mode_readiness_failures(doctor, _doctor_mode_for_pipeline_profile(profile))
+def _validate_readiness(
+    doctor: DoctorReport,
+    profile: str,
+    *,
+    project_runtime: BugBountyProjectRuntime | None = None,
+) -> None:
+    failures = mode_readiness_failures(
+        doctor,
+        _doctor_mode_for_pipeline_profile(profile),
+        nmap_required=not (
+            project_runtime is not None and project_runtime.tcp_discovery_skipped
+        ),
+    )
     if failures:
         raise ValueError(" ".join(failures))
 
@@ -1116,7 +1134,8 @@ def _assess_resume_state(
             prior_statuses=prior_statuses,
         )
     detected = {
-        "PIPELINE-STEP-002": "nmap-allports.txt" in artifact_names,
+        "PIPELINE-STEP-002": "nmap-allports.txt" in artifact_names
+        or prior_statuses.get("PIPELINE-STEP-002") == "noop",
         "PIPELINE-STEP-003": any(
             name.startswith("nmap-services") for name in artifact_names
         ) or prior_statuses.get("PIPELINE-STEP-003") == "noop",
@@ -1434,6 +1453,24 @@ def _validate_resume_phase_order(detected: dict[str, bool]) -> None:
             )
 
 
+def _skipped_step_message(
+    step_id: str,
+    prior_pipeline: dict[str, object] | None,
+) -> str:
+    prior_statuses = _prior_step_statuses(prior_pipeline)
+    if step_id == "PIPELINE-STEP-002" and prior_statuses.get(step_id) == "noop":
+        return (
+            "Prior engagement-policy TCP-discovery no-op verified; phase skipped "
+            "during resume."
+        )
+    if step_id == "PIPELINE-STEP-003" and prior_statuses.get(step_id) == "noop":
+        return (
+            "Prior policy-approved service/version no-op verified; phase skipped "
+            "during resume."
+        )
+    return SKIPPED_STEP_MESSAGES[step_id]
+
+
 def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
     return replace(
         result,
@@ -1546,6 +1583,10 @@ def _step_runners(
         return f"Local readiness, {state}, and exact scope checks passed.", [], {}
 
     def nmap_discover():
+        if project_runtime is not None and project_runtime.tcp_discovery_skipped:
+            raise TCPDiscoveryNoWork(
+                "TCP discovery was intentionally skipped by the engagement policy."
+            )
         result = (
             run_nmap_discovery_workflow(
                 target=target,
@@ -1575,6 +1616,11 @@ def _step_runners(
         )
 
     def nmap_services():
+        if project_runtime is not None and project_runtime.tcp_discovery_skipped:
+            raise ServiceVersionNoWork(
+                "Nmap service/version enrichment was intentionally skipped because "
+                "TCP discovery produced no trusted open-port observations."
+            )
         if project_runtime is not None and not project_runtime.service_version_permitted:
             raise ServiceVersionNoWork(
                 "Nmap service/version enrichment was intentionally skipped because "
@@ -1598,16 +1644,24 @@ def _step_runners(
         )
 
     def http_metadata():
+        programme_scope_seed_origins = None
         if project_runtime is not None:
-            state = build_project_state(output_dir)
-            from bugslyce.recon.http_metadata import discover_http_origins
-            project_runtime.bind_http_origins(tuple(discover_http_origins(state, target)))
+            if project_runtime.tcp_discovery_skipped:
+                programme_scope_seed_origins = project_runtime.initial_http_origins
+                project_runtime.bind_http_origins(programme_scope_seed_origins)
+            else:
+                state = build_project_state(output_dir)
+                from bugslyce.recon.http_metadata import discover_http_origins
+                project_runtime.bind_http_origins(
+                    tuple(discover_http_origins(state, target))
+                )
         result = (
             run_http_metadata_workflow(
                 output_dir,
                 scope_file,
                 runner=project_runtime.curl_runner(),
                 project_runtime=project_runtime,
+                programme_scope_seed_origins=programme_scope_seed_origins,
             )
             if project_runtime
             else run_http_metadata_workflow(output_dir, scope_file)

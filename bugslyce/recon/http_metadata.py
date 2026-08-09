@@ -50,6 +50,7 @@ def run_http_metadata_workflow(
     scope_file: Path,
     runner: LiveHTTPMetadataRunner | None = None,
     project_runtime=None,
+    programme_scope_seed_origins: tuple[str, ...] | None = None,
 ) -> ReconHTTPMetadataExecutionResult:
     """Collect headers, robots.txt, and homepage HTML from discovered services."""
 
@@ -62,9 +63,36 @@ def run_http_metadata_workflow(
     manifest_path = input_dir / "recon_manifest.json"
     manifest = _load_manifest_payload(manifest_path)
     initial_state = build_project_state(input_dir)
-    if project_runtime is None:
-        enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
-    target = _resolve_target(manifest, initial_state)
+    seed_profile = None
+    if programme_scope_seed_origins is not None:
+        if project_runtime is None or not project_runtime.tcp_discovery_skipped:
+            raise ValueError(
+                "Programme-scope HTTP seeds require a TCP-skip project runtime."
+            )
+        canonical_seeds = tuple(sorted(set(programme_scope_seed_origins)))
+        if (
+            not canonical_seeds
+            or canonical_seeds != programme_scope_seed_origins
+            or canonical_seeds != project_runtime.approved_http_origins
+        ):
+            raise ValueError(
+                "Programme-scope HTTP seeds do not match the strict project runtime."
+            )
+        seed_target = getattr(getattr(project_runtime, "project", None), "target", None)
+        if not isinstance(seed_target, str) or not seed_target:
+            raise ValueError("Programme-scope HTTP seeds require a bound project target.")
+        target = seed_target
+        all_origins = list(canonical_seeds)
+        seed_profile = "bug-bounty-policy-http-seed"
+    else:
+        if project_runtime is None:
+            enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+        target = _resolve_target(manifest, initial_state)
+        all_origins = discover_http_origins(
+            initial_state,
+            target,
+            max_services=max(MAX_HTTP_METADATA_SERVICES, len(initial_state.port_services)),
+        )
     target = validate_explicit_nmap_target_scope(target, scope_file)
     if project_runtime is not None:
         from bugslyce.recon.project_runtime import require_project_runtime_binding
@@ -77,11 +105,6 @@ def run_http_metadata_workflow(
             runner,
             "curl",
         )
-    all_origins = discover_http_origins(
-        initial_state,
-        target,
-        max_services=max(MAX_HTTP_METADATA_SERVICES, len(initial_state.port_services)),
-    )
     if not all_origins:
         raise ValueError("No open HTTP services were found in existing nmap service evidence.")
     origins = all_origins[:MAX_HTTP_METADATA_SERVICES]
@@ -114,6 +137,7 @@ def run_http_metadata_workflow(
         local_scope_path.name,
         origins,
         command_results,
+        default_profile=seed_profile,
     )
     manifest_path.write_text(
         json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n",
@@ -230,6 +254,8 @@ def _updated_manifest(
     scope_filename: str,
     origins: list[str],
     command_results,
+    *,
+    default_profile: str | None = None,
 ) -> dict[str, object]:
     payload = dict(manifest or {})
     existing = payload.get("artifacts")
@@ -289,7 +315,7 @@ def _updated_manifest(
     base_profile = (
         original_profile.removesuffix("-plus-http-metadata")
         if isinstance(original_profile, str) and original_profile
-        else "nmap-services"
+        else default_profile or "nmap-services"
     )
     payload.update(
         {

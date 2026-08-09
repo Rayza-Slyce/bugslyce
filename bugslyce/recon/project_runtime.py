@@ -11,17 +11,25 @@ import subprocess
 from bugslyce.core.engagement_policy import (
     READINESS_FUTURE_ENFORCEMENT,
     SERVICE_VERSION_PERMITTED,
+    TCP_SKIP,
     EngagementPolicy,
     EngagementPolicyAssessment,
     assess_engagement_policy,
 )
 from bugslyce.core.models import ReconCommand, ReconCommandResult
 from bugslyce.core.programme_scope import (
+    ACTION_INCLUDE,
+    CanonicalHostnameDestination,
+    CanonicalIPv4Destination,
     DESTINATION_HOSTNAME,
     DESTINATION_IPV4,
     OUTCOME_ALLOWED,
     ProgrammeScopePolicy,
+    RULE_EXACT_HTTP_URL,
+    RULE_HTTP_PATH_PREFIX,
     ScopeDecision,
+    canonicalise_http_url_destination,
+    evaluate_programme_scope,
     evaluate_raw_scope_destination,
 )
 from bugslyce.project_session import (
@@ -82,6 +90,7 @@ class BugBountyProjectRuntime:
     assessment: EngagementPolicyAssessment
     programme_scope_policy: ProgrammeScopePolicy
     target_decision: ScopeDecision
+    initial_http_origins: tuple[str, ...]
     capabilities: dict[str, ToolCapabilities]
     ipv4_resolver: IPv4Resolver | None = None
     process_runner: object | None = None
@@ -105,6 +114,18 @@ class BugBountyProjectRuntime:
             raise ValueError("Engagement policy is incomplete for project execution.")
         if self.target_decision.outcome != OUTCOME_ALLOWED:
             raise ValueError("Project target is not authorised by programme scope.")
+        expected_http_origins = (
+            _explicit_http_seed_origins(
+                self.programme_scope_policy,
+                self.target_decision,
+            )
+            if self.tcp_discovery_skipped
+            else ()
+        )
+        if self.initial_http_origins != expected_http_origins:
+            raise ValueError(
+                "Initial HTTP origins do not match canonical programme-scope authority."
+            )
         self._nmap_session = self._new_session((), nmap_only=True)
         self._nmap_runtime = BugBountyExternalToolRuntime(
             self._nmap_session, SafeSubprocessRunner(self.process_runner)
@@ -113,6 +134,14 @@ class BugBountyProjectRuntime:
     @property
     def service_version_permitted(self) -> bool:
         return self.policy.service_version_detection == SERVICE_VERSION_PERMITTED
+
+    @property
+    def tcp_discovery_skipped(self) -> bool:
+        return self.policy.tcp_discovery_policy == TCP_SKIP
+
+    @property
+    def approved_http_origins(self) -> tuple[str, ...]:
+        return self._approved_origins
 
     @property
     def http_executor(self) -> InternalHTTPExecutor:
@@ -373,8 +402,6 @@ def build_bug_bounty_project_runtime(
             "Engagement policy is not ready. "
             + " ".join(assessment.not_ready_reasons)
         )
-    if policy.tcp_discovery_policy == "skip_tcp_discovery":
-        raise ValueError("Standard and Deep project pipelines require bounded TCP discovery.")
     programme_scope = load_project_programme_scope_policy(project)
     if programme_scope is None:
         raise ValueError("Programme scope policy is missing.")
@@ -390,20 +417,71 @@ def build_bug_bounty_project_runtime(
             "Project target is not authorised by programme scope "
             f"({decision.reason_code})."
         )
+    initial_http_origins = (
+        _explicit_http_seed_origins(programme_scope, decision)
+        if policy.tcp_discovery_policy == TCP_SKIP
+        else ()
+    )
+    if policy.tcp_discovery_policy == TCP_SKIP and not initial_http_origins:
+        raise ValueError(
+            "TCP-skip project execution requires explicit allowed root HTTP "
+            "programme scope for the project target."
+        )
     selected_capabilities = capabilities or {
         tool: _probe_capabilities(tool) for tool in ("curl", "gobuster", "nmap")
     }
-    return BugBountyProjectRuntime(
+    runtime = BugBountyProjectRuntime(
         project=project,
         profile=profile,
         policy=policy,
         assessment=assessment,
         programme_scope_policy=programme_scope,
         target_decision=decision,
+        initial_http_origins=initial_http_origins,
         capabilities=selected_capabilities,
         ipv4_resolver=ipv4_resolver,
         process_runner=process_runner,
     )
+    if initial_http_origins:
+        runtime.bind_http_origins(initial_http_origins)
+    return runtime
+
+
+def _explicit_http_seed_origins(
+    policy: ProgrammeScopePolicy,
+    target_decision: ScopeDecision,
+) -> tuple[str, ...]:
+    """Derive root origins only from explicit HTTP inclusions allowed in full scope."""
+
+    target = target_decision.canonical_destination
+    if isinstance(target, CanonicalHostnameDestination):
+        target_kind = DESTINATION_HOSTNAME
+        target_value = target.hostname
+    elif isinstance(target, CanonicalIPv4Destination):
+        target_kind = DESTINATION_IPV4
+        target_value = target.address
+    else:
+        return ()
+
+    origins: set[str] = set()
+    for rule in policy.rules:
+        if rule.action != ACTION_INCLUDE or rule.kind not in {
+            RULE_EXACT_HTTP_URL,
+            RULE_HTTP_PATH_PREFIX,
+        }:
+            continue
+        destination = canonicalise_http_url_destination(rule.canonical_value)
+        if (
+            destination.origin.host_kind != target_kind
+            or destination.origin.host != target_value
+        ):
+            continue
+        root = canonicalise_http_url_destination(
+            f"{destination.origin.canonical_value}/"
+        )
+        if evaluate_programme_scope(policy, root).outcome == OUTCOME_ALLOWED:
+            origins.add(root.canonical_value)
+    return tuple(sorted(origins))
 
 
 def require_project_runtime_binding(

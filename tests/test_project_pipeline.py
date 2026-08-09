@@ -14,6 +14,15 @@ import pytest
 
 from bugslyce import __version__
 from bugslyce.cli import main
+from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
+from bugslyce.core.engagement_policy import (
+    AUTOMATION_PERMITTED,
+    CONFIRMED,
+    IDENTIFICATION_NONE,
+    SERVICE_VERSION_NOT_PERMITTED,
+    TCP_SKIP,
+    build_bug_bounty_policy,
+)
 from bugslyce.core.models import (
     DiscoveredPath,
     Evidence,
@@ -21,6 +30,10 @@ from bugslyce.core.models import (
     ProjectState,
     ReconManifest,
     ReconManifestArtifact,
+)
+from bugslyce.core.programme_scope import (
+    build_programme_scope_policy,
+    build_programme_scope_rule,
 )
 from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.project_pipeline import (
@@ -35,9 +48,12 @@ from bugslyce.project_pipeline import (
     PipelineStep,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
+    ServiceVersionNoWork,
+    TCPDiscoveryNoWork,
     _body_fetch_warning_message,
     _deep_operator_summary_leads,
     _step_runners,
+    _validate_readiness,
     format_exception_diagnostic,
     render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
@@ -45,7 +61,13 @@ from bugslyce.project_pipeline import (
     write_project_pipeline_result,
 )
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
-from bugslyce.project_session import scaffold_project
+from bugslyce.project_session import (
+    initialize_project,
+    load_project,
+    save_project_engagement_policy,
+    save_project_programme_scope_policy,
+    scaffold_project,
+)
 from bugslyce.recon.body_fetch import BodyFetchNoWork
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_plan import (
@@ -58,6 +80,8 @@ from bugslyce.recon.collection_confidence import (
     build_collection_confidence_notices,
 )
 from bugslyce.recon.path_followup import PathFollowupNoWork
+from bugslyce.recon.external_enforcement import assess_tool_capabilities
+from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
 from bugslyce.reports.markdown import render_markdown_report
 from bugslyce.reports.operator_summary import (
@@ -68,6 +92,132 @@ from bugslyce.reports.operator_summary import (
 
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "profile",
+    (STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE),
+)
+def test_pipeline_records_tcp_skip_nmap_stages_as_noops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(*_args, **_kwargs):
+        runners = {
+            step_id: (lambda: ("Synthetic offline phase completed.", [], {}))
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        }
+        runners["PIPELINE-STEP-002"] = lambda: (_ for _ in ()).throw(
+            TCPDiscoveryNoWork(
+                "TCP discovery was intentionally skipped by the engagement policy."
+            )
+        )
+        runners["PIPELINE-STEP-003"] = lambda: (_ for _ in ()).throw(
+            ServiceVersionNoWork(
+                "Nmap service/version enrichment was intentionally skipped because "
+                "TCP discovery produced no trusted open-port observations."
+            )
+        )
+        return runners
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
+    statuses = {step.step_id: step.status for step in result.steps}
+
+    assert statuses["PIPELINE-STEP-002"] == "noop"
+    assert statuses["PIPELINE-STEP-003"] == "noop"
+    assert result.no_op_steps == 2
+    assert not (output_dir / "nmap-allports.txt").exists()
+    assert not (output_dir / "nmap-services-all.txt").exists()
+
+
+def test_tcp_skip_pipeline_readiness_does_not_require_nmap_but_keeps_http_tools() -> None:
+    runtime = SimpleNamespace(tcp_discovery_skipped=True)
+
+    _validate_readiness(
+        _structured_doctor(missing_tool="nmap"),
+        STANDARD_PIPELINE_PROFILE,
+        project_runtime=runtime,
+    )
+    with pytest.raises(ValueError, match="curl"):
+        _validate_readiness(
+            _structured_doctor(missing_tool="curl"),
+            STANDARD_PIPELINE_PROFILE,
+            project_runtime=runtime,
+        )
+
+
+def test_fresh_tcp_skip_pipeline_runs_real_strict_http_metadata_without_nmap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file, output_dir, runtime, process = _tcp_skip_project_runtime(tmp_path)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_bug_bounty_project_runtime",
+        lambda *_args, **_kwargs: runtime,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_path_followup_workflow",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("stop after HTTP metadata")
+        ),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            STANDARD_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    statuses = {step.step_id: step.status for step in exc_info.value.result.steps}
+    assert statuses["PIPELINE-STEP-002"] == "noop"
+    assert statuses["PIPELINE-STEP-003"] == "noop"
+    assert statuses["PIPELINE-STEP-004"] == "completed"
+    assert len(process.calls) == 3
+    assert sum(call[0] == "nmap" for call in process.calls) == 0
+    assert all(call[0] == "curl" for call in process.calls)
+    assert [call[-1] for call in process.calls] == [
+        "https://app.example.test/",
+        "https://app.example.test/robots.txt",
+        "https://app.example.test/",
+    ]
+    assert not (output_dir / "nmap-allports.txt").exists()
+    assert not (output_dir / "nmap-services-all.txt").exists()
+    manifest = json.loads((output_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["profile"] == "bug-bounty-policy-http-seed-plus-http-metadata"
+    assert all(artifact["type"] != "nmap" for artifact in manifest["artifacts"])
 
 
 def test_deep_operator_summary_leads_receive_response_contrast_models() -> None:
@@ -3415,6 +3565,86 @@ def test_resume_records_followup_noops_and_continues(
     assert result.steps[11].status == "completed"
 
 
+def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    http_artefact = output_dir / "curl-headers-10.10.10.10-443.txt"
+    http_artefact.write_text("HTTP/1.1 200 OK\n", encoding="utf-8")
+    (output_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "artifacts": [
+                    {"type": "http_headers", "file": http_artefact.name}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        Path(f"{output_dir}-evidence-pack.zip"),
+        profile=STANDARD_PIPELINE_PROFILE,
+        final_status="failed",
+        step_statuses={
+            "PIPELINE-STEP-002": "noop",
+            "PIPELINE-STEP-003": "noop",
+            "PIPELINE-STEP-004": "completed",
+        },
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._step_runners",
+        lambda *_args, **_kwargs: {
+            step_id: (lambda: ("Synthetic offline phase completed.", [], {}))
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        STANDARD_PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+    steps = {step.step_id: step for step in result.steps}
+
+    assert steps["PIPELINE-STEP-002"].status == "skipped_existing"
+    assert steps["PIPELINE-STEP-002"].message == (
+        "Prior engagement-policy TCP-discovery no-op verified; phase skipped "
+        "during resume."
+    )
+    assert steps["PIPELINE-STEP-003"].status == "skipped_existing"
+    assert "policy-approved service/version no-op" in steps["PIPELINE-STEP-003"].message
+    assert steps["PIPELINE-STEP-004"].status == "skipped_existing"
+    assert not (output_dir / "nmap-allports.txt").exists()
+    assert not (output_dir / "nmap-services-all.txt").exists()
+
+
 def test_resume_refuses_target_and_content_plan_mismatches(
     tmp_path: Path,
     monkeypatch,
@@ -3693,6 +3923,100 @@ def test_project_pipeline_module_has_no_direct_execution_apis() -> None:
 def _fresh_project(tmp_path: Path) -> tuple[Path, Path]:
     scaffold = scaffold_project("pipeline-test", "10.10.10.10", tmp_path / "projects")
     return Path(scaffold.project_file), Path(scaffold.project.output_dir)
+
+
+def _tcp_skip_project_runtime(
+    tmp_path: Path,
+) -> tuple[Path, Path, object, object]:
+    scope_file = tmp_path / "scope.md"
+    scope_file.write_text(
+        "# Scope\n\n## In Scope\n\n- app.example.test\n",
+        encoding="utf-8",
+    )
+    _project, project_file = initialize_project(
+        "tcp-skip",
+        "app.example.test",
+        scope_file,
+        tmp_path / "output",
+        engagement_context=BUG_BOUNTY_CONTEXT,
+    )
+    save_project_engagement_policy(
+        project_file,
+        build_bug_bounty_policy(
+            programme_rules_reviewed=CONFIRMED,
+            automated_reconnaissance=AUTOMATION_PERMITTED,
+            identification_requirement=IDENTIFICATION_NONE,
+            tcp_discovery_policy=TCP_SKIP,
+            service_version_detection=SERVICE_VERSION_NOT_PERMITTED,
+            updated_at="2026-06-15T12:00:00Z",
+        ),
+    )
+    save_project_programme_scope_policy(
+        project_file,
+        build_programme_scope_policy(
+            (
+                build_programme_scope_rule(
+                    rule_id="target-host",
+                    action="include",
+                    kind="exact_hostname",
+                    value="app.example.test",
+                ),
+                build_programme_scope_rule(
+                    rule_id="target-origin",
+                    action="include",
+                    kind="http_path_prefix",
+                    value="https://app.example.test/",
+                ),
+            ),
+            updated_at="2026-06-15T12:00:00Z",
+        ),
+    )
+    project = load_project(project_file)
+    process = _StrictCurlOnlyProcess()
+    capabilities = {
+        "curl": assess_tool_capabilities(
+            "curl",
+            "--disable --connect-timeout --dump-header --globoff --header --head "
+            "--max-redirs --max-time --noproxy --output --proto --resolve --silent "
+            "--show-error --user-agent --write-out",
+        ),
+        "gobuster": assess_tool_capabilities(
+            "gobuster",
+            "dir --url --wordlist --threads --delay --useragent --headers value "
+            "-H value --timeout --output --follow-redirect (default false)",
+        ),
+        "nmap": assess_tool_capabilities(
+            "nmap", "-sT -sV -Pn -n -p --max-rate --max-retries -oN"
+        ),
+    }
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        STANDARD_PIPELINE_PROFILE,
+        capabilities=capabilities,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.10",),
+        process_runner=process,
+    )
+    return project_file, Path(project.output_dir), runtime, process
+
+
+class _StrictCurlOnlyProcess:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv, _timeout_seconds, _environment):
+        command = tuple(argv)
+        self.calls.append(command)
+        if command[0] != "curl":
+            raise AssertionError("TCP-skip pipeline must not execute Nmap.")
+        Path(command[command.index("--output") + 1]).write_text(
+            "<!doctype html><title>Example</title>",
+            encoding="utf-8",
+        )
+        Path(command[command.index("--dump-header") + 1]).write_text(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="200", stderr="")
 
 
 def _doctor(

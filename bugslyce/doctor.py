@@ -360,15 +360,29 @@ def recon_readiness_failures(report: DoctorReport) -> tuple[str, ...]:
     return tuple(dict.fromkeys(failures))
 
 
-def mode_readiness_failures(report: DoctorReport, mode: str) -> tuple[str, ...]:
+def mode_readiness_failures(
+    report: DoctorReport,
+    mode: str,
+    *,
+    nmap_required: bool = True,
+) -> tuple[str, ...]:
     """Return deterministic failures that block one executable recon mode."""
 
     if mode not in {"quick", "standard", "deep"}:
         raise ValueError(f"Unknown doctor mode readiness identifier: {mode}")
+    if not isinstance(nmap_required, bool):
+        raise ValueError("Doctor Nmap requirement must be boolean.")
     display_name = MODE_LABELS[mode]
     failures: list[str] = []
     failures.extend(_core_readiness_failures(report, display_name))
-    failures.extend(_tool_readiness_failures(report, mode, display_name))
+    failures.extend(
+        _tool_readiness_failures(
+            report,
+            mode,
+            display_name,
+            nmap_required=nmap_required,
+        )
+    )
     failures.extend(_resource_readiness_failures(report, mode, display_name))
     return tuple(failures)
 
@@ -398,10 +412,12 @@ def _tool_readiness_failures(
     report: DoctorReport,
     mode: str,
     display_name: str,
+    *,
+    nmap_required: bool = True,
 ) -> tuple[str, ...]:
     failures: list[str] = []
     for name, _purpose, workflows in REQUIRED_EXTERNAL_TOOLS:
-        if mode not in workflows:
+        if mode not in workflows or (name == "nmap" and not nmap_required):
             continue
         if report.tools:
             matches = [tool for tool in report.tools if tool.name == name]
