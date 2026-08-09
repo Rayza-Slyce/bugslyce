@@ -1,14 +1,14 @@
 # Release Notes
 
-## 1.2.0rc1
+## 1.2.0
 
-BugSlyce `1.2.0rc1` is the release candidate for the v1.2 reliability and
-production bug-bounty runtime work.
+BugSlyce `1.2.0` is the v1.2 reliability and production bug-bounty runtime
+release.
 
-Source-level runtime acceptance has completed in controlled authorised labs and
-under current authorised bug-bounty programme constraints. Packaged candidate
-build, isolated installation and exact-wheel cross-host acceptance remain to be
-completed before any final `1.2.0` release decision.
+Before final promotion, the v1.2 runtime completed source-level acceptance in
+controlled authorised labs and under current authorised bug-bounty programme
+constraints. An untagged `1.2.0rc1` candidate wheel also completed isolated
+Mint and Kali exact-wheel acceptance and a packaged Deep authorised-lab run.
 
 ### Strict bug-bounty project runtime
 

@@ -12,9 +12,9 @@ BugSlyce does not claim confirmed vulnerabilities.
 
 ## Production bug bounty preflight
 
-BugSlyce `1.2.0rc1` is the release candidate for the v1.2 strict
-bug-bounty runtime. Standard and Deep bug-bounty project execution now uses
-policy-aware traffic controls and default-deny programme-scope enforcement.
+BugSlyce `1.2.0` introduces the v1.2 strict bug-bounty runtime.
+Standard and Deep bug-bounty project execution uses policy-aware traffic
+controls and default-deny programme-scope enforcement.
 
 Historical controlled testing of `1.1.1` against a local HTTP capture server
 found that Standard Recon peaked at **154 requests per second** and Deep Recon
@@ -51,10 +51,10 @@ authorised labs remain supported live-testing contexts. Standard and Deep
 bug-bounty project execution is supported only when the current programme
 policy, default-deny programme scope and strict preflight all permit it.
 
-Current package version: `1.2.0rc1`.
+Current package version: `1.2.0`.
 
-This candidate has completed source-level runtime acceptance. Package build,
-isolated installation and exact-wheel cross-host acceptance remain pending.
+The v1.2 runtime completed source-level, isolated-package, cross-host and
+packaged authorised-lab acceptance before final promotion.
 
 ## Authorised Use
 
@@ -225,7 +225,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.2.0rc1`. The deterministic test suite mocks live
+The package version is `1.2.0`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash

@@ -55,7 +55,7 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     )
     compact = " ".join(readme.split())
 
-    assert "Current package version: `1.2.0rc1`" in readme
+    assert "Current package version: `1.2.0`" in readme
     assert "BugSlyce v1.1.0 is prepared for review and release" not in compact
     assert "PyPI may continue to provide v1.0.0 until v1.1.0 is published" not in compact
     assert "BugSlyce v1.1.0 has already been published" not in compact

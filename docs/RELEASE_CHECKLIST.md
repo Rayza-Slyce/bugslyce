@@ -1,10 +1,11 @@
 # Release Checklist
 
-This checklist tracks BugSlyce `1.2.0rc1` release-candidate acceptance.
+This checklist tracks BugSlyce `1.2.0` final release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **source/runtime acceptance is complete; packaged
-`1.2.0rc1` acceptance is pending.**
+Current decision: **source/runtime and packaged `1.2.0rc1` acceptance are
+complete; final `1.2.0` build, exact-wheel verification and publication are
+pending.**
 
 Current source baseline before release-metadata preparation:
 `0372bd9ff616d0ce604408a1ddc5c5a516ae874b`.
@@ -24,25 +25,26 @@ Current source baseline before release-metadata preparation:
 - [x] Sitemap metadata collection and evidence-pack integrity were verified.
 - [x] Pre-release runtime baseline full suite passed: `3,178 passed`.
 
-### Still required for `1.2.0rc1`
+### Still required for final `1.2.0`
 
 - [x] Focused release/documentation validation passed after candidate-version
       alignment: `255 passed`.
 - [x] Full suite passed after candidate-version alignment: `3,178 passed`;
       compileall and `git diff --check` also passed.
-- [ ] Candidate wheel and source distribution build from the reviewed state.
-- [ ] Wheel/sdist metadata, member, RECORD and path-safety inspection.
-- [ ] Wheel rebuild from the source distribution.
-- [ ] Fresh isolated local installation outside the checkout.
-- [ ] Exact candidate wheel accepted through temporary pipx on Mint.
-- [ ] The exact same wheel SHA-256 accepted through temporary pipx on Kali.
-- [ ] Packaged acceptance confirms required runtime resources and CLI behaviour.
-- [ ] Packaged authorised-lab acceptance passes.
-- [ ] Candidate commit/tag/release decision is recorded.
-- [ ] Final `1.2.0` remains a separate decision after candidate acceptance.
+- [x] Untagged `1.2.0rc1` wheel and source distribution built and inspected.
+- [x] `1.2.0rc1` wheel/sdist metadata, members, RECORD and path safety passed.
+- [x] `1.2.0rc1` isolated Mint installation passed.
+- [x] The exact same `1.2.0rc1` wheel passed temporary pipx acceptance on Mint
+      and Kali.
+- [x] Packaged `1.2.0rc1` Deep authorised-lab acceptance passed.
+- [ ] Final `1.2.0` wheel and source distribution build from the reviewed state.
+- [ ] Final wheel/sdist metadata and archive safety checks pass.
+- [ ] Final exact wheel passes isolated/package verification on Mint and Kali.
+- [ ] Final release commit and annotated `v1.2.0` tag are created and pushed.
+- [ ] Final wheel and source distribution are published.
 
 The completed `1.1.0`, `1.0.0`, `1.0.0rc2` and `1.0.0rc1` records below are
-historical evidence and must not be rewritten as current `1.2.0rc1` results.
+historical evidence and must not be rewritten as current `1.2.0` results.
 
 ## Historical 1.1.0 - A. Source Integrity
 
