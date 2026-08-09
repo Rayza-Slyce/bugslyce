@@ -20,6 +20,7 @@ from bugslyce.recon.deep_collection_request_plan import (
 )
 from bugslyce.recon.deep_metadata_collector import (
     DeepHTTPResponse,
+    MAX_SITEMAP_ROUTE_REFERENCES,
     collect_deep_metadata_from_plan,
     render_deep_metadata_collection_result_markdown,
 )
@@ -236,6 +237,102 @@ def test_collection_order_is_deterministic() -> None:
         "http://example.test/robots.txt",
         "http://example.test/sitemap.xml",
     )
+
+
+def test_sitemap_collection_extracts_bounded_deduplicated_same_origin_routes() -> None:
+    request = _request(
+        "https://app.example.test/sitemap.xml",
+        source="metadata_coverage",
+        evidence_ids=("EVID-PATH-0006", "EVID-HEADER-0010"),
+    )
+    locs = [
+        "https://app.example.test/docs",
+        "https://app.example.test/account?view=summary",
+        "https://app.example.test/docs",
+        "https://app.example.test/a/../admin",
+        "https://app.example.test/%2Fencoded",
+        "https://app.example.test/%ZZ",
+        "https://app.example.test/path`tick",
+        "https://other.example.test/external",
+        "ftp://app.example.test/unsupported",
+        "https://user:secret@app.example.test/private",
+        "https://app.example.test/fragment#section",
+        "not-a-url",
+        *(f"https://app.example.test/route-{index:03d}" for index in range(80)),
+    ]
+    body = (
+        '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join(f"<url><loc>{value.replace('&', '&amp;')}</loc></url>" for value in locs)
+        + "</urlset>"
+    ).encode()
+    calls: list[str] = []
+
+    result = collect_deep_metadata_from_plan(
+        _plan((request,), allowed_origins=("https://app.example.test",)),
+        fetcher=_fake_fetcher(
+            calls,
+            body=body,
+            headers=(("content-type", "text/xml; charset=utf-8"),),
+        ),
+    )
+
+    item = result.collected[0]
+    assert calls == ["https://app.example.test/sitemap.xml"]
+    assert len(item.sitemap_route_references) == MAX_SITEMAP_ROUTE_REFERENCES
+    assert item.sitemap_route_references == tuple(
+        sorted(
+            {
+                "https://app.example.test/docs",
+                "https://app.example.test/account?view=summary",
+                "https://app.example.test/admin",
+                *(f"https://app.example.test/route-{index:03d}" for index in range(80)),
+            }
+        )[:MAX_SITEMAP_ROUTE_REFERENCES]
+    )
+    assert all("other.example.test" not in value for value in item.sitemap_route_references)
+    assert all("secret" not in value for value in item.sitemap_route_references)
+    assert all("#" not in value for value in item.sitemap_route_references)
+    assert all("%2F" not in value for value in item.sitemap_route_references)
+    assert all("%ZZ" not in value for value in item.sitemap_route_references)
+    assert all("`" not in value for value in item.sitemap_route_references)
+    assert "https://app.example.test/admin" in item.sitemap_route_references
+    assert "https://app.example.test/a/../admin" not in item.sitemap_route_references
+    assert not hasattr(item, "body")
+    assert item.body_sha256 == sha256(body).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        b"<urlset><url><loc>https://app.example.test/unclosed</loc>",
+        b"<document><loc>https://app.example.test/not-a-sitemap</loc></document>",
+        b'<!DOCTYPE urlset SYSTEM "https://example.invalid/sitemap.dtd"><urlset />',
+        b'<?xml version="1.0" encoding="unknown-encoding"?><urlset />',
+    ),
+)
+def test_malformed_or_non_sitemap_xml_keeps_response_with_empty_route_inventory(
+    body: bytes,
+) -> None:
+    request = _request(
+        "https://app.example.test/sitemap.xml",
+        source="metadata_coverage",
+    )
+    calls: list[str] = []
+
+    result = collect_deep_metadata_from_plan(
+        _plan((request,), allowed_origins=("https://app.example.test",)),
+        fetcher=_fake_fetcher(
+            calls,
+            body=body,
+            headers=(("content-type", "application/xml"),),
+        ),
+    )
+
+    assert calls == ["https://app.example.test/sitemap.xml"]
+    assert result.total_collected == 1
+    assert result.total_skipped == 0
+    assert result.collected[0].sitemap_route_references == ()
+    assert result.collected[0].body_sha256 == sha256(body).hexdigest()
 
 
 def test_renderer_includes_sections_safety_wording_and_no_finding_language() -> None:

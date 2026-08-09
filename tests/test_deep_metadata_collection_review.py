@@ -188,6 +188,42 @@ def test_404_and_non_404_client_errors_get_distinct_leads() -> None:
     assert client_error.evidence_ids == ("EVID-403", "EVID-401")
 
 
+def test_sitemap_route_inventory_is_exposed_for_neutral_manual_review() -> None:
+    result = DeepMetadataCollectionResult(
+        collected=(
+            _collected(
+                "https://app.example.test/sitemap.xml",
+                200,
+                "sitemap-hash",
+                evidence_ids=("EVID-PATH-0006", "EVID-HEADER-0010"),
+                sitemap_route_references=(
+                    "https://app.example.test/account",
+                    "https://app.example.test/docs",
+                ),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    summary = build_deep_metadata_collection_review(result)
+    rendered = render_deep_metadata_collection_review_markdown(summary)
+    lead = next(lead for lead in summary.leads if lead.category == "sitemap_route_inventory")
+
+    assert lead.severity == "info"
+    assert lead.title == "Collected sitemap route inventory for manual review"
+    assert lead.urls == (
+        "https://app.example.test/account",
+        "https://app.example.test/docs",
+    )
+    assert lead.evidence_ids == ("EVID-PATH-0006", "EVID-HEADER-0010")
+    assert "were not requested or tested" in lead.detail
+    assert "https://app.example.test/account" in rendered
+    assert "vulnerability" not in rendered.lower()
+
+
 def test_skip_reason_leads_and_counts_are_deterministic() -> None:
     result = DeepMetadataCollectionResult(
         collected=(),
@@ -272,6 +308,7 @@ def _collected(
     *,
     preview: str = "preview",
     evidence_ids: tuple[str, ...] = ("EVID-1",),
+    sitemap_route_references: tuple[str, ...] = (),
 ) -> DeepMetadataCollectedItem:
     return DeepMetadataCollectedItem(
         url=url,
@@ -286,6 +323,7 @@ def _collected(
         source="metadata_coverage",
         reason="planned_uncollected_metadata",
         evidence_ids=evidence_ids,
+        sitemap_route_references=sitemap_route_references,
     )
 
 

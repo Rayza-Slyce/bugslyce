@@ -229,6 +229,33 @@ def _build_leads(
     for item in result.collected:
         by_group[_status_group(item.status_code)].append(item)
 
+    sitemap_items = [
+        item for item in result.collected if item.sitemap_route_references
+    ]
+    if sitemap_items:
+        leads.append(
+            DeepMetadataCollectionReviewLead(
+                category="sitemap_route_inventory",
+                severity="info",
+                title="Collected sitemap route inventory for manual review",
+                detail=(
+                    "Bounded same-origin route references were extracted offline "
+                    "from already-collected sitemap responses. The routes were not "
+                    "requested or tested."
+                ),
+                urls=tuple(
+                    sorted(
+                        {
+                            route
+                            for item in sitemap_items
+                            for route in item.sitemap_route_references
+                        }
+                    )
+                ),
+                evidence_ids=_evidence_ids(sitemap_items),
+            )
+        )
+
     lead_specs = (
         (
             "2xx_success",

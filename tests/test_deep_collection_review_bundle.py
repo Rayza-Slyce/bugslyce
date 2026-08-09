@@ -291,6 +291,36 @@ def test_partial_inputs_generate_priorities_from_available_summary_only() -> Non
     )
 
 
+def test_sitemap_route_inventory_flows_through_existing_unified_bundle() -> None:
+    routes = (
+        "https://app.example.test/account",
+        "https://app.example.test/docs",
+    )
+    bundle = build_deep_collection_review_bundle(
+        _metadata_summary(
+            total_collected=1,
+            leads=(
+                _metadata_lead(
+                    "sitemap_route_inventory",
+                    routes,
+                    evidence_ids=("EVID-PATH-0006", "EVID-HEADER-0010"),
+                ),
+            ),
+        ),
+        _empty_source_summary(),
+    )
+
+    assert len(bundle.priorities) == 1
+    priority = bundle.priorities[0]
+    assert priority.category == "sitemap_route_inventory"
+    assert priority.related_urls == routes
+    assert priority.related_evidence_ids == (
+        "EVID-PATH-0006",
+        "EVID-HEADER-0010",
+    )
+    assert priority.source_sections == ("metadata_collection_review",)
+
+
 def test_renderer_compacts_long_values_and_uses_review_only_language() -> None:
     source = _source_summary(
         leads=(

@@ -138,7 +138,7 @@ def build_deep_collection_request_plan_from_project_state(
     )
 
     for item in metadata_coverage.items:
-        if item.status != "planned_uncollected":
+        if item.status not in {"observed", "planned_uncollected"}:
             continue
         item_origin = _origin_for_url(item.url)
         if programme_scope_policy is None and (
@@ -150,7 +150,11 @@ def build_deep_collection_request_plan_from_project_state(
                 url=item.url,
                 method="GET",
                 source="metadata_coverage",
-                reason="planned_uncollected_metadata",
+                reason=(
+                    "observed_metadata_body_uncollected"
+                    if item.status == "observed"
+                    else "planned_uncollected_metadata"
+                ),
                 evidence_ids=item.evidence_ids,
                 tags=("metadata", "coverage_gap"),
             )

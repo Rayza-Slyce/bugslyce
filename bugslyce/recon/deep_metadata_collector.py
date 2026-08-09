@@ -11,13 +11,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
+from urllib.parse import urlparse
+from xml.etree import ElementTree
 
+from bugslyce.core.programme_scope import canonicalise_http_url_destination
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionBounds,
     DeepCollectionRequest,
 )
 from bugslyce.recon.deep_collection_request_plan import DeepCollectionRequestPlan
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
+from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
 from bugslyce.recon.http_enforcement import (
     HTTPRateRejected,
     HTTPRedirectHop,
@@ -27,6 +31,8 @@ from bugslyce.recon.http_enforcement import (
 
 
 MAX_BODY_PREVIEW_CHARS = 500
+MAX_SITEMAP_ROUTE_REFERENCES = 64
+MAX_SITEMAP_REFERENCE_CHARS = 2048
 SAFETY_NOTES = (
     "This is a bounded metadata collection result.",
     "It does not submit forms.",
@@ -70,6 +76,7 @@ class DeepMetadataCollectedItem:
     source: str
     reason: str
     evidence_ids: tuple[str, ...]
+    sitemap_route_references: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,6 +166,11 @@ def collect_deep_metadata_from_plan(
                 source=request.source,
                 reason=request.reason,
                 evidence_ids=tuple(_dedupe(list(request.evidence_ids))),
+                sitemap_route_references=_extract_sitemap_route_references(
+                    request.url,
+                    response.status_code,
+                    body,
+                ),
             )
         )
 
@@ -229,6 +241,9 @@ def _render_collected_item(item: DeepMetadataCollectedItem) -> list[str]:
     if item.evidence_ids:
         evidence = ", ".join(f"`{evidence_id}`" for evidence_id in item.evidence_ids)
         lines.append(f"  - Evidence: {evidence}")
+    if item.sitemap_route_references:
+        lines.append("  - Bounded sitemap route references:")
+        lines.extend(f"    - `{url}`" for url in item.sitemap_route_references)
     return lines
 
 
@@ -261,6 +276,72 @@ def _skip_from_decision(
 def _body_preview(body: bytes) -> str:
     text = body.decode("utf-8", errors="replace")
     return text[:MAX_BODY_PREVIEW_CHARS]
+
+
+def _extract_sitemap_route_references(
+    request_url: str,
+    status_code: int,
+    body: bytes,
+) -> tuple[str, ...]:
+    """Extract bounded same-origin loc references from an already-fetched sitemap."""
+
+    try:
+        request_path = urlparse(request_url).path
+    except ValueError:
+        return ()
+    if request_path != "/sitemap.xml" or not 200 <= status_code < 300:
+        return ()
+    lowered_body = body.lower()
+    if b"<!doctype" in lowered_body or b"<!entity" in lowered_body:
+        return ()
+    try:
+        root = ElementTree.fromstring(body)
+    except (ElementTree.ParseError, LookupError, ValueError):
+        return ()
+    if _xml_local_name(root.tag) not in {"urlset", "sitemapindex"}:
+        return ()
+
+    request_origin = http_origin_from_url(request_url)
+    if request_origin is None:
+        return ()
+    routes: set[str] = set()
+    for element in root.iter():
+        if _xml_local_name(element.tag) != "loc" or element.text is None:
+            continue
+        route = _canonical_same_origin_sitemap_url(element.text, request_origin)
+        if route is not None:
+            routes.add(route)
+    return tuple(sorted(routes)[:MAX_SITEMAP_ROUTE_REFERENCES])
+
+
+def _canonical_same_origin_sitemap_url(
+    raw_url: str,
+    expected_origin: HttpOrigin,
+) -> str | None:
+    value = raw_url.strip()
+    if (
+        not value
+        or len(value) > MAX_SITEMAP_REFERENCE_CHARS
+        or any(character.isspace() for character in value)
+    ):
+        return None
+    try:
+        destination = canonicalise_http_url_destination(value)
+    except ValueError:
+        return None
+    if (
+        destination.origin.scheme != expected_origin.scheme
+        or destination.origin.host != expected_origin.hostname
+        or destination.origin.effective_port != expected_origin.effective_port
+    ):
+        return None
+    return destination.canonical_value
+
+
+def _xml_local_name(tag: object) -> str:
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1].lower()
 
 
 def _dedupe(values: list[str]) -> list[str]:

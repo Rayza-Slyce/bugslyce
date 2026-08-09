@@ -40,6 +40,7 @@ def deep_metadata_collection_result_to_dict(
                 "source": item.source,
                 "reason": item.reason,
                 "evidence_ids": list(item.evidence_ids),
+                "sitemap_route_references": list(item.sitemap_route_references),
             }
             for item in result.collected
         ],
@@ -148,6 +149,10 @@ def _collected_item_from_dict(payload: object) -> DeepMetadataCollectedItem:
         source=_require_str(payload, "source"),
         reason=_require_str(payload, "reason"),
         evidence_ids=_str_tuple(_require_list(payload, "evidence_ids"), "evidence_ids"),
+        sitemap_route_references=_optional_str_tuple(
+            payload,
+            "sitemap_route_references",
+        ),
     )
 
 
@@ -181,6 +186,12 @@ def _str_tuple(values: list, field: str) -> tuple[str, ...]:
     if not all(isinstance(value, str) for value in values):
         raise ValueError(f"{field} must contain only strings.")
     return tuple(values)
+
+
+def _optional_str_tuple(payload: dict, field: str) -> tuple[str, ...]:
+    if field not in payload:
+        return ()
+    return _str_tuple(_require_list(payload, field), field)
 
 
 def _require_list(payload: dict, field: str) -> list:

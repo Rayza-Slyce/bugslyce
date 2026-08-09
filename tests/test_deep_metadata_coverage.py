@@ -109,7 +109,7 @@ def test_collected_robots_value_counts_as_collected_robots_coverage() -> None:
     assert summary.collected_count == 1
 
 
-def test_discovered_security_txt_marks_metadata_url_collected() -> None:
+def test_discovered_security_txt_marks_metadata_url_observed_without_body() -> None:
     summary = build_deep_metadata_coverage_from_project_state(
         _project_state(
             discovered_paths=[
@@ -119,9 +119,11 @@ def test_discovered_security_txt_marks_metadata_url_collected() -> None:
     )
 
     security = _item(summary, "https://example.test/security.txt")
-    assert security.status == "collected"
+    assert security.status == "observed"
     assert security.category == "security"
     assert security.evidence_ids == ("EVID-PATH-0001",)
+    assert security.collected is False
+    assert security.reason == "local_metadata_path_observed_without_body"
 
 
 def test_endpoint_metadata_reference_is_observed() -> None:

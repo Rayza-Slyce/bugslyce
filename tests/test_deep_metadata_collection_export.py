@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,7 @@ def test_result_to_dict_includes_expected_keys_without_full_body() -> None:
             "source": "metadata_coverage",
             "reason": "planned_uncollected_metadata",
             "evidence_ids": ["EVID-1", "EVID-2"],
+            "sitemap_route_references": [],
         }
     ]
     assert payload["skipped"] == [
@@ -106,7 +108,19 @@ def test_write_artifacts_rejects_missing_or_file_output_dir(tmp_path: Path) -> N
 
 
 def test_result_round_trips_from_dict_and_loader(tmp_path: Path) -> None:
-    result = _result()
+    base = _result()
+    result = replace(
+        base,
+        collected=(
+            replace(
+                base.collected[0],
+                sitemap_route_references=(
+                    "http://example.test/account",
+                    "http://example.test/docs",
+                ),
+            ),
+        ),
+    )
     payload = deep_metadata_collection_result_to_dict(result)
     path = tmp_path / DEEP_METADATA_COLLECTION_JSON
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -120,7 +134,27 @@ def test_result_round_trips_from_dict_and_loader(tmp_path: Path) -> None:
         assert candidate.total_skipped == result.total_skipped
         assert candidate.collected[0].headers == (("content-type", "text/plain"),)
         assert candidate.collected[0].evidence_ids == ("EVID-1", "EVID-2")
+        assert candidate.collected[0].sitemap_route_references == (
+            "http://example.test/account",
+            "http://example.test/docs",
+        )
         assert candidate.skipped[0].evidence_ids == ("EVID-ROUTE",)
+        assert not hasattr(candidate.collected[0], "body")
+
+
+def test_schema_v1_without_sitemap_routes_loads_as_empty_collection(
+    tmp_path: Path,
+) -> None:
+    payload = deep_metadata_collection_result_to_dict(_result())
+    payload["collected"][0].pop("sitemap_route_references")
+    path = tmp_path / DEEP_METADATA_COLLECTION_JSON
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rebuilt = deep_metadata_collection_result_from_dict(payload)
+    loaded = load_deep_metadata_collection_result(path)
+
+    for candidate in (rebuilt, loaded):
+        assert candidate.collected[0].sitemap_route_references == ()
         assert not hasattr(candidate.collected[0], "body")
 
 

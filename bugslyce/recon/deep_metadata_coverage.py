@@ -287,11 +287,11 @@ def _metadata_evidence_by_url(
             evidence_by_url,
             normalised_url,
             _EvidenceCoverage(
-                status="collected",
+                status="observed",
                 category=category,
                 source="project-state:discovered-path",
                 evidence_ids=tuple(_dedupe(path.evidence_ids)),
-                reason="local_metadata_path_collected",
+                reason="local_metadata_path_observed_without_body",
             ),
         )
 
@@ -311,7 +311,7 @@ def _metadata_evidence_by_url(
                 category=category,
                 source="project-state:endpoint",
                 evidence_ids=tuple(_dedupe(endpoint.evidence_ids)),
-                reason="metadata_reference_observed",
+                reason="metadata_reference_observed_without_body",
             ),
         )
 
