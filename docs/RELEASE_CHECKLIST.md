@@ -3,9 +3,7 @@
 This checklist tracks BugSlyce `1.2.0` final release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **source/runtime and packaged `1.2.0rc1` acceptance are
-complete; final `1.2.0` build, exact-wheel verification and publication are
-pending.**
+Current decision: **BugSlyce `1.2.0` release acceptance is complete.**
 
 Current source baseline before release-metadata preparation:
 `0372bd9ff616d0ce604408a1ddc5c5a516ae874b`.
@@ -37,11 +35,39 @@ Current source baseline before release-metadata preparation:
 - [x] The exact same `1.2.0rc1` wheel passed temporary pipx acceptance on Mint
       and Kali.
 - [x] Packaged `1.2.0rc1` Deep authorised-lab acceptance passed.
-- [ ] Final `1.2.0` wheel and source distribution build from the reviewed state.
-- [ ] Final wheel/sdist metadata and archive safety checks pass.
-- [ ] Final exact wheel passes isolated/package verification on Mint and Kali.
-- [ ] Final release commit and annotated `v1.2.0` tag are created and pushed.
-- [ ] Final wheel and source distribution are published.
+- [x] Final `1.2.0` wheel and source distribution built from the reviewed state.
+- [x] Final wheel/sdist metadata and archive safety checks passed.
+- [x] Final exact wheel passed isolated/package verification on Mint and Kali.
+- [x] Final release commit and annotated `v1.2.0` tag were created and pushed.
+- [x] PyPI `1.2.0` release and GitHub `v1.2.0` release were verified publicly.
+
+### 1.2.0 release record
+
+Release source commit:
+`11bc5207a0dcccad2da898c14d5f984738adfeff`
+
+Annotated release tag:
+`v1.2.0`
+
+Final wheel:
+
+`bugslyce-1.2.0-py3-none-any.whl`
+
+SHA-256:
+
+`33d0c36bccff80959db5fce74ddcf373e16c75b18521ef5d957718050ffb2f2e`
+
+Final source distribution:
+
+`bugslyce-1.2.0.tar.gz`
+
+SHA-256:
+
+`c30bf8fec28818c3d5ba125d742bcc28dc2052ba3c0312f76895661c89996d45`
+
+The untagged `1.2.0rc1` candidate was used for packaged cross-host and
+authorised-lab acceptance before final promotion. No public rc1 tag or package
+release was required.
 
 The completed `1.1.0`, `1.0.0`, `1.0.0rc2` and `1.0.0rc1` records below are
 historical evidence and must not be rewritten as current `1.2.0` results.
