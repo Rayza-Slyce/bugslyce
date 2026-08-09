@@ -1228,3 +1228,203 @@ def _completed_deep_project(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
     return project_file, tuple(
         [project_dir / name for name in canonical_names] + [export_path]
     )
+
+@pytest.mark.parametrize(
+    ("mode_choice", "mode_label"),
+    (
+        ("3", "Standard Recon"),
+        ("4", "Deep Recon"),
+    ),
+)
+def test_ready_bug_bounty_standard_and_deep_continue_from_policy_to_scope(
+    monkeypatch,
+    tmp_path: Path,
+    mode_choice: str,
+    mode_label: str,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    stages: list[str] = []
+    prompts: list[str] = []
+    output: list[str] = []
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+
+    def fake_policy(*_args, **_kwargs):
+        stages.append("policy")
+        return SimpleNamespace(saved=True, cancelled=False, policy=object())
+
+    def fake_scope(*_args, **_kwargs):
+        stages.append("scope")
+        return 0
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        fake_policy,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.assess_engagement_policy",
+        lambda _policy: SimpleNamespace(not_ready_reasons=()),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_programme_scope",
+        fake_scope,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.load_project",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            programme_scope_file="programme_scope.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
+    )
+
+    answers = iter(
+        [
+            "1",
+            "demo",
+            "10.10.10.10",
+            "projects",
+            "3",
+            mode_choice,
+            "YES",
+            "",
+        ]
+    )
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert stages == ["policy", "scope"]
+    assert any(f"Run {mode_label} now?" in prompt for prompt in prompts)
+    assert f"{mode_label} was not started." in output
+
+
+def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    output: list[str] = []
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            saved=True,
+            cancelled=False,
+            policy=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.assess_engagement_policy",
+        lambda _policy: SimpleNamespace(not_ready_reasons=()),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_programme_scope",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.load_project",
+        lambda *_args, **_kwargs: SimpleNamespace(programme_scope_file=None),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
+    )
+
+    answers = iter(
+        [
+            "1",
+            "demo",
+            "10.10.10.10",
+            "projects",
+            "3",
+            "3",
+            "YES",
+        ]
+    )
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda _prompt: next(answers),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert "Standard Recon was selected but not started. Programme scope was not saved." in output
+    assert "No network requests were made." in output
+
+
+def test_ready_bug_bounty_quick_stays_fail_closed_before_scope(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    output: list[str] = []
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            saved=True,
+            cancelled=False,
+            policy=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.assess_engagement_policy",
+        lambda _policy: SimpleNamespace(not_ready_reasons=()),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_programme_scope",
+        lambda *args, **kwargs: pytest.fail("scope must not run for Quick"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *args, **kwargs: pytest.fail("pipeline must not run for Quick"),
+    )
+
+    answers = iter(
+        [
+            "1",
+            "demo",
+            "10.10.10.10",
+            "projects",
+            "3",
+            "1",
+            "YES",
+        ]
+    )
+
+    exit_code = run_interactive_launcher(
+        input_func=lambda _prompt: next(answers),
+        print_func=output.append,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert any(
+        "Strict bug-bounty project execution supports Standard and Deep Recon."
+        in line
+        for line in output
+    )
+    assert "No network requests were made." in output

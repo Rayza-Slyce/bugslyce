@@ -15,11 +15,13 @@ from bugslyce.core.engagement_context import (
     engagement_context_label,
     parse_engagement_context_choice,
 )
+from bugslyce.core.engagement_policy import assess_engagement_policy
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.engagement_policy_setup import (
     configure_project_policy_interactively,
     show_project_policy,
 )
+from bugslyce.programme_scope_setup import configure_project_programme_scope
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     PIPELINE_PROFILE,
@@ -213,7 +215,7 @@ def _start_new_project(
     project_file = Path(scaffold.project_file)
     if engagement_context == BUG_BOUNTY_CONTEXT:
         try:
-            configure_project_policy_interactively(
+            policy_result = configure_project_policy_interactively(
                 project_file,
                 input_func=input_func,
                 print_func=print_func,
@@ -228,15 +230,58 @@ def _start_new_project(
             print_func("The project was saved, but its engagement policy was not changed.")
             print_func("No network requests were made.")
             return 2
-        if profile is not None:
+
+        if (
+            not policy_result.saved
+            or policy_result.policy is None
+            or assess_engagement_policy(policy_result.policy).not_ready_reasons
+        ):
+            if profile is not None:
+                print_func(
+                    f"{_profile_display_name(profile)} was selected but not started. "
+                    "Use the strict project pipeline after engagement policy and programme scope are ready."
+                )
+            else:
+                print_func("Manual setup was saved. No recon was started.")
+            print_func("No network requests were made.")
+            return 0
+
+        if profile == PIPELINE_PROFILE:
             print_func(
-                f"{_profile_display_name(profile)} was selected but not started. "
-                "Use the strict project pipeline after engagement policy and programme scope are ready."
+                "Quick Recon was selected but not started. "
+                "Strict bug-bounty project execution supports Standard and Deep Recon."
             )
-        else:
-            print_func("Manual setup was saved. No recon was started.")
-        print_func("No network requests were made.")
-        return 0
+            print_func("No network requests were made.")
+            return 0
+
+        scope_exit_code = configure_project_programme_scope(
+            project_file,
+            input_func=input_func,
+            print_func=print_func,
+            error_func=print_func,
+        )
+        if scope_exit_code != 0:
+            print_func("Programme-scope setup did not complete successfully.")
+            print_func("No network requests were made.")
+            return scope_exit_code
+
+        try:
+            scoped_project = load_project(project_file)
+        except (ValueError, OSError, UnicodeError) as exc:
+            print_func(f"Error: programme-scope readiness could not be confirmed: {exc}")
+            print_func("No network requests were made.")
+            return 2
+
+        if scoped_project.programme_scope_file is None:
+            if profile is not None:
+                print_func(
+                    f"{_profile_display_name(profile)} was selected but not started. "
+                    "Programme scope was not saved."
+                )
+            else:
+                print_func("Manual setup was saved. No recon was started.")
+            print_func("No network requests were made.")
+            return 0
     if profile is None:
         _print_interactive_next_steps(scaffold, print_func, profile=None)
         return 0
