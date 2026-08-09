@@ -102,12 +102,49 @@ def test_ready_fresh_bug_bounty_project_still_recommends_standard(
 
 
 @pytest.mark.parametrize("profile", ("standard-bounded", "deep-bounded"))
-def test_completed_bug_bounty_pipeline_recommends_offline_report_review(
+def test_completed_bug_bounty_pipeline_prefers_existing_html_report(
     tmp_path: Path,
     profile: str,
 ) -> None:
     project_file, output_dir = _ready_bug_bounty_project(tmp_path)
     _write_completed_bug_bounty_pipeline(output_dir, profile=profile)
+    _write(output_dir / "project_state.json", "{}\n")
+    _write(output_dir / "report.html", "<!doctype html>\n")
+
+    result = build_project_next(project_file)
+
+    assert result.recommended_action.id == "review-existing-report"
+    assert result.recommended_action.optional is False
+    assert result.recommended_action.title == "Open the existing HTML Operator Report."
+    assert "xdg-open" in result.recommended_action.command_preview
+    assert str(output_dir / "report.html") in result.recommended_action.command_preview
+
+    markdown = next(
+        action
+        for action in result.optional_actions
+        if action.id == "review-existing-markdown-report"
+    )
+    assert "less" in markdown.command_preview
+    assert str(output_dir / "report.md") in markdown.command_preview
+
+    assert all(
+        action.id != "render-html-report"
+        for action in (result.recommended_action, *result.optional_actions)
+    )
+    assert all(
+        action.id != "run-standard-project-pipeline"
+        for action in (result.recommended_action, *result.optional_actions)
+    )
+
+
+@pytest.mark.parametrize("profile", ("standard-bounded", "deep-bounded"))
+def test_completed_bug_bounty_pipeline_without_html_keeps_render_option(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    project_file, output_dir = _ready_bug_bounty_project(tmp_path)
+    _write_completed_bug_bounty_pipeline(output_dir, profile=profile)
+    _write(output_dir / "project_state.json", "{}\n")
 
     result = build_project_next(project_file)
 
@@ -115,10 +152,15 @@ def test_completed_bug_bounty_pipeline_recommends_offline_report_review(
     assert result.recommended_action.optional is False
     assert "less" in result.recommended_action.command_preview
     assert str(output_dir / "report.md") in result.recommended_action.command_preview
-    assert all(
-        action.id != "run-standard-project-pipeline"
-        for action in (result.recommended_action, *result.optional_actions)
+
+    render = next(
+        action
+        for action in result.optional_actions
+        if action.id == "render-html-report"
     )
+    assert "bugslyce report html" in render.command_preview
+    assert str(output_dir / "report.html") in render.command_preview
+    assert f"{output_dir}-evidence-report.html" not in render.command_preview
 
 
 @pytest.mark.parametrize("pack_exists", (False, True))

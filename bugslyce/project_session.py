@@ -1052,8 +1052,12 @@ def _bug_bounty_offline_actions(
     actions: list[GuidedProjectAction] = []
     manifest_path = output_dir / "recon_manifest.json"
     report_path = output_dir / "report.md"
+    html_report_path = output_dir / "report.html"
     state_path = output_dir / "project_state.json"
     evidence_pack_path = Path(f"{project.output_dir}-evidence-pack.zip")
+    has_html_report = (
+        html_report_path.is_file() and not html_report_path.is_symlink()
+    )
     if manifest_path.is_file():
         actions.append(
             GuidedProjectAction(
@@ -1065,16 +1069,33 @@ def _bug_bounty_offline_actions(
                 optional=True,
             )
         )
-    if report_path.is_file():
+    if has_html_report:
         actions.append(
             GuidedProjectAction(
                 id="review-existing-report",
-                title="Review the existing local Markdown report.",
+                title="Open the existing HTML Operator Report.",
+                command_preview=_format_command(["xdg-open", str(html_report_path)]),
+                optional=True,
+            )
+        )
+    if report_path.is_file():
+        actions.append(
+            GuidedProjectAction(
+                id=(
+                    "review-existing-markdown-report"
+                    if has_html_report
+                    else "review-existing-report"
+                ),
+                title=(
+                    "Review the existing local Markdown report as a text fallback."
+                    if has_html_report
+                    else "Review the existing local Markdown report."
+                ),
                 command_preview=_format_command(["less", str(report_path)]),
                 optional=True,
             )
         )
-    if state_path.is_file():
+    if state_path.is_file() and not has_html_report:
         actions.append(
             GuidedProjectAction(
                 id="render-html-report",
@@ -1087,7 +1108,7 @@ def _bug_bounty_offline_actions(
                         "--input-dir",
                         project.output_dir,
                         "--output",
-                        f"{project.output_dir}-evidence-report.html",
+                        str(html_report_path),
                     ]
                 ),
                 optional=True,
