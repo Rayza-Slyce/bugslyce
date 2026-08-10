@@ -27,7 +27,7 @@ from bugslyce.recon.modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FINAL_VERSION = "1.2.0"
+FINAL_VERSION = "1.2.1"
 RC2_VERSION = "1.0.0rc2"
 PREVIOUS_RC_VERSION = "1.0.0rc1"
 RC2_WHEEL_FILENAME = "bugslyce-1.0.0rc2-py3-none-any.whl"
@@ -225,9 +225,9 @@ def test_final_package_filename_contract() -> None:
 
     assert distribution_name == "bugslyce"
     assert f"{distribution_name}-{FINAL_VERSION}-py3-none-any.whl" == (
-        "bugslyce-1.2.0-py3-none-any.whl"
+        "bugslyce-1.2.1-py3-none-any.whl"
     )
-    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.2.0.tar.gz"
+    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.2.1.tar.gz"
 
 
 def test_release_documents_distinguish_current_final_state_and_history() -> None:

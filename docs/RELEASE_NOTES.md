@@ -1,5 +1,42 @@
 # Release Notes
 
+## 1.2.1
+
+BugSlyce `1.2.1` is a focused safety-hardening patch for the strict v1.2
+bug-bounty runtime.
+
+### Resolved-peer programme scope
+
+- Hostname programme authority no longer implicitly authorises resolved IPv4
+  peers in BugSlyce's deterministic special-purpose or multicast ranges.
+- Such peers require explicit exact-IPv4 or IPv4-CIDR programme authority.
+- Explicit exclusions remain dominant, and explicitly authorised private/local
+  IPv4 targets remain supported.
+
+### Strict Gobuster peer binding
+
+- Strict Gobuster now retains the IPv4 peer selected and authorised during
+  programme-scope preflight and uses that IPv4 in the executable `--url`.
+- The original logical hostname authority is preserved with exactly one
+  functional `Host` header.
+- This removes the second target-hostname DNS resolution that previously
+  allowed Gobuster to contact a different peer after preflight.
+- Direct IPv4 Gobuster targets retain their existing direct-IP behaviour.
+
+### Validation and bounded limitation
+
+- The corrected source passed `3,274` deterministic tests on Mint and Kali,
+  with `compileall` and `git diff --check` also passing.
+- Controlled local Kali execution confirmed Gobuster contacted only the
+  programme-approved pinned IPv4 peer while preserving the logical `Host`
+  authority.
+- Hostname-based HTTPS Gobuster uses an IP-pinned transport and does not
+  preserve hostname SNI. SNI-dependent services may therefore produce
+  incomplete content-discovery results. This is a bounded reliability
+  limitation; transport-peer safety takes precedence.
+- BugSlyce remains reconnaissance and evidence-led triage only. Exploitation
+  and active vulnerability testing remain outside v1 scope.
+
 ## 1.2.0
 
 BugSlyce `1.2.0` is the v1.2 reliability and production bug-bounty runtime

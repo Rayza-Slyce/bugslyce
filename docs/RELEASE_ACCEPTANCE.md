@@ -1,6 +1,6 @@
 # Release Acceptance
 
-This guide is the current acceptance procedure for BugSlyce `1.2.0`. The
+This guide is the current acceptance procedure for BugSlyce `1.2.1`. The
 completed public record below documents the earlier `1.0.0rc1` acceptance.
 
 Do not run live recon against any system unless you own it or are explicitly
@@ -56,7 +56,7 @@ PY
 python -m bugslyce.cli --version
 ```
 
-Both commands must report `1.2.0`; the CLI form must print `bugslyce 1.2.0`.
+Both commands must report `1.2.1`; the CLI form must print `bugslyce 1.2.1`.
 
 ### 3. Test Groups
 
@@ -164,7 +164,7 @@ Mint and Kali must install the same exact local wheel. Record its filename and
 SHA-256 before either installation, then verify exact-wheel SHA-256 equality between Mint and Kali.
 
 ```bash
-WHEEL=/absolute/path/to/bugslyce-1.2.0-py3-none-any.whl
+WHEEL=/absolute/path/to/bugslyce-1.2.1-py3-none-any.whl
 sha256sum "$WHEEL"
 PIPX_HOME=$(mktemp -d)
 PIPX_BIN_DIR=$(mktemp -d)
@@ -194,7 +194,7 @@ bugslyce project run --help
 bugslyce doctor
 ```
 
-Expected version: `bugslyce 1.2.0`.
+Expected version: `bugslyce 1.2.1`.
 
 ### 10. Markdown Link Validation
 
@@ -333,4 +333,4 @@ Keep private target details out of commits and public tickets.
 
 | Date | Commit | Package version | Kali version | Python version | Private target identifier | Mode | Result | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|  |  | `1.2.0` |  |  |  |  |  |  |
+|  |  | `1.2.1` |  |  |  |  |  |  |

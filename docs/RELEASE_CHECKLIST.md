@@ -1,11 +1,43 @@
 # Release Checklist
 
-This checklist tracks BugSlyce `1.2.0` final release acceptance.
+This checklist tracks BugSlyce `1.2.1` safety-patch release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **BugSlyce `1.2.0` release acceptance is complete.**
+Current decision: **The `1.2.1` source/runtime safety correction is accepted;
+release packaging and promotion checks are still required.**
 
-Current source baseline before release-metadata preparation:
+Accepted safety-fix commit:
+`6b3e0d3d34b2f19c0a7f088a0ba1658644011a05`.
+
+### Completed `1.2.1` source/runtime acceptance
+
+- [x] Special-purpose and multicast resolved IPv4 peers require explicit
+      IPv4/CIDR programme authority.
+- [x] Strict Gobuster pins the programme-approved IPv4 peer and preserves the
+      logical HTTP Host authority.
+- [x] Controlled local Kali execution reproduced the original DNS hand-off
+      defect and subsequently confirmed the corrected peer binding.
+- [x] Focused safety-critical validation passed: `875 passed`.
+- [x] Full Mint and Kali source validation passed: `3,274 passed`.
+- [x] `compileall` and `git diff --check` passed.
+- [x] Safety-fix commit was pushed and independently verified on Kali.
+
+### Still required for `1.2.1`
+
+- [x] Align package/runtime/release-facing metadata to `1.2.1`.
+- [x] Pass focused release/documentation validation and the full suite.
+- [ ] Build the final `1.2.1` wheel and source distribution from reviewed
+      committed source.
+- [ ] Verify package metadata, archive safety, RECORD and bundled resources.
+- [ ] Verify the exact same wheel through isolated Mint and Kali installation.
+- [ ] Create and push annotated tag `v1.2.1`.
+- [ ] Publish and verify PyPI `1.2.1` and GitHub `v1.2.1`.
+
+## Historical `1.2.0` release acceptance
+
+Historical decision: **BugSlyce `1.2.0` release acceptance is complete.**
+
+Historical source baseline before `1.2.0` release-metadata preparation:
 `0372bd9ff616d0ce604408a1ddc5c5a516ae874b`.
 
 ### Completed source/runtime acceptance
