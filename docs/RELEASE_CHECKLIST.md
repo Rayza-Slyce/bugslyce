@@ -3,8 +3,7 @@
 This checklist tracks BugSlyce `1.2.1` safety-patch release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **The `1.2.1` source/runtime safety correction is accepted;
-release packaging and promotion checks are still required.**
+Current decision: **BugSlyce `1.2.1` release acceptance is complete.**
 
 Accepted safety-fix commit:
 `6b3e0d3d34b2f19c0a7f088a0ba1658644011a05`.
@@ -26,12 +25,65 @@ Accepted safety-fix commit:
 
 - [x] Align package/runtime/release-facing metadata to `1.2.1`.
 - [x] Pass focused release/documentation validation and the full suite.
-- [ ] Build the final `1.2.1` wheel and source distribution from reviewed
+- [x] Build the final `1.2.1` wheel and source distribution from reviewed
       committed source.
-- [ ] Verify package metadata, archive safety, RECORD and bundled resources.
-- [ ] Verify the exact same wheel through isolated Mint and Kali installation.
-- [ ] Create and push annotated tag `v1.2.1`.
-- [ ] Publish and verify PyPI `1.2.1` and GitHub `v1.2.1`.
+- [x] Verify package metadata, archive safety, RECORD and bundled resources.
+- [x] Verify the exact same wheel through isolated Mint and Kali installation.
+- [x] Create and push annotated tag `v1.2.1`.
+- [x] Publish and verify PyPI `1.2.1` and GitHub `v1.2.1`.
+
+### 1.2.1 release record
+
+Release source commit:
+
+`dbec3526f807405548148f2b93f54c78301e1436`
+
+Safety-fix commit:
+
+`6b3e0d3d34b2f19c0a7f088a0ba1658644011a05`
+
+Annotated release tag:
+
+`v1.2.1`
+
+Final wheel:
+
+`bugslyce-1.2.1-py3-none-any.whl`
+
+SHA-256:
+
+`81e1d28e41a53c7c40bf26893ad4d11e25b646208aef18c85b61335f009ac75d`
+
+Final source distribution:
+
+`bugslyce-1.2.1.tar.gz`
+
+SHA-256:
+
+`0d37e3e2c3e382c93f0499d9da2ff547ed5d2eb1a8f05f821b6461db2d94d65c`
+
+Release acceptance evidence:
+
+- Source validation passed `3,274` tests on Mint and Kali.
+- Focused safety-critical validation passed `875` tests.
+- Controlled local Kali execution confirmed strict Gobuster contacted only the
+  programme-approved pinned IPv4 peer while preserving the logical Host
+  authority.
+- Wheel and source distribution metadata, archive paths, wheel RECORD and
+  bundled resources passed inspection.
+- The exact same wheel passed isolated Mint and Kali installation with matching
+  SHA-256.
+- PyPI `1.2.1` was publicly verified against the accepted wheel and source
+  distribution hashes.
+- GitHub `v1.2.1` was publicly verified with the same accepted release
+  artefacts.
+- A normal Kali pipx installation was upgraded from public PyPI `1.2.0` to
+  `1.2.1`; package/runtime versions matched and `bugslyce doctor` reported all
+  executable v1 recon modes ready.
+
+The annotated `v1.2.1` tag remains attached to the exact release-source commit
+above. This release-record update is post-release bookkeeping and is not part
+of the tagged release source.
 
 ## Historical `1.2.0` release acceptance
 
