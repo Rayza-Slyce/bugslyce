@@ -3967,6 +3967,12 @@ def _tcp_skip_project_runtime(
                     kind="http_path_prefix",
                     value="https://app.example.test/",
                 ),
+                build_programme_scope_rule(
+                    rule_id="fixture-peer-network",
+                    action="include",
+                    kind="ipv4_cidr",
+                    value="192.0.2.0/24",
+                ),
             ),
             updated_at="2026-06-15T12:00:00Z",
         ),

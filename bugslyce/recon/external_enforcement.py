@@ -137,6 +137,7 @@ _GOBUSTER_REQUIRED_OPTIONS = frozenset(
         "--wordlist",
     }
 )
+_GOBUSTER_CAPABILITY_OPTIONS = _GOBUSTER_REQUIRED_OPTIONS | {"--no-tls-validation"}
 _NMAP_REQUIRED_OPTIONS = frozenset(
     {"-sT", "-Pn", "-n", "-p", "--max-rate", "--max-retries", "-oN"}
 )
@@ -649,13 +650,20 @@ def assess_tool_capabilities(
         return ToolCapabilities(tool, False, frozenset(), diagnostic="executable_absent")
     if not isinstance(help_text, str) or not help_text.strip():
         return ToolCapabilities(tool, True, frozenset(), diagnostic="help_output_unusable")
-    required = {
+    capability_options = {
         "curl": _CURL_REQUIRED_OPTIONS,
-        "gobuster": _GOBUSTER_REQUIRED_OPTIONS,
+        "gobuster": _GOBUSTER_CAPABILITY_OPTIONS,
         "nmap": _NMAP_CAPABILITY_OPTIONS,
     }[tool]
     supported = frozenset(
-        option for option in required if _help_mentions_option(help_text, option)
+        option
+        for option in capability_options
+        if _help_mentions_option(help_text, option)
+    )
+    required = (
+        _GOBUSTER_REQUIRED_OPTIONS
+        if tool == "gobuster"
+        else capability_options
     )
     repeatable = tool == "gobuster" and _gobuster_repeatable_headers_supported(
         help_text
@@ -665,8 +673,9 @@ def assess_tool_capabilities(
         help_text,
         re.IGNORECASE,
     ) is not None
-    diagnostic = "compatible" if supported == required else "required_options_missing"
-    if tool == "gobuster" and supported == required and not repeatable:
+    required_supported = required.issubset(supported)
+    diagnostic = "compatible" if required_supported else "required_options_missing"
+    if tool == "gobuster" and required_supported and not repeatable:
         diagnostic = "repeatable_headers_unproven"
     return ToolCapabilities(
         tool=tool,
@@ -958,16 +967,55 @@ def build_bug_bounty_gobuster_plan(
         raise ValueError(
             "Strict Gobuster base URL is not an approved root or path HTTP destination."
         )
+    hostname_target = destination.origin.host_kind == DESTINATION_HOSTNAME
+    if hostname_target and destination.origin.scheme == "https":
+        reason = _capability_reason(
+            capabilities,
+            "gobuster",
+            frozenset({"--no-tls-validation"}),
+        )
+        if reason:
+            return _unsupported_plan(
+                "gobuster",
+                "content_discovery",
+                COMPONENT_OMITTED,
+                reason,
+            )
+    if any(
+        header.name.casefold() == "host"
+        for header in configuration.identification_headers
+    ):
+        raise ValueError("Strict Gobuster Host header conflicts with configured identity.")
     _require_gobuster_namespace_authority(
         canonical_programme_scope_policy,
         decision.matched_inclusion_rule_ids,
         destination,
     )
-    select_programme_scope_ipv4_peer(
+    selected_ipv4 = select_programme_scope_ipv4_peer(
         canonical_programme_scope_policy,
         decision,
         ipv4_resolver,
     )
+    explicit_port = parsed.port
+    execution_authority = (
+        destination.origin.host
+        if explicit_port is None
+        else f"{destination.origin.host}:{explicit_port}"
+    )
+    execution_url = (
+        f"{destination.origin.scheme}://{execution_authority}{destination.path}"
+    )
+    functional_headers: tuple[tuple[str, str], ...] = ()
+    if hostname_target:
+        pinned_authority = (
+            selected_ipv4
+            if explicit_port is None
+            else f"{selected_ipv4}:{explicit_port}"
+        )
+        execution_url = (
+            f"{destination.origin.scheme}://{pinned_authority}{destination.path}"
+        )
+        functional_headers = (("Host", execution_authority),)
     if not wordlist.is_file():
         raise ValueError("Strict Gobuster wordlist does not exist.")
     _require_safe_local_path(wordlist, label="Strict Gobuster wordlist path")
@@ -987,7 +1035,7 @@ def build_bug_bounty_gobuster_plan(
         "gobuster",
         "dir",
         "--url",
-        origin,
+        execution_url,
         "--wordlist",
         str(wordlist),
         "--threads",
@@ -999,10 +1047,16 @@ def build_bug_bounty_gobuster_plan(
     ]
     redacted = [*argv[:-1], "configured"]
     redactions = [configuration.user_agent]
+    for name, value in functional_headers:
+        argv.extend(("--headers", f"{name}: {value}"))
+        redacted.extend(("--headers", f"{name}: configured"))
     for header in configuration.identification_headers:
         argv.extend(("--headers", f"{header.name}: {header.value}"))
         redacted.extend(("--headers", f"{header.name}: configured"))
         redactions.append(header.value)
+    if hostname_target and destination.origin.scheme == "https":
+        argv.append("--no-tls-validation")
+        redacted.append("--no-tls-validation")
     argv.extend(
         (
             "--timeout",
@@ -1624,7 +1678,7 @@ def _validate_strict_curl_argv(
 def _validate_strict_gobuster_argv(
     argv: tuple[str, ...],
     configuration: HTTPEnforcementConfiguration,
-) -> None:
+) -> tuple[str, ...]:
     if len(argv) < 2 or argv[:2] != ("gobuster", "dir"):
         raise ValueError("Strict Gobuster plan must use directory mode.")
     required_values = {
@@ -1639,12 +1693,92 @@ def _validate_strict_gobuster_argv(
     if "--url" not in argv:
         raise ValueError("Strict Gobuster plan lacks an approved root origin.")
     root_url = argv[argv.index("--url") + 1]
-    if http_origin_from_url(root_url) not in configuration.approved_origins:
-        raise ValueError("Strict Gobuster plan root origin is not approved.")
-    names = [value.split(":", 1)[0].casefold() for index, value in enumerate(argv) if index and argv[index - 1] == "--headers"]
-    expected = [item.name.casefold() for item in configuration.identification_headers]
-    if names != expected:
+    try:
+        parsed_root = urlparse(root_url)
+        root_destination = canonicalise_http_url_destination(root_url)
+        explicit_root_port = parsed_root.port
+    except ValueError:
+        raise ValueError("Strict Gobuster plan root origin is invalid.") from None
+    expected_root_authority = (
+        root_destination.origin.host
+        if explicit_root_port is None
+        else f"{root_destination.origin.host}:{explicit_root_port}"
+    )
+    expected_root_url = (
+        f"{root_destination.origin.scheme}://"
+        f"{expected_root_authority}{root_destination.path}"
+    )
+    if (
+        expected_root_url != root_url
+        or root_destination.origin.host_kind != DESTINATION_IPV4
+        or root_destination.query is not None
+    ):
+        raise ValueError("Strict Gobuster plan must use a canonical IPv4 target.")
+    headers = tuple(
+        value
+        for index, value in enumerate(argv)
+        if index and argv[index - 1] == "--headers"
+    )
+    host_headers = tuple(
+        value for value in headers if value.split(":", 1)[0].casefold() == "host"
+    )
+    if len(host_headers) > 1:
+        raise ValueError("Strict Gobuster plan has duplicate Host headers.")
+    expected_headers: tuple[str, ...]
+    if host_headers:
+        host_header = host_headers[0]
+        if not host_header.startswith("Host: "):
+            raise ValueError("Strict Gobuster logical Host authority is invalid.")
+        host_authority = host_header.removeprefix("Host: ")
+        try:
+            parsed_logical_origin = urlparse(
+                f"{root_destination.origin.scheme}://{host_authority}/"
+            )
+            logical_destination = canonicalise_http_url_destination(
+                f"{root_destination.origin.scheme}://"
+                f"{host_authority}{root_destination.path}"
+            )
+            explicit_logical_port = parsed_logical_origin.port
+        except ValueError:
+            raise ValueError("Strict Gobuster logical Host authority is invalid.") from None
+        expected_logical_authority = (
+            logical_destination.origin.host
+            if explicit_logical_port is None
+            else f"{logical_destination.origin.host}:{explicit_logical_port}"
+        )
+        if (
+            logical_destination.origin.host_kind != DESTINATION_HOSTNAME
+            or expected_logical_authority != host_authority
+            or (explicit_logical_port is None) != (explicit_root_port is None)
+            or logical_destination.origin.effective_port
+            != root_destination.origin.effective_port
+            or http_origin_from_url(logical_destination.canonical_value)
+            not in configuration.approved_origins
+        ):
+            raise ValueError("Strict Gobuster logical Host authority is not approved.")
+        expected_headers = (
+            f"Host: {expected_logical_authority}",
+            *(
+                f"{item.name}: {item.value}"
+                for item in configuration.identification_headers
+            ),
+        )
+        expected_tls_count = (
+            1 if root_destination.origin.scheme == "https" else 0
+        )
+    else:
+        if http_origin_from_url(root_url) not in configuration.approved_origins:
+            raise ValueError("Strict Gobuster plan root origin is not approved.")
+        expected_headers = tuple(
+            f"{item.name}: {item.value}"
+            for item in configuration.identification_headers
+        )
+        expected_tls_count = 0
+    if headers != expected_headers:
         raise ValueError("Strict Gobuster plan identification headers do not match the enforcement configuration.")
+    if argv.count("--no-tls-validation") != expected_tls_count or "-k" in argv:
+        raise ValueError("Strict Gobuster plan TLS controls do not match the target binding.")
+    return expected_headers
 
 
 def _validate_strict_nmap_argv(
@@ -1824,7 +1958,7 @@ def _validate_bound_gobuster_plan(
     configuration: HTTPEnforcementConfiguration,
 ) -> None:
     argv = plan.private_argv
-    _validate_strict_gobuster_argv(argv, configuration)
+    expected_headers = _validate_strict_gobuster_argv(argv, configuration)
     _require_exact_option_counts(
         argv,
         {
@@ -1835,15 +1969,16 @@ def _validate_bound_gobuster_plan(
             "--useragent": 1,
             "--timeout": 1,
             "--output": 1,
+            "--headers": len(expected_headers),
+            "--no-tls-validation": (
+                1 if "--no-tls-validation" in argv else 0
+            ),
         },
     )
     headers = tuple(
         value for index, value in enumerate(argv) if index and argv[index - 1] == "--headers"
     )
-    expected_identity = tuple(
-        f"{item.name}: {item.value}" for item in configuration.identification_headers
-    )
-    if headers != expected_identity:
+    if headers != expected_headers:
         raise ValueError("Strict Gobuster identification headers do not match the enforcement configuration.")
     if (
         plan.request_timeout_seconds is None

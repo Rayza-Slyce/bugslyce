@@ -23,6 +23,7 @@ from bugslyce.core.programme_scope import (
     REASON_INVALID_DESTINATION,
     REASON_NO_MATCHING_INCLUSION,
     REASON_RESOLVED_IP_EXCLUDED,
+    REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
     REASON_UNSUPPORTED_DESTINATION,
     RULE_EXACT_HOSTNAME,
     RULE_EXACT_HTTP_URL,
@@ -37,6 +38,7 @@ from bugslyce.core.programme_scope import (
     ProgrammeScopePolicy,
     ProgrammeScopeRule,
     ScopeDecision,
+    _resolved_ipv4_peer_requires_explicit_inclusion,
     build_programme_scope_policy,
     build_programme_scope_rule,
     canonicalise_hostname,
@@ -356,6 +358,97 @@ def test_ipv4_cidr_is_strict_network_aligned_and_ipv4_only() -> None:
     for raw in ("192.0.2.1/24", "192.0.2.0/024", "192.0.2.0/33", "::1/128", " 192.0.2.0/24"):
         with pytest.raises(ValueError):
             canonicalise_ipv4_cidr(raw)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "0.0.0.0",
+        "0.255.255.255",
+        "10.0.0.0",
+        "10.255.255.255",
+        "100.64.0.0",
+        "100.127.255.255",
+        "127.0.0.0",
+        "127.255.255.255",
+        "169.254.0.0",
+        "169.254.255.255",
+        "172.16.0.0",
+        "172.31.255.255",
+        "192.0.0.0",
+        "192.0.0.9",
+        "192.0.0.10",
+        "192.0.0.255",
+        "192.0.2.0",
+        "192.0.2.255",
+        "192.31.196.0",
+        "192.31.196.255",
+        "192.52.193.0",
+        "192.52.193.255",
+        "192.88.99.0",
+        "192.88.99.255",
+        "192.168.0.0",
+        "192.168.255.255",
+        "192.175.48.0",
+        "192.175.48.255",
+        "198.18.0.0",
+        "198.19.255.255",
+        "198.51.100.0",
+        "198.51.100.255",
+        "203.0.113.0",
+        "203.0.113.255",
+        "224.0.0.0",
+        "239.255.255.255",
+        "240.0.0.0",
+        "255.255.255.255",
+    ],
+)
+def test_special_purpose_or_multicast_ipv4_peer_requires_explicit_inclusion(
+    address: str,
+) -> None:
+    assert _resolved_ipv4_peer_requires_explicit_inclusion(address) is True
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "1.1.1.1",
+        "8.8.8.8",
+        "9.255.255.255",
+        "11.0.0.0",
+        "100.63.255.255",
+        "100.128.0.0",
+        "126.255.255.255",
+        "128.0.0.0",
+        "169.253.255.255",
+        "169.255.0.0",
+        "172.15.255.255",
+        "172.32.0.0",
+        "192.0.1.255",
+        "192.0.3.0",
+        "192.31.195.255",
+        "192.31.197.0",
+        "192.52.192.255",
+        "192.52.194.0",
+        "192.88.98.255",
+        "192.88.100.0",
+        "192.167.255.255",
+        "192.169.0.0",
+        "192.175.47.255",
+        "192.175.49.0",
+        "198.17.255.255",
+        "198.20.0.0",
+        "198.51.99.255",
+        "198.51.101.0",
+        "203.0.112.255",
+        "203.0.114.0",
+        "223.255.255.255",
+    ],
+)
+def test_ipv4_outside_owned_special_purpose_table_does_not_require_explicit_inclusion(
+    address: str,
+) -> None:
+    assert _resolved_ipv4_peer_requires_explicit_inclusion(address) is False
 
 
 def test_ipv4_exact_and_cidr_boundaries_are_evaluated_without_hostname_inference() -> None:
@@ -813,18 +906,92 @@ def test_resolved_peer_without_exclusion_preserves_allowed_logical_decision() ->
     policy = _policy(_rule("host", RULE_EXACT_HOSTNAME, "example.test"))
     logical_destination = canonicalise_hostname_destination("example.test")
     logical = evaluate_programme_scope(policy, logical_destination)
-    peer = canonicalise_resolved_ipv4_peer(logical_destination, "203.0.113.8")
+    peer = canonicalise_resolved_ipv4_peer(logical_destination, "8.8.8.8")
 
     resolved = evaluate_resolved_ipv4_peer(policy, logical, peer)
 
     assert resolved.outcome == OUTCOME_ALLOWED
     assert resolved.reason_code == REASON_INCLUDED
     assert resolved.canonical_destination == logical_destination
-    assert resolved.resolved_peer == canonicalise_ipv4_destination("203.0.113.8")
+    assert resolved.resolved_peer == canonicalise_ipv4_destination("8.8.8.8")
     assert resolved.matched_inclusion_rule_ids == ("host",)
     assert resolved.operator_safe_explanation == (
         "Destination is included by programme scope rule host."
     )
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "0.0.0.1",
+        "10.0.0.1",
+        "100.64.0.1",
+        "127.0.0.1",
+        "169.254.169.254",
+        "172.16.0.1",
+        "192.168.1.1",
+        "203.0.113.8",
+        "224.0.0.1",
+        "240.0.0.1",
+        "255.255.255.255",
+    ],
+)
+def test_resolved_special_purpose_or_multicast_peer_fails_closed_without_ip_authority(
+    address: str,
+) -> None:
+    policy = _policy(_rule("host", RULE_EXACT_HOSTNAME, "example.test"))
+    destination = canonicalise_hostname_destination("example.test")
+    logical = evaluate_programme_scope(policy, destination)
+    peer = canonicalise_resolved_ipv4_peer(destination, address)
+
+    resolved = evaluate_resolved_ipv4_peer(policy, logical, peer)
+
+    assert resolved.outcome == OUTCOME_UNKNOWN
+    assert (
+        resolved.reason_code
+        == REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION
+    )
+    assert resolved.matched_inclusion_rule_ids == ("host",)
+    assert resolved.matched_exclusion_rule_ids == ()
+    assert resolved.primary_inclusion_rule_id is None
+    assert resolved.primary_exclusion_rule_id is None
+    assert resolved.resolved_peer == canonicalise_ipv4_destination(address)
+    assert resolved.operator_safe_explanation == (
+        "Special-purpose or multicast resolved IPv4 peer requires explicit "
+        "IPv4 programme scope inclusion."
+    )
+
+
+@pytest.mark.parametrize(
+    ("peer_rule_kind", "peer_rule_value", "address"),
+    [
+        (RULE_EXACT_IPV4, "127.0.0.1", "127.0.0.1"),
+        (RULE_IPV4_CIDR, "10.0.0.0/8", "10.20.30.40"),
+        (RULE_IPV4_CIDR, "169.254.0.0/16", "169.254.169.254"),
+        (RULE_IPV4_CIDR, "203.0.113.0/24", "203.0.113.8"),
+    ],
+)
+def test_explicit_ipv4_scope_authorises_special_resolved_peer(
+    peer_rule_kind: str,
+    peer_rule_value: str,
+    address: str,
+) -> None:
+    policy = _policy(
+        _rule("host", RULE_EXACT_HOSTNAME, "example.test"),
+        _rule("peer-include", peer_rule_kind, peer_rule_value),
+    )
+    destination = canonicalise_hostname_destination("example.test")
+    logical = evaluate_programme_scope(policy, destination)
+    peer = canonicalise_resolved_ipv4_peer(destination, address)
+
+    resolved = evaluate_resolved_ipv4_peer(policy, logical, peer)
+
+    assert resolved.outcome == OUTCOME_ALLOWED
+    assert resolved.reason_code == REASON_INCLUDED
+    assert resolved.primary_inclusion_rule_id == "host"
+    assert resolved.primary_exclusion_rule_id is None
+    assert resolved.matched_inclusion_rule_ids == ("host", "peer-include")
+    assert resolved.resolved_peer == canonicalise_ipv4_destination(address)
 
 
 @pytest.mark.parametrize(

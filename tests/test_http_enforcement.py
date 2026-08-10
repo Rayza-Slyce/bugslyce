@@ -68,6 +68,7 @@ from bugslyce.recon.user_agent import (
 
 HEADER_SENTINEL = "private-researcher-identity-9173"
 USER_AGENT_SENTINEL = "PrivateProgrammeAgent/9173"
+ORDINARY_PUBLIC_IPV4 = "8.8.8.8"
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +89,7 @@ def _prevent_real_dns(monkeypatch: pytest.MonkeyPatch) -> None:
                 socket.SOCK_STREAM,
                 socket.IPPROTO_TCP,
                 "",
-                ("203.0.113.10", port),
+                (ORDINARY_PUBLIC_IPV4, port),
             )
         ]
 
@@ -920,7 +921,7 @@ def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> 
 
 
 def test_programme_scoped_executor_selects_lowest_allowed_resolved_ipv4() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
     transport = _RecordingPeerBoundTransport()
@@ -1036,7 +1037,7 @@ def test_ipv4_literal_scope_skips_resolution_and_binds_literal_peer() -> None:
 
 
 def test_redirect_resolves_and_evaluates_each_logical_destination_fresh() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (
             ("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
             ("redirect-peer", ACTION_EXCLUDE, RULE_EXACT_IPV4, "192.0.2.8"),
@@ -1432,7 +1433,7 @@ def test_ipv6_only_system_resolution_becomes_no_usable_ipv4() -> None:
 
 
 def test_selected_peer_connect_failure_has_no_fallback_and_counts_one_attempt() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
     events: list[tuple[object, ...]] = []
@@ -1624,7 +1625,7 @@ def test_scoped_executor_rejects_explicit_ordinary_recording_transport() -> None
 
 
 def test_scoped_executor_accepts_explicit_peer_bound_transports() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
     explicit = http_enforcement_module.PeerBoundHTTPTransport()
@@ -1651,7 +1652,7 @@ def test_scoped_executor_accepts_explicit_peer_bound_transports() -> None:
 
 
 def test_scoped_exchange_rejects_postconstruction_urllib_replacement() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
     executor = InternalHTTPExecutor(
@@ -1677,7 +1678,7 @@ def test_scoped_exchange_rejects_postconstruction_urllib_replacement() -> None:
 def test_scoped_exchange_rejects_postconstruction_recording_replacement() -> None:
     private_note = "PRIVATE-REPLACEMENT-NOTE-4418"
     private_source = "PRIVATE-REPLACEMENT-SOURCE-4418"
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),),
         private_note=private_note,
         private_source_wording=private_source,
@@ -1707,7 +1708,7 @@ def test_scoped_exchange_rejects_postconstruction_recording_replacement() -> Non
 
 
 def test_programme_scoped_requests_retain_pacing_and_identity_headers() -> None:
-    policy = _programme_scope_policy(
+    policy = _programme_scope_policy_with_fixture_peer(
         (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
     clock = _FakeTime()
@@ -2999,6 +3000,28 @@ def _configuration(
             if (origin := http_origin_from_url(value)) is not None
         ),
         maximum_redirect_hops=maximum_redirect_hops,
+    )
+
+
+
+def _programme_scope_policy_with_fixture_peer(
+    rules: tuple[tuple[str, str, str, str], ...],
+    *,
+    private_note: str | None = None,
+    private_source_wording: str | None = None,
+) -> ProgrammeScopePolicy:
+    return _programme_scope_policy(
+        (
+            *rules,
+            (
+                "fixture-peer-network",
+                ACTION_INCLUDE,
+                RULE_IPV4_CIDR,
+                "192.0.2.0/24",
+            ),
+        ),
+        private_note=private_note,
+        private_source_wording=private_source_wording,
     )
 
 

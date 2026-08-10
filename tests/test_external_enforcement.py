@@ -103,7 +103,7 @@ CURL_HELP = " ".join(
 GOBUSTER_HELP = """
 dir
 --url --wordlist --threads --delay --useragent --headers stringArray
---timeout --output --follow-redirect (default false)
+--timeout --output --follow-redirect (default false) --no-tls-validation
 """
 GOBUSTER_382_HELP = """
 Usage:
@@ -121,6 +121,7 @@ Flags:
       --output string
       --follow-redirect (default false)
             Follow redirects
+      --no-tls-validation
 """
 NMAP_HELP = "-sT -sV -Pn -n -p --max-rate --max-retries -oN"
 COMPACT_NMAP_HELP = """
@@ -2287,6 +2288,7 @@ def test_gobuster_382_session_builds_a_supported_redacted_two_header_plan(
         for index, value in enumerate(plan.private_argv)
         if index and plan.private_argv[index - 1] == "--headers"
     ] == [
+        "Host: example.test",
         f"X-Researcher-ID: {HEADER_SECRET}",
         f"X-Programme-Handle: {second_header}",
     ]
@@ -2478,7 +2480,7 @@ def test_scoped_nmap_rejected_peer_precedes_registration_and_launch(
 def test_scoped_nmap_wildcard_authorises_only_proper_descendant(
     tmp_path: Path,
 ) -> None:
-    policy = _programme_policy_from_rules(
+    policy = _programme_policy_from_rules_with_fixture_peer(
         ("wildcard", "include", "wildcard_subdomain", "*.example.test"),
     )
     plan = build_bug_bounty_nmap_plan(
@@ -2930,10 +2932,185 @@ def test_scoped_gobuster_exact_hostname_authority_passes_dns_preflight(
         ipv4_resolver=resolver,
     )
 
-    assert plan.private_argv[plan.private_argv.index("--url") + 1] == (
-        "https://example.test/api/"
-    )
+    argv = plan.private_argv
+    assert argv[argv.index("--url") + 1] == "https://192.0.2.10/api/"
+    assert argv.count("--no-tls-validation") == 1
+    assert argv.count("Host: example.test") == 1
     assert resolver_calls == [("example.test", 443)]
+
+
+def test_scoped_gobuster_pins_selected_ordinary_peer_and_logical_host_authority(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test:8443/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(
+            approved_origins=("https://example.test:8443/",),
+        ),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda hostname, port: (
+            resolver_calls.append((hostname, port)) or ("8.8.8.8",)
+        ),
+    )
+
+    argv = plan.private_argv
+    pinned_url = argv[argv.index("--url") + 1]
+    headers = tuple(
+        value
+        for index, value in enumerate(argv)
+        if index and argv[index - 1] == "--headers"
+    )
+    assert resolver_calls == [("example.test", 8443)]
+    assert pinned_url == "https://8.8.8.8:8443/api/"
+    assert "example.test" not in pinned_url
+    assert headers == (
+        "Host: example.test:8443",
+        f"X-Researcher-ID: {HEADER_SECRET}",
+    )
+    assert argv.count("--no-tls-validation") == 1
+    assert "-k" not in argv
+
+
+def test_scoped_gobuster_http_hostname_is_pinned_without_tls_bypass(
+    tmp_path: Path,
+) -> None:
+    plan = build_bug_bounty_gobuster_plan(
+        origin="http://example.test:8080/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(
+            approved_origins=("http://example.test:8080/",),
+        ),
+        capabilities=assess_tool_capabilities(
+            "gobuster",
+            GOBUSTER_HELP.replace("--no-tls-validation", ""),
+        ),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("8.8.8.8",),
+    )
+
+    argv = plan.private_argv
+    assert argv[argv.index("--url") + 1] == "http://8.8.8.8:8080/api/"
+    assert argv.count("Host: example.test:8080") == 1
+    assert "--no-tls-validation" not in argv
+    assert "-k" not in argv
+
+
+def test_scoped_gobuster_preserves_explicit_default_port_in_peer_and_host(
+    tmp_path: Path,
+) -> None:
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test:443/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("8.8.8.8",),
+    )
+
+    argv = plan.private_argv
+    assert argv[argv.index("--url") + 1] == "https://8.8.8.8:443/api/"
+    assert argv.count("Host: example.test:443") == 1
+
+
+def test_scoped_gobuster_https_hostname_without_tls_capability_is_omitted_before_dns(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+
+    plan = build_bug_bounty_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(),
+        capabilities=assess_tool_capabilities(
+            "gobuster",
+            GOBUSTER_HELP.replace("--no-tls-validation", ""),
+        ),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda hostname, port: resolver_calls.append((hostname, port)),
+    )
+
+    assert plan.compatibility_status == COMPONENT_OMITTED
+    assert "--no-tls-validation" in plan.reason
+    assert resolver_calls == []
+
+
+def test_scoped_gobuster_rejects_configured_host_identity_collision_before_dns(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration()
+    object.__setattr__(
+        configuration,
+        "identification_headers",
+        (IdentificationHeader("Host", HEADER_SECRET),),
+    )
+    resolver_calls: list[tuple[str, int]] = []
+
+    with pytest.raises(ValueError, match="Host header conflicts"):
+        build_bug_bounty_gobuster_plan(
+            origin="https://example.test/",
+            wordlist=_wordlist(tmp_path),
+            output_file=tmp_path / "gobuster.txt",
+            timeout_seconds=10,
+            configuration=configuration,
+            capabilities=_capabilities("gobuster"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda hostname, port: resolver_calls.append(
+                (hostname, port)
+            ),
+        )
+
+    assert resolver_calls == []
+
+
+def test_scoped_gobuster_direct_ipv4_preserves_url_without_dns_or_host_header(
+    tmp_path: Path,
+) -> None:
+    resolver_calls: list[tuple[str, int]] = []
+    policy = _programme_policy_from_rules(
+        ("peer", "include", "exact_ipv4", "192.0.2.10"),
+        (
+            "http-base",
+            "include",
+            "http_path_prefix",
+            "http://192.0.2.10:8080/",
+        ),
+    )
+
+    plan = build_bug_bounty_gobuster_plan(
+        origin="http://192.0.2.10:8080/api/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+        configuration=_configuration(
+            approved_origins=("http://192.0.2.10:8080/",),
+        ),
+        capabilities=_capabilities("gobuster"),
+        programme_scope_policy=policy,
+        ipv4_resolver=lambda hostname, port: resolver_calls.append((hostname, port)),
+    )
+
+    argv = plan.private_argv
+    headers = tuple(
+        value
+        for index, value in enumerate(argv)
+        if index and argv[index - 1] == "--headers"
+    )
+    assert argv[argv.index("--url") + 1] == "http://192.0.2.10:8080/api/"
+    assert headers == (f"X-Researcher-ID: {HEADER_SECRET}",)
+    assert resolver_calls == []
+    assert "--no-tls-validation" not in argv
 
 
 def test_scoped_gobuster_exact_url_alone_is_refused_before_dns(
@@ -3046,7 +3223,7 @@ def test_scoped_gobuster_rejected_peer_precedes_plan_and_attempt(
 def test_scoped_gobuster_wildcard_authorises_only_proper_descendant(
     tmp_path: Path,
 ) -> None:
-    policy = _programme_policy_from_rules(
+    policy = _programme_policy_from_rules_with_fixture_peer(
         ("wildcard", "include", "wildcard_subdomain", "*.example.test"),
     )
     resolver_calls: list[tuple[str, int]] = []
@@ -3085,7 +3262,7 @@ def test_scoped_gobuster_path_prefix_authorises_equal_or_deeper_base(
     tmp_path: Path,
     base_path: str,
 ) -> None:
-    policy = _programme_policy_from_rules(
+    policy = _programme_policy_from_rules_with_fixture_peer(
         ("api", "include", "http_path_prefix", "https://example.test/api"),
     )
     origin = f"https://example.test{base_path}"
@@ -3100,7 +3277,10 @@ def test_scoped_gobuster_path_prefix_authorises_equal_or_deeper_base(
         ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
     )
 
-    assert plan.private_argv[plan.private_argv.index("--url") + 1] == origin
+    assert plan.private_argv[plan.private_argv.index("--url") + 1] == (
+        f"https://192.0.2.10{base_path}"
+    )
+    assert plan.private_argv.count("Host: example.test") == 1
 
 
 @pytest.mark.parametrize("base_path", ["/", "/apiv2", "/other/"])
@@ -3155,7 +3335,7 @@ def test_scoped_gobuster_path_authority_retains_origin_port_boundary(
 def test_scoped_gobuster_exact_url_needs_separate_broad_authority(
     tmp_path: Path,
 ) -> None:
-    policy = _programme_policy_from_rules(
+    policy = _programme_policy_from_rules_with_fixture_peer(
         ("exact", "include", "exact_http_url", "https://example.test/api/"),
         ("host", "include", "exact_hostname", "example.test"),
     )
@@ -3216,7 +3396,7 @@ def test_scoped_gobuster_only_intersecting_generated_exclusions_block(
     excluded_value: str,
     blocked: bool,
 ) -> None:
-    policy = _programme_policy_from_rules(
+    policy = _programme_policy_from_rules_with_fixture_peer(
         ("host", "include", "exact_hostname", "example.test"),
         ("excluded", "exclude", excluded_kind, excluded_value),
     )
@@ -3273,7 +3453,7 @@ def test_scoped_gobuster_dns_failures_precede_plan_attempt_and_identity(
     assert "private-programme-source-4729" not in rendered
 
 
-def test_scoped_gobuster_preflight_keeps_logical_url_and_existing_controls(
+def test_scoped_gobuster_preflight_pins_deterministic_peer_and_keeps_controls(
     tmp_path: Path,
 ) -> None:
     origin = "https://example.test/api/"
@@ -3294,21 +3474,69 @@ def test_scoped_gobuster_preflight_keeps_logical_url_and_existing_controls(
     argv = plan.private_argv
 
     assert argv[:2] == ("gobuster", "dir")
-    assert argv[argv.index("--url") + 1] == origin
+    assert argv[argv.index("--url") + 1] == "https://192.0.2.10/api/"
     assert argv[argv.index("--threads") + 1] == "1"
     assert argv[argv.index("--delay") + 1] == "200000000ns"
+    assert argv.count("Host: example.test") == 1
     assert f"X-Researcher-ID: {HEADER_SECRET}" in argv
-    assert "192.0.2.10" not in argv and "192.0.2.20" not in argv
+    assert "192.0.2.20" not in argv
+    assert argv.count("--no-tls-validation") == 1
     assert not {
         "--follow-redirect",
         "-r",
-        "--no-tls-validation",
         "-k",
         "--proxy",
         "--recursive",
         "--extensions",
         "--backup",
     } & set(argv)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "pinned_ipv4",
+        "host_authority",
+        "scheme",
+        "port",
+        "duplicate_host",
+        "remove_tls_flag",
+    ),
+)
+def test_registered_scoped_gobuster_target_binding_tampering_is_refused(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    session = _session(_FakeTime())
+    plan = session.build_gobuster_plan(
+        origin="https://example.test/",
+        wordlist=_wordlist(tmp_path),
+        output_file=tmp_path / "gobuster.txt",
+        timeout_seconds=10,
+    )
+    argv = list(plan.private_argv)
+    url_index = argv.index("--url") + 1
+    host_index = argv.index("Host: example.test")
+    if tamper == "pinned_ipv4":
+        argv[url_index] = "https://192.0.2.11/"
+    elif tamper == "host_authority":
+        argv[host_index] = "Host: other.test"
+    elif tamper == "scheme":
+        argv[url_index] = "http://192.0.2.10/"
+    elif tamper == "port":
+        argv[url_index] = "https://192.0.2.10:8443/"
+    elif tamper == "duplicate_host":
+        argv[host_index:host_index] = ["--headers", "Host: example.test"]
+    else:
+        argv.remove("--no-tls-validation")
+    object.__setattr__(plan, "_private_argv", tuple(argv))
+    process = _ProcessRunner()
+
+    with pytest.raises(ValueError, match="changed after registration"):
+        BugBountyExternalToolRuntime(session, SafeSubprocessRunner(process)).run(plan)
+
+    assert process.calls == []
+    assert session.http_executor.total_request_attempts == 0
 
 
 @pytest.mark.parametrize(
@@ -3793,7 +4021,13 @@ def _programme_policy(
             value=hostname,
             private_note="private-programme-note-4729",
             private_source_wording="private-programme-source-4729",
-        )
+        ),
+        build_programme_scope_rule(
+            rule_id="fixture-peer-network",
+            action="include",
+            kind="ipv4_cidr",
+            value="192.0.2.0/24",
+        ),
     ]
     if excluded_ipv4 is not None:
         rules.append(
@@ -3826,6 +4060,21 @@ def _programme_policy_from_rules(
             for rule_id, action, kind, value in rules
         ],
         updated_at="2026-07-30T10:00:00Z",
+    )
+
+
+
+def _programme_policy_from_rules_with_fixture_peer(
+    *rules: tuple[str, str, str, str],
+):
+    return _programme_policy_from_rules(
+        *rules,
+        (
+            "fixture-peer-network",
+            "include",
+            "ipv4_cidr",
+            "192.0.2.0/24",
+        ),
     )
 
 

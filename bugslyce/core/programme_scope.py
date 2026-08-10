@@ -64,6 +64,9 @@ REASON_NO_MATCHING_INCLUSION = "no_matching_inclusion"
 REASON_UNSUPPORTED_DESTINATION = "unsupported_destination"
 REASON_INVALID_DESTINATION = "invalid_destination"
 REASON_RESOLVED_IP_EXCLUDED = "resolved_ip_excluded"
+REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION = (
+    "resolved_ip_requires_explicit_inclusion"
+)
 SUPPORTED_SCOPE_REASON_CODES = frozenset(
     {
         REASON_INCLUDED,
@@ -72,6 +75,7 @@ SUPPORTED_SCOPE_REASON_CODES = frozenset(
         REASON_UNSUPPORTED_DESTINATION,
         REASON_INVALID_DESTINATION,
         REASON_RESOLVED_IP_EXCLUDED,
+        REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
     }
 )
 
@@ -102,6 +106,40 @@ _NESTED_PATH_BOUNDARY_ESCAPE = re.compile(
     r"%25(?:25)*(?:2e|2f|5c)",
     re.IGNORECASE,
 )
+
+_RESOLVED_PEER_EXPLICIT_INCLUSION_NETWORKS = tuple(
+    ipaddress.IPv4Network(value)
+    for value in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "192.31.196.0/24",
+        "192.52.193.0/24",
+        "192.88.99.0/24",
+        "192.168.0.0/16",
+        "192.175.48.0/24",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+    )
+)
+
+
+def _resolved_ipv4_peer_requires_explicit_inclusion(address: str) -> bool:
+    """Return whether a resolved IPv4 peer must be explicitly authorised."""
+
+    peer = ipaddress.IPv4Address(address)
+    return any(
+        peer in network
+        for network in _RESOLVED_PEER_EXPLICIT_INCLUSION_NETWORKS
+    )
 
 
 def _contains_unsafe_text(value: str) -> bool:
@@ -737,6 +775,11 @@ def _canonical_scope_explanation(
             "Resolved IPv4 peer is blocked by explicit programme scope rule "
             f"{primary_exclusion_rule_id}."
         )
+    if reason_code == REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION:
+        return (
+            "Special-purpose or multicast resolved IPv4 peer requires explicit "
+            "IPv4 programme scope inclusion."
+        )
     if reason_code == REASON_NO_MATCHING_INCLUSION:
         return "Destination has no matching programme scope inclusion."
     if reason_code == REASON_UNSUPPORTED_DESTINATION:
@@ -888,11 +931,22 @@ class ScopeDecision:
 
     def _validate_evaluated_unknown(self) -> None:
         if (
-            self.reason_code != REASON_NO_MATCHING_INCLUSION
+            self.reason_code
+            not in {
+                REASON_NO_MATCHING_INCLUSION,
+                REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
+            }
             or self.matched_exclusion_rule_ids
             or self.primary_inclusion_rule_id is not None
             or self.primary_exclusion_rule_id is not None
             or (self.matched_inclusion_rule_ids and self.resolved_peer is None)
+            or (
+                self.reason_code == REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION
+                and (
+                    self.resolved_peer is None
+                    or not self.matched_inclusion_rule_ids
+                )
+            )
         ):
             raise ValueError("Unknown scope decision state is inconsistent.")
 
@@ -1009,6 +1063,17 @@ def evaluate_resolved_ipv4_peer(
         outcome = OUTCOME_BLOCKED
         reason = REASON_RESOLVED_IP_EXCLUDED
         primary_inclusion = logical_decision.primary_inclusion_rule_id
+    elif (
+        logical_decision.outcome == OUTCOME_ALLOWED
+        and _resolved_ipv4_peer_requires_explicit_inclusion(
+            resolved_peer.peer.address
+        )
+        and not peer_inclusions
+    ):
+        outcome = OUTCOME_UNKNOWN
+        reason = REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION
+        primary_inclusion = None
+        primary_exclusion = None
     else:
         outcome = logical_decision.outcome
         reason = logical_decision.reason_code

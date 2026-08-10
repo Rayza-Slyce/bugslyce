@@ -60,6 +60,7 @@ Flags:
       --output string
       --follow-redirect (default false)
             Follow redirects
+      --no-tls-validation
 """
 
 
@@ -127,7 +128,7 @@ def _capabilities():
         ),
         "gobuster": assess_tool_capabilities(
             "gobuster",
-            "dir --url --wordlist --threads --delay --useragent --headers value -H value --timeout --output --follow-redirect (default false)",
+            "dir --url --wordlist --threads --delay --useragent --headers value -H value --timeout --output --follow-redirect (default false) --no-tls-validation",
         ),
         "nmap": assess_tool_capabilities(
             "nmap", "-sT -sV -Pn -n -p --max-rate --max-retries -oN"
@@ -178,6 +179,14 @@ def _project(
                 value="app.example.test",
             )
         )
+    rules.append(
+        build_programme_scope_rule(
+            rule_id="fixture-peer-network",
+            action="include",
+            kind="ipv4_cidr",
+            value="192.0.2.0/24",
+        )
+    )
     if excluded:
         rules.append(
             build_programme_scope_rule(
