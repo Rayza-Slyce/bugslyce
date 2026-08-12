@@ -609,15 +609,49 @@ def test_http_metadata_preserves_fingerprint_evidence_across_two_file_nmap_merge
     ]
 
     assert len(matching_ports) == 1
-    assert matching_ports[0].service in {"ppp", "ppp?"}
+    assert matching_ports[0].service == "ppp?"
     assert matching_ports[0].service != "http"
     assert "http_protocol_evidence" in matching_ports[0].tags
     assert "http_service" in matching_ports[0].tags
     assert [service.url for service in state.http_services] == [
         "http://10.10.10.10:3000/"
     ]
+    evidence_by_file = {Path(item.source_file).name: item.id for item in state.evidence}
+    assert state.http_services[0].evidence_ids == [
+        evidence_by_file["nmap-services-all.txt"]
+    ]
+    assert evidence_by_file["nmap-allports.txt"] not in state.http_services[0].evidence_ids
     assert discover_http_origins(state, "10.10.10.10") == [
         "http://10.10.10.10:3000/"
+    ]
+
+
+def test_http_origins_use_reconciled_nmap_service_identity(tmp_path: Path) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nmap-services-all.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  ssh     OpenSSH 9.0\n"
+        "8080/tcp open  http    Caddy 2.7\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert discover_http_origins(state, "10.10.10.10") == [
+        "http://10.10.10.10:8080/"
+    ]
+    evidence_by_file = {Path(item.source_file).name: item.id for item in state.evidence}
+    service = state.http_services[0]
+    assert service.evidence_ids == [
+        evidence_by_file["nmap-allports.txt"],
+        evidence_by_file["nmap-services-all.txt"],
     ]
 
 

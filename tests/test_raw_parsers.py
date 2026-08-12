@@ -7,7 +7,12 @@ from pathlib import Path
 from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
-from bugslyce.parsers.nmap import parse_nmap_normal
+from bugslyce.parsers.nmap import (
+    NMAP_OUTPUT_DISCOVERY,
+    NMAP_OUTPUT_SERVICE_VERSION,
+    classify_nmap_output_role,
+    parse_nmap_normal,
+)
 from bugslyce.parsers.robots import parse_robots
 
 
@@ -36,6 +41,29 @@ def test_nmap_parser_extracts_varied_http_ssh_and_database_services(tmp_path: Pa
     assert all(record.host == "192.0.2.25" for record in records)
     assert records[0].product == "Caddy"
     assert records[0].version == "2.7"
+
+
+def test_nmap_output_role_uses_retained_table_shape_not_filename(tmp_path: Path) -> None:
+    discovery = tmp_path / "unexpected-service-name.txt"
+    service_version = tmp_path / "unexpected-discovery-name.txt"
+    discovery.write_text(
+        "Nmap scan report for app.example.test\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n",
+        encoding="utf-8",
+    )
+    service_version.write_text(
+        "Nmap scan report for app.example.test\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  ssh     OpenSSH 9.0\n",
+        encoding="utf-8",
+    )
+
+    assert classify_nmap_output_role(discovery) == NMAP_OUTPUT_DISCOVERY
+    assert (
+        classify_nmap_output_role(service_version)
+        == NMAP_OUTPUT_SERVICE_VERSION
+    )
 
 
 def test_nmap_parser_recognises_same_port_escaped_http_fingerprint(tmp_path: Path) -> None:

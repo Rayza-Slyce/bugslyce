@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from bugslyce.core.project import build_project_state
@@ -244,6 +245,147 @@ def test_project_state_derives_plain_http_from_nmap_fingerprint_without_changing
     }
     assert len(state.http_services) == 2
     assert "http://10.10.10.10:3000/" in render_markdown_report(state, [])
+
+
+def test_root_page_title_enriches_reconciled_nmap_http_service(tmp_path: Path) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "homepage-80.html").write_text(
+        "<html><head><title>Administration</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "artifacts": [
+                    {"type": "nmap", "file": "nmap-allports.txt"},
+                    {
+                        "type": "html",
+                        "file": "homepage-80.html",
+                        "url": "http://10.10.10.10/",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [(service.url, service.title) for service in state.http_services] == [
+        ("http://10.10.10.10/", "Administration")
+    ]
+    titles = [
+        artifact
+        for artifact in state.http_artifacts
+        if artifact.artifact_type == "page_title"
+    ]
+    assert [(artifact.url, artifact.value) for artifact in titles] == [
+        ("http://10.10.10.10/", "Administration")
+    ]
+
+
+def test_service_version_identity_supersedes_discovery_without_stale_http_state(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nmap-services-all.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  ssh     OpenSSH 9.0\n"
+        "8080/tcp open  http    Caddy 2.7\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    ports = {service.port: service for service in state.port_services}
+
+    assert tuple(ports) == (80, 8080)
+    assert (ports[80].service, ports[80].product, ports[80].version) == (
+        "ssh",
+        "OpenSSH",
+        "9.0",
+    )
+    assert len(ports[80].evidence_ids) == 2
+    assert "open_service" in ports[80].tags
+    assert "http_service" not in ports[80].tags
+    assert "non_default_http_port" not in ports[80].tags
+    assert (ports[8080].service, ports[8080].product, ports[8080].version) == (
+        "http",
+        "Caddy",
+        "2.7",
+    )
+    evidence = {
+        item.id: item
+        for item in state.evidence
+        if item.id in ports[80].evidence_ids
+    }
+    assert [evidence[evidence_id].context["service"] for evidence_id in ports[80].evidence_ids] == [
+        "http",
+        "ssh",
+    ]
+    assert [service.url for service in state.http_services] == [
+        "http://10.10.10.10:8080/"
+    ]
+
+
+def test_identity_less_service_version_observation_keeps_discovery_fallback(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT   STATE SERVICE\n"
+        "22/tcp open  ssh\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nmap-services-all.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT   STATE SERVICE VERSION\n"
+        "22/tcp open  unknown OpenSSH 9.0\n",
+        encoding="utf-8",
+    )
+
+    service = build_project_state(tmp_path).port_services[0]
+
+    assert (service.service, service.product, service.version) == ("ssh", None, None)
+    assert len(service.evidence_ids) == 2
+
+
+def test_nmap_http_service_uses_only_http_supporting_observations(tmp_path: Path) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE\n"
+        "8080/tcp open  unknown\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nmap-services-all.txt").write_text(
+        "Nmap scan report for 10.10.10.10\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "8080/tcp open  http    Caddy 2.7\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    port_service = state.port_services[0]
+    evidence_by_file = {Path(item.source_file).name: item.id for item in state.evidence}
+
+    assert len(port_service.evidence_ids) == 2
+    assert state.http_services[0].evidence_ids == [
+        evidence_by_file["nmap-services-all.txt"]
+    ]
+    assert evidence_by_file["nmap-allports.txt"] not in state.http_services[0].evidence_ids
 
 
 def test_saved_robots_body_value_becomes_http_artifact(tmp_path: Path) -> None:

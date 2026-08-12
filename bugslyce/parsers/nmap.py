@@ -16,10 +16,36 @@ SERVICE_LINE = re.compile(
 )
 FINGERPRINT_HEADER = re.compile(r"^SF-Port(?P<port>\d+)-(?P<protocol>TCP|UDP):(?P<payload>.*)$")
 HTTP_PROTOCOL_EVIDENCE_TAG = "http_protocol_evidence"
+NMAP_OUTPUT_DISCOVERY = "discovery"
+NMAP_OUTPUT_SERVICE_VERSION = "service_version"
+NMAP_OUTPUT_UNKNOWN = "unknown"
 HTTP_RESPONSE_STATUS = re.compile(
     r'(?:^|%)r\([^,\r\n]+,[^,\r\n]+,"'
     r'HTTP/1\.[01][ \t]+[1-5]\d{2}(?=[ \t]|\\r|\\n|"|$)'
 )
+
+
+def classify_nmap_output_role(path: Path) -> str:
+    """Classify retained BugSlyce Nmap output by its service-table shape."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return NMAP_OUTPUT_UNKNOWN
+    roles: set[str] = set()
+    for line in lines:
+        columns = line.strip().split()
+        if columns[:3] != ["PORT", "STATE", "SERVICE"]:
+            continue
+        if len(columns) == 3:
+            roles.add(NMAP_OUTPUT_DISCOVERY)
+        elif columns[3] == "VERSION":
+            roles.add(NMAP_OUTPUT_SERVICE_VERSION)
+    if NMAP_OUTPUT_SERVICE_VERSION in roles:
+        return NMAP_OUTPUT_SERVICE_VERSION
+    if NMAP_OUTPUT_DISCOVERY in roles:
+        return NMAP_OUTPUT_DISCOVERY
+    return NMAP_OUTPUT_UNKNOWN
 
 
 def parse_nmap_normal(path: Path, default_host: str | None = None) -> list[PortService]:

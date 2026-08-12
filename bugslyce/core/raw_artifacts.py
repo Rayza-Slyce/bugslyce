@@ -25,6 +25,9 @@ from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
 from bugslyce.parsers.nmap import (
+    NMAP_OUTPUT_SERVICE_VERSION,
+    NMAP_OUTPUT_UNKNOWN,
+    classify_nmap_output_role,
     http_scheme_for_port_service,
     is_http_capable_port_service,
     parse_nmap_normal,
@@ -69,6 +72,8 @@ def assemble_raw_artifacts(
 
     port_services: list[PortService] = []
     port_service_keys: dict[tuple[str, int, str], PortService] = {}
+    port_service_roles: dict[tuple[str, int, str], str] = {}
+    port_service_http_evidence: dict[tuple[str, int, str], list[str]] = {}
     http_artifacts: list[HTTPArtifact] = []
     discovered_paths: list[DiscoveredPath] = []
 
@@ -84,6 +89,8 @@ def assemble_raw_artifacts(
                 service_order,
                 port_services,
                 port_service_keys,
+                port_service_roles,
+                port_service_http_evidence,
                 processed_files,
                 warnings,
                 host_tags,
@@ -149,6 +156,14 @@ def assemble_raw_artifacts(
                 endpoint_tags,
             )
 
+    _finalise_nmap_services(
+        port_services,
+        service_records,
+        service_order,
+        host_tags,
+        port_service_http_evidence,
+    )
+    _apply_root_page_titles(http_artifacts, service_records)
     return RawAssemblyResult(port_services, http_artifacts, discovered_paths)
 
 
@@ -183,11 +198,14 @@ def _assemble_nmap(
     service_order: list[str],
     port_services: list[PortService],
     port_service_keys: dict[tuple[str, int, str], PortService],
+    port_service_roles: dict[tuple[str, int, str], str],
+    port_service_http_evidence: dict[tuple[str, int, str], list[str]],
     processed_files: list[str],
     warnings: list[str],
     host_tags: Callable[[str], list[str]],
 ) -> None:
     metadata = context.metadata
+    output_role = classify_nmap_output_role(context.path)
     context_host = _context_host(metadata, context.manifest_target, default_host)
     records = _parse_present(
         context.path,
@@ -218,37 +236,56 @@ def _assemble_nmap(
         if host:
             _link_asset(asset_evidence, asset_sources, host, evidence_id, record.source_file)
         key = (host, record.port, record.protocol)
-        tags = dedupe_preserve_order([*_port_service_tags(record), *_metadata_tags(metadata)])
+        if record.state == "open" and is_http_capable_port_service(record):
+            _append_unique(port_service_http_evidence.setdefault(key, []), evidence_id)
+        tags = dedupe_preserve_order([*record.tags, *_metadata_tags(metadata)])
         if key not in port_service_keys:
+            if (
+                output_role == NMAP_OUTPUT_SERVICE_VERSION
+                and not _has_meaningful_service_identity(record)
+            ):
+                record.product = None
+                record.version = None
             record.host = host
             record.evidence_ids = [evidence_id]
             record.tags = tags
             port_service_keys[key] = record
+            port_service_roles[key] = (
+                output_role
+                if _has_meaningful_service_identity(record)
+                else NMAP_OUTPUT_UNKNOWN
+            )
             port_services.append(record)
         else:
             existing = port_service_keys[key]
             _append_unique(existing.evidence_ids, evidence_id)
             existing.tags = dedupe_preserve_order([*existing.tags, *tags])
-            if existing.service in {None, "unknown"} and record.service not in {None, "unknown"}:
-                existing.service = record.service
-            if not existing.product and record.product:
-                existing.product = record.product
-            if not existing.version and record.version:
-                existing.version = record.version
-        if record.state == "open" and is_http_capable_port_service(record):
-            service_url = _service_url(host, record)
-            _merge_http_service(
-                service_records,
-                service_order,
-                service_url,
-                host,
-                None,
-                None,
-                [value for value in (record.product, record.version) if value],
-                None,
-                evidence_id,
-                host_tags,
-            )
+            existing_role = port_service_roles[key]
+            if output_role == NMAP_OUTPUT_SERVICE_VERSION:
+                if not _has_meaningful_service_identity(record):
+                    continue
+                if existing_role != NMAP_OUTPUT_SERVICE_VERSION:
+                    existing.state = record.state
+                    existing.service = record.service
+                    existing.product = record.product
+                    existing.version = record.version
+                    existing.source_file = record.source_file
+                    port_service_roles[key] = output_role
+                else:
+                    if not existing.product and record.product:
+                        existing.product = record.product
+                    if not existing.version and record.version:
+                        existing.version = record.version
+            elif existing_role != NMAP_OUTPUT_SERVICE_VERSION:
+                if (
+                    existing.service in {None, "unknown"}
+                    and _has_meaningful_service_identity(record)
+                ):
+                    existing.service = record.service
+                if not existing.product and record.product:
+                    existing.product = record.product
+                if not existing.version and record.version:
+                    existing.version = record.version
 
 
 def _assemble_headers(
@@ -664,8 +701,77 @@ def _append_unique(values: list[str], value: str) -> None:
         values.append(value)
 
 
+_DERIVED_PORT_SERVICE_TAGS = {
+    "open_service",
+    "http_service",
+    "non_default_http_port",
+}
+
+
+def _has_meaningful_service_identity(record: PortService) -> bool:
+    return record.service not in {None, "", "unknown"}
+
+
+def _finalise_nmap_services(
+    port_services: list[PortService],
+    service_records: dict[str, HTTPService],
+    service_order: list[str],
+    host_tags: Callable[[str], list[str]],
+    port_service_http_evidence: dict[tuple[str, int, str], list[str]],
+) -> None:
+    """Derive service tags and HTTP records after same-port reconciliation."""
+
+    for record in port_services:
+        record.tags = dedupe_preserve_order(
+            [
+                *(
+                    tag
+                    for tag in record.tags
+                    if tag not in _DERIVED_PORT_SERVICE_TAGS
+                ),
+                *_port_service_tags(record),
+            ]
+        )
+        if record.state != "open" or not is_http_capable_port_service(record):
+            continue
+        service_url = _service_url(record.host, record)
+        key = (record.host, record.port, record.protocol)
+        for index, evidence_id in enumerate(port_service_http_evidence.get(key, [])):
+            _merge_http_service(
+                service_records,
+                service_order,
+                service_url,
+                record.host,
+                None,
+                None,
+                (
+                    [value for value in (record.product, record.version) if value]
+                    if index == 0
+                    else []
+                ),
+                None,
+                evidence_id,
+                host_tags,
+            )
+
+
+def _apply_root_page_titles(
+    http_artifacts: list[HTTPArtifact],
+    service_records: dict[str, HTTPService],
+) -> None:
+    """Apply retained root-page titles after deferred Nmap HTTP materialisation."""
+
+    for artifact in http_artifacts:
+        if artifact.artifact_type != "page_title" or not artifact.url:
+            continue
+        origin = _origin_url(artifact.url)
+        service = service_records.get(origin)
+        if service and normalise_url(artifact.url) == origin and not service.title:
+            service.title = artifact.value
+
+
 def _port_service_tags(record: PortService) -> list[str]:
-    tags = list(record.tags)
+    tags: list[str] = []
     if record.state == "open":
         tags.append("open_service")
     if is_http_capable_port_service(record):
