@@ -21,6 +21,7 @@ from bugslyce.recon.evidence_pack_closure import (
     EvidencePackReferenceRecord,
     discover_evidence_pack_references,
     group_evidence_pack_references,
+    portable_pipeline_step_message_is_valid,
     render_reference_closure_payload,
 )
 from bugslyce.time_utils import Clock, utc_now_iso
@@ -651,8 +652,15 @@ def _portable_confidence_pipeline_content(content: bytes) -> bytes:
             field: _required_json_text(
                 step.get(field), f"pipeline confidence step #{index} {field}"
             )
-            for field in ("step_id", "name", "command_kind", "status", "message")
+            for field in ("step_id", "name", "command_kind", "status")
         }
+        message = step.get("message")
+        if not portable_pipeline_step_message_is_valid(portable_step["status"], message):
+            raise ValueError(
+                f"Pipeline confidence step #{index} message must be non-empty text "
+                "except for pending or running steps."
+            )
+        portable_step["message"] = message
         for field in ("started_at", "completed_at"):
             value = step.get(field)
             if value is not None:

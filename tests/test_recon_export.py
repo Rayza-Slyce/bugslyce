@@ -3196,7 +3196,17 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
         "final_status": "failed",
         "steps": [
             {
-                "step_id": "PIPELINE-STEP-FAILED",
+                "step_id": "PIPELINE-STEP-001",
+                "name": "local validation",
+                "command_kind": "local-validation",
+                "status": "completed",
+                "message": "Local readiness checks passed.",
+                "started_at": "2026-07-21T11:59:00Z",
+                "completed_at": "2026-07-21T11:59:01Z",
+                "output_paths": [str(input_dir / "validation.txt")],
+            },
+            {
+                "step_id": "PIPELINE-STEP-004",
                 "name": "bounded collector",
                 "command_kind": "content-run",
                 "status": "failed",
@@ -3204,6 +3214,22 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
                 "started_at": "2026-07-21T12:00:00Z",
                 "completed_at": "2026-07-21T12:00:01Z",
                 "output_paths": [str(input_dir / "partial-output.txt")],
+            },
+            {
+                "step_id": "PIPELINE-STEP-005",
+                "name": "path follow-up",
+                "command_kind": "path-followup",
+                "status": "pending",
+                "message": "",
+                "output_paths": [],
+            },
+            {
+                "step_id": "PIPELINE-STEP-006",
+                "name": "content planning",
+                "command_kind": "content-plan",
+                "status": "pending",
+                "message": "",
+                "output_paths": [],
             }
         ],
     }
@@ -3220,10 +3246,14 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
     assert pipeline_path.read_bytes() == source_bytes
     assert packed_pipeline["portable_confidence_schema"] == 1
     assert packed_pipeline["generated_by"] == "bugslyce.collection_confidence.pipeline"
-    assert packed_pipeline["steps"][0]["status"] == "failed"
-    assert packed_pipeline["steps"][0]["message"] == (
+    packed_steps = {step["step_id"]: step for step in packed_pipeline["steps"]}
+    assert packed_steps["PIPELINE-STEP-001"]["message"] == "Local readiness checks passed."
+    assert packed_steps["PIPELINE-STEP-004"]["status"] == "failed"
+    assert packed_steps["PIPELINE-STEP-004"]["message"] == (
         "collector failed while reviewing /api/login"
     )
+    assert packed_steps["PIPELINE-STEP-005"]["message"] == ""
+    assert packed_steps["PIPELINE-STEP-006"]["message"] == ""
     for field in (
         "project_file",
         "scope_file",
@@ -3233,13 +3263,21 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
         "export_path",
     ):
         assert field not in packed_pipeline
-    assert "output_paths" not in packed_pipeline["steps"][0]
+    assert all("output_paths" not in step for step in packed_pipeline["steps"])
     assert "project_pipeline.json" in {
         record[0]
         for record in _closure_owner_associations(closure)
         if record[1] == "collection_confidence_notice"
-        and record[2] == "CONFIDENCE-STAGE-PIPELINE-STEP-FAILED"
+        and record[2] == "CONFIDENCE-STAGE-PIPELINE-STEP-004"
     }
+    assert not any(
+        record[1] == "collection_confidence_notice"
+        and record[2] in {
+            "CONFIDENCE-STAGE-PIPELINE-STEP-005",
+            "CONFIDENCE-STAGE-PIPELINE-STEP-006",
+        }
+        for record in _closure_owner_associations(closure)
+    )
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
 
     closure_path = extracted / REFERENCE_CLOSURE_FILENAME
@@ -3267,6 +3305,173 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
     validation = validate_evidence_pack_root(extracted)
     assert validation.validation_status == "incomplete"
     assert "project_pipeline.json" in validation.missing_declared_member_paths
+
+
+def test_portable_pipeline_preserves_running_empty_and_pending_nonempty_messages(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "project_pipeline.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "step_id": "PIPELINE-STEP-001",
+                        "name": "local validation",
+                        "command_kind": "local-validation",
+                        "status": "running",
+                        "message": "",
+                    },
+                    {
+                        "step_id": "PIPELINE-STEP-002",
+                        "name": "TCP discovery",
+                        "command_kind": "nmap-discover",
+                        "status": "pending",
+                        "message": "Awaiting approved maintenance window.",
+                    },
+                    {
+                        "step_id": "PIPELINE-STEP-003",
+                        "name": "bounded collector",
+                        "command_kind": "content-run",
+                        "status": "failed",
+                        "message": "Collector failed after the running checkpoint.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "running-checkpoint.zip"
+
+    export_recon_evidence_pack(input_dir, output_path)
+
+    extracted = tmp_path / "running-checkpoint"
+    with zipfile.ZipFile(output_path) as archive:
+        pipeline = json.loads(archive.read("project_pipeline.json"))
+        archive.extractall(extracted)
+    steps = {step["step_id"]: step for step in pipeline["steps"]}
+    assert steps["PIPELINE-STEP-001"]["message"] == ""
+    assert steps["PIPELINE-STEP-002"]["message"] == (
+        "Awaiting approved maintenance window."
+    )
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    (
+        ("failed", ""),
+        ("completed", ""),
+        ("noop", ""),
+        ("skipped_existing", ""),
+        ("skipped", ""),
+        ("unavailable", ""),
+        ("pending", "   "),
+        ("running", "   "),
+        ("failed", None),
+        ("failed", 1),
+        ("failed", []),
+        ("failed", {}),
+    ),
+)
+def test_portable_pipeline_rejects_invalid_status_message_pairs(
+    tmp_path: Path,
+    status: str,
+    message: object,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "project_pipeline.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "step_id": "PIPELINE-STEP-001",
+                        "name": "collector",
+                        "command_kind": "content-run",
+                        "status": status,
+                        "message": message,
+                    },
+                    {
+                        "step_id": "PIPELINE-STEP-002",
+                        "name": "bounded collector",
+                        "command_kind": "content-run",
+                        "status": "failed",
+                        "message": "Collector failed while preserving the pipeline record.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Pipeline confidence step #1 message"):
+        export_recon_evidence_pack(input_dir, tmp_path / "invalid-message.zip")
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    (
+        ("failed", ""),
+        ("completed", ""),
+        ("noop", ""),
+        ("skipped_existing", ""),
+        ("skipped", ""),
+        ("unavailable", ""),
+        ("pending", "   "),
+        ("running", "   "),
+        ("failed", None),
+        ("failed", 1),
+        ("failed", []),
+        ("failed", {}),
+    ),
+)
+def test_offline_validator_rejects_invalid_portable_pipeline_messages(
+    tmp_path: Path,
+    status: str,
+    message: object,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / "project_pipeline.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "step_id": "PIPELINE-STEP-001",
+                        "name": "collector",
+                        "command_kind": "content-run",
+                        "status": "completed",
+                        "message": "Collection completed.",
+                    },
+                    {
+                        "step_id": "PIPELINE-STEP-002",
+                        "name": "bounded collector",
+                        "command_kind": "content-run",
+                        "status": "failed",
+                        "message": "Collector failed while preserving the pipeline record.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "valid-message.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / "valid-message"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+    pipeline_path = extracted / "project_pipeline.json"
+    pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+    pipeline["steps"][0]["status"] = status
+    pipeline["steps"][0]["message"] = message
+    pipeline_path.write_text(json.dumps(pipeline), encoding="utf-8")
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert (
+        "portable_confidence_pipeline_metadata_invalid:steps[0].message"
+        in validation.metadata_consistency_errors
+    )
 
 
 def test_failed_command_notice_uses_included_portable_member(tmp_path: Path) -> None:

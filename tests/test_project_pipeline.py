@@ -3904,6 +3904,7 @@ def test_pipeline_stops_on_required_failure_and_records_pending_later_steps(
     )
     assert payload["steps"][3]["message"] == "mocked HTTP failure"
     assert payload["steps"][4]["status"] == "pending"
+    assert payload["steps"][4]["message"] == ""
 
 
 def test_project_pipeline_module_has_no_direct_execution_apis() -> None:

@@ -80,6 +80,17 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "collection_confidence_notice",
     }
 )
+_PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
+
+
+def portable_pipeline_step_message_is_valid(status: object, message: object) -> bool:
+    """Return whether a portable pipeline message preserves canonical checkpoint semantics."""
+
+    if not isinstance(message, str):
+        return False
+    if message == "":
+        return status in _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES
+    return bool(message.strip())
 
 
 @dataclass(frozen=True)
@@ -1024,9 +1035,13 @@ def _validate_portable_confidence_pipeline(
         if not isinstance(step, dict):
             errors.add(prefix + f"steps[{index}]")
             continue
-        for field in ("step_id", "name", "command_kind", "status", "message"):
+        for field in ("step_id", "name", "command_kind", "status"):
             if not isinstance(step.get(field), str) or not step[field].strip():
                 errors.add(prefix + f"steps[{index}].{field}")
+        if not portable_pipeline_step_message_is_valid(
+            step.get("status"), step.get("message")
+        ):
+            errors.add(prefix + f"steps[{index}].message")
         for field in ("started_at", "completed_at"):
             if field in step and (
                 not isinstance(step[field], str) or not step[field].strip()
