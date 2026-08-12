@@ -49,6 +49,11 @@ from bugslyce.recon.deep_parameter_inventory import (
     build_deep_parameter_inventory,
     render_deep_parameter_inventory_markdown,
 )
+from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
+    DeepPostFollowupJavaScriptRouteExtractionResult,
+    build_deep_post_followup_javascript_route_extraction,
+    render_deep_post_followup_javascript_route_extraction_markdown,
+)
 from bugslyce.recon.deep_redirect_auth_flow_review import (
     DeepRedirectAuthFlowReview,
     build_deep_redirect_auth_flow_review,
@@ -86,6 +91,7 @@ STAGE_ORDER = (
     "html_routes",
     "javascript_routes",
     "shallow_route_followup",
+    "post_followup_javascript_routes",
     "form_inventory",
     "parameter_inventory",
 )
@@ -113,6 +119,9 @@ class DeepReconOrchestrationResult:
     html_route_extraction: DeepHtmlRouteExtractionResult
     javascript_route_extraction: DeepJavaScriptRouteExtractionResult
     shallow_route_followup: DeepShallowRouteFollowupResult
+    post_followup_javascript_route_extraction: (
+        DeepPostFollowupJavaScriptRouteExtractionResult
+    )
     form_inventory: DeepFormInventoryResult
     parameter_inventory: DeepParameterInventoryResult
     successful_content_reviews: tuple[SuccessfulDeepContentReview, ...]
@@ -161,6 +170,9 @@ def build_deep_recon_orchestration(
     )
     html_routes = build_deep_html_route_extraction(source_collection)
     javascript_routes = build_deep_javascript_route_extraction(source_collection)
+    post_followup_javascript_routes = (
+        build_deep_post_followup_javascript_route_extraction(shallow_followups)
+    )
     form_inventory = build_deep_form_inventory(source_collection, shallow_followups)
     parameter_inventory = build_deep_parameter_inventory(
         source_collection,
@@ -179,6 +191,7 @@ def build_deep_recon_orchestration(
         html_routes,
         javascript_routes,
         shallow_followups,
+        post_followup_javascript_routes,
         form_inventory,
         parameter_inventory,
     )
@@ -194,6 +207,7 @@ def build_deep_recon_orchestration(
         html_routes.safety_notes,
         javascript_routes.safety_notes,
         shallow_followups.safety_notes,
+        post_followup_javascript_routes.safety_notes,
         form_inventory.safety_notes,
         parameter_inventory.safety_notes,
     )
@@ -230,6 +244,9 @@ def build_deep_recon_orchestration(
             render_deep_shallow_route_followup_result_markdown(
                 report_shallow_followups
             ),
+            render_deep_post_followup_javascript_route_extraction_markdown(
+                post_followup_javascript_routes
+            ),
             render_deep_form_inventory_markdown(form_inventory),
             render_deep_parameter_inventory_markdown(parameter_inventory),
         )
@@ -244,6 +261,7 @@ def build_deep_recon_orchestration(
         html_route_extraction=html_routes,
         javascript_route_extraction=javascript_routes,
         shallow_route_followup=shallow_followups,
+        post_followup_javascript_route_extraction=post_followup_javascript_routes,
         form_inventory=form_inventory,
         parameter_inventory=parameter_inventory,
         successful_content_reviews=successful_content_reviews,
@@ -327,6 +345,7 @@ def _stage_counts(
     html_routes: DeepHtmlRouteExtractionResult,
     javascript_routes: DeepJavaScriptRouteExtractionResult,
     shallow_followups: DeepShallowRouteFollowupResult,
+    post_followup_javascript_routes: DeepPostFollowupJavaScriptRouteExtractionResult,
     form_inventory: DeepFormInventoryResult,
     parameter_inventory: DeepParameterInventoryResult,
 ) -> tuple[tuple[str, int], ...]:
@@ -338,6 +357,10 @@ def _stage_counts(
         ("html_routes", len(html_routes.routes)),
         ("javascript_routes", len(javascript_routes.candidates)),
         ("shallow_route_followup", shallow_followups.summary_counts.responses_collected),
+        (
+            "post_followup_javascript_routes",
+            len(post_followup_javascript_routes.candidates),
+        ),
         ("form_inventory", len(form_inventory.forms)),
         ("parameter_inventory", len(parameter_inventory.parameters)),
     )

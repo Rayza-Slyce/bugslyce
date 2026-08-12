@@ -67,6 +67,8 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
     assert result.html_route_extraction is not None
     assert result.javascript_route_extraction is not None
     assert result.shallow_route_followup is shallow
+    assert result.post_followup_javascript_route_extraction.candidates == ()
+    assert dict(result.stage_counts)["post_followup_javascript_routes"] == 0
     assert result.form_inventory is not None
     assert result.parameter_inventory is not None
     assert result.deep_profile_selected is False
@@ -76,6 +78,172 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
         item.canonical_url for item in result.successful_content_reviews
     ) == ("http://example.test/source",)
     assert "Bounded Deep collection completion is not established." in result.deep_recon_markdown
+    assert result.deep_recon_markdown.count(
+        "## Deep Post-follow-up JavaScript Route Analysis"
+    ) == 1
+    assert "### Offline Static Route Candidates\n\n- None." in (
+        result.deep_recon_markdown
+    )
+
+
+def test_orchestration_surfaces_post_followup_javascript_routes_offline() -> None:
+    shallow = _shallow_item(
+        url="https://example.test/app.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const late = "/api/late-only";',
+        evidence_ids=("EVID-LATE-JS",),
+    )
+
+    result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(shallow),
+    )
+
+    post = result.post_followup_javascript_route_extraction
+    assert len(post.candidates) == 1
+    assert post.candidates[0].candidate_id == "DEEP-JS-POST-ROUTE-0001"
+    assert post.candidates[0].safe_resolved_url == (
+        "https://example.test/api/late-only"
+    )
+    shallow_index = result.stage_order.index("shallow_route_followup")
+    assert result.stage_order[shallow_index + 1] == (
+        "post_followup_javascript_routes"
+    )
+    assert dict(result.stage_counts)["post_followup_javascript_routes"] == 1
+    assert "## Deep Post-follow-up JavaScript Route Analysis" in (
+        result.deep_recon_markdown
+    )
+    assert "No network request was made or planned by this analysis." in (
+        result.deep_recon_markdown
+    )
+    assert "Extracted static candidates were not automatically requested." in (
+        result.deep_recon_markdown
+    )
+    assert "Static candidates are manual-review context, not confirmed endpoints." in (
+        result.deep_recon_markdown
+    )
+
+
+def test_post_followup_orchestration_is_deterministic_for_reversed_inputs() -> None:
+    first = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-0002",
+        url="https://example.test/b.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const shared = "/api/shared"; const b = "/api/b";',
+        source_route_candidate_ids=("DEEP-JS-ROUTE-0002",),
+        evidence_ids=("EVID-B",),
+    )
+    second = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-0001",
+        url="https://example.test/a.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const shared = "/api/shared"; const a = "/api/a";',
+        source_route_candidate_ids=("DEEP-JS-ROUTE-0001",),
+        evidence_ids=("EVID-A",),
+    )
+
+    normal = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(first, second),
+    )
+    reversed_result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(second, first),
+    )
+
+    assert (
+        reversed_result.post_followup_javascript_route_extraction
+        == normal.post_followup_javascript_route_extraction
+    )
+    assert reversed_result.stage_counts == normal.stage_counts
+    post_heading = "## Deep Post-follow-up JavaScript Route Analysis"
+    next_heading = "## Deep Form Inventory"
+    normal_post = normal.deep_recon_markdown[
+        normal.deep_recon_markdown.index(post_heading) :
+        normal.deep_recon_markdown.index(next_heading)
+    ]
+    reversed_post = reversed_result.deep_recon_markdown[
+        reversed_result.deep_recon_markdown.index(post_heading) :
+        reversed_result.deep_recon_markdown.index(next_heading)
+    ]
+    assert reversed_post == normal_post
+    assert (
+        reversed_result.deep_recon_runbook_markdown
+        == normal.deep_recon_runbook_markdown
+    )
+
+
+def test_post_followup_markdown_preserves_relational_source_provenance() -> None:
+    first = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-A",
+        url="https://example.test/a.js",
+        final_url="https://example.test/a-v2.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const route = "/api/shared"; // source A',
+        source_route_candidate_ids=("DEEP-JS-ROUTE-A",),
+        evidence_ids=("EVID-A",),
+    )
+    second = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-B",
+        url="https://example.test/b.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const route = "/api/shared"; // source B',
+        source_route_candidate_ids=("DEEP-JS-ROUTE-B",),
+        evidence_ids=("EVID-B",),
+    )
+
+    result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(first, second),
+    )
+    rendered = result.deep_recon_markdown
+    first_source = rendered.index("Source observation 1")
+    second_source = rendered.index("Source observation 2")
+
+    assert "DEEP-SHALLOW-REQ-A" in rendered[first_source:second_source]
+    assert "DEEP-JS-ROUTE-A" in rendered[first_source:second_source]
+    assert "https://example.test/a.js" in rendered[first_source:second_source]
+    assert "https://example.test/a-v2.js" in rendered[first_source:second_source]
+    assert hashlib.sha256(first.body).hexdigest() in rendered[first_source:second_source]
+    assert "EVID-A" in rendered[first_source:second_source]
+    assert "DEEP-SHALLOW-REQ-B" not in rendered[first_source:second_source]
+    assert "DEEP-SHALLOW-REQ-B" in rendered[second_source:]
+    assert "DEEP-JS-ROUTE-B" in rendered[second_source:]
+    assert hashlib.sha256(second.body).hexdigest() in rendered[second_source:]
+    assert "EVID-B" in rendered[second_source:]
+
+
+def test_initial_javascript_and_shallow_candidate_ids_remain_unchanged() -> None:
+    source = _source_item(
+        url="https://example.test/bootstrap.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const script = "/app.js";',
+    )
+    shallow = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-0001",
+        url="https://example.test/app.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'const late = "/api/late-only";',
+        source_route_candidate_ids=("DEEP-JS-ROUTE-0001",),
+    )
+    shallow_result = _shallow_result(shallow)
+
+    result = build_deep_recon_orchestration(
+        _source_result(source),
+        shallow_result,
+    )
+
+    assert tuple(
+        candidate.candidate_id
+        for candidate in result.javascript_route_extraction.candidates
+    ) == ("DEEP-JS-ROUTE-0001",)
+    assert result.shallow_route_followup is shallow_result
+    assert result.shallow_route_followup.collected[0].source_route_candidate_ids == (
+        "DEEP-JS-ROUTE-0001",
+    )
+    assert result.post_followup_javascript_route_extraction.candidates[
+        0
+    ].candidate_id == "DEEP-JS-POST-ROUTE-0001"
 
 
 def test_builder_threads_real_metadata_collection_into_review_and_fingerprints() -> None:
@@ -145,12 +313,18 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
     shallow = _shallow_result(_shallow_item())
     original_form = orchestration.build_deep_form_inventory
     original_parameter = orchestration.build_deep_parameter_inventory
+    original_post = orchestration.build_deep_post_followup_javascript_route_extraction
     captured: dict[str, object] = {}
 
     def capture_form(source_collection, shallow_followups):
         captured["form_source"] = source_collection
         captured["form_shallow"] = shallow_followups
         return original_form(source_collection, shallow_followups)
+
+    def capture_post(shallow_followups):
+        captured["post_calls"] = int(captured.get("post_calls", 0)) + 1
+        captured["post_shallow"] = shallow_followups
+        return original_post(shallow_followups)
 
     def capture_parameter(source_collection, shallow_followups, html_extraction, javascript_extraction):
         captured["parameter_source"] = source_collection
@@ -165,16 +339,26 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
         )
 
     monkeypatch.setattr(orchestration, "build_deep_form_inventory", capture_form)
+    monkeypatch.setattr(
+        orchestration,
+        "build_deep_post_followup_javascript_route_extraction",
+        capture_post,
+    )
     monkeypatch.setattr(orchestration, "build_deep_parameter_inventory", capture_parameter)
 
     result = orchestration.build_deep_recon_orchestration(source, shallow)
 
     assert captured["form_source"] is source
     assert captured["form_shallow"] is shallow
+    assert captured["post_calls"] == 1
+    assert captured["post_shallow"] is shallow
     assert captured["parameter_source"] is source
     assert captured["parameter_shallow"] is shallow
     assert captured["parameter_html"] is result.html_route_extraction
     assert captured["parameter_javascript"] is result.javascript_route_extraction
+    assert captured["parameter_javascript"] is not (
+        result.post_followup_javascript_route_extraction
+    )
 
 
 def test_combined_report_markdown_is_ordered_once_and_deterministic() -> None:
@@ -194,6 +378,7 @@ def test_combined_report_markdown_is_ordered_once_and_deterministic() -> None:
         "## Deep HTML Route Extraction",
         "## Deep JavaScript Route Extraction",
         "## Deep Shallow Route Follow-up Results",
+        "## Deep Post-follow-up JavaScript Route Analysis",
         "## Deep Form Inventory",
         "## Deep Parameter Inventory",
     )
@@ -334,7 +519,65 @@ def test_writer_creates_three_deterministic_artifacts(tmp_path: Path) -> None:
     assert "<form" not in public_json
     assert str(tmp_path) not in public_json
     assert public_json.endswith("\n")
-    assert write_deep_recon_orchestration_artifacts(result, tmp_path, force=True)[2].read_bytes() == paths[2].read_bytes()
+    assert write_deep_recon_orchestration_artifacts(
+        result,
+        tmp_path,
+        force=True,
+    )[2].read_bytes() == paths[2].read_bytes()
+
+
+def test_writer_indexes_post_followup_stage_without_structured_body_export(
+    tmp_path: Path,
+) -> None:
+    preview_prefix = (
+        b'const late = "/api/late-only"; '
+        b'const preview = "VISIBLE_SHALLOW_PREVIEW_MARKER"; '
+        + (b"x" * 460)
+    )
+    body = preview_prefix + b"FULL_BODY_ONLY_SECRET"
+    body_preview = body[:500].decode("utf-8")
+    assert "VISIBLE_SHALLOW_PREVIEW_MARKER" in body_preview
+    assert "FULL_BODY_ONLY_SECRET" not in body_preview
+    result = build_deep_recon_orchestration(
+        _source_result(),
+        _shallow_result(
+            _shallow_item(
+                url="https://example.test/app.js",
+                headers=(("Content-Type", "application/javascript"),),
+                body=body,
+                body_preview=body_preview,
+                evidence_ids=("EVID-LATE-JS",),
+            )
+        ),
+    )
+
+    review_path, runbook_path, json_path = write_deep_recon_orchestration_artifacts(
+        result,
+        tmp_path,
+    )
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    public_json = json_path.read_text(encoding="utf-8")
+    review = review_path.read_text(encoding="utf-8")
+    runbook = runbook_path.read_text(encoding="utf-8")
+
+    assert payload["schema_version"] == "1.0"
+    assert "post_followup_javascript_routes" in payload["stage_order"]
+    assert {
+        item["stage"]: item["count"] for item in payload["stage_counts"]
+    }["post_followup_javascript_routes"] == 1
+    assert "VISIBLE_SHALLOW_PREVIEW_MARKER" not in public_json
+    assert "FULL_BODY_ONLY_SECRET" not in public_json
+    assert "/api/late-only" not in public_json
+    assert "DEEP-JS-POST-ROUTE-0001" not in public_json
+    assert review.count("## Deep Post-follow-up JavaScript Route Analysis") == 1
+    assert review.count("DEEP-JS-POST-ROUTE-0001") == 1
+    assert "VISIBLE_SHALLOW_PREVIEW_MARKER" in review
+    assert "FULL_BODY_ONLY_SECRET" not in review
+    assert "EVID-LATE-JS" in review
+    assert "post_followup_javascript_routes" in runbook
+    assert "DEEP-JS-POST-ROUTE-0001" not in runbook
+    assert "VISIBLE_SHALLOW_PREVIEW_MARKER" not in runbook
+    assert "FULL_BODY_ONLY_SECRET" not in runbook
 
 
 def test_selected_deep_profile_records_completed_collection_and_offline_review(
@@ -717,25 +960,28 @@ def _shallow_result(*items: DeepShallowRouteFollowupCollectedItem) -> DeepShallo
 
 def _shallow_item(
     *,
+    request_id: str = "DEEP-SHALLOW-REQ-0001",
     url: str = "http://example.test/follow",
+    final_url: str | None = None,
     headers: tuple[tuple[str, str], ...] = (("Content-Type", "text/html"),),
     body: bytes = b"<html><form action='/follow-login'><input name='shallow'></form></html>",
+    source_route_candidate_ids: tuple[str, ...] = ("DEEP-HTML-ROUTE-0001",),
     evidence_ids: tuple[str, ...] = ("EVID-SHALLOW",),
     body_preview: str = "",
 ) -> DeepShallowRouteFollowupCollectedItem:
     return DeepShallowRouteFollowupCollectedItem(
-        request_id="DEEP-SHALLOW-REQ-0001",
+        request_id=request_id,
         requested_url=url,
         method="GET",
         status_code=200,
-        final_url=url,
+        final_url=final_url or url,
         headers=headers,
         body_preview=body_preview or body.decode("utf-8", errors="replace")[:500],
         body_sha256=hashlib.sha256(body).hexdigest(),
         body_bytes=len(body),
         elapsed_seconds=0.2,
         source_model_kinds=("html_route",),
-        source_route_candidate_ids=("DEEP-HTML-ROUTE-0001",),
+        source_route_candidate_ids=source_route_candidate_ids,
         query_parameter_names=("token",),
         evidence_ids=evidence_ids,
         interpretation="Collected via deterministic test fixture.",

@@ -2887,12 +2887,40 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
                 tags=["metadata"],
             ),
         ),
-        discovered_paths=(),
+        discovered_paths=(
+            DiscoveredPath(
+                url="https://app.example.test/loader",
+                status_code=200,
+                content_length=128,
+                redirect_location=None,
+                source="fixture-loader",
+                evidence_ids=["EVID-LOADER"],
+                tags=[],
+            ),
+        ),
     )
     fetch_calls: list[str] = []
 
     def fetcher(request, _bounds):
         fetch_calls.append(request.url)
+        if request.url == "https://app.example.test/loader":
+            return DeepHTTPResponse(
+                url=request.url,
+                final_url=request.url,
+                status_code=200,
+                headers=(("Content-Type", "application/javascript"),),
+                body=b'const shallow = "/app.js";',
+                elapsed_seconds=0.01,
+            )
+        if request.url == "https://app.example.test/app.js":
+            return DeepHTTPResponse(
+                url=request.url,
+                final_url=request.url,
+                status_code=200,
+                headers=(("Content-Type", "application/javascript"),),
+                body=b'const late = "/api/late-only";',
+                elapsed_seconds=0.01,
+            )
         return DeepHTTPResponse(
             url=request.url,
             final_url=request.url,
@@ -2927,6 +2955,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
     collection_message, collection_paths, _updates = runners["PIPELINE-STEP-010D"]()
 
     assert fetch_calls == [
+        "https://app.example.test/loader",
         "https://app.example.test/robots.txt",
         "https://app.example.test/security.txt",
         "https://app.example.test/.well-known/security.txt",
@@ -2934,6 +2963,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
         "https://app.example.test/crossdomain.xml",
         "https://app.example.test/clientaccesspolicy.xml",
         "https://app.example.test/favicon.ico",
+        "https://app.example.test/app.js",
     ]
     assert "metadata" in collection_message.lower()
     assert {Path(path).name for path in collection_paths} == {
@@ -2945,21 +2975,32 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
     outputs = context["deep_outputs"]
     assert isinstance(outputs, DeepPipelineOutputs)
     assert outputs.source_collection is not None
-    assert outputs.source_collection.total_collected == 0
+    assert outputs.source_collection.total_collected == 1
     assert {
         item.reason for item in outputs.source_collection.skipped
     } == {"metadata_request"}
     assert outputs.metadata_collection is not None
     assert outputs.metadata_collection.total_collected == 7
 
+    fetch_calls_before_orchestration = tuple(fetch_calls)
     runners["PIPELINE-STEP-011D"]()
 
+    assert tuple(fetch_calls) == fetch_calls_before_orchestration
+    assert "https://app.example.test/api/late-only" not in fetch_calls
     outputs = context["deep_outputs"]
     assert isinstance(outputs, DeepPipelineOutputs)
     assert outputs.orchestration is not None
     assert (
         outputs.orchestration.collection_review_bundle.summary_counts.metadata_responses_collected
         == 7
+    )
+    post_candidates = (
+        outputs.orchestration.post_followup_javascript_route_extraction.candidates
+    )
+    assert len(post_candidates) == 1
+    assert post_candidates[0].candidate_id == "DEEP-JS-POST-ROUTE-0001"
+    assert post_candidates[0].safe_resolved_url == (
+        "https://app.example.test/api/late-only"
     )
     assert (output_dir / "deep_metadata_collection.json").is_file()
 
