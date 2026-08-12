@@ -107,6 +107,42 @@ def test_html_source_evidence_produces_html_review_lead_through_full_chain() -> 
     )
 
 
+def test_input_artifact_preserves_name_value_through_full_interpretation_chain() -> None:
+    artifact = HTTPArtifact(
+        url="http://example.test/",
+        artifact_type="input",
+        value="name=password;type=password",
+        source_file="homepage.html",
+        evidence_ids=["EVID-INPUT-0001"],
+        tags=[],
+    )
+
+    assembly = assemble_standard_interpretation_from_project_state(
+        _project_state(http_artifacts=[artifact])
+    )
+
+    lead = next(
+        lead
+        for lead in assembly.review_leads
+        if lead.lead_type == "html_suspicious_attribute_review"
+    )
+    assert lead.raw_value == "password"
+    assert lead.raw_value != "password;type"
+    assert lead.field_name == "name"
+    assert lead.item_type == "suspicious_id_or_class"
+    assert lead.evidence_ids == ("EVID-INPUT-0001",)
+    assert lead.url == "http://example.test/"
+    assert lead.path == "homepage.html"
+    assert artifact.value == "name=password;type=password"
+    item = next(
+        item
+        for item in assembly.collection.html_source_analyses[0].items
+        if item.item_type == "suspicious_id_or_class"
+    )
+    assert item.attribute_name == "name"
+    assert item.tag_name == "input"
+
+
 def test_generic_encoded_text_produces_artefact_review_lead_through_full_chain() -> None:
     state = _project_state(
         http_artifacts=[

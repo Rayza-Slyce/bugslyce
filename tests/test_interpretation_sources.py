@@ -12,6 +12,7 @@ from bugslyce.core.models import (
 from bugslyce.recon.interpretation_sources import (
     artefact_sources_from_project_state,
 )
+from bugslyce.recon.html_source_analysis import analyse_html_source
 from bugslyce.recon.modes import get_recon_mode
 from bugslyce.reports.markdown import render_markdown_report
 
@@ -132,6 +133,74 @@ def test_compact_hidden_element_does_not_create_synthetic_hidden_markup() -> Non
     assert source.field_name == "hidden_element"
     assert source.text == "p"
     assert "<div hidden>" not in source.text
+
+
+def test_compact_input_artifact_restores_separate_html_attributes() -> None:
+    artifact = HTTPArtifact(
+        url="http://example.test/",
+        artifact_type="input",
+        value="name=password;type=password",
+        source_file="homepage.html",
+        evidence_ids=["EVID-INPUT-0001"],
+        tags=[],
+    )
+
+    source = artefact_sources_from_project_state(
+        _project_state(http_artifacts=[artifact])
+    )[0]
+
+    assert source.text == '<input name="password" type="password">'
+    assert artifact.value == "name=password;type=password"
+
+
+def test_compact_input_artifact_escapes_synthetic_attribute_values() -> None:
+    source = artefact_sources_from_project_state(
+        _project_state(
+            http_artifacts=[
+                HTTPArtifact(
+                    url="http://example.test/",
+                    artifact_type="input",
+                    value='name=password" autofocus="injected;type=password<&',
+                    source_file="homepage.html",
+                    evidence_ids=["EVID-INPUT-ESCAPED"],
+                    tags=[],
+                )
+            ]
+        )
+    )[0]
+
+    assert source.text == (
+        '<input name="password&quot; autofocus=&quot;injected" '
+        'type="password&lt;&amp;">'
+    )
+    analysis = analyse_html_source(source)
+    suspicious = [
+        item
+        for item in analysis.items
+        if item.item_type == "suspicious_id_or_class"
+    ]
+    assert [(item.tag_name, item.attribute_name, item.raw_value) for item in suspicious] == [
+        ("input", "name", "password&quot; autofocus=&quot;injected"),
+    ]
+
+
+def test_unrecognised_compact_input_artifact_uses_existing_fallback() -> None:
+    source = artefact_sources_from_project_state(
+        _project_state(
+            http_artifacts=[
+                HTTPArtifact(
+                    url="http://example.test/",
+                    artifact_type="input",
+                    value="legacy-input-value",
+                    source_file="homepage.html",
+                    evidence_ids=["EVID-INPUT-LEGACY"],
+                    tags=[],
+                )
+            ]
+        )
+    )[0]
+
+    assert source.text == "<input legacy-input-value>"
 
 
 def test_missing_or_empty_source_file_does_not_crash_when_metadata_is_sufficient() -> None:

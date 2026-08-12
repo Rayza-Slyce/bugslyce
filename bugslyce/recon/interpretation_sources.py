@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from html import escape
 from urllib.parse import urlparse
 
 from bugslyce.core.models import Evidence, HTTPArtifact, ProjectState
@@ -165,12 +166,27 @@ def _source_text_for_artifact(artifact: HTTPArtifact) -> str:
     if artifact.artifact_type == "form":
         return f'<form action="{value}"></form>'
     if artifact.artifact_type == "input":
-        return f"<input {value}>"
+        return _input_source_text(value)
     if artifact.artifact_type == "link":
         return f'<a href="{value}">{value}</a>'
     if artifact.artifact_type == "script_or_asset":
         return f'<script src="{value}"></script>'
     return value
+
+
+def _input_source_text(value: str) -> str:
+    """Restore the parser's compact input attributes as safe synthetic HTML."""
+
+    if not value.startswith("name="):
+        return f"<input {value}>"
+    name_and_type = value.removeprefix("name=")
+    if ";type=" not in name_and_type:
+        return f"<input {value}>"
+    name, input_type = name_and_type.rsplit(";type=", 1)
+    return (
+        f'<input name="{escape(name, quote=True)}" '
+        f'type="{escape(input_type, quote=True)}">'
+    )
 
 
 def _bounded_text(value: str, max_source_chars: int) -> str:
