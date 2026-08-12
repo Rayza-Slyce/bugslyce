@@ -16,6 +16,9 @@ from urllib.parse import parse_qsl, quote, unquote, urljoin, urlparse
 
 from bugslyce.recon.deep_html_route_extraction import DeepHtmlRouteExtractionResult
 from bugslyce.recon.deep_javascript_route_extraction import DeepJavaScriptRouteExtractionResult
+from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
+    DeepPostFollowupJavaScriptRouteSourceObservation,
+)
 from bugslyce.recon.deep_shallow_route_followup import DeepShallowRouteFollowupResult
 from bugslyce.recon.deep_source_route_collector import DeepSourceRouteCollectionResult
 
@@ -77,41 +80,258 @@ SAFETY_NOTES = (
 
 
 @dataclass(frozen=True)
+class DeepParameterInventoryObservation:
+    """One authoritative parameter-name observation and its provenance."""
+
+    name: str
+    context: str
+    occurrence_count: int
+    control_tag: str = ""
+    control_type: str = ""
+    form_method: str = ""
+    form_enctype: str = ""
+    form_target_kind: str = ""
+    safe_form_action_url: str = ""
+    safe_route_url: str = ""
+    javascript_candidate_reference: str = ""
+    action_resolution_context: str = ""
+    route_origin_relationship: str = ""
+    javascript_resolution_contexts: tuple[str, ...] = ()
+    javascript_candidate_forms: tuple[str, ...] = ()
+    javascript_script_types: tuple[str, ...] = ()
+    required: bool = False
+    disabled: bool = False
+    source_kind: str = ""
+    source_id: str = ""
+    source_response_ids: tuple[str, ...] = ()
+    source_request_ids: tuple[str, ...] = ()
+    safe_source_urls: tuple[str, ...] = ()
+    source_collection_sections: tuple[str, ...] = ()
+    source_selection_reasons: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    post_followup_candidate_id: str = ""
+    post_followup_source_observation: (
+        DeepPostFollowupJavaScriptRouteSourceObservation | None
+    ) = None
+
+
+@dataclass(frozen=True)
 class DeepParameterInventoryItem:
     """One aggregated parameter-name inventory item."""
 
     parameter_id: str
-    name: str
-    contexts: tuple[str, ...]
-    control_tags: tuple[str, ...]
-    control_types: tuple[str, ...]
-    form_methods: tuple[str, ...]
-    form_enctypes: tuple[str, ...]
-    form_target_kinds: tuple[str, ...]
-    safe_form_action_urls: tuple[str, ...]
-    safe_route_urls: tuple[str, ...]
-    javascript_candidate_references: tuple[str, ...]
-    action_resolution_contexts: tuple[str, ...]
-    route_origin_relationships: tuple[str, ...]
-    javascript_resolution_contexts: tuple[str, ...]
-    javascript_candidate_forms: tuple[str, ...]
-    javascript_script_types: tuple[str, ...]
-    required_occurrences: int
-    disabled_occurrences: int
-    enabled_occurrences: int
-    password_control_occurrences: int
-    file_control_occurrences: int
-    hidden_control_occurrences: int
-    occurrence_count: int
-    source_kinds: tuple[str, ...]
-    source_ids: tuple[str, ...]
-    source_response_ids: tuple[str, ...]
-    source_request_ids: tuple[str, ...]
-    safe_source_urls: tuple[str, ...]
-    source_collection_sections: tuple[str, ...]
-    source_selection_reasons: tuple[str, ...]
-    evidence_ids: tuple[str, ...]
+    observations: tuple[DeepParameterInventoryObservation, ...]
     interpretation: str
+
+    def __post_init__(self) -> None:
+        names = {observation.name for observation in self.observations}
+        if len(names) != 1:
+            raise ValueError(
+                "DeepParameterInventoryItem observations must contain one parameter name"
+            )
+
+    @property
+    def name(self) -> str:
+        return self.observations[0].name
+
+    @property
+    def contexts(self) -> tuple[str, ...]:
+        return _ordered_contexts(tuple(item.context for item in self.observations))
+
+    @property
+    def control_tags(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "control_tag")
+
+    @property
+    def control_types(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "control_type")
+
+    @property
+    def form_methods(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "form_method")
+
+    @property
+    def form_enctypes(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "form_enctype")
+
+    @property
+    def form_target_kinds(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "form_target_kind")
+
+    @property
+    def safe_form_action_urls(self) -> tuple[str, ...]:
+        return _observation_scalar_values(
+            self.observations,
+            "safe_form_action_url",
+            exclude=("unresolved",),
+        )
+
+    @property
+    def safe_route_urls(self) -> tuple[str, ...]:
+        return _observation_scalar_values(
+            self.observations,
+            "safe_route_url",
+            exclude=("unresolved",),
+        )
+
+    @property
+    def javascript_candidate_references(self) -> tuple[str, ...]:
+        return _observation_scalar_values(
+            self.observations,
+            "javascript_candidate_reference",
+        )
+
+    @property
+    def action_resolution_contexts(self) -> tuple[str, ...]:
+        return _observation_scalar_values(
+            self.observations,
+            "action_resolution_context",
+        )
+
+    @property
+    def route_origin_relationships(self) -> tuple[str, ...]:
+        return _observation_scalar_values(
+            self.observations,
+            "route_origin_relationship",
+        )
+
+    @property
+    def javascript_resolution_contexts(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "javascript_resolution_contexts",
+            nested_field="resolution_contexts",
+        )
+
+    @property
+    def javascript_candidate_forms(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "javascript_candidate_forms",
+            nested_field="candidate_forms",
+        )
+
+    @property
+    def javascript_script_types(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "javascript_script_types",
+            nested_field="script_types",
+        )
+
+    @property
+    def required_occurrences(self) -> int:
+        return sum(item.occurrence_count for item in self.observations if item.required)
+
+    @property
+    def disabled_occurrences(self) -> int:
+        return sum(item.occurrence_count for item in self.observations if item.disabled)
+
+    @property
+    def enabled_occurrences(self) -> int:
+        return sum(
+            item.occurrence_count
+            for item in self.observations
+            if item.context == "form_control" and not item.disabled
+        )
+
+    @property
+    def password_control_occurrences(self) -> int:
+        return sum(
+            item.occurrence_count
+            for item in self.observations
+            if item.control_type == "password"
+        )
+
+    @property
+    def file_control_occurrences(self) -> int:
+        return sum(
+            item.occurrence_count
+            for item in self.observations
+            if item.control_type == "file"
+        )
+
+    @property
+    def hidden_control_occurrences(self) -> int:
+        return sum(
+            item.occurrence_count
+            for item in self.observations
+            if item.control_type == "hidden"
+        )
+
+    @property
+    def occurrence_count(self) -> int:
+        return sum(item.occurrence_count for item in self.observations)
+
+    @property
+    def source_kinds(self) -> tuple[str, ...]:
+        return _observation_scalar_values(self.observations, "source_kind")
+
+    @property
+    def source_ids(self) -> tuple[str, ...]:
+        return _unique_sorted(
+            tuple(
+                value
+                for item in self.observations
+                for value in (item.source_id, item.post_followup_candidate_id)
+                if value
+            )
+        )
+
+    @property
+    def source_response_ids(self) -> tuple[str, ...]:
+        return _observation_tuple_values(self.observations, "source_response_ids")
+
+    @property
+    def source_request_ids(self) -> tuple[str, ...]:
+        values = [
+            value
+            for item in self.observations
+            for value in item.source_request_ids
+        ]
+        values.extend(
+            item.post_followup_source_observation.shallow_request_id
+            for item in self.observations
+            if item.post_followup_source_observation is not None
+        )
+        return _unique_sorted(tuple(values))
+
+    @property
+    def safe_source_urls(self) -> tuple[str, ...]:
+        values = [
+            value
+            for item in self.observations
+            for value in item.safe_source_urls
+            if value != "unresolved"
+        ]
+        for item in self.observations:
+            source = item.post_followup_source_observation
+            if source is not None:
+                values.extend((source.safe_requested_url, source.safe_final_url))
+        return _unique_sorted(tuple(value for value in values if value != "unresolved"))
+
+    @property
+    def source_collection_sections(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "source_collection_sections",
+        )
+
+    @property
+    def source_selection_reasons(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "source_selection_reasons",
+            nested_field="source_selection_reasons",
+        )
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "evidence_ids",
+            nested_field="evidence_ids",
+        )
 
 
 @dataclass(frozen=True)
@@ -193,36 +413,6 @@ class _Source:
     shallow_query_parameter_names: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     body: bytes = field(repr=False)
-
-
-@dataclass(frozen=True)
-class _Observation:
-    name: str
-    context: str
-    occurrence_count: int
-    control_tag: str = ""
-    control_type: str = ""
-    form_method: str = ""
-    form_enctype: str = ""
-    form_target_kind: str = ""
-    safe_form_action_url: str = ""
-    safe_route_url: str = ""
-    javascript_candidate_reference: str = ""
-    action_resolution_context: str = ""
-    route_origin_relationship: str = ""
-    javascript_resolution_contexts: tuple[str, ...] = ()
-    javascript_candidate_forms: tuple[str, ...] = ()
-    javascript_script_types: tuple[str, ...] = ()
-    required: bool = False
-    disabled: bool = False
-    source_kind: str = ""
-    source_id: str = ""
-    source_response_ids: tuple[str, ...] = ()
-    source_request_ids: tuple[str, ...] = ()
-    safe_source_urls: tuple[str, ...] = ()
-    source_collection_sections: tuple[str, ...] = ()
-    source_selection_reasons: tuple[str, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(repr=False)
@@ -372,7 +562,7 @@ def build_deep_parameter_inventory(
     """Build a deterministic offline parameter-name inventory."""
 
     sources = _canonical_sources(source_collection, shallow_followups)
-    observations: list[_Observation] = []
+    observations: list[DeepParameterInventoryObservation] = []
     skipped: list[DeepParameterInventorySkippedItem] = []
     empty_skips = 0
     explicit_non_html_skips = 0
@@ -586,8 +776,8 @@ def _source_with_id(source: _Source, index: int) -> _Source:
     )
 
 
-def _url_query_observations(source: _Source, skipped: list[DeepParameterInventorySkippedItem]) -> tuple[_Observation, ...]:
-    observations: list[_Observation] = []
+def _url_query_observations(source: _Source, skipped: list[DeepParameterInventorySkippedItem]) -> tuple[DeepParameterInventoryObservation, ...]:
+    observations: list[DeepParameterInventoryObservation] = []
     if source.source_kind == "source_route_collection":
         observations.extend(_query_observations_from_raw_url(source, source.raw_requested_url, source.safe_requested_url, "source_requested_url_query", skipped))
         observations.extend(_query_observations_from_raw_url(source, source.raw_final_url, source.safe_final_url, "source_final_url_query", skipped))
@@ -664,13 +854,13 @@ def _form_observations(
     source: _Source,
     parsed: _ParsedHtml,
     skipped: list[DeepParameterInventorySkippedItem],
-) -> tuple[_Observation, ...]:
-    observations: list[_Observation] = []
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    observations: list[DeepParameterInventoryObservation] = []
     for _index in range(parsed.empty_parameter_names):
         skipped.append(_skip(source.source_kind, source.source_id, "form_control", "empty_parameter_name", source.evidence_ids))
     for control in parsed.controls:
         observations.append(
-            _Observation(
+            DeepParameterInventoryObservation(
                 name=control.name,
                 context="form_control",
                 occurrence_count=1,
@@ -713,8 +903,8 @@ def _form_observations(
 def _html_route_observations(
     html_extraction: DeepHtmlRouteExtractionResult,
     skipped: list[DeepParameterInventorySkippedItem],
-) -> tuple[_Observation, ...]:
-    observations: list[_Observation] = []
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    observations: list[DeepParameterInventoryObservation] = []
     for route in html_extraction.routes:
         accepted, rejected = _metadata_name_results(route.query_parameter_names)
         for reason in rejected:
@@ -723,7 +913,7 @@ def _html_route_observations(
         origin = route.origin_relationship if route.origin_relationship in {"same_origin", "cross_origin", "not_comparable"} else "other"
         for canonical in accepted:
             observations.append(
-                _Observation(
+                DeepParameterInventoryObservation(
                     name=canonical,
                     context="html_route_query",
                     occurrence_count=max(1, route.occurrence_count),
@@ -744,8 +934,8 @@ def _html_route_observations(
 def _javascript_route_observations(
     javascript_extraction: DeepJavaScriptRouteExtractionResult,
     skipped: list[DeepParameterInventorySkippedItem],
-) -> tuple[_Observation, ...]:
-    observations: list[_Observation] = []
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    observations: list[DeepParameterInventoryObservation] = []
     for candidate in javascript_extraction.candidates:
         accepted, rejected = _metadata_name_results(candidate.query_parameter_names)
         for reason in rejected:
@@ -754,7 +944,7 @@ def _javascript_route_observations(
         candidate_reference = candidate.safe_candidate if candidate.safe_candidate != "unresolved" else ""
         for canonical in accepted:
             observations.append(
-                _Observation(
+                DeepParameterInventoryObservation(
                     name=canonical,
                     context="javascript_route_query",
                     occurrence_count=max(1, candidate.occurrence_count),
@@ -786,8 +976,8 @@ def _name_observations(
     action_resolution_context: str = "",
     metadata_names: bool = False,
     safe_source_urls: tuple[str, ...] | None = None,
-) -> tuple[_Observation, ...]:
-    observations: list[_Observation] = []
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    observations: list[DeepParameterInventoryObservation] = []
     accepted: set[str] = set()
     rejected: set[tuple[str, str]] = set()
     for name in names:
@@ -807,7 +997,7 @@ def _name_observations(
             continue
         accepted.add(canonical)
         observations.append(
-            _Observation(
+            DeepParameterInventoryObservation(
                 name=canonical,
                 context=context,
                 occurrence_count=occurrence_count,
@@ -834,7 +1024,7 @@ def _query_observations_from_raw_url(
     safe_url: str,
     context: str,
     skipped: list[DeepParameterInventorySkippedItem],
-) -> tuple[_Observation, ...]:
+) -> tuple[DeepParameterInventoryObservation, ...]:
     if safe_url == "unresolved":
         if raw_url:
             skipped.append(_skip(source.source_kind, source.source_id, context, "invalid_source_url", source.evidence_ids))
@@ -850,50 +1040,32 @@ def _query_observations_from_raw_url(
     return _name_observations(source, names, context, 1, skipped, safe_source_urls=(safe_url,))
 
 
-def _aggregate_observations(observations: list[_Observation]) -> tuple[DeepParameterInventoryItem, ...]:
-    grouped: dict[str, list[_Observation]] = {}
+def _aggregate_observations(
+    observations: list[DeepParameterInventoryObservation],
+) -> tuple[DeepParameterInventoryItem, ...]:
+    grouped: dict[str, list[DeepParameterInventoryObservation]] = {}
     for observation in observations:
         grouped.setdefault(observation.name, []).append(observation)
     pending: list[DeepParameterInventoryItem] = []
-    for name, group in grouped.items():
-        pending.append(_parameter_item("", name, tuple(group)))
+    for group in grouped.values():
+        pending.append(_parameter_item("", tuple(group)))
     ordered = sorted(pending, key=_parameter_sort_key)
-    return tuple(_parameter_item(f"DEEP-PARAM-{index:04d}", item.name, tuple(grouped[item.name])) for index, item in enumerate(ordered, start=1))
+    return tuple(
+        _parameter_item(
+            f"DEEP-PARAM-{index:04d}",
+            tuple(grouped[item.name]),
+        )
+        for index, item in enumerate(ordered, start=1)
+    )
 
 
-def _parameter_item(parameter_id: str, name: str, observations: tuple[_Observation, ...]) -> DeepParameterInventoryItem:
+def _parameter_item(
+    parameter_id: str,
+    observations: tuple[DeepParameterInventoryObservation, ...],
+) -> DeepParameterInventoryItem:
     return DeepParameterInventoryItem(
         parameter_id=parameter_id,
-        name=name,
-        contexts=_ordered_contexts(tuple(obs.context for obs in observations)),
-        control_tags=_unique_sorted(tuple(obs.control_tag for obs in observations if obs.control_tag)),
-        control_types=_unique_sorted(tuple(obs.control_type for obs in observations if obs.control_type)),
-        form_methods=_unique_sorted(tuple(obs.form_method for obs in observations if obs.form_method)),
-        form_enctypes=_unique_sorted(tuple(obs.form_enctype for obs in observations if obs.form_enctype)),
-        form_target_kinds=_unique_sorted(tuple(obs.form_target_kind for obs in observations if obs.form_target_kind)),
-        safe_form_action_urls=_unique_sorted(tuple(obs.safe_form_action_url for obs in observations if obs.safe_form_action_url and obs.safe_form_action_url != "unresolved")),
-        safe_route_urls=_unique_sorted(tuple(obs.safe_route_url for obs in observations if obs.safe_route_url and obs.safe_route_url != "unresolved")),
-        javascript_candidate_references=_unique_sorted(tuple(obs.javascript_candidate_reference for obs in observations if obs.javascript_candidate_reference)),
-        action_resolution_contexts=_unique_sorted(tuple(obs.action_resolution_context for obs in observations if obs.action_resolution_context)),
-        route_origin_relationships=_unique_sorted(tuple(obs.route_origin_relationship for obs in observations if obs.route_origin_relationship)),
-        javascript_resolution_contexts=_unique_sorted(tuple(value for obs in observations for value in obs.javascript_resolution_contexts)),
-        javascript_candidate_forms=_unique_sorted(tuple(value for obs in observations for value in obs.javascript_candidate_forms)),
-        javascript_script_types=_unique_sorted(tuple(value for obs in observations for value in obs.javascript_script_types)),
-        required_occurrences=sum(obs.occurrence_count for obs in observations if obs.required),
-        disabled_occurrences=sum(obs.occurrence_count for obs in observations if obs.disabled),
-        enabled_occurrences=sum(obs.occurrence_count for obs in observations if obs.context == "form_control" and not obs.disabled),
-        password_control_occurrences=sum(obs.occurrence_count for obs in observations if obs.control_type == "password"),
-        file_control_occurrences=sum(obs.occurrence_count for obs in observations if obs.control_type == "file"),
-        hidden_control_occurrences=sum(obs.occurrence_count for obs in observations if obs.control_type == "hidden"),
-        occurrence_count=sum(obs.occurrence_count for obs in observations),
-        source_kinds=_unique_sorted(tuple(obs.source_kind for obs in observations if obs.source_kind)),
-        source_ids=_unique_sorted(tuple(obs.source_id for obs in observations if obs.source_id)),
-        source_response_ids=_unique_sorted(tuple(value for obs in observations for value in obs.source_response_ids)),
-        source_request_ids=_unique_sorted(tuple(value for obs in observations for value in obs.source_request_ids)),
-        safe_source_urls=_unique_sorted(tuple(value for obs in observations for value in obs.safe_source_urls if value != "unresolved")),
-        source_collection_sections=_unique_sorted(tuple(value for obs in observations for value in obs.source_collection_sections)),
-        source_selection_reasons=_unique_sorted(tuple(value for obs in observations for value in obs.source_selection_reasons)),
-        evidence_ids=_unique_sorted(tuple(value for obs in observations for value in obs.evidence_ids)),
+        observations=tuple(sorted(observations, key=_observation_sort_key)),
         interpretation="Parameter name observed in already collected static evidence; no value was retained, replayed, guessed or mutated.",
     )
 
@@ -901,7 +1073,7 @@ def _parameter_item(parameter_id: str, name: str, observations: tuple[_Observati
 def _summary_counts(
     source_collection: DeepSourceRouteCollectionResult,
     shallow_followups: DeepShallowRouteFollowupResult,
-    observations: list[_Observation],
+    observations: list[DeepParameterInventoryObservation],
     parameters: tuple[DeepParameterInventoryItem, ...],
     empty_skips: int,
     explicit_non_html_skips: int,
@@ -957,6 +1129,7 @@ def _render_parameter(parameter: DeepParameterInventoryItem) -> list[str]:
         "",
         "- Contexts: " + _format_values(parameter.contexts),
         f"- Occurrences: `{parameter.occurrence_count}`",
+        f"- Provenance observations: `{len(parameter.observations)}`",
         "- Control tags: " + _format_values(parameter.control_tags),
         "- Control types: " + _format_values(parameter.control_types),
         "- Form methods: " + _format_values(parameter.form_methods),
@@ -1170,6 +1343,98 @@ def _parameter_sort_key(parameter: DeepParameterInventoryItem) -> tuple:
         parameter.source_ids,
         parameter.evidence_ids,
     )
+
+
+def _observation_sort_key(observation: DeepParameterInventoryObservation) -> tuple:
+    post_source = observation.post_followup_source_observation
+    post_source_key = (
+        ()
+        if post_source is None
+        else (
+            post_source.shallow_request_id,
+            post_source.upstream_route_candidate_ids,
+            post_source.safe_requested_url,
+            post_source.safe_final_url,
+            post_source.source_body_sha256,
+            post_source.evidence_ids,
+            post_source.source_model_kinds,
+            post_source.source_selection_reasons,
+            post_source.script_types,
+            post_source.candidate_forms,
+            post_source.resolution_contexts,
+            post_source.occurrence_count,
+        )
+    )
+    return (
+        CONTEXT_ORDER.get(observation.context, 99),
+        observation.context,
+        observation.name,
+        observation.source_kind,
+        observation.source_id,
+        observation.source_request_ids,
+        observation.source_response_ids,
+        observation.safe_source_urls,
+        observation.safe_route_url,
+        observation.safe_form_action_url,
+        observation.javascript_candidate_reference,
+        observation.source_collection_sections,
+        observation.source_selection_reasons,
+        observation.evidence_ids,
+        observation.control_tag,
+        observation.control_type,
+        observation.form_method,
+        observation.form_enctype,
+        observation.form_target_kind,
+        observation.action_resolution_context,
+        observation.route_origin_relationship,
+        observation.javascript_resolution_contexts,
+        observation.javascript_candidate_forms,
+        observation.javascript_script_types,
+        observation.required,
+        observation.disabled,
+        observation.occurrence_count,
+        observation.post_followup_candidate_id,
+        post_source_key,
+    )
+
+
+def _observation_scalar_values(
+    observations: tuple[DeepParameterInventoryObservation, ...],
+    field_name: str,
+    *,
+    exclude: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    return _unique_sorted(
+        tuple(
+            value
+            for observation in observations
+            if (value := getattr(observation, field_name)) and value not in exclude
+        )
+    )
+
+
+def _observation_tuple_values(
+    observations: tuple[DeepParameterInventoryObservation, ...],
+    field_name: str,
+    *,
+    nested_field: str | None = None,
+) -> tuple[str, ...]:
+    values = [
+        value
+        for observation in observations
+        for value in getattr(observation, field_name)
+    ]
+    if nested_field is not None:
+        values.extend(
+            value
+            for observation in observations
+            if observation.post_followup_source_observation is not None
+            for value in getattr(
+                observation.post_followup_source_observation,
+                nested_field,
+            )
+        )
+    return _unique_sorted(tuple(values))
 
 
 def _source_sort_key(source: _Source) -> tuple:

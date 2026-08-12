@@ -16,12 +16,17 @@ from bugslyce.recon.deep_javascript_route_extraction import (
     DeepJavaScriptRouteExtractionSummaryCounts,
 )
 from bugslyce.recon.deep_parameter_inventory import (
+    DeepParameterInventoryItem,
+    DeepParameterInventoryObservation,
     MAX_PARAMETER_NAME_CHARS,
     MAX_RENDERED_VALUES,
     MAX_RENDERED_VALUE_CHARS,
     _format_values,
     build_deep_parameter_inventory,
     render_deep_parameter_inventory_markdown,
+)
+from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
+    DeepPostFollowupJavaScriptRouteSourceObservation,
 )
 import bugslyce.recon.deep_parameter_inventory as inventory_module
 from bugslyce.recon.deep_parameter_inventory import _format_parameter_name
@@ -266,6 +271,72 @@ def test_routes_javascript_original_and_shallow_query_metadata_are_inventoried()
     assert by_name["jsParam"].javascript_resolution_contexts == ("execution_context_unknown",)
     for secret in ("SECRET", "#frag"):
         assert secret not in public
+
+
+def test_initial_javascript_parameter_retains_authoritative_observation() -> None:
+    candidate = _js_candidate(
+        candidate_id="DEEP-JS-ROUTE-0042",
+        query_names=("tenant",),
+        occurrence_count=2,
+        evidence=("EVID-JS-TENANT",),
+        safe_resolved_url="https://example.test/api/items?tenant",
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        _js_result(candidate),
+    )
+    parameter = result.parameters[0]
+    observation = parameter.observations[0]
+
+    assert observation.context == "javascript_route_query"
+    assert observation.source_id == "DEEP-JS-ROUTE-0042"
+    assert observation.safe_route_url == "https://example.test/api/items?tenant"
+    assert observation.evidence_ids == ("EVID-JS-TENANT",)
+    assert observation.occurrence_count == 2
+    assert parameter.contexts == ("javascript_route_query",)
+    assert parameter.source_ids == ("DEEP-JS-ROUTE-0042",)
+    assert parameter.safe_route_urls == (
+        "https://example.test/api/items?tenant",
+    )
+    assert parameter.evidence_ids == ("EVID-JS-TENANT",)
+    assert parameter.occurrence_count == 2
+
+
+def test_form_and_javascript_parameter_keep_distinct_source_observations() -> None:
+    source = _source_item(
+        body=b"<html><form><input name='tenant'></form></html>",
+        evidence=("EVID-FORM",),
+    )
+    candidate = _js_candidate(
+        candidate_id="DEEP-JS-ROUTE-0007",
+        query_names=("tenant",),
+        evidence=("EVID-JS",),
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(source),
+        _shallow_result(),
+        _html_result(),
+        _js_result(candidate),
+    )
+    parameter = result.parameters[0]
+
+    assert parameter.name == "tenant"
+    assert parameter.contexts == ("form_control", "javascript_route_query")
+    assert parameter.occurrence_count == 2
+    assert tuple(item.context for item in parameter.observations) == (
+        "form_control",
+        "javascript_route_query",
+    )
+    form_observation, javascript_observation = parameter.observations
+    assert form_observation.source_id.startswith("DEEP-PARAM-SOURCE-")
+    assert form_observation.evidence_ids == ("EVID-FORM",)
+    assert javascript_observation.source_id == "DEEP-JS-ROUTE-0007"
+    assert javascript_observation.evidence_ids == ("EVID-JS",)
+    assert parameter.evidence_ids == ("EVID-FORM", "EVID-JS")
 
 
 def test_raw_query_names_decode_once_and_repeated_names_count_once() -> None:
@@ -631,6 +702,96 @@ def test_same_name_aggregates_across_all_contexts_and_prioritises_multi_context(
     assert result.summary_counts.unique_parameters_observed_in_multiple_contexts == 1
 
 
+def test_parameter_item_retains_authoritative_relational_observations() -> None:
+    first = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-A",
+        url="http://example.test/a",
+        query_names=("tenant",),
+        evidence=("EVID-A",),
+    )
+    second = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-B",
+        url="http://example.test/b",
+        query_names=("tenant",),
+        evidence=("EVID-B",),
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(second, first),
+        _html_result(),
+        _js_result(),
+    )
+    parameter = result.parameters[0]
+
+    assert tuple(
+        (
+            observation.source_request_ids,
+            observation.safe_source_urls,
+            observation.evidence_ids,
+        )
+        for observation in parameter.observations
+    ) == (
+        (
+            ("DEEP-SHALLOW-REQ-A",),
+            ("http://example.test/a",),
+            ("EVID-A",),
+        ),
+        (
+            ("DEEP-SHALLOW-REQ-B",),
+            ("http://example.test/b",),
+            ("EVID-B",),
+        ),
+    )
+    assert parameter.occurrence_count == sum(
+        observation.occurrence_count for observation in parameter.observations
+    )
+
+
+def test_observation_model_can_retain_future_post_followup_relationship() -> None:
+    post_source = DeepPostFollowupJavaScriptRouteSourceObservation(
+        shallow_request_id="DEEP-SHALLOW-REQ-0004",
+        upstream_route_candidate_ids=("DEEP-JS-ROUTE-0002",),
+        safe_requested_url="https://example.test/js/app.js",
+        safe_final_url="https://example.test/assets/app-v2.js",
+        source_body_sha256="a" * 64,
+        evidence_ids=("EVID-POST-JS",),
+        source_model_kinds=("javascript_route",),
+        source_selection_reasons=("javascript_content_type",),
+        script_types=("classic",),
+        candidate_forms=("root_relative",),
+        resolution_contexts=("javascript_response_url",),
+        occurrence_count=2,
+    )
+    observation = DeepParameterInventoryObservation(
+        name="tenant",
+        context="post_followup_javascript_route_query",
+        occurrence_count=2,
+        safe_route_url="https://example.test/api/items?tenant",
+        source_kind="post_followup_javascript_route",
+        post_followup_candidate_id="DEEP-JS-POST-ROUTE-0003",
+        post_followup_source_observation=post_source,
+    )
+    parameter = DeepParameterInventoryItem(
+        parameter_id="DEEP-PARAM-0001",
+        observations=(observation,),
+        interpretation="Static test observation.",
+    )
+
+    retained = parameter.observations[0]
+    assert retained.post_followup_candidate_id == "DEEP-JS-POST-ROUTE-0003"
+    assert retained.post_followup_source_observation is post_source
+    assert post_source.shallow_request_id == "DEEP-SHALLOW-REQ-0004"
+    assert post_source.upstream_route_candidate_ids == ("DEEP-JS-ROUTE-0002",)
+    assert post_source.safe_requested_url == "https://example.test/js/app.js"
+    assert post_source.safe_final_url == "https://example.test/assets/app-v2.js"
+    assert post_source.source_body_sha256 == "a" * 64
+    assert parameter.source_ids == ("DEEP-JS-POST-ROUTE-0003",)
+    assert parameter.source_request_ids == ("DEEP-SHALLOW-REQ-0004",)
+    assert parameter.evidence_ids == ("EVID-POST-JS",)
+    assert parameter.occurrence_count == 2
+
+
 def test_determinism_with_reversed_inputs_headers_evidence_and_form_order() -> None:
     source_a = _source_item(
         url="http://example.test/same",
@@ -653,6 +814,12 @@ def test_determinism_with_reversed_inputs_headers_evidence_and_form_order() -> N
     reversed_result = build_deep_parameter_inventory(_source_result(source_b, source_a), _shallow_result(), _html_result(html_b, html_a), _js_result(js_b, js_a))
 
     assert normal == reversed_result
+    assert tuple(item.observations for item in normal.parameters) == tuple(
+        item.observations for item in reversed_result.parameters
+    )
+    assert tuple(item.parameter_id for item in normal.parameters) == tuple(
+        item.parameter_id for item in reversed_result.parameters
+    )
     assert render_deep_parameter_inventory_markdown(normal) == render_deep_parameter_inventory_markdown(reversed_result)
 
 
@@ -932,11 +1099,12 @@ def _js_candidate(
     query_names: tuple[str, ...] = ("jsParam",),
     occurrence_count: int = 1,
     evidence: tuple[str, ...] = ("EVID-JS",),
+    safe_resolved_url: str | None = None,
 ) -> DeepJavaScriptRouteCandidate:
     return DeepJavaScriptRouteCandidate(
         candidate_id=candidate_id,
         safe_candidate="/api?jsParam",
-        safe_resolved_url=None,
+        safe_resolved_url=safe_resolved_url,
         path="/api",
         query_parameter_names=query_names,
         candidate_forms=("query_relative",),
