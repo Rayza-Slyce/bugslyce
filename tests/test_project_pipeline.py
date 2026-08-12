@@ -55,6 +55,7 @@ from bugslyce.project_pipeline import (
     _step_runners,
     _validate_readiness,
     format_exception_diagnostic,
+    render_project_pipeline_markdown,
     render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
@@ -62,6 +63,7 @@ from bugslyce.project_pipeline import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.project_session import (
+    build_project_next,
     initialize_project,
     load_project,
     save_project_engagement_policy,
@@ -81,6 +83,7 @@ from bugslyce.recon.collection_confidence import (
 )
 from bugslyce.recon.path_followup import PathFollowupNoWork
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
+from bugslyce.recon.evidence_pack_closure import validate_evidence_pack_root
 from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
 from bugslyce.reports.markdown import render_markdown_report
@@ -3955,6 +3958,469 @@ def test_pipeline_stops_on_required_failure_and_records_pending_later_steps(
     assert payload["steps"][4]["message"] == ""
 
 
+def test_deep_content_failure_continues_independent_deep_and_local_steps(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    deep_result = object()
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(context, *_args, **_kwargs):
+        def complete(step_id: str):
+            def run():
+                calls.append(step_id)
+                return f"{step_id} completed.", [], {}
+
+            return run
+
+        runners = {
+            step_id: complete(step_id)
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        }
+
+        def fail_content():
+            calls.append("PIPELINE-STEP-007")
+            raise ValueError("FAM-007 controlled content discovery failure")
+
+        def deep_collection():
+            calls.append("PIPELINE-STEP-010D")
+            context["fam_007_deep_result"] = deep_result
+            return "Independent Deep collection completed.", [], {}
+
+        def deep_orchestration():
+            calls.append("PIPELINE-STEP-011D")
+            assert context["fam_007_deep_result"] is deep_result
+            return "Deep orchestration consumed the collection result.", [], {}
+
+        runners["PIPELINE-STEP-007"] = fail_content
+        runners["PIPELINE-STEP-010D"] = deep_collection
+        runners["PIPELINE-STEP-011D"] = deep_orchestration
+        return runners
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        ProjectPipelineFailed,
+        match="FAM-007 controlled content discovery failure",
+    ) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    steps = {step.step_id: step for step in result.steps}
+    assert result.final_status == "failed"
+    assert steps["PIPELINE-STEP-007"].status == "failed"
+    assert steps["PIPELINE-STEP-007"].message == (
+        "FAM-007 controlled content discovery failure"
+    )
+    for step_id in ("PIPELINE-STEP-008", "PIPELINE-STEP-009"):
+        assert steps[step_id].status == "skipped_dependency"
+        assert "PIPELINE-STEP-007" in steps[step_id].message
+    assert calls.count("PIPELINE-STEP-010D") == 1
+    assert calls.count("PIPELINE-STEP-011D") == 1
+    assert calls[-5:] == [
+        "PIPELINE-STEP-010D",
+        "PIPELINE-STEP-011D",
+        "PIPELINE-STEP-010",
+        "PIPELINE-STEP-011",
+        "PIPELINE-STEP-012",
+    ]
+    persisted = json.loads(
+        (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    assert persisted["final_status"] == "failed"
+    assert {
+        step["step_id"]: step["status"] for step in persisted["steps"]
+    } == {step.step_id: step.status for step in result.steps}
+    pipeline_markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "- Dependency-skipped steps: `2`" in pipeline_markdown
+    assert "- Status: `skipped_dependency`" in pipeline_markdown
+    assert "PIPELINE-STEP-007 bounded content discovery execution failed" in (
+        pipeline_markdown
+    )
+    guidance = render_project_pipeline_failure_guidance(result)
+    assert "recorded a failure at step PIPELINE-STEP-007" in guidance[0]
+    assert "continued only while remaining stage prerequisites were satisfied" in (
+        guidance[1]
+    )
+    assert "remains classified as failed" in guidance[2]
+
+
+def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    fetch_calls: list[str] = []
+    failure = "FAM-007 integration content discovery failure"
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_nmap_discovery_workflow",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            nmap_output_path=str(output_dir / "nmap-allports.txt"),
+            report_path=str(output_dir / "report.md"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_nmap_discovery_execution_result",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_nmap_service_workflow",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            nmap_output_path=str(output_dir / "nmap-services-all.txt"),
+            report_path=str(output_dir / "report.md"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_nmap_service_execution_result",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_http_metadata_workflow",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            artifact_paths=[str(output_dir / "homepage-10.10.10.10-80.html")],
+            report_path=str(output_dir / "report.md"),
+        ),
+    )
+
+    def write_http_metadata_fixture(*_args, **_kwargs):
+        (output_dir / "nmap-allports.txt").write_text(
+            "Nmap scan report for 10.10.10.10\n"
+            "PORT   STATE SERVICE\n"
+            "80/tcp open  http\n",
+            encoding="utf-8",
+        )
+        (output_dir / "nmap-services-all.txt").write_text(
+            "Nmap scan report for 10.10.10.10\n"
+            "PORT   STATE SERVICE VERSION\n"
+            "80/tcp open  http    nginx 1.24.0\n",
+            encoding="utf-8",
+        )
+        (output_dir / "homepage-10.10.10.10-80.html").write_text(
+            "<html><title>Fixture home</title></html>\n",
+            encoding="utf-8",
+        )
+        (output_dir / "recon_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "target": "10.10.10.10",
+                    "scope_file": "scope.md",
+                    "profile": "lab-tcp-full-plus-services",
+                    "artifacts": [
+                        {"type": "nmap", "file": "nmap-allports.txt"},
+                        {"type": "nmap", "file": "nmap-services-all.txt"},
+                        {
+                            "type": "html",
+                            "file": "homepage-10.10.10.10-80.html",
+                            "url": "http://10.10.10.10/",
+                        },
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return ()
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_http_metadata_execution_result",
+        write_http_metadata_fixture,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_path_followup_workflow",
+        lambda *_args, **_kwargs: SimpleNamespace(artifact_paths=[], report_path=None),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_path_followup_execution_result",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_content_discovery_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(profile=DEEP_BOUNDED_CORE_PROFILE),
+    )
+
+    def write_content_plan_fixture(_plan, plan_dir):
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        json_path = plan_dir / "content_discovery_plan.json"
+        markdown_path = plan_dir / "content_discovery_plan.md"
+        json_path.write_text("{}\n", encoding="utf-8")
+        markdown_path.write_text("# Fixture plan\n", encoding="utf-8")
+        return json_path, markdown_path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_content_discovery_plan",
+        write_content_plan_fixture,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_discovery_workflow",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError(failure)),
+    )
+
+    def fetcher(request, _bounds):
+        fetch_calls.append(request.url)
+        return DeepHTTPResponse(
+            url=request.url,
+            final_url=request.url,
+            status_code=404,
+            headers=(("Content-Type", "text/plain"),),
+            body=b"not found",
+            elapsed_seconds=0.01,
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_http_fetcher",
+        lambda: fetcher,
+    )
+
+    with pytest.raises(ProjectPipelineFailed, match=failure) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    steps = {step.step_id: step for step in result.steps}
+    assert result.final_status == "failed"
+    assert steps["PIPELINE-STEP-007"].status == "failed"
+    assert steps["PIPELINE-STEP-007"].message == failure
+    for step_id in ("PIPELINE-STEP-008", "PIPELINE-STEP-009"):
+        assert steps[step_id].status == "skipped_dependency"
+        assert steps[step_id].message
+    for step_id in (
+        "PIPELINE-STEP-010D",
+        "PIPELINE-STEP-011D",
+        "PIPELINE-STEP-010",
+        "PIPELINE-STEP-011",
+        "PIPELINE-STEP-012",
+    ):
+        assert steps[step_id].status == "completed"
+    assert fetch_calls
+
+    pipeline = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
+    assert pipeline["final_status"] == "failed"
+    assert {
+        step["step_id"]: step["status"] for step in pipeline["steps"]
+    } == {step.step_id: step.status for step in result.steps}
+    pipeline_markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert failure in pipeline_markdown
+    assert "Dependency-skipped steps: `2`" in pipeline_markdown
+    assert "No later steps were executed." not in pipeline_markdown
+
+    status_markdown = (output_dir / "recon_status.md").read_text(encoding="utf-8")
+    report_markdown = (output_dir / "report.md").read_text(encoding="utf-8")
+    runbook_markdown = (output_dir / "runbook.md").read_text(encoding="utf-8")
+    assert "pipeline final status: failed" in status_markdown.lower()
+    assert "Collection stage dependency-blocked" in report_markdown
+    assert "Collection stage dependency-blocked" in runbook_markdown
+
+    export_path = Path(result.export_path or "")
+    assert export_path.is_file()
+    extracted = tmp_path / "extracted-pack"
+    with zipfile.ZipFile(export_path) as archive:
+        packed_pipeline = json.loads(archive.read("project_pipeline.json"))
+        archive.extractall(extracted)
+    assert packed_pipeline["portable_confidence_schema"] == 1
+    assert "final_status" not in packed_pipeline
+    packed_steps = {step["step_id"]: step for step in packed_pipeline["steps"]}
+    assert packed_steps["PIPELINE-STEP-007"]["status"] == "failed"
+    assert packed_steps["PIPELINE-STEP-008"]["status"] == "skipped_dependency"
+    assert packed_steps["PIPELINE-STEP-009"]["status"] == "skipped_dependency"
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+    next_result = build_project_next(project_file)
+    assert next_result.recommended_action.id == "content-plan-tiny"
+    assert "bugslyce recon content-plan" in next_result.recommended_action.command_preview
+
+
+@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE))
+def test_non_deep_content_failure_remains_fail_fast(
+    tmp_path: Path,
+    monkeypatch,
+    profile: str,
+) -> None:
+    project_file, _output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_controlled_failure_runners(
+        monkeypatch,
+        calls,
+        failures={"PIPELINE-STEP-007": "controlled content failure"},
+    )
+
+    with pytest.raises(
+        ProjectPipelineFailed,
+        match="controlled content failure",
+    ) as exc_info:
+        run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
+
+    result = exc_info.value.result
+    assert result.final_status == "failed"
+    assert calls[-1] == "PIPELINE-STEP-007"
+    assert all(
+        step.status == "pending"
+        for step in result.steps
+        if step.step_id
+        in {"PIPELINE-STEP-008", "PIPELINE-STEP-009", "PIPELINE-STEP-010"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("failed_step_id", "diagnostic"),
+    (
+        ("PIPELINE-STEP-004", "controlled HTTP metadata failure"),
+        ("PIPELINE-STEP-006", "controlled content-plan failure"),
+    ),
+)
+def test_deep_failures_before_content_execution_remain_fail_fast(
+    tmp_path: Path,
+    monkeypatch,
+    failed_step_id: str,
+    diagnostic: str,
+) -> None:
+    project_file, _output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_controlled_failure_runners(
+        monkeypatch,
+        calls,
+        failures={failed_step_id: diagnostic},
+    )
+
+    with pytest.raises(ProjectPipelineFailed, match=diagnostic) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    assert calls[-1] == failed_step_id
+    assert "PIPELINE-STEP-010D" not in calls
+    assert next(
+        step for step in result.steps if step.step_id == "PIPELINE-STEP-010D"
+    ).status == "pending"
+
+
+def test_deep_content_continuation_stops_on_deep_collection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, _output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_controlled_failure_runners(
+        monkeypatch,
+        calls,
+        failures={
+            "PIPELINE-STEP-007": "controlled content failure",
+            "PIPELINE-STEP-010D": "controlled Deep collection failure",
+        },
+    )
+
+    with pytest.raises(
+        ProjectPipelineFailed,
+        match="controlled Deep collection failure",
+    ) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    steps = {step.step_id: step for step in result.steps}
+    assert result.final_status == "failed"
+    assert result.failed_step == "PIPELINE-STEP-007"
+    assert steps["PIPELINE-STEP-007"].message == "controlled content failure"
+    assert steps["PIPELINE-STEP-010D"].status == "failed"
+    assert steps["PIPELINE-STEP-010D"].message == "controlled Deep collection failure"
+    assert steps["PIPELINE-STEP-011D"].status == "pending"
+    assert "PIPELINE-STEP-011D" not in calls
+
+
+def test_deep_content_failure_continuation_is_deterministic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    results = []
+    rendered = []
+    for name in ("first", "second"):
+        project_file, _output_dir = _fresh_project(tmp_path / name)
+        calls: list[str] = []
+        _patch_controlled_failure_runners(
+            monkeypatch,
+            calls,
+            failures={"PIPELINE-STEP-007": "controlled content failure"},
+        )
+        with pytest.raises(ProjectPipelineFailed) as exc_info:
+            run_project_pipeline(
+                project_file,
+                DEEP_PIPELINE_PROFILE,
+                clock=lambda: FIXED_TIME,
+            )
+        result = exc_info.value.result
+        results.append(
+            (
+                result.final_status,
+                tuple(
+                    (step.step_id, step.status, step.message)
+                    for step in result.steps
+                ),
+            )
+        )
+        rendered.append(
+            render_project_pipeline_markdown(
+                replace(
+                    result,
+                    project_file="/project/bugslyce_project.json",
+                    scope_file="/project/scope.md",
+                    output_dir="/project/output",
+                )
+            )
+        )
+
+    assert results[0] == results[1]
+    assert rendered[0] == rendered[1]
+
+
 def test_project_pipeline_module_has_no_direct_execution_apis() -> None:
     source = (
         Path(__file__).resolve().parents[1]
@@ -3972,6 +4438,55 @@ def test_project_pipeline_module_has_no_direct_execution_apis() -> None:
 def _fresh_project(tmp_path: Path) -> tuple[Path, Path]:
     scaffold = scaffold_project("pipeline-test", "10.10.10.10", tmp_path / "projects")
     return Path(scaffold.project_file), Path(scaffold.project.output_dir)
+
+
+def _patch_controlled_failure_runners(
+    monkeypatch,
+    calls: list[str],
+    *,
+    failures: dict[str, str],
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(_context, *_args, **_kwargs):
+        def runner(step_id: str):
+            def run():
+                calls.append(step_id)
+                diagnostic = failures.get(step_id)
+                if diagnostic is not None:
+                    raise ValueError(diagnostic)
+                return f"{step_id} completed.", [], {}
+
+            return run
+
+        return {
+            step_id: runner(step_id)
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        }
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def _tcp_skip_project_runtime(

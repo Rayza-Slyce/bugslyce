@@ -578,6 +578,33 @@ def test_status_does_not_verify_deep_files_without_pipeline_metadata(tmp_path: P
     assert "- Deep pipeline phases: 0/2" in rendered
 
 
+def test_status_accepts_dependency_skipped_steps_in_failed_deep_pipeline(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _status_input(tmp_path, include_body=True)
+    _write_deep_artifacts(input_dir)
+    _write_deep_pipeline_metadata(
+        input_dir,
+        final_status="failed",
+        step_statuses={
+            "PIPELINE-STEP-007": "failed",
+            "PIPELINE-STEP-008": "skipped_dependency",
+            "PIPELINE-STEP-009": "skipped_dependency",
+            "PIPELINE-STEP-010D": "completed",
+            "PIPELINE-STEP-011D": "completed",
+        },
+    )
+
+    result = build_recon_status(input_dir)
+    rendered = render_recon_status_markdown(result)
+
+    assert result.latest_execution
+    assert result.latest_execution["pipeline_final_status"] == "failed"
+    assert "pipeline_metadata_warning" not in result.latest_execution
+    assert result.artifact_overview["deep_pipeline_phases_detected"] == 2
+    assert "- Deep pipeline phases: 2/2" in rendered
+
+
 def test_status_rejects_mismatched_pipeline_metadata_for_deep_verification(tmp_path: Path) -> None:
     input_dir, _scope = _status_input(tmp_path, include_body=True)
     _write_deep_artifacts(input_dir)

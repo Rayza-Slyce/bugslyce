@@ -236,6 +236,34 @@ def test_failed_stage_and_command_do_not_use_success_wording() -> None:
     assert command.direct_fact == "The `local-collector` command `CMD-TEST` failed: exit code 2."
 
 
+def test_dependency_skipped_pipeline_stage_is_visible_as_incomplete_collection() -> None:
+    notices = build_collection_confidence_notices(
+        _state(),
+        pipeline_steps=(
+            {
+                "step_id": "PIPELINE-STEP-008",
+                "name": "content-result follow-up",
+                "command_kind": "content-followup",
+                "status": "skipped_dependency",
+                "message": (
+                    "Skipped because PIPELINE-STEP-007 bounded content discovery "
+                    "execution failed."
+                ),
+            },
+        ),
+    )
+
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.category == SKIPPED_OR_UNAVAILABLE
+    assert notice.title == (
+        "Collection stage dependency-blocked: content-result follow-up"
+    )
+    assert "status `skipped_dependency`" in notice.direct_fact
+    assert "PIPELINE-STEP-007" in notice.direct_fact
+    assert "No result should be inferred" in notice.operator_implication
+
+
 def test_recoverable_body_fetch_exit_18_uses_partial_evidence_wording() -> None:
     notices = build_collection_confidence_notices(
         _state(),

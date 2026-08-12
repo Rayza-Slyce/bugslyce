@@ -547,7 +547,15 @@ def _load_pipeline_metadata(input_dir: Path, target: str) -> tuple[dict[str, Any
     steps = payload.get("steps")
     if not isinstance(steps, list):
         return None, "project_pipeline.json steps were invalid"
-    valid_step_statuses = {"pending", "running", "completed", "failed", "skipped_existing", "noop"}
+    valid_step_statuses = {
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "skipped_existing",
+        "skipped_dependency",
+        "noop",
+    }
     for step in steps:
         if not isinstance(step, dict):
             return None, "project_pipeline.json step was invalid"

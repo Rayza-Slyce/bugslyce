@@ -237,6 +237,10 @@ SKIPPED_STEP_MESSAGES = {
         "Existing completed evidence pack detected; export skipped during resume."
     ),
 }
+DEEP_CONTENT_FAILURE_DEPENDENT_STEP_IDS = (
+    "PIPELINE-STEP-008",
+    "PIPELINE-STEP-009",
+)
 
 
 @dataclass(frozen=True)
@@ -376,6 +380,14 @@ def render_project_pipeline_failure_guidance(result: PipelineResult) -> tuple[st
             "The run is classified as failed.",
             "No successful final evidence pack is being advertised.",
             "Review local artefacts and pipeline diagnostics.",
+        )
+    if any(step.status == "skipped_dependency" for step in result.steps):
+        return (
+            f"Pipeline recorded a failure at step {failed_step}.",
+            "Dependent stages were skipped; execution continued only while "
+            "remaining stage prerequisites were satisfied.",
+            "The run remains classified as failed.",
+            "Review the failed and dependency-skipped step diagnostics and retained local evidence.",
         )
     return (
         f"Pipeline stopped at step {failed_step}.",
@@ -541,12 +553,20 @@ def run_project_pipeline(
         clock,
         comparator_progress_callback=comparator_progress_callback,
     )
-    for index, step in enumerate(result.steps):
+    deferred_failure_diagnostic: str | None = None
+    for index in range(len(result.steps)):
+        step = result.steps[index]
         position = index + 1
         if step.status == "skipped_existing":
             _emit(
                 progress_callback,
                 f"[{position}/{total_steps}] {step.name} skipped.\n{step.message}",
+            )
+            continue
+        if step.status == "skipped_dependency":
+            _emit(
+                progress_callback,
+                f"[{position}/{total_steps}] {step.name} dependency-skipped.\n{step.message}",
             )
             continue
         _emit(progress_callback, f"[{position}/{total_steps}] {step.name} starting...")
@@ -598,6 +618,14 @@ def run_project_pipeline(
                 preserve_canonical_pipeline_metadata,
             )
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
+            if _may_continue_after_deep_content_failure(profile, step.step_id):
+                result = _mark_deep_content_dependent_steps_skipped(result)
+                _write_project_pipeline_checkpoint(
+                    result,
+                    preserve_canonical_pipeline_metadata,
+                )
+                deferred_failure_diagnostic = diagnostic
+                continue
             raise ProjectPipelineFailed(diagnostic, result) from exc
         except (ValueError, OSError) as exc:
             diagnostic = format_exception_diagnostic(exc)
@@ -618,6 +646,14 @@ def run_project_pipeline(
                 preserve_canonical_pipeline_metadata,
             )
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
+            if _may_continue_after_deep_content_failure(profile, step.step_id):
+                result = _mark_deep_content_dependent_steps_skipped(result)
+                _write_project_pipeline_checkpoint(
+                    result,
+                    preserve_canonical_pipeline_metadata,
+                )
+                deferred_failure_diagnostic = diagnostic
+                continue
             raise ProjectPipelineFailed(diagnostic, result) from exc
 
         completed_step = replace(
@@ -636,7 +672,9 @@ def run_project_pipeline(
     result = replace(
         _refresh_result_counts(result),
         completed_at=utc_now_iso(clock),
-        final_status="completed",
+        final_status=(
+            "failed" if deferred_failure_diagnostic is not None else "completed"
+        ),
     )
     _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
     if not preserve_canonical_pipeline_metadata:
@@ -680,6 +718,8 @@ def run_project_pipeline(
     completion_summary = context.get("completion_summary")
     if isinstance(completion_summary, PipelineCompletionSummary):
         result = replace(result, completion_summary=completion_summary)
+    if deferred_failure_diagnostic is not None:
+        raise ProjectPipelineFailed(deferred_failure_diagnostic, result)
     return result
 
 
@@ -730,6 +770,7 @@ def render_project_pipeline_markdown(result: PipelineResult) -> str:
         f"- Reused existing evidence: `{str(result.reused_existing_evidence).lower()}`",
         f"- Completed steps: `{result.completed_steps}`",
         f"- Skipped existing steps: `{result.skipped_steps}`",
+        f"- Dependency-skipped steps: `{_dependency_skipped_count(result)}`",
         f"- No-op steps: `{result.no_op_steps}`",
         f"- Failed step: `{result.failed_step or 'none'}`",
         f"- Final status: `{result.final_status}`",
@@ -812,6 +853,7 @@ def render_project_pipeline_summary(result: PipelineResult) -> str:
         "Step summary:",
         f"* Completed: {result.completed_steps}",
         f"* Skipped existing: {result.skipped_steps}",
+        f"* Dependency-skipped: {_dependency_skipped_count(result)}",
         f"* No-op: {result.no_op_steps}",
         f"* Failed: {failed_count}",
         "",
@@ -1483,6 +1525,33 @@ def _refresh_result_counts(result: PipelineResult) -> PipelineResult:
             None,
         ),
     )
+
+
+def _dependency_skipped_count(result: PipelineResult) -> int:
+    return sum(step.status == "skipped_dependency" for step in result.steps)
+
+
+def _may_continue_after_deep_content_failure(profile: str, step_id: str) -> bool:
+    return profile == DEEP_PIPELINE_PROFILE and step_id == "PIPELINE-STEP-007"
+
+
+def _mark_deep_content_dependent_steps_skipped(
+    result: PipelineResult,
+) -> PipelineResult:
+    steps = list(result.steps)
+    for index, step in enumerate(steps):
+        if step.step_id not in DEEP_CONTENT_FAILURE_DEPENDENT_STEP_IDS:
+            continue
+        steps[index] = replace(
+            step,
+            status="skipped_dependency",
+            message=(
+                "Skipped because PIPELINE-STEP-007 bounded content discovery "
+                "execution failed."
+            ),
+            output_paths=[],
+        )
+    return replace(result, steps=steps)
 
 
 def _content_discovery_profile_for_pipeline(profile: str) -> str:

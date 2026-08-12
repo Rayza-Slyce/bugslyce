@@ -483,7 +483,12 @@ def _pipeline_step_notices(
     notices = []
     for step in pipeline_steps:
         status = str(_field(step, "status") or "").strip().lower()
-        if status not in {"failed", "skipped", "unavailable"}:
+        if status not in {
+            "failed",
+            "skipped",
+            "skipped_dependency",
+            "unavailable",
+        }:
             continue
         step_id = str(_field(step, "step_id") or "unknown-stage").strip()
         name = str(_field(step, "name") or step_id).strip()
@@ -492,6 +497,9 @@ def _pipeline_step_notices(
         ).strip()
         unavailable = status == "unavailable" or "unavailable" in message.lower()
         category = FAILED if status == "failed" else SKIPPED_OR_UNAVAILABLE
+        rendered_status = (
+            "dependency-blocked" if status == "skipped_dependency" else status
+        )
         notices.append(
             CollectionConfidenceNotice(
                 notice_id=f"CONFIDENCE-STAGE-{_identifier(step_id)}",
@@ -499,7 +507,7 @@ def _pipeline_step_notices(
                 title=(
                     f"Collection stage unavailable: {name}"
                     if unavailable
-                    else f"Collection stage {status}: {name}"
+                    else f"Collection stage {rendered_status}: {name}"
                 ),
                 direct_fact=(
                     f"Pipeline stage `{step_id}` recorded status `{status}`: {message}"

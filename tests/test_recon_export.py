@@ -3206,8 +3206,8 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
                 "output_paths": [str(input_dir / "validation.txt")],
             },
             {
-                "step_id": "PIPELINE-STEP-004",
-                "name": "bounded collector",
+                "step_id": "PIPELINE-STEP-007",
+                "name": "bounded content discovery execution",
                 "command_kind": "content-run",
                 "status": "failed",
                 "message": "collector failed while reviewing /api/login",
@@ -3216,20 +3216,34 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
                 "output_paths": [str(input_dir / "partial-output.txt")],
             },
             {
-                "step_id": "PIPELINE-STEP-005",
-                "name": "path follow-up",
-                "command_kind": "path-followup",
-                "status": "pending",
-                "message": "",
+                "step_id": "PIPELINE-STEP-008",
+                "name": "content-result follow-up",
+                "command_kind": "content-followup",
+                "status": "skipped_dependency",
+                "message": (
+                    "Skipped because PIPELINE-STEP-007 bounded content discovery "
+                    "execution failed."
+                ),
                 "output_paths": [],
             },
             {
-                "step_id": "PIPELINE-STEP-006",
-                "name": "content planning",
-                "command_kind": "content-plan",
-                "status": "pending",
-                "message": "",
+                "step_id": "PIPELINE-STEP-009",
+                "name": "selective body fetch",
+                "command_kind": "body-fetch",
+                "status": "skipped_dependency",
+                "message": (
+                    "Skipped because PIPELINE-STEP-007 bounded content discovery "
+                    "execution failed."
+                ),
                 "output_paths": [],
+            },
+            {
+                "step_id": "PIPELINE-STEP-010D",
+                "name": "Deep bounded collection",
+                "command_kind": "deep-collection",
+                "status": "completed",
+                "message": "Independent Deep collection completed.",
+                "output_paths": [str(input_dir / "deep_source_route_collection.json")],
             }
         ],
     }
@@ -3248,12 +3262,17 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
     assert packed_pipeline["generated_by"] == "bugslyce.collection_confidence.pipeline"
     packed_steps = {step["step_id"]: step for step in packed_pipeline["steps"]}
     assert packed_steps["PIPELINE-STEP-001"]["message"] == "Local readiness checks passed."
-    assert packed_steps["PIPELINE-STEP-004"]["status"] == "failed"
-    assert packed_steps["PIPELINE-STEP-004"]["message"] == (
+    assert packed_steps["PIPELINE-STEP-007"]["status"] == "failed"
+    assert packed_steps["PIPELINE-STEP-007"]["message"] == (
         "collector failed while reviewing /api/login"
     )
-    assert packed_steps["PIPELINE-STEP-005"]["message"] == ""
-    assert packed_steps["PIPELINE-STEP-006"]["message"] == ""
+    for step_id in ("PIPELINE-STEP-008", "PIPELINE-STEP-009"):
+        assert packed_steps[step_id]["status"] == "skipped_dependency"
+        assert packed_steps[step_id]["message"] == (
+            "Skipped because PIPELINE-STEP-007 bounded content discovery "
+            "execution failed."
+        )
+    assert packed_steps["PIPELINE-STEP-010D"]["status"] == "completed"
     for field in (
         "project_file",
         "scope_file",
@@ -3268,16 +3287,15 @@ def test_failed_pipeline_notice_is_portable_and_required_by_closure(
         record[0]
         for record in _closure_owner_associations(closure)
         if record[1] == "collection_confidence_notice"
-        and record[2] == "CONFIDENCE-STAGE-PIPELINE-STEP-004"
+        and record[2] == "CONFIDENCE-STAGE-PIPELINE-STEP-007"
     }
-    assert not any(
-        record[1] == "collection_confidence_notice"
-        and record[2] in {
-            "CONFIDENCE-STAGE-PIPELINE-STEP-005",
-            "CONFIDENCE-STAGE-PIPELINE-STEP-006",
+    for step_id in ("PIPELINE-STEP-008", "PIPELINE-STEP-009"):
+        assert "project_pipeline.json" in {
+            record[0]
+            for record in _closure_owner_associations(closure)
+            if record[1] == "collection_confidence_notice"
+            and record[2] == f"CONFIDENCE-STAGE-{step_id}"
         }
-        for record in _closure_owner_associations(closure)
-    )
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
 
     closure_path = extracted / REFERENCE_CLOSURE_FILENAME
@@ -3336,6 +3354,13 @@ def test_portable_pipeline_preserves_running_empty_and_pending_nonempty_messages
                         "status": "failed",
                         "message": "Collector failed after the running checkpoint.",
                     },
+                    {
+                        "step_id": "PIPELINE-STEP-004",
+                        "name": "later untouched stage",
+                        "command_kind": "path-followup",
+                        "status": "pending",
+                        "message": "",
+                    },
                 ]
             }
         ),
@@ -3354,6 +3379,7 @@ def test_portable_pipeline_preserves_running_empty_and_pending_nonempty_messages
     assert steps["PIPELINE-STEP-002"]["message"] == (
         "Awaiting approved maintenance window."
     )
+    assert steps["PIPELINE-STEP-004"]["message"] == ""
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
 
 
