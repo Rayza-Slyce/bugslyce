@@ -411,6 +411,12 @@ def render_deep_javascript_route_extraction_markdown(
     return "\n".join(lines).rstrip()
 
 
+def safe_javascript_route_url(raw_url: str) -> str:
+    """Return the extractor's redacted, deterministic HTTP URL representation."""
+
+    return _safe_url(raw_url)
+
+
 def _select_scripts(
     items: tuple[DeepSourceRouteCollectedItem, ...],
 ) -> tuple[tuple[_SourceScript, ...], dict[str, int]]:
