@@ -154,6 +154,7 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_deep_operator_summary_leads,
     build_operator_summary,
+    count_direct_structured_disclosure_leads,
 )
 from bugslyce.time_utils import Clock, utc_now_iso
 from bugslyce.triage.candidates import generate_candidates
@@ -2095,7 +2096,9 @@ def _write_interpretation_report_if_needed(
     assembly = (
         assemble_standard_interpretation_from_project_state(
             project_state,
-            referenced_direct_lead_count=len(operator_summary_leads),
+            referenced_direct_lead_count=count_direct_structured_disclosure_leads(
+                operator_summary_leads
+            ),
         )
         if operator_summary_leads
         else assemble_standard_interpretation_from_project_state(project_state)

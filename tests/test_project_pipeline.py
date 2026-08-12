@@ -2190,7 +2190,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert captured_operator_leads[0][1].endpoints == [
         "https://example.test/catalogue.json"
     ]
-    assert 3 in referenced_direct_counts
+    assert 2 in referenced_direct_counts
     assert "No interpretation review leads" not in (captured_manual_review[0] or "")
     assert "listed once in the Operator Summary" in (captured_manual_review[0] or "")
     assert "request began at `https://example.test/catalogue`" in (

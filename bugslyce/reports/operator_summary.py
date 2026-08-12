@@ -67,6 +67,12 @@ REPEATED_CONTENT_GROUP_CATEGORIES = {
     "request_reflecting_template_group",
     "candidate_default_template_group",
 }
+DIRECT_STRUCTURED_DISCLOSURE_LEAD_TYPES = frozenset(
+    {
+        "structured_configuration_body",
+        "structured_json_routes",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,17 @@ class DeepSummaryDisclosure(Protocol):
     evidence_ids: Sequence[str]
     observed_values: Sequence[str]
     evidence_excerpt: Sequence[str]
+
+
+def count_direct_structured_disclosure_leads(
+    leads: Sequence[OperatorSummaryLead],
+) -> int:
+    """Count Deep additions represented as direct structured disclosures."""
+
+    return sum(
+        lead.lead_type in DIRECT_STRUCTURED_DISCLOSURE_LEAD_TYPES
+        for lead in leads
+    )
 
 
 def build_deep_operator_summary_leads(

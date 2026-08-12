@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from bugslyce.core.models import Candidate, DiscoveredPath, Endpoint, Evidence, HTTPArtifact, HTTPService
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.human_triage import (
@@ -24,6 +26,7 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_deep_operator_summary_leads,
     build_operator_summary,
+    count_direct_structured_disclosure_leads,
 )
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
@@ -34,6 +37,43 @@ from bugslyce.triage.candidates import generate_candidates
 
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
+
+
+def _deep_addition(lead_type: str) -> OperatorSummaryLead:
+    return OperatorSummaryLead(
+        title=lead_type,
+        why="Retained local evidence supports offline review.",
+        endpoints=["https://example.test/"],
+        evidence_ids=["EVID-TEST"],
+        next_action="Review the retained evidence offline.",
+        signal="direct",
+        score=1,
+        lead_type=lead_type,
+    )
+
+
+@pytest.mark.parametrize(
+    ("lead_types", "expected_count"),
+    (
+        (
+            (
+                "structured_configuration_body",
+                "structured_json_routes",
+                "successful_deep_content",
+            ),
+            2,
+        ),
+        (("successful_deep_content",), 0),
+        (("structured_configuration_body", "structured_json_routes"), 2),
+    ),
+)
+def test_direct_structured_disclosure_count_uses_only_matching_deep_leads(
+    lead_types: tuple[str, ...],
+    expected_count: int,
+) -> None:
+    assert count_direct_structured_disclosure_leads(
+        tuple(_deep_addition(lead_type) for lead_type in lead_types)
+    ) == expected_count
 
 
 def _basic_saas_report() -> tuple[str, object, object]:
