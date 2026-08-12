@@ -27,6 +27,7 @@ from bugslyce.recon.deep_parameter_inventory import (
 )
 from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
     DeepPostFollowupJavaScriptRouteSourceObservation,
+    build_deep_post_followup_javascript_route_extraction,
 )
 import bugslyce.recon.deep_parameter_inventory as inventory_module
 from bugslyce.recon.deep_parameter_inventory import _format_parameter_name
@@ -792,6 +793,204 @@ def test_observation_model_can_retain_future_post_followup_relationship() -> Non
     assert parameter.occurrence_count == 2
 
 
+def test_post_followup_javascript_query_parameter_is_inventoried_with_relational_provenance() -> None:
+    post_followup = _post_result(
+        _shallow_item(
+            request_id="DEEP-SHALLOW-REQ-POST-0001",
+            url="https://example.test/app.js",
+            headers=(("Content-Type", "application/javascript"),),
+            body=b'fetch("/api/late-only?tenant=blue")',
+            evidence=("EVID-POST-0001",),
+        )
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+        post_followup,
+    )
+
+    tenant = next(parameter for parameter in result.parameters if parameter.name == "tenant")
+    assert tenant.contexts == ("post_followup_javascript_route_query",)
+    assert tenant.observations[0].post_followup_candidate_id == (
+        "DEEP-JS-POST-ROUTE-0001"
+    )
+    assert tenant.observations[0].post_followup_source_observation is not None
+    assert tenant.observations[0].post_followup_source_observation.shallow_request_id == (
+        "DEEP-SHALLOW-REQ-POST-0001"
+    )
+    assert (
+        tenant.observations[0]
+        .post_followup_source_observation
+        .upstream_route_candidate_ids
+        == ("H1",)
+    )
+    assert "blue" not in repr(result)
+    assert "blue" not in render_deep_parameter_inventory_markdown(result)
+
+
+def test_initial_and_post_followup_javascript_observations_aggregate_one_parameter() -> None:
+    initial = _js_result(
+        _js_candidate(
+            candidate_id="DEEP-JS-ROUTE-0001",
+            query_names=("tenant",),
+            evidence=("EVID-INITIAL",),
+            safe_resolved_url="https://example.test/api/initial?tenant",
+        )
+    )
+    post_followup = _post_result(
+        _shallow_item(
+            request_id="DEEP-SHALLOW-REQ-POST-0001",
+            url="https://example.test/app.js",
+            headers=(("Content-Type", "application/javascript"),),
+            body=b'fetch("/api/post?tenant=blue")',
+            evidence=("EVID-POST",),
+        )
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        initial,
+        post_followup,
+    )
+
+    assert len(result.parameters) == 1
+    tenant = result.parameters[0]
+    assert tenant.name == "tenant"
+    assert tenant.contexts == (
+        "javascript_route_query",
+        "post_followup_javascript_route_query",
+    )
+    assert len(tenant.observations) == 2
+    assert tenant.occurrence_count == 2
+    assert tenant.evidence_ids == ("EVID-INITIAL", "EVID-POST")
+
+
+def test_multiple_post_followup_sources_preserve_relational_parameter_provenance() -> None:
+    post_followup = _post_result(
+        _shallow_item(
+            request_id="DEEP-SHALLOW-REQ-A",
+            url="https://example.test/a.js",
+            headers=(("Content-Type", "application/javascript"),),
+            body=b'fetch("/api/items?tenant=one")',
+            evidence=("EVID-A",),
+        ),
+        _shallow_item(
+            request_id="DEEP-SHALLOW-REQ-B",
+            url="https://example.test/b.js",
+            headers=(("Content-Type", "application/javascript"),),
+            body=b'fetch("/api/items?tenant=two")',
+            evidence=("EVID-B",),
+        ),
+    )
+
+    result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+        post_followup,
+    )
+
+    tenant = result.parameters[0]
+    assert tenant.name == "tenant"
+    assert tenant.occurrence_count == 2
+    assert tuple(
+        (
+            observation.post_followup_source_observation.shallow_request_id,
+            observation.post_followup_source_observation.safe_requested_url,
+            observation.post_followup_source_observation.evidence_ids,
+        )
+        for observation in tenant.observations
+        if observation.post_followup_source_observation is not None
+    ) == (
+        ("DEEP-SHALLOW-REQ-A", "https://example.test/a.js", ("EVID-A",)),
+        ("DEEP-SHALLOW-REQ-B", "https://example.test/b.js", ("EVID-B",)),
+    )
+
+
+def test_form_and_post_followup_javascript_observations_aggregate_one_parameter() -> None:
+    source = _source_result(
+        _source_item(body=b"<html><form><input name='tenant'></form></html>")
+    )
+    post_followup = _post_result(
+        _shallow_item(
+            headers=(("Content-Type", "application/javascript"),),
+            body=b'fetch("/api/post?tenant=blue")',
+        )
+    )
+
+    result = build_deep_parameter_inventory(
+        source,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+        post_followup,
+    )
+
+    tenant = result.parameters[0]
+    assert tenant.contexts == (
+        "form_control",
+        "post_followup_javascript_route_query",
+    )
+    assert tenant.control_tags == ("input",)
+    assert tenant.occurrence_count == 2
+
+
+def test_post_followup_parameter_observations_are_deterministic_and_regenerate_ids() -> None:
+    first = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-B",
+        url="https://example.test/b.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'fetch("/api/post?alpha=one")',
+        evidence=("EVID-B",),
+    )
+    second = _shallow_item(
+        request_id="DEEP-SHALLOW-REQ-A",
+        url="https://example.test/a.js",
+        headers=(("Content-Type", "application/javascript"),),
+        body=b'fetch("/api/post?alpha=two")',
+        evidence=("EVID-A",),
+    )
+    initial = _js_result(
+        _js_candidate(
+            candidate_id="DEEP-JS-ROUTE-0001",
+            query_names=("zeta",),
+            safe_resolved_url="https://example.test/api/initial?zeta",
+        )
+    )
+
+    normal = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        initial,
+        _post_result(first, second),
+    )
+    reversed_result = build_deep_parameter_inventory(
+        _source_result(),
+        _shallow_result(),
+        _html_result(),
+        initial,
+        _post_result(second, first),
+    )
+
+    assert normal == reversed_result
+    assert tuple(parameter.parameter_id for parameter in normal.parameters) == (
+        "DEEP-PARAM-0001",
+        "DEEP-PARAM-0002",
+    )
+    assert tuple(parameter.name for parameter in normal.parameters) == ("alpha", "zeta")
+    assert (
+        render_deep_parameter_inventory_markdown(normal)
+        == render_deep_parameter_inventory_markdown(reversed_result)
+    )
+
+
 def test_determinism_with_reversed_inputs_headers_evidence_and_form_order() -> None:
     source_a = _source_item(
         url="http://example.test/same",
@@ -977,6 +1176,12 @@ def _shallow_result(*items: DeepShallowRouteFollowupCollectedItem) -> DeepShallo
             responses_too_large=0,
         ),
         safety_notes=(),
+    )
+
+
+def _post_result(*items: DeepShallowRouteFollowupCollectedItem):
+    return build_deep_post_followup_javascript_route_extraction(
+        _shallow_result(*items)
     )
 
 

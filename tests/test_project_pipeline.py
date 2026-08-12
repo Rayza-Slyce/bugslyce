@@ -2918,7 +2918,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
                 final_url=request.url,
                 status_code=200,
                 headers=(("Content-Type", "application/javascript"),),
-                body=b'const late = "/api/late-only";',
+                body=b'const late = "/api/late-only?tenant=blue";',
                 elapsed_seconds=0.01,
             )
         return DeepHTTPResponse(
@@ -2987,6 +2987,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
 
     assert tuple(fetch_calls) == fetch_calls_before_orchestration
     assert "https://app.example.test/api/late-only" not in fetch_calls
+    assert "https://app.example.test/api/late-only?tenant=blue" not in fetch_calls
     outputs = context["deep_outputs"]
     assert isinstance(outputs, DeepPipelineOutputs)
     assert outputs.orchestration is not None
@@ -3000,7 +3001,13 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
     assert len(post_candidates) == 1
     assert post_candidates[0].candidate_id == "DEEP-JS-POST-ROUTE-0001"
     assert post_candidates[0].safe_resolved_url == (
-        "https://app.example.test/api/late-only"
+        "https://app.example.test/api/late-only?tenant"
+    )
+    parameters = outputs.orchestration.parameter_inventory.parameters
+    tenant = next(parameter for parameter in parameters if parameter.name == "tenant")
+    assert tenant.contexts == ("post_followup_javascript_route_query",)
+    assert tenant.observations[0].post_followup_candidate_id == (
+        "DEEP-JS-POST-ROUTE-0001"
     )
     assert (output_dir / "deep_metadata_collection.json").is_file()
 

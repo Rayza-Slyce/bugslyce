@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, quote, unquote, urljoin, urlparse
 from bugslyce.recon.deep_html_route_extraction import DeepHtmlRouteExtractionResult
 from bugslyce.recon.deep_javascript_route_extraction import DeepJavaScriptRouteExtractionResult
 from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
+    DeepPostFollowupJavaScriptRouteExtractionResult,
     DeepPostFollowupJavaScriptRouteSourceObservation,
 )
 from bugslyce.recon.deep_shallow_route_followup import DeepShallowRouteFollowupResult
@@ -59,10 +60,11 @@ CONTEXT_ORDER = {
     "form_action_query": 1,
     "html_route_query": 2,
     "javascript_route_query": 3,
-    "source_requested_url_query": 4,
-    "source_final_url_query": 5,
-    "shallow_observed_query": 6,
-    "shallow_final_url_query": 7,
+    "post_followup_javascript_route_query": 4,
+    "source_requested_url_query": 5,
+    "source_final_url_query": 6,
+    "shallow_observed_query": 7,
+    "shallow_final_url_query": 8,
 }
 SAFETY_NOTES = (
     "This is offline inventory from already collected evidence and existing extraction models.",
@@ -364,6 +366,7 @@ class DeepParameterInventorySummaryCounts:
     form_action_query_name_observations: int
     html_route_query_name_observations: int
     javascript_route_query_name_observations: int
+    post_followup_javascript_route_query_name_observations: int
     source_requested_url_observations: int
     source_final_url_observations: int
     shallow_observed_query_name_observations: int
@@ -558,6 +561,9 @@ def build_deep_parameter_inventory(
     shallow_followups: DeepShallowRouteFollowupResult,
     html_extraction: DeepHtmlRouteExtractionResult,
     javascript_extraction: DeepJavaScriptRouteExtractionResult,
+    post_followup_javascript_route_extraction: (
+        DeepPostFollowupJavaScriptRouteExtractionResult | None
+    ) = None,
 ) -> DeepParameterInventoryResult:
     """Build a deterministic offline parameter-name inventory."""
 
@@ -601,6 +607,13 @@ def build_deep_parameter_inventory(
 
     observations.extend(_html_route_observations(html_extraction, skipped))
     observations.extend(_javascript_route_observations(javascript_extraction, skipped))
+    if post_followup_javascript_route_extraction is not None:
+        observations.extend(
+            _post_followup_javascript_route_observations(
+                post_followup_javascript_route_extraction,
+                skipped,
+            )
+        )
     parameters = _aggregate_observations(observations)
     skipped_items = tuple(sorted(skipped, key=lambda item: (item.source_kind, item.source_id, item.context, item.reason, item.evidence_ids)))
     counts = _summary_counts(
@@ -652,6 +665,8 @@ def render_deep_parameter_inventory_markdown(result: DeepParameterInventoryResul
         f"- Form-action query-name observations: {counts.form_action_query_name_observations}",
         f"- HTML-route query-name observations: {counts.html_route_query_name_observations}",
         f"- JavaScript-route query-name observations: {counts.javascript_route_query_name_observations}",
+        "- Post-follow-up JavaScript-route query-name observations: "
+        f"{counts.post_followup_javascript_route_query_name_observations}",
         f"- Source requested-URL observations: {counts.source_requested_url_observations}",
         f"- Source final-URL observations: {counts.source_final_url_observations}",
         f"- Shallow observed query-name observations: {counts.shallow_observed_query_name_observations}",
@@ -965,6 +980,48 @@ def _javascript_route_observations(
     return tuple(observations)
 
 
+def _post_followup_javascript_route_observations(
+    extraction: DeepPostFollowupJavaScriptRouteExtractionResult,
+    skipped: list[DeepParameterInventorySkippedItem],
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    """Represent post-follow-up JavaScript query names without new collection."""
+
+    observations: list[DeepParameterInventoryObservation] = []
+    for candidate in extraction.candidates:
+        accepted, rejected = _metadata_name_results(candidate.query_parameter_names)
+        for reason in rejected:
+            skipped.append(
+                _skip(
+                    "post_followup_javascript_route",
+                    candidate.candidate_id,
+                    "post_followup_javascript_route_query",
+                    reason,
+                    candidate.evidence_ids,
+                )
+            )
+        safe_route_url = _safe_url(candidate.safe_resolved_url or "")
+        candidate_reference = (
+            candidate.safe_candidate if candidate.safe_candidate != "unresolved" else ""
+        )
+        for source_observation in candidate.source_observations:
+            for canonical in accepted:
+                observations.append(
+                    DeepParameterInventoryObservation(
+                        name=canonical,
+                        context="post_followup_javascript_route_query",
+                        occurrence_count=max(1, source_observation.occurrence_count),
+                        safe_route_url=(
+                            safe_route_url if safe_route_url != "unresolved" else ""
+                        ),
+                        javascript_candidate_reference=candidate_reference,
+                        source_kind="post_followup_javascript_route",
+                        post_followup_candidate_id=candidate.candidate_id,
+                        post_followup_source_observation=source_observation,
+                    )
+                )
+    return tuple(observations)
+
+
 def _name_observations(
     source: _Source,
     names: tuple[str, ...],
@@ -1104,6 +1161,11 @@ def _summary_counts(
         form_action_query_name_observations=sum(obs.occurrence_count for obs in observations if obs.context == "form_action_query"),
         html_route_query_name_observations=sum(obs.occurrence_count for obs in observations if obs.context == "html_route_query"),
         javascript_route_query_name_observations=sum(obs.occurrence_count for obs in observations if obs.context == "javascript_route_query"),
+        post_followup_javascript_route_query_name_observations=sum(
+            obs.occurrence_count
+            for obs in observations
+            if obs.context == "post_followup_javascript_route_query"
+        ),
         source_requested_url_observations=sum(obs.occurrence_count for obs in observations if obs.context == "source_requested_url_query"),
         source_final_url_observations=sum(obs.occurrence_count for obs in observations if obs.context == "source_final_url_query"),
         shallow_observed_query_name_observations=sum(obs.occurrence_count for obs in observations if obs.context == "shallow_observed_query"),

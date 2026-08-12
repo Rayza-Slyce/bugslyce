@@ -179,6 +179,7 @@ def build_deep_recon_orchestration(
         shallow_followups,
         html_routes,
         javascript_routes,
+        post_followup_javascript_routes,
     )
     successful_content_reviews = build_successful_deep_content_reviews(
         source_collection

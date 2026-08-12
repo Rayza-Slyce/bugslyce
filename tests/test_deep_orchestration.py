@@ -90,7 +90,7 @@ def test_orchestration_surfaces_post_followup_javascript_routes_offline() -> Non
     shallow = _shallow_item(
         url="https://example.test/app.js",
         headers=(("Content-Type", "application/javascript"),),
-        body=b'const late = "/api/late-only";',
+        body=b'const late = "/api/late-only?tenant=blue";',
         evidence_ids=("EVID-LATE-JS",),
     )
 
@@ -103,7 +103,16 @@ def test_orchestration_surfaces_post_followup_javascript_routes_offline() -> Non
     assert len(post.candidates) == 1
     assert post.candidates[0].candidate_id == "DEEP-JS-POST-ROUTE-0001"
     assert post.candidates[0].safe_resolved_url == (
-        "https://example.test/api/late-only"
+        "https://example.test/api/late-only?tenant"
+    )
+    tenant = next(
+        parameter
+        for parameter in result.parameter_inventory.parameters
+        if parameter.name == "tenant"
+    )
+    assert tenant.contexts == ("post_followup_javascript_route_query",)
+    assert tenant.observations[0].post_followup_candidate_id == (
+        "DEEP-JS-POST-ROUTE-0001"
     )
     shallow_index = result.stage_order.index("shallow_route_followup")
     assert result.stage_order[shallow_index + 1] == (
@@ -326,16 +335,26 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
         captured["post_shallow"] = shallow_followups
         return original_post(shallow_followups)
 
-    def capture_parameter(source_collection, shallow_followups, html_extraction, javascript_extraction):
+    def capture_parameter(
+        source_collection,
+        shallow_followups,
+        html_extraction,
+        javascript_extraction,
+        post_followup_javascript_route_extraction,
+    ):
         captured["parameter_source"] = source_collection
         captured["parameter_shallow"] = shallow_followups
         captured["parameter_html"] = html_extraction
         captured["parameter_javascript"] = javascript_extraction
+        captured["parameter_post_followup_javascript"] = (
+            post_followup_javascript_route_extraction
+        )
         return original_parameter(
             source_collection,
             shallow_followups,
             html_extraction,
             javascript_extraction,
+            post_followup_javascript_route_extraction,
         )
 
     monkeypatch.setattr(orchestration, "build_deep_form_inventory", capture_form)
@@ -356,7 +375,7 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
     assert captured["parameter_shallow"] is shallow
     assert captured["parameter_html"] is result.html_route_extraction
     assert captured["parameter_javascript"] is result.javascript_route_extraction
-    assert captured["parameter_javascript"] is not (
+    assert captured["parameter_post_followup_javascript"] is (
         result.post_followup_javascript_route_extraction
     )
 
@@ -530,7 +549,7 @@ def test_writer_indexes_post_followup_stage_without_structured_body_export(
     tmp_path: Path,
 ) -> None:
     preview_prefix = (
-        b'const late = "/api/late-only"; '
+        b'const late = "/api/late-only?tenant=blue"; '
         b'const preview = "VISIBLE_SHALLOW_PREVIEW_MARKER"; '
         + (b"x" * 460)
     )
@@ -565,19 +584,30 @@ def test_writer_indexes_post_followup_stage_without_structured_body_export(
     assert {
         item["stage"]: item["count"] for item in payload["stage_counts"]
     }["post_followup_javascript_routes"] == 1
+    assert {
+        item["stage"]: item["count"] for item in payload["stage_counts"]
+    }["parameter_inventory"] == 2
+    assert {parameter.name for parameter in result.parameter_inventory.parameters} == {
+        "tenant",
+        "token",
+    }
     assert "VISIBLE_SHALLOW_PREVIEW_MARKER" not in public_json
     assert "FULL_BODY_ONLY_SECRET" not in public_json
+    assert "blue" not in public_json
     assert "/api/late-only" not in public_json
     assert "DEEP-JS-POST-ROUTE-0001" not in public_json
     assert review.count("## Deep Post-follow-up JavaScript Route Analysis") == 1
-    assert review.count("DEEP-JS-POST-ROUTE-0001") == 1
+    assert review.count("DEEP-JS-POST-ROUTE-0001") == 2
     assert "VISIBLE_SHALLOW_PREVIEW_MARKER" in review
     assert "FULL_BODY_ONLY_SECRET" not in review
     assert "EVID-LATE-JS" in review
+    assert "post_followup_javascript_route_query" in review
+    assert "tenant" in review
     assert "post_followup_javascript_routes" in runbook
     assert "DEEP-JS-POST-ROUTE-0001" not in runbook
     assert "VISIBLE_SHALLOW_PREVIEW_MARKER" not in runbook
     assert "FULL_BODY_ONLY_SECRET" not in runbook
+    assert "blue" not in runbook
 
 
 def test_selected_deep_profile_records_completed_collection_and_offline_review(
