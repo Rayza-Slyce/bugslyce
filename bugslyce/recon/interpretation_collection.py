@@ -21,8 +21,12 @@ from bugslyce.recon.interpretation import (
     aggregate_interpretation_leads,
 )
 from bugslyce.recon.interpretation_rendering import (
-    render_review_leads_markdown,
+    render_review_occurrence_groups_markdown,
     validate_referenced_direct_lead_count,
+)
+from bugslyce.recon.review_occurrence_grouping import (
+    ReviewOccurrenceGroup,
+    build_review_occurrence_groups,
 )
 from bugslyce.recon.robots_analysis import RobotsAnalysis, analyse_robots_txt
 
@@ -49,6 +53,7 @@ class InterpretationCollection:
     robots_analyses: tuple[RobotsAnalysis, ...]
     html_source_analyses: tuple[HtmlSourceAnalysis, ...]
     review_leads: tuple[ReviewLead, ...]
+    review_occurrence_groups: tuple[ReviewOccurrenceGroup, ...]
     manual_review_leads_markdown: str | None
     referenced_direct_lead_count: int = 0
 
@@ -109,9 +114,10 @@ def collect_interpretation_from_sources(
             for lead in analysis.review_leads
         ),
     )
+    review_occurrence_groups = build_review_occurrence_groups(review_leads)
     markdown = (
-        render_review_leads_markdown(
-            review_leads,
+        render_review_occurrence_groups_markdown(
+            review_occurrence_groups,
             engagement_context=engagement_context,
             referenced_direct_lead_count=referenced_direct_lead_count,
         )
@@ -125,6 +131,7 @@ def collect_interpretation_from_sources(
         robots_analyses=tuple(robots_analyses),
         html_source_analyses=tuple(html_analyses),
         review_leads=review_leads,
+        review_occurrence_groups=review_occurrence_groups,
         manual_review_leads_markdown=markdown,
         referenced_direct_lead_count=referenced_direct_lead_count,
     )

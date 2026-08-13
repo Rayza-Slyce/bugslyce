@@ -16,6 +16,7 @@ from bugslyce.core.models import HTTPArtifact, ProjectState
 from bugslyce.recon.deep_source_route_collector import (
     render_deep_source_route_skip_reason,
 )
+from bugslyce.recon.review_occurrence_grouping import ReviewOccurrenceGroup
 from bugslyce.reports.html_model import (
     HtmlReportModel,
     HtmlRouteGroup,
@@ -480,10 +481,10 @@ def _confidence_section(model: HtmlReportModel) -> str:
 
 
 def _candidate_section(model: HtmlReportModel) -> str:
-    if not model.candidates:
+    if not model.candidates and not model.review_occurrence_groups:
         content = _empty("No deterministic manual review lead is present in this artefact set.")
     else:
-        content = "".join(
+        candidate_content = "".join(
             _detail_card(
                 candidate.title,
                 (
@@ -500,11 +501,75 @@ def _candidate_section(model: HtmlReportModel) -> str:
             )
             for candidate in model.candidates
         )
+        occurrence_content = "".join(
+            _review_occurrence_group_card(group)
+            for group in model.review_occurrence_groups
+        )
+        content = candidate_content + occurrence_content
     return _section(
         "manual-review",
         "Manual review leads",
         '<p class="section-note">Priority is manual attention priority, not vulnerability severity.</p>'
         + content,
+    )
+
+
+def _review_occurrence_group_card(group: ReviewOccurrenceGroup) -> str:
+    members = tuple(
+        (
+            f"{member.lead_id}: "
+            + "; ".join(
+                part
+                for part in (
+                    (
+                        f"line {member.line_number}"
+                        if member.line_number is not None
+                        else "line not recorded"
+                    ),
+                    (
+                        "evidence " + ", ".join(member.evidence_ids)
+                        if member.evidence_ids
+                        else "evidence not recorded"
+                    ),
+                )
+                if part
+            )
+        )
+        for member in group.members
+    )
+    source = "; ".join(
+        part
+        for part in (
+            group.source_label or group.source_id,
+            f"kind={group.source_kind}" if group.source_kind else "",
+            (
+                f"url={group.url}"
+                if group.url
+                else f"path={group.path}"
+                if group.path
+                else ""
+            ),
+        )
+        if part
+    )
+    return _detail_card(
+        group.title,
+        (
+            ("Review group ID", group.group_id),
+            ("Manual attention", _human_label(group.priority)),
+            ("Category", _human_label(group.category)),
+            ("Source", source),
+            ("Semantic value", group.raw_value),
+            ("Occurrence count", group.occurrence_count),
+            ("Child occurrences", _joined(members)),
+            ("Evidence", _compact_list(group.evidence_ids, "evidence IDs")),
+            ("Existing explanation", group.explanation),
+            (
+                "Suggested manual validation",
+                _joined(group.suggested_manual_validation),
+            ),
+        ),
+        category=group.category,
     )
 
 
@@ -1054,6 +1119,7 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
         ),
         *(notice.category for notice in model.confidence_notices),
         *(group.category for group in model.similarity_review.groups),
+        *(group.category for group in model.review_occurrence_groups),
         *(
             item.type
             for item in (state.recon_manifest.artifacts if state.recon_manifest else ())

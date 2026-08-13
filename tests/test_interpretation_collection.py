@@ -274,6 +274,32 @@ def test_collection_can_skip_markdown_rendering() -> None:
     assert collection.manual_review_leads_markdown is None
 
 
+def test_collection_retains_raw_leads_beside_derived_occurrence_groups() -> None:
+    source = ArtefactSource(
+        source_id="same-source",
+        source_kind="html",
+        url="https://example.test/",
+        text=(
+            '<html>\n<a href="/archive/backup.zip">one</a>\n'
+            '<a href="/archive/backup.zip">two</a>\n</html>'
+        ),
+        evidence_ids=("EVID-SOURCE",),
+    )
+
+    collection = collect_interpretation_from_sources((source,))
+
+    assert len(collection.review_leads) == 2
+    assert tuple(lead.lead_id for lead in collection.review_leads) == (
+        "LEAD-0001",
+        "LEAD-0002",
+    )
+    assert tuple(lead.line_number for lead in collection.review_leads) == (2, 3)
+    assert len(collection.review_occurrence_groups) == 1
+    assert tuple(
+        member.lead for member in collection.review_occurrence_groups[0].members
+    ) == collection.review_leads
+
+
 def test_standard_available_and_deep_available() -> None:
     assert get_recon_mode("standard").is_available
     assert get_recon_mode("deep").is_available

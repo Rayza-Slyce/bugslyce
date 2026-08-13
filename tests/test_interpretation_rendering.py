@@ -144,17 +144,44 @@ def test_render_robots_and_html_source_metadata() -> None:
     assert "homepage" in markdown
 
 
-def test_renderer_preserves_existing_ids_and_input_order() -> None:
+def test_renderer_preserves_existing_ids_with_permutation_stable_group_order() -> None:
     leads = (
         _lead("LEAD-0002", "Second rendered lead"),
         _lead("LEAD-0001", "First rendered lead"),
     )
 
+    forward = render_review_leads_markdown(leads)
+    reverse = render_review_leads_markdown(tuple(reversed(leads)))
+
+    assert forward == reverse
+    assert "### LEAD-0002: Second rendered lead" in forward
+    assert "### LEAD-0001: First rendered lead" in forward
+
+
+def test_same_source_two_line_occurrences_render_as_one_operator_reason() -> None:
+    source = ArtefactSource(
+        source_id="EVID-BODY",
+        source_kind="html",
+        source_label="homepage",
+        url="https://example.test/",
+        text=(
+            '<html>\n<a href="/archive/backup.zip">one</a>\n'
+            '<a href="/archive/backup.zip">two</a>\n</html>'
+        ),
+        evidence_ids=("EVID-BODY",),
+    )
+    html_leads = analyse_html_source(source).review_leads
+    leads = aggregate_interpretation_leads(html_source_review_leads=html_leads)
+
     markdown = render_review_leads_markdown(leads)
 
-    assert markdown.index("### LEAD-0002: Second rendered lead") < markdown.index(
-        "### LEAD-0001: First rendered lead"
-    )
+    assert len(leads) == 2
+    assert markdown.count("Source attribute contains a suspicious local reference.") == 1
+    assert "- Occurrences in this source: 2" in markdown
+    assert "`LEAD-0001` - line 2" in markdown
+    assert "`LEAD-0002` - line 3" in markdown
+    assert "evidence EVID-BODY" in markdown
+    assert markdown.count("- Priority: medium") == 1
 
 
 def test_renderer_truncates_long_raw_values_and_previews() -> None:

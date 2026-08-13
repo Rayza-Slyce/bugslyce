@@ -57,7 +57,12 @@ from bugslyce.recon.http_route_relationships import (
     build_http_route_relationship_clusters,
 )
 from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
+from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.recon.reasoning_relationships import build_route_reasoning_review
+from bugslyce.recon.review_occurrence_grouping import ReviewOccurrenceGroup
+from bugslyce.recon.standard_interpretation import (
+    assemble_standard_interpretation_from_project_state,
+)
 from bugslyce.reports.human_triage import (
     HumanTriageBrief,
     build_human_triage_brief,
@@ -142,6 +147,8 @@ class HtmlReportModel:
     missing_deep_summary_inputs: tuple[str, ...]
     assessed_origins: tuple[HttpOrigin, ...]
     route_groups: tuple[HtmlRouteGroup, ...]
+    review_leads: tuple[ReviewLead, ...]
+    review_occurrence_groups: tuple[ReviewOccurrenceGroup, ...]
     available_artefacts: tuple[str, ...]
 
 
@@ -207,6 +214,10 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         engagement_context=getattr(project_state, "engagement_context", "unknown"),
         ranked_leads=operator_summary.ranked_leads,
     )
+    interpretation = assemble_standard_interpretation_from_project_state(
+        project_state,
+        render_markdown=False,
+    )
     return HtmlReportModel(
         project_state=project_state,
         candidates=tuple(candidates),
@@ -226,6 +237,8 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         missing_deep_summary_inputs=missing_deep_inputs,
         assessed_origins=_assessed_origins(project_state),
         route_groups=_route_groups(project_state),
+        review_leads=interpretation.review_leads,
+        review_occurrence_groups=interpretation.collection.review_occurrence_groups,
         available_artefacts=tuple(
             path.name
             for path in sorted(root.iterdir(), key=lambda value: value.name)

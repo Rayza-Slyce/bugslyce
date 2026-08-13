@@ -46,6 +46,9 @@ from bugslyce.recon.deep_metadata_collector import (
 from bugslyce.recon.deep_response_similarity_review import (
     render_deep_response_similarity_review_markdown,
 )
+from bugslyce.recon.standard_interpretation import (
+    assemble_standard_interpretation_from_project_state,
+)
 from bugslyce.triage.candidates import generate_candidates
 
 
@@ -168,6 +171,65 @@ def test_html_human_triage_does_not_duplicate_canonical_lead_ids(
 
     for lead in model.operator_summary.ranked_leads:
         assert html.count(lead.lead_id) == 1
+
+
+def test_html_reconstructs_same_manual_review_groups_as_markdown(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "review-occurrence-groups")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["http_artifacts"].append(
+        {
+            "url": "https://portal.example.test/",
+            "artifact_type": "response_body",
+            "value": (
+                '<html>\n<a href="/archive/backup.zip">one</a>\n'
+                '<a href="/archive/backup.zip">two</a>\n</html>'
+            ),
+            "source_file": "raw/homepage.html",
+            "evidence_ids": ["EVID-REPEATED-REFERENCE"],
+            "tags": [],
+        }
+    )
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    assembly = assemble_standard_interpretation_from_project_state(
+        model.project_state
+    )
+    html = unescape(render_html_report(model))
+
+    assert model.review_leads == assembly.review_leads
+    assert model.review_occurrence_groups == (
+        assembly.collection.review_occurrence_groups
+    )
+    group = next(
+        group
+        for group in model.review_occurrence_groups
+        if group.raw_value == "/archive/backup.zip"
+    )
+    assert group.occurrence_count == 2
+    assert group.review_lead_ids == tuple(
+        lead.lead_id
+        for lead in model.review_leads
+        if lead.raw_value == "/archive/backup.zip"
+    )
+    assert tuple(member.line_number for member in group.members) == (2, 3)
+    assert group.group_id in html
+    assert "Occurrence count</dt><dd>2" in html
+    assert (
+        f"{group.review_lead_ids[0]}: line 2; evidence EVID-REPEATED-REFERENCE"
+        in html
+    )
+    assert (
+        f"{group.review_lead_ids[1]}: line 3; evidence EVID-REPEATED-REFERENCE"
+        in html
+    )
+    assert "/archive/backup.zip" in html
 
 
 def test_html_report_missing_input_or_required_state_fails_clearly(
