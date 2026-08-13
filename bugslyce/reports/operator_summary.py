@@ -25,8 +25,10 @@ from bugslyce.recon.deep_http_fingerprint_summary import (
 from bugslyce.recon.deep_response_similarity_review import (
     DeepResponseSimilarityGroup,
     DeepResponseSimilarityReview,
+    PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.reasoning_relationships import RouteReasoningReview
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     directory_listing_title,
@@ -61,11 +63,6 @@ INTERESTING_SEGMENTS = {
     "dashboard",
     "config",
     "files",
-}
-REPEATED_CONTENT_GROUP_CATEGORIES = {
-    "exact_body_hash_group",
-    "request_reflecting_template_group",
-    "candidate_default_template_group",
 }
 DIRECT_STRUCTURED_DISCLOSURE_LEAD_TYPES = frozenset(
     {
@@ -491,6 +488,7 @@ def build_operator_summary(
     *,
     additional_leads: tuple[OperatorSummaryLead, ...] = (),
     response_similarity_review: DeepResponseSimilarityReview | None = None,
+    route_reasoning_review: RouteReasoningReview | None = None,
 ) -> OperatorSummary:
     """Build a conservative ranked summary from structured evidence."""
 
@@ -561,6 +559,7 @@ def build_operator_summary(
         _finalise_ranked_lead(lead, rank)
         for rank, lead in enumerate(ranked_unfinalised, start=1)
     ]
+    ranked = _with_route_reasoning(ranked, route_reasoning_review)
     promoted_access_boundary_urls = {
         _canonical_summary_url(endpoint)
         for lead in ranked
@@ -891,6 +890,47 @@ def _finalise_ranked_lead(
     return replace(lead, lead_id=f"LEAD-{digest}", rank=rank)
 
 
+def _with_route_reasoning(
+    leads: list[OperatorSummaryLead],
+    route_reasoning_review: RouteReasoningReview | None,
+) -> list[OperatorSummaryLead]:
+    """Add proven route composition after rank and canonical identity are fixed."""
+
+    if route_reasoning_review is None:
+        return leads
+    contexts = route_reasoning_review.by_page_key()
+    enriched: list[OperatorSummaryLead] = []
+    for lead in leads:
+        if lead.lead_type != "fetched_application_page" or len(lead.endpoints) != 1:
+            enriched.append(lead)
+            continue
+        context = contexts.get(canonical_route_url(lead.endpoints[0]))
+        if context is None or not context.independent_confirmation:
+            enriched.append(lead)
+            continue
+        corroboration = (
+            " Retained source evidence independently references the same route."
+        )
+        if context.weakening_family:
+            corroboration += (
+                " The retained response-family context means this does not establish "
+                "distinct application behaviour."
+            )
+        enriched.append(
+            replace(
+                lead,
+                why=lead.why + corroboration,
+                evidence_ids=sorted(
+                    {
+                        *lead.evidence_ids,
+                        *context.corroborating_evidence_ids,
+                    }
+                ),
+            )
+        )
+    return enriched
+
+
 def _low_signal_items(
     project_state: ProjectState,
     candidates: list[Candidate],
@@ -1053,7 +1093,7 @@ def _repeated_content_group_urls(
     return {
         canonical
         for group in similarity_review.groups
-        if group.category in REPEATED_CONTENT_GROUP_CATEGORIES
+        if group.category in PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES
         for value in group.requested_urls
         if (canonical := _response_family_member_url(value))
     }

@@ -119,6 +119,7 @@ from bugslyce.recon.investigation_threads import (
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
 )
+from bugslyce.recon.reasoning_relationships import build_route_reasoning_review
 from bugslyce.recon.modes import DEEP_RECON_PROFILE, QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.nmap_discover import (
     run_nmap_discovery_workflow,
@@ -2183,6 +2184,23 @@ def _write_interpretation_report_if_needed(
         project_state,
         getattr(assembly, "sources", ()),
     )
+    relationship_clusters = _http_route_relationship_clusters_if_available(
+        profile,
+        project_state,
+        context,
+    )
+    route_reasoning_review = build_route_reasoning_review(
+        project_state,
+        successful_reviews=tuple(
+            getattr(orchestration, "successful_content_reviews", ())
+        ),
+        relationship_clusters=relationship_clusters,
+        response_similarity_review=(
+            getattr(orchestration, "response_similarity_review", None)
+            if orchestration is not None
+            else None
+        ),
+    )
     operator_summary = (
         build_operator_summary(
             project_state,
@@ -2193,6 +2211,7 @@ def _write_interpretation_report_if_needed(
                 if orchestration is not None
                 else None
             ),
+            route_reasoning_review=route_reasoning_review,
         )
         if isinstance(project_state, ProjectState)
         else None
@@ -2209,11 +2228,7 @@ def _write_interpretation_report_if_needed(
         **triage_kwargs,
     )
     relationship_markdown = render_http_route_relationship_clusters_markdown(
-        _http_route_relationship_clusters_if_available(
-            profile,
-            project_state,
-            context,
-        )
+        relationship_clusters
     )
     report_kwargs: dict[str, object] = {
         "human_triage_brief_markdown": render_human_triage_brief_markdown(

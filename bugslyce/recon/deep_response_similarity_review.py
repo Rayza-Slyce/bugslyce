@@ -65,6 +65,13 @@ GROUP_CATEGORY_ORDER = {
     "client_error_signature_group": 4,
     "response_signature_group": 5,
 }
+PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES = frozenset(
+    {
+        "exact_body_hash_group",
+        "request_reflecting_template_group",
+        "candidate_default_template_group",
+    }
+)
 SAFETY_NOTES = (
     "This is offline deterministic grouping of existing HTTP fingerprint evidence.",
     "No network requests were made.",

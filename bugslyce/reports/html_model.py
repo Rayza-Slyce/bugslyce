@@ -57,6 +57,7 @@ from bugslyce.recon.http_route_relationships import (
     build_http_route_relationship_clusters,
 )
 from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
+from bugslyce.recon.reasoning_relationships import build_route_reasoning_review
 from bugslyce.reports.human_triage import (
     HumanTriageBrief,
     build_human_triage_brief,
@@ -182,6 +183,12 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         source_collection=source_collection,
         successful_reviews=successful_content,
     )
+    route_reasoning = build_route_reasoning_review(
+        project_state,
+        successful_reviews=successful_content,
+        relationship_clusters=relationships,
+        response_similarity_review=similarities,
+    )
     notices = build_collection_confidence_notices_from_project(
         project_state,
         root,
@@ -192,6 +199,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         candidates,
         additional_leads=deep_summary_leads,
         response_similarity_review=similarities,
+        route_reasoning_review=route_reasoning,
     )
     human_triage_brief = build_human_triage_brief(
         project_state,
