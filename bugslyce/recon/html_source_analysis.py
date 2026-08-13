@@ -237,7 +237,16 @@ def _parse_html_source_items(source: ArtefactSource) -> list[HtmlSourceItem]:
 
         for attr_name, attr_value in attrs_by_name.items():
             attr_lower = attr_name.lower()
-            if attr_lower in {"id", "class", "name"} and _contains_suspicious_word(attr_value):
+            if (
+                attr_lower in {"id", "class", "name"}
+                and _contains_suspicious_word(attr_value)
+                and not _is_conventional_password_control_attribute(
+                    tag_name,
+                    attrs_by_name,
+                    attr_lower,
+                    attr_value,
+                )
+            ):
                 items.append(
                     _item(
                         source,
@@ -269,6 +278,24 @@ def _parse_html_source_items(source: ArtefactSource) -> list[HtmlSourceItem]:
         if value and _contains_suspicious_word(value):
             items.append(_item(source, "inline_text", value, match.start(1), match.end(1)))
     return items
+
+
+def _is_conventional_password_control_attribute(
+    tag_name: str,
+    attrs_by_name: dict[str, str],
+    attr_name: str,
+    attr_value: str,
+) -> bool:
+    """Identify the ordinary name/id of a visible HTML password control."""
+
+    return (
+        tag_name == "input"
+        and attrs_by_name.get("type", "").strip().casefold() == "password"
+        and attr_name in {"id", "name"}
+        and attr_value.strip().casefold() == "password"
+        and "hidden" not in attrs_by_name
+        and not _style_hides_content(attrs_by_name.get("style", ""))
+    )
 
 
 def _parse_attrs(attrs: str) -> dict[str, str]:

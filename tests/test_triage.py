@@ -653,6 +653,38 @@ def test_generic_login_form_fields_do_not_create_credential_like_candidate() -> 
     assert not any(login_url in candidate.affected_endpoints for candidate in credential_candidates)
 
 
+def test_documentation_prose_does_not_change_plausible_assignment_policy() -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    url = "https://app.example-bounty.test/"
+    state = replace(
+        state,
+        http_artifacts=[
+            *state.http_artifacts,
+            HTTPArtifact(
+                url=url,
+                artifact_type="html_comment",
+                value=(
+                    "Documentation example credentials: username=operator "
+                    "password=plausible-value-2026"
+                ),
+                source_file="homepage.html",
+                evidence_ids=["EVID-ART-DOCUMENTED-CREDENTIAL"],
+                tags=[],
+            ),
+        ],
+    )
+
+    candidate = next(
+        candidate
+        for candidate in generate_candidates(state)
+        if candidate.candidate_type == "credential_like_artifact_review"
+        and candidate.affected_endpoints == [url]
+    )
+
+    assert candidate.priority == "high"
+    assert candidate.evidence_ids == ["EVID-ART-DOCUMENTED-CREDENTIAL"]
+
+
 def test_api_account_resource_path_does_not_create_auth_candidate() -> None:
     state = build_project_state(FIXTURES_ROOT / "basic_saas")
     candidates = generate_candidates(state)

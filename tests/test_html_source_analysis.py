@@ -69,6 +69,78 @@ def test_suspicious_id_class_name_detection() -> None:
     assert all(item.attribute_name in {"id", "name"} for item in suspicious)
 
 
+def test_conventional_visible_password_controls_do_not_emit_suspicious_name_leads() -> None:
+    for text in (
+        '<input type="password" name="password">',
+        '<input id="password" type="password">',
+        '<input name="password" id="password" type="PASSWORD">',
+    ):
+        analysis = analyse_html_source(
+            ArtefactSource(source_id="ordinary-password", text=text)
+        )
+
+        assert not any(
+            lead.lead_type == "html_suspicious_attribute_review"
+            for lead in analysis.review_leads
+        )
+        assert not any(
+            item.item_type == "suspicious_id_or_class"
+            for item in analysis.items
+        )
+
+
+def test_password_control_suppression_requires_conventional_visible_structure() -> None:
+    source = ArtefactSource(
+        source_id="stronger-password-context",
+        text=(
+            '<input type="password" name="password" hidden>\n'
+            '<input type="password" name="password" style="display:none">\n'
+            '<input type="password" name="admin_password" '
+            'data-config="/etc/passwords.conf">'
+        ),
+    )
+
+    analysis = analyse_html_source(source)
+
+    assert [
+        (lead.item.attribute_name, lead.item.raw_value)
+        for lead in analysis.review_leads
+        if lead.lead_type == "html_suspicious_attribute_review"
+    ] == [
+        ("name", "password"),
+        ("name", "password"),
+        ("name", "admin_password"),
+    ]
+    assert sum(
+        lead.lead_type == "html_hidden_source_review"
+        for lead in analysis.review_leads
+    ) == 2
+    assert any(
+        lead.lead_type == "html_local_reference_review"
+        and lead.item.raw_value == "/etc/passwords.conf"
+        for lead in analysis.review_leads
+    )
+
+
+def test_password_lexical_clues_outside_conventional_control_remain_reviewable() -> None:
+    source = ArtefactSource(
+        source_id="non-form-password-context",
+        text=(
+            '<div name="password">password guidance</div>\n'
+            '<!-- password=plausible-local-example -->\n'
+            '<a href="/archive/passwords.conf">configuration</a>'
+        ),
+    )
+
+    analysis = analyse_html_source(source)
+    lead_types = {lead.lead_type for lead in analysis.review_leads}
+
+    assert "html_suspicious_attribute_review" in lead_types
+    assert "html_inline_text_clue_review" in lead_types
+    assert "html_comment_clue_review" in lead_types
+    assert "html_local_reference_review" in lead_types
+
+
 def test_local_href_src_and_form_action_reference_detection_without_submission() -> None:
     source = ArtefactSource(
         source_id="refs",

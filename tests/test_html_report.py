@@ -232,6 +232,45 @@ def test_html_reconstructs_same_manual_review_groups_as_markdown(
     assert "/archive/backup.zip" in html
 
 
+def test_html_reconstructs_conventional_password_form_without_suspicious_group(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "ordinary-password-control")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["http_artifacts"].append(
+        {
+            "url": "https://portal.example.test/login",
+            "artifact_type": "input",
+            "value": "name=password;type=password",
+            "source_file": "raw/login.html",
+            "evidence_ids": ["EVID-ORDINARY-PASSWORD-CONTROL"],
+            "tags": [],
+        }
+    )
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+    html = unescape(render_html_report(model))
+
+    artifact = next(
+        item
+        for item in model.project_state.http_artifacts
+        if item.evidence_ids == ["EVID-ORDINARY-PASSWORD-CONTROL"]
+    )
+    assert artifact.value == "name=password;type=password"
+    assert "name=password;type=password" in html
+    assert not any(
+        group.lead_type == "html_suspicious_attribute_review"
+        and "EVID-ORDINARY-PASSWORD-CONTROL" in group.evidence_ids
+        for group in model.review_occurrence_groups
+    )
+    assert "Suspicious HTML id/class/name contains clue-like wording" not in html
+
+
 def test_html_report_missing_input_or_required_state_fails_clearly(
     tmp_path: Path,
 ) -> None:
