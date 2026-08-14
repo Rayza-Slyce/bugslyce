@@ -27,6 +27,7 @@ from bugslyce.reports.human_triage import (
 )
 from bugslyce.reports.markdown import export_project_state_json, render_markdown_report
 from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
 from bugslyce.recon.deep_source_route_collection_export import (
     deep_source_route_collection_result_to_dict,
@@ -75,6 +76,31 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert 'id="report-search"' in html
     assert 'data-status="200"' in html
     assert "<details" in html
+
+
+def test_html_model_exposes_shared_semantic_view_without_rendering_it(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "shared-semantic-view")
+    model = build_html_report_model(pack)
+
+    html = render_html_report(model)
+    html_with_empty_semantics = render_html_report(
+        replace(
+            model,
+            operator_report_view=build_operator_report_view(model.operator_summary),
+        )
+    )
+
+    assert model.operator_report_view.primary_anchor_ids == tuple(
+        lead.lead_id for lead in model.operator_summary.ranked_leads
+    )
+    assert len(model.operator_report_view.investigation_context.primary_contexts) == len(
+        model.operator_summary.ranked_leads
+    )
+    assert "Investigation Context" not in html
+    assert "Analysis Coverage" not in html
+    assert html_with_empty_semantics == html
 
 
 def test_html_report_renders_shared_human_triage_source_context(

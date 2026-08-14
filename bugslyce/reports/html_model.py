@@ -30,6 +30,9 @@ from bugslyce.recon.deep_http_fingerprint_summary import (
     DeepHttpFingerprintSummary,
     build_deep_http_fingerprint_summary,
 )
+from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
+    build_deep_initial_retained_javascript_route_extraction,
+)
 from bugslyce.recon.deep_metadata_collection_export import (
     DEEP_METADATA_COLLECTION_JSON,
     load_deep_metadata_collection_result,
@@ -63,15 +66,24 @@ from bugslyce.recon.review_occurrence_grouping import ReviewOccurrenceGroup
 from bugslyce.recon.standard_interpretation import (
     assemble_standard_interpretation_from_project_state,
 )
+from bugslyce.reports.analysis_coverage import (
+    coverage_evidence_from_initial_retained_javascript_routes,
+)
 from bugslyce.reports.human_triage import (
     HumanTriageBrief,
     build_human_triage_brief,
+)
+from bugslyce.reports.investigation_context import InvestigationContextSources
+from bugslyce.reports.operator_report_view import (
+    OperatorReportView,
+    build_operator_report_view,
 )
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
     build_deep_operator_summary_leads,
     build_operator_summary,
 )
+from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
 
 _T = TypeVar("_T")
@@ -150,6 +162,7 @@ class HtmlReportModel:
     review_leads: tuple[ReviewLead, ...]
     review_occurrence_groups: tuple[ReviewOccurrenceGroup, ...]
     available_artefacts: tuple[str, ...]
+    operator_report_view: OperatorReportView
 
 
 def build_html_report_model(input_dir: Path) -> HtmlReportModel:
@@ -214,6 +227,32 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         engagement_context=getattr(project_state, "engagement_context", "unknown"),
         ranked_leads=operator_summary.ranked_leads,
     )
+    workflow_leads = build_grouped_workflow_leads(project_state)
+    initial_retained_routes = (
+        build_deep_initial_retained_javascript_route_extraction(
+            project_state,
+            source_collection,
+        )
+        if _deep_report_inputs_available(root, project_state, deep_mode_enabled)
+        else None
+    )
+    operator_report_view = build_operator_report_view(
+        operator_summary,
+        investigation_sources=InvestigationContextSources(
+            evidence=tuple(project_state.evidence),
+            route_reasoning=route_reasoning,
+            successful_content=successful_content,
+            route_relationships=relationships,
+            workflow_leads=tuple(workflow_leads),
+        ),
+        coverage_evidence=(
+            coverage_evidence_from_initial_retained_javascript_routes(
+                initial_retained_routes
+            )
+            if initial_retained_routes is not None
+            else ()
+        ),
+    )
     interpretation = assemble_standard_interpretation_from_project_state(
         project_state,
         render_markdown=False,
@@ -244,6 +283,27 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
             for path in sorted(root.iterdir(), key=lambda value: value.name)
             if path.is_file() and not path.is_symlink()
         ),
+        operator_report_view=operator_report_view,
+    )
+
+
+def _deep_report_inputs_available(
+    root: Path,
+    project_state: ProjectState,
+    deep_mode_enabled: bool,
+) -> bool:
+    """Return the existing persisted-state policy for Deep report applicability."""
+
+    profile = (
+        project_state.recon_manifest.profile
+        if project_state.recon_manifest is not None
+        else None
+    )
+    return (
+        profile == "deep-bounded"
+        or _deep_pipeline_profile(root) == "deep-bounded"
+        or deep_mode_enabled
+        or (root / DEEP_SOURCE_ROUTE_COLLECTION_JSON).is_file()
     )
 
 
@@ -276,21 +336,9 @@ def _deep_summary_input_status(
 ) -> tuple[bool, str | None, tuple[str, ...]]:
     """Describe whether persisted Deep inputs can reproduce the production summary."""
 
-    profile = (
-        project_state.recon_manifest.profile
-        if project_state.recon_manifest is not None
-        else None
-    )
-    pipeline_profile = _deep_pipeline_profile(root)
     orchestration = root / "deep_recon_orchestration.json"
     source_collection = root / DEEP_SOURCE_ROUTE_COLLECTION_JSON
-    applicable = (
-        profile == "deep-bounded"
-        or pipeline_profile == "deep-bounded"
-        or deep_mode_enabled
-        or source_collection.is_file()
-    )
-    if not applicable:
+    if not _deep_report_inputs_available(root, project_state, deep_mode_enabled):
         return False, None, ()
     missing = tuple(
         name

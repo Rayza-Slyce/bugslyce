@@ -23,6 +23,7 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_operator_summary,
 )
+from bugslyce.reports.operator_report_view import OperatorReportView
 from bugslyce.reports.provenance import build_workflow_provenance
 
 
@@ -57,6 +58,7 @@ def render_markdown_report(
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
     operator_summary: OperatorSummary | None = None,
+    operator_report_view: OperatorReportView | None = None,
 ) -> str:
     """Render a cautious deterministic triage report."""
 
@@ -191,6 +193,7 @@ def write_project_outputs(
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
     operator_summary: OperatorSummary | None = None,
+    operator_report_view: OperatorReportView | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
@@ -212,6 +215,7 @@ def write_project_outputs(
             collection_confidence_markdown=collection_confidence_markdown,
             operator_summary_leads=operator_summary_leads,
             operator_summary=operator_summary,
+            operator_report_view=operator_report_view,
         ),
         encoding="utf-8",
     )

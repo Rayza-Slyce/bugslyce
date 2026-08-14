@@ -32,7 +32,12 @@ from bugslyce.reports.human_triage import (
     render_human_triage_brief_markdown,
     render_readable_evidence_cards_markdown,
 )
+from bugslyce.reports.investigation_context import InvestigationContextSources
 from bugslyce.reports.markdown import render_markdown_report
+from bugslyce.reports.operator_report_view import (
+    OperatorReportView,
+    build_operator_report_view,
+)
 from bugslyce.reports.operator_summary import build_operator_summary
 from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
@@ -57,6 +62,7 @@ class StandardInterpretationReport:
     investigation_thread_count: int
     route_source_review_count: int
     sources_analyzed: int
+    operator_report_view: OperatorReportView
 
 
 def render_standard_interpretation_report(
@@ -87,6 +93,13 @@ def render_standard_interpretation_report(
         engagement_context=project_state.engagement_context,
     )
     operator_summary = build_operator_summary(project_state, candidates_list)
+    operator_report_view = build_operator_report_view(
+        operator_summary,
+        investigation_sources=InvestigationContextSources(
+            evidence=tuple(project_state.evidence),
+            workflow_leads=tuple(workflow_leads),
+        ),
+    )
     human_triage_brief = build_human_triage_brief(
         project_state,
         candidates_list,
@@ -114,6 +127,7 @@ def render_standard_interpretation_report(
         readable_evidence_cards_markdown=evidence_cards_markdown,
         collection_confidence_markdown=confidence_markdown,
         operator_summary=operator_summary,
+        operator_report_view=operator_report_view,
     )
     return StandardInterpretationReport(
         markdown=markdown,
@@ -132,4 +146,5 @@ def render_standard_interpretation_report(
         investigation_thread_count=len(threads),
         route_source_review_count=len(route_source_leads),
         sources_analyzed=assembly.sources_analyzed,
+        operator_report_view=operator_report_view,
     )

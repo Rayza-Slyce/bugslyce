@@ -28,6 +28,7 @@ from bugslyce.reports.operator_summary import (
     build_operator_summary,
     count_direct_structured_disclosure_leads,
 )
+from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     render_successful_deep_content_runbook,
@@ -599,6 +600,24 @@ def test_deep_recon_markdown_omission_none_empty_and_whitespace_are_unchanged() 
     assert render_markdown_report(state, candidates, deep_recon_markdown=None) == baseline
     assert render_markdown_report(state, candidates, deep_recon_markdown="") == baseline
     assert render_markdown_report(state, candidates, deep_recon_markdown="   \n\t") == baseline
+
+
+def test_shared_operator_view_does_not_change_markdown_output() -> None:
+    baseline, state, candidates = _basic_saas_report()
+    summary = build_operator_summary(state, candidates)
+
+    assert render_markdown_report(
+        state,
+        candidates,
+        operator_summary=summary,
+        operator_report_view=build_operator_report_view(summary),
+    ) == render_markdown_report(
+        state,
+        candidates,
+        operator_summary=summary,
+    )
+    assert "Investigation Context" not in baseline
+    assert "Analysis Coverage" not in baseline
 
 
 def test_report_inserts_deep_recon_markdown_once_as_opaque_block() -> None:

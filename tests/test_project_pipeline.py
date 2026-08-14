@@ -3374,6 +3374,138 @@ def test_deep_report_requires_orchestration(
         )
 
 
+def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce import project_pipeline
+
+    project_state = _quick_completion_state(tmp_path)
+    summary = OperatorSummary(
+        review_first=[
+            OperatorSummaryLead(
+                title="Controlled primary lead",
+                why="Existing evidence.",
+                endpoints=["http://10.10.10.10/portal"],
+                evidence_ids=["EVID-DISCOVERY"],
+                next_action="Review retained evidence.",
+                signal="controlled",
+                score=90,
+                lead_id="LEAD-CONTROLLED",
+                rank=1,
+            )
+        ],
+        low_signal=[],
+        coverage=[],
+    )
+    orchestration = SimpleNamespace(
+        successful_content_reviews=(),
+        form_inventory=SimpleNamespace(forms=()),
+        parameter_inventory=SimpleNamespace(parameters=()),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(project_pipeline, "build_project_state", lambda _: project_state)
+    monkeypatch.setattr(project_pipeline, "build_collection_confidence_notices_from_project", lambda *args, **kwargs: ())
+    monkeypatch.setattr(project_pipeline, "generate_candidates", lambda _: [])
+    monkeypatch.setattr(project_pipeline, "build_grouped_workflow_leads", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        project_pipeline,
+        "assemble_standard_interpretation_from_project_state",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            manual_review_leads_markdown="",
+            review_leads=(),
+            sources=(),
+        ),
+    )
+    monkeypatch.setattr(project_pipeline, "build_investigation_threads", lambda *args, **kwargs: ())
+    monkeypatch.setattr(project_pipeline, "render_investigation_threads_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr(project_pipeline, "build_route_source_review", lambda *args, **kwargs: ())
+    monkeypatch.setattr(project_pipeline, "render_route_source_review_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr(project_pipeline, "_http_route_relationship_clusters_if_available", lambda *args, **kwargs: ())
+    monkeypatch.setattr(project_pipeline, "build_route_reasoning_review", lambda *args, **kwargs: None)
+    monkeypatch.setattr(project_pipeline, "build_operator_summary", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(project_pipeline, "build_human_triage_brief", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(project_pipeline, "render_human_triage_brief_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr(project_pipeline, "render_readable_evidence_cards_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr(project_pipeline, "render_http_route_relationship_clusters_markdown", lambda *args, **kwargs: "")
+    monkeypatch.setattr(project_pipeline, "_deep_operator_summary_leads", lambda *_: ())
+    monkeypatch.setattr(project_pipeline, "_render_deep_report_index", lambda *_: "")
+    monkeypatch.setattr(project_pipeline, "_report_coverage_evidence", lambda *_: ())
+
+    def write_outputs(*_args, **kwargs):
+        captured["view"] = kwargs["operator_report_view"]
+        return tmp_path / "report.md", tmp_path / "project_state.json"
+
+    monkeypatch.setattr(project_pipeline, "write_project_outputs", write_outputs)
+
+    context = {"deep_outputs": DeepPipelineOutputs(orchestration=orchestration)}
+    project_pipeline._write_interpretation_report_if_needed(
+        DEEP_PIPELINE_PROFILE,
+        tmp_path,
+        context,
+    )
+
+    view = captured["view"]
+    assert view.primary_anchor_ids == ("LEAD-CONTROLLED",)
+    assert tuple(
+        context.anchor_id for context in view.investigation_context.primary_contexts
+    ) == ("LEAD-CONTROLLED",)
+    assert view is context["completion_summary"].operator_report_view
+
+
+def test_deep_report_coverage_evidence_uses_each_admitted_positive_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce import project_pipeline
+
+    orchestration = SimpleNamespace(
+        javascript_route_extraction="ordinary-js",
+        initial_retained_javascript_route_extraction="initial-js",
+        post_followup_javascript_route_extraction="post-js",
+        parameter_inventory="parameters",
+    )
+    observed: list[tuple[str, object]] = []
+
+    def adapter(name: str):
+        def build(value: object) -> tuple[str, ...]:
+            observed.append((name, value))
+            return (name,)
+
+        return build
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "coverage_evidence_from_deep_javascript_routes",
+        adapter("ordinary-js"),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "coverage_evidence_from_initial_retained_javascript_routes",
+        adapter("initial-js"),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "coverage_evidence_from_post_followup_javascript_routes",
+        adapter("post-js"),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "coverage_evidence_from_deep_parameter_inventory",
+        adapter("parameters"),
+    )
+
+    evidence = project_pipeline._report_coverage_evidence(orchestration)
+
+    assert evidence == ("ordinary-js", "initial-js", "post-js", "parameters")
+    assert observed == [
+        ("ordinary-js", "ordinary-js"),
+        ("initial-js", "initial-js"),
+        ("post-js", "post-js"),
+        ("parameters", "parameters"),
+    ]
+
+
 def test_deep_export_requires_existing_five_path_tuple(tmp_path: Path) -> None:
     from bugslyce import project_pipeline
 

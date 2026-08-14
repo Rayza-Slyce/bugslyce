@@ -7,6 +7,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+import pytest
+
 from bugslyce.core.models import Evidence
 from bugslyce.core.project import build_project_state
 from bugslyce.reports.html_model import build_html_report_model
@@ -26,6 +28,10 @@ from bugslyce.recon.deep_shallow_route_followup import (
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
+)
+from bugslyce.recon.deep_source_route_collection_export import (
+    DEEP_SOURCE_ROUTE_COLLECTION_JSON,
+    deep_source_route_collection_result_to_dict,
 )
 from bugslyce.recon.modes import DEEP_RECON_BOUNDS
 
@@ -372,17 +378,74 @@ def test_offline_project_state_reconstruction_rebuilds_initial_route_analysis(
     state = _state(
         tmp_path,
         {"homepage.html": '<html><script>fetch("/service/status")</script></html>'},
+        profile="deep-bounded",
     )
     (tmp_path / "project_state.json").write_text(
         export_project_state_json(state, []),
         encoding="utf-8",
     )
 
-    offline_state = build_html_report_model(tmp_path).project_state
+    offline_model = build_html_report_model(tmp_path)
+    offline_state = offline_model.project_state
 
     assert build_deep_initial_retained_javascript_route_extraction(
         offline_state
     ) == build_deep_initial_retained_javascript_route_extraction(state)
+    expected_source = build_deep_initial_retained_javascript_route_extraction(
+        state
+    ).candidates[0].source_observations[0]
+    assert tuple(
+        (item.unit.source_role, item.unit.source_id, item.finding_count)
+        for item in offline_model.operator_report_view.analysis_coverage.items
+    ) == ((expected_source.source_role, expected_source.source_id, 1),)
+
+
+@pytest.mark.parametrize(
+    ("arm", "profile", "pipeline_deep", "source_collection_deep", "expected_deep"),
+    (
+        ("manifest", "deep-bounded", False, False, True),
+        ("pipeline-status", None, True, False, True),
+        ("source-collection", None, False, True, True),
+        ("non-deep", None, False, False, False),
+    ),
+)
+def test_html_shared_view_reuses_existing_deep_applicability_signals(
+    tmp_path: Path,
+    arm: str,
+    profile: str | None,
+    pipeline_deep: bool,
+    source_collection_deep: bool,
+    expected_deep: bool,
+) -> None:
+    state = _state(
+        tmp_path / arm,
+        {"homepage.html": '<html><script>fetch("/service/status")</script></html>'},
+        profile=profile,
+    )
+    root = Path(state.input_dir)
+    (root / "project_state.json").write_text(
+        export_project_state_json(state, []),
+        encoding="utf-8",
+    )
+    if pipeline_deep:
+        (root / "recon_status.json").write_text(
+            json.dumps({"latest_execution": {"pipeline_profile": "deep-bounded"}}),
+            encoding="utf-8",
+        )
+    if source_collection_deep:
+        (root / DEEP_SOURCE_ROUTE_COLLECTION_JSON).write_text(
+            json.dumps(
+                deep_source_route_collection_result_to_dict(
+                    DeepSourceRouteCollectionResult((), (), 0, 0, 0)
+                )
+            ),
+            encoding="utf-8",
+        )
+
+    model = build_html_report_model(root)
+
+    assert (model.operator_summary_fallback is not None) is expected_deep
+    assert bool(model.operator_report_view.analysis_coverage.items) is expected_deep
 
 
 def test_high_cardinality_static_routes_remain_bounded_by_retained_body_size(
@@ -465,6 +528,7 @@ def _state(
     files: dict[str, str],
     *,
     manifest_entries: tuple[dict[str, str], ...] | None = None,
+    profile: str | None = None,
 ):
     root.mkdir(parents=True, exist_ok=True)
     for name, body in files.items():
@@ -483,6 +547,7 @@ def _state(
                 "schema_version": "1.0",
                 "target": "example.test",
                 "artifacts": list(entries),
+                **({"profile": profile} if profile is not None else {}),
             }
         ),
         encoding="utf-8",

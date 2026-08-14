@@ -146,13 +146,25 @@ from bugslyce.recon.status import build_recon_status, write_recon_status
 from bugslyce.recon.standard_interpretation import (
     assemble_standard_interpretation_from_project_state,
 )
+from bugslyce.reports.analysis_coverage import (
+    AnalysisCoverageExecutionEvidence,
+    coverage_evidence_from_deep_javascript_routes,
+    coverage_evidence_from_deep_parameter_inventory,
+    coverage_evidence_from_initial_retained_javascript_routes,
+    coverage_evidence_from_post_followup_javascript_routes,
+)
 from bugslyce.reports.human_triage import (
     build_human_triage_brief,
     render_human_triage_brief_markdown,
     render_readable_evidence_cards_markdown,
 )
 from bugslyce.reports.html import write_project_html_report
+from bugslyce.reports.investigation_context import InvestigationContextSources
 from bugslyce.reports.markdown import write_project_outputs
+from bugslyce.reports.operator_report_view import (
+    OperatorReportView,
+    build_operator_report_view,
+)
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
     OperatorSummaryLead,
@@ -286,6 +298,7 @@ class PipelineCompletionSummary:
 
     collection_confidence_notices: tuple[CollectionConfidenceNotice, ...]
     operator_summary: OperatorSummary
+    operator_report_view: OperatorReportView | None = None
 
 
 @dataclass(frozen=True)
@@ -2239,6 +2252,29 @@ def _write_interpretation_report_if_needed(
         workflow_leads=workflow_leads,
         **triage_kwargs,
     )
+    operator_report_view = (
+        build_operator_report_view(
+            operator_summary,
+            investigation_sources=InvestigationContextSources(
+                evidence=tuple(project_state.evidence),
+                route_reasoning=route_reasoning_review,
+                successful_content=tuple(
+                    getattr(orchestration, "successful_content_reviews", ())
+                ),
+                route_relationships=relationship_clusters,
+                forms=(orchestration.form_inventory.forms if orchestration else ()),
+                parameters=(
+                    orchestration.parameter_inventory.parameters
+                    if orchestration
+                    else ()
+                ),
+                workflow_leads=tuple(workflow_leads),
+            ),
+            coverage_evidence=_report_coverage_evidence(orchestration),
+        )
+        if operator_summary is not None
+        else None
+    )
     relationship_markdown = render_http_route_relationship_clusters_markdown(
         relationship_clusters
     )
@@ -2262,6 +2298,8 @@ def _write_interpretation_report_if_needed(
     }
     if operator_summary is not None:
         report_kwargs["operator_summary"] = operator_summary
+        if operator_report_view is not None:
+            report_kwargs["operator_report_view"] = operator_report_view
     confidence_markdown = render_collection_confidence_markdown(confidence_notices)
     if confidence_markdown:
         report_kwargs["collection_confidence_markdown"] = confidence_markdown
@@ -2276,10 +2314,11 @@ def _write_interpretation_report_if_needed(
         output_dir,
         **report_kwargs,
     )
-    if operator_summary is not None:
+    if operator_summary is not None and operator_report_view is not None:
         context["completion_summary"] = PipelineCompletionSummary(
             collection_confidence_notices=confidence_notices,
             operator_summary=operator_summary,
+            operator_report_view=operator_report_view,
         )
     return [str(report_path), str(json_path)]
 
@@ -2296,12 +2335,41 @@ def _build_completion_summary_from_project(
     if not isinstance(project_state, ProjectState):
         return None
     candidates = generate_candidates(project_state)
+    operator_summary = build_operator_summary(project_state, candidates)
     return PipelineCompletionSummary(
         collection_confidence_notices=build_collection_confidence_notices_from_project(
             project_state,
             output_dir,
         ),
-        operator_summary=build_operator_summary(project_state, candidates),
+        operator_summary=operator_summary,
+        operator_report_view=build_operator_report_view(
+            operator_summary,
+            investigation_sources=InvestigationContextSources(
+                evidence=tuple(project_state.evidence),
+                workflow_leads=tuple(build_grouped_workflow_leads(project_state)),
+            ),
+        ),
+    )
+
+
+def _report_coverage_evidence(
+    orchestration: DeepReconOrchestrationResult | None,
+) -> tuple[AnalysisCoverageExecutionEvidence, ...]:
+    if orchestration is None:
+        return ()
+    return (
+        *coverage_evidence_from_deep_javascript_routes(
+            orchestration.javascript_route_extraction
+        ),
+        *coverage_evidence_from_initial_retained_javascript_routes(
+            orchestration.initial_retained_javascript_route_extraction
+        ),
+        *coverage_evidence_from_post_followup_javascript_routes(
+            orchestration.post_followup_javascript_route_extraction
+        ),
+        *coverage_evidence_from_deep_parameter_inventory(
+            orchestration.parameter_inventory
+        ),
     )
 
 
