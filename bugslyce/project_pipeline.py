@@ -65,6 +65,9 @@ from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_javascript_route_extraction import (
     build_deep_javascript_route_extraction,
 )
+from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
+    build_deep_initial_retained_javascript_route_extraction,
+)
 from bugslyce.recon.deep_metadata_collection_export import (
     DEEP_METADATA_COLLECTION_JSON,
     DEEP_METADATA_COLLECTION_MARKDOWN,
@@ -1915,10 +1918,19 @@ def _step_runners(
             or current.shallow_followups is None
         ):
             raise ValueError("Deep collection results are required before orchestration.")
+        initial_retained_javascript_routes = (
+            build_deep_initial_retained_javascript_route_extraction(
+                build_project_state(output_dir),
+                current.source_collection,
+            )
+        )
         orchestration = build_deep_recon_orchestration(
             current.source_collection,
             current.shallow_followups,
             metadata_collection=current.metadata_collection,
+            initial_retained_javascript_route_extraction=(
+                initial_retained_javascript_routes
+            ),
             deep_profile_selected=profile == DEEP_PIPELINE_PROFILE,
             deep_collection_completed=profile == DEEP_PIPELINE_PROFILE,
         )

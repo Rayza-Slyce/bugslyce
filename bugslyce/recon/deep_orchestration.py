@@ -40,6 +40,11 @@ from bugslyce.recon.deep_javascript_route_extraction import (
     build_deep_javascript_route_extraction,
     render_deep_javascript_route_extraction_markdown,
 )
+from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
+    DeepInitialRetainedJavaScriptRouteExtractionResult,
+    empty_deep_initial_retained_javascript_route_extraction,
+    render_deep_initial_retained_javascript_route_extraction_markdown,
+)
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.deep_metadata_collection_review import (
     build_deep_metadata_collection_review,
@@ -119,6 +124,9 @@ class DeepReconOrchestrationResult:
     html_route_extraction: DeepHtmlRouteExtractionResult
     javascript_route_extraction: DeepJavaScriptRouteExtractionResult
     shallow_route_followup: DeepShallowRouteFollowupResult
+    initial_retained_javascript_route_extraction: (
+        DeepInitialRetainedJavaScriptRouteExtractionResult
+    )
     post_followup_javascript_route_extraction: (
         DeepPostFollowupJavaScriptRouteExtractionResult
     )
@@ -140,6 +148,9 @@ def build_deep_recon_orchestration(
     shallow_followups: DeepShallowRouteFollowupResult,
     *,
     metadata_collection: DeepMetadataCollectionResult | None = None,
+    initial_retained_javascript_route_extraction: (
+        DeepInitialRetainedJavaScriptRouteExtractionResult | None
+    ) = None,
     deep_profile_selected: bool = False,
     deep_collection_completed: bool | None = None,
 ) -> DeepReconOrchestrationResult:
@@ -170,6 +181,11 @@ def build_deep_recon_orchestration(
     )
     html_routes = build_deep_html_route_extraction(source_collection)
     javascript_routes = build_deep_javascript_route_extraction(source_collection)
+    initial_retained_javascript_routes = (
+        empty_deep_initial_retained_javascript_route_extraction()
+        if initial_retained_javascript_route_extraction is None
+        else initial_retained_javascript_route_extraction
+    )
     post_followup_javascript_routes = (
         build_deep_post_followup_javascript_route_extraction(shallow_followups)
     )
@@ -180,6 +196,9 @@ def build_deep_recon_orchestration(
         html_routes,
         javascript_routes,
         post_followup_javascript_routes,
+        initial_retained_javascript_route_extraction=(
+            initial_retained_javascript_routes
+        ),
     )
     successful_content_reviews = build_successful_deep_content_reviews(
         source_collection
@@ -207,6 +226,7 @@ def build_deep_recon_orchestration(
         similarity_review.safety_notes,
         html_routes.safety_notes,
         javascript_routes.safety_notes,
+        initial_retained_javascript_routes.safety_notes,
         shallow_followups.safety_notes,
         post_followup_javascript_routes.safety_notes,
         form_inventory.safety_notes,
@@ -245,6 +265,9 @@ def build_deep_recon_orchestration(
             render_deep_shallow_route_followup_result_markdown(
                 report_shallow_followups
             ),
+            render_deep_initial_retained_javascript_route_extraction_markdown(
+                initial_retained_javascript_routes
+            ),
             render_deep_post_followup_javascript_route_extraction_markdown(
                 post_followup_javascript_routes
             ),
@@ -262,6 +285,7 @@ def build_deep_recon_orchestration(
         html_route_extraction=html_routes,
         javascript_route_extraction=javascript_routes,
         shallow_route_followup=shallow_followups,
+        initial_retained_javascript_route_extraction=initial_retained_javascript_routes,
         post_followup_javascript_route_extraction=post_followup_javascript_routes,
         form_inventory=form_inventory,
         parameter_inventory=parameter_inventory,

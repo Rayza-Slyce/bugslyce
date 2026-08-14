@@ -341,6 +341,8 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
         html_extraction,
         javascript_extraction,
         post_followup_javascript_route_extraction,
+        *,
+        initial_retained_javascript_route_extraction=None,
     ):
         captured["parameter_source"] = source_collection
         captured["parameter_shallow"] = shallow_followups
@@ -349,12 +351,18 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
         captured["parameter_post_followup_javascript"] = (
             post_followup_javascript_route_extraction
         )
+        captured["parameter_initial_retained_javascript"] = (
+            initial_retained_javascript_route_extraction
+        )
         return original_parameter(
             source_collection,
             shallow_followups,
             html_extraction,
             javascript_extraction,
             post_followup_javascript_route_extraction,
+            initial_retained_javascript_route_extraction=(
+                initial_retained_javascript_route_extraction
+            ),
         )
 
     monkeypatch.setattr(orchestration, "build_deep_form_inventory", capture_form)
@@ -377,6 +385,9 @@ def test_dependency_inputs_are_threaded_to_form_and_parameter_inventory(monkeypa
     assert captured["parameter_javascript"] is result.javascript_route_extraction
     assert captured["parameter_post_followup_javascript"] is (
         result.post_followup_javascript_route_extraction
+    )
+    assert captured["parameter_initial_retained_javascript"] is (
+        result.initial_retained_javascript_route_extraction
     )
 
 

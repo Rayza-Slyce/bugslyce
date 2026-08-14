@@ -1961,6 +1961,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         shallow_arg,
         *,
         metadata_collection=None,
+        initial_retained_javascript_route_extraction=None,
         deep_profile_selected=False,
         deep_collection_completed=None,
     ):
@@ -1970,6 +1971,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         identities["orchestration_source"] = source_arg
         identities["orchestration_metadata"] = metadata_collection
         identities["orchestration_shallow"] = shallow_arg
+        identities["orchestration_initial_retained_javascript"] = (
+            initial_retained_javascript_route_extraction
+        )
         return orchestration
 
     monkeypatch.setattr(
@@ -2170,6 +2174,9 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     assert identities["orchestration_source"] is source_collection
     assert identities["orchestration_metadata"] is metadata_collection
     assert identities["orchestration_shallow"] is shallow_followups
+    assert (
+        identities["orchestration_initial_retained_javascript"].candidates == ()
+    )
     assert identities["source_fetcher"] is identities["metadata_fetcher"]
     assert identities["source_fetcher"] is identities["shallow_fetcher"]
     assert len(captured_report) == 1
@@ -2864,13 +2871,51 @@ def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
     assert "DeepReconOrchestrationResult" in str(hints["orchestration"])
 
 
+@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE))
+def test_initial_retained_javascript_adapter_is_never_called_outside_deep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_initial_retained_javascript_route_extraction",
+        lambda *_args, **_kwargs: pytest.fail(
+            "initial-retained JavaScript analysis is Deep-only"
+        ),
+    )
+
+    run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
+
+    assert "deep-orchestrate" not in calls
+
+
 def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     output_dir = tmp_path / "project"
     output_dir.mkdir()
+    (output_dir / "initial.html").write_text(
+        '<html><script>fetch("/service/status")</script></html>',
+        encoding="utf-8",
+    )
     state = SimpleNamespace(
+        input_dir=str(output_dir),
+        recon_manifest=ReconManifest(
+            schema_version="1.0",
+            target="app.example.test",
+            artifacts=[
+                ReconManifestArtifact(
+                    type="html",
+                    file="initial.html",
+                    url="https://app.example.test/",
+                )
+            ],
+        ),
+        evidence=(),
         http_services=(
             SimpleNamespace(
                 url="https://app.example.test/",
@@ -3006,6 +3051,16 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
     assert post_candidates[0].safe_resolved_url == (
         "https://app.example.test/api/late-only?tenant"
     )
+    initial_candidates = (
+        outputs.orchestration.initial_retained_javascript_route_extraction.candidates
+    )
+    assert len(initial_candidates) == 1
+    assert initial_candidates[0].candidate_id == "DEEP-JS-INITIAL-ROUTE-0001"
+    assert initial_candidates[0].safe_resolved_url == (
+        "https://app.example.test/service/status"
+    )
+    assert initial_candidates[0].source_observations[0].manifest_file == "initial.html"
+    assert "https://app.example.test/service/status" not in fetch_calls
     parameters = outputs.orchestration.parameter_inventory.parameters
     tenant = next(parameter for parameter in parameters if parameter.name == "tenant")
     assert tenant.contexts == ("post_followup_javascript_route_query",)
