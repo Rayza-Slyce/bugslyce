@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,12 +24,14 @@ from bugslyce.reports.markdown import (
     write_project_outputs,
 )
 from bugslyce.reports.operator_summary import (
+    OperatorSummary,
     OperatorSummaryLead,
     build_deep_operator_summary_leads,
     build_operator_summary,
     count_direct_structured_disclosure_leads,
 )
 from bugslyce.reports.operator_report_view import build_operator_report_view
+from bugslyce.reports.investigation_context import InvestigationContextSources
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     render_successful_deep_content_runbook,
@@ -93,6 +96,94 @@ def test_markdown_report_renders_for_basic_saas() -> None:
     assert "Evidence directories and exported ZIP packs may retain" in report
     assert "cookie values, session identifiers, or tokens" in report
     assert "delete or sanitise sensitive retained evidence" in report
+
+
+def test_markdown_review_first_renders_available_investigation_context() -> None:
+    _report, state, candidates = _basic_saas_report()
+    evidence_id = state.evidence[0].id
+    summary = OperatorSummary(
+        review_first=[
+            replace(
+                _deep_addition("controlled_context"),
+                lead_id="LEAD-CONTEXT",
+                rank=1,
+                evidence_ids=[evidence_id],
+            )
+        ],
+        low_signal=[],
+        coverage=[],
+    )
+    view = build_operator_report_view(
+        summary,
+        investigation_sources=InvestigationContextSources(
+            evidence=tuple(state.evidence),
+        ),
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        operator_summary=summary,
+        operator_report_view=view,
+    )
+
+    first = view.investigation_context.primary_contexts[0]
+    assert f'<a id="{first.anchor_reference.anchor_token}"></a>' in report
+    assert "Investigation context:" in report
+    evidence_reference = next(
+        reference
+        for reference in first.navigation_references
+        if reference.target_kind == "evidence"
+    )
+    assert f'[`{evidence_id}`](#{evidence_reference.anchor_token})' in report
+    assert f'<a id="{evidence_reference.anchor_token}"></a>{evidence_id}' in report
+    assert f"[Review First context](#{first.anchor_reference.anchor_token})" in report
+    assert "Analysis Coverage" not in report
+    anchors = re.findall(r'<a id="(ctx-[^"]+)"></a>', report)
+    for target in re.findall(r'\]\(#(ctx-[^)]+)\)', report):
+        assert anchors.count(target) == 1
+
+
+def test_markdown_context_omits_dead_link_for_unrendered_evidence() -> None:
+    _report, state, candidates = _basic_saas_report()
+    summary = OperatorSummary(
+        review_first=[
+            replace(
+                _deep_addition("controlled_context"),
+                lead_id="LEAD-MISSING-EVIDENCE",
+                rank=1,
+                evidence_ids=["EVID-NOT-RENDERED"],
+            )
+        ],
+        low_signal=[],
+        coverage=[],
+    )
+    view = build_operator_report_view(
+        summary,
+        investigation_sources=InvestigationContextSources(
+            evidence=(
+                Evidence(
+                    "EVID-NOT-RENDERED",
+                    "retained/source.txt",
+                    '<img src=x onerror="alert(1)">',
+                    "available to C1 only",
+                    {},
+                ),
+            ),
+        ),
+    )
+
+    report = render_markdown_report(
+        state,
+        candidates,
+        operator_summary=summary,
+        operator_report_view=view,
+    )
+
+    assert "evidence `EVID-NOT-RENDERED`" in report
+    assert "](#ctx-evidence-evid-not-rendered)" not in report
+    assert "<img" not in report
+    assert "&lt;img src=x onerror=&quot;alert\\(1\\)&quot;&gt;" in report
 
 
 def test_report_includes_project_engagement_context(tmp_path: Path) -> None:

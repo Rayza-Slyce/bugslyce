@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict
+from html import escape as escape_html
 import json
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,11 @@ from bugslyce.reports.operator_summary import (
     build_operator_summary,
 )
 from bugslyce.reports.operator_report_view import OperatorReportView
+from bugslyce.reports.investigation_context import InvestigationContextItem
+from bugslyce.reports.investigation_context_presentation import (
+    InvestigationContextPresentationIndex,
+    build_investigation_context_presentation_index,
+)
 from bugslyce.reports.provenance import build_workflow_provenance
 
 
@@ -62,6 +68,14 @@ def render_markdown_report(
 ) -> str:
     """Render a cautious deterministic triage report."""
 
+    context_index = (
+        build_investigation_context_presentation_index(
+            operator_report_view.investigation_context
+        )
+        if operator_report_view is not None
+        else None
+    )
+
     lines: list[str] = [
         "# BugSlyce Recon Pack",
         "",
@@ -79,6 +93,7 @@ def render_markdown_report(
         candidates,
         additional_leads=operator_summary_leads,
         summary=operator_summary,
+        context_index=context_index,
     )
     _optional_prerendered_section(lines, collection_confidence_markdown)
     _optional_prerendered_section(lines, human_triage_brief_markdown)
@@ -98,7 +113,7 @@ def render_markdown_report(
     _http_services(lines, project_state)
     _surface_areas(lines, candidates)
     _priority_queue(lines, project_state, candidates)
-    _evidence_table(lines, project_state)
+    _evidence_table(lines, project_state, context_index)
     _operator_notes(lines, project_state)
     _sensitive_evidence_notice(lines)
     _safe_next_steps(lines)
@@ -115,6 +130,7 @@ def _operator_summary(
     *,
     additional_leads: tuple[OperatorSummaryLead, ...] = (),
     summary: OperatorSummary | None = None,
+    context_index: InvestigationContextPresentationIndex | None = None,
 ) -> None:
     if summary is None:
         summary = build_operator_summary(
@@ -132,6 +148,13 @@ def _operator_summary(
         )
     else:
         for lead in summary.ranked_leads:
+            context = (
+                context_index.primary_by_anchor_id.get(lead.lead_id)
+                if context_index is not None
+                else None
+            )
+            if context is not None:
+                lines.append(f'<a id="{context.anchor_reference.anchor_token}"></a>')
             lines.extend(
                 [
                     f"{lead.rank}. **{_md(lead.title)}**",
@@ -145,6 +168,13 @@ def _operator_summary(
                     "",
                 ]
             )
+            if context is not None and context.context_items:
+                _markdown_investigation_context(
+                    lines,
+                    context.context_items,
+                    context_index,
+                    frozenset(item.id for item in project_state.evidence),
+                )
 
     lines.extend(["### Low-Signal / Avoid Rabbit Holes", ""])
     if not summary.low_signal:
@@ -176,6 +206,101 @@ def _complete_code_list(values: list[str] | tuple[str, ...]) -> str:
     return ", ".join(
         "`" + str(value).replace("`", "'") + "`" for value in values
     )
+
+
+def _markdown_investigation_context(
+    lines: list[str],
+    items: tuple[InvestigationContextItem, ...],
+    index: InvestigationContextPresentationIndex,
+    rendered_evidence_ids: frozenset[str],
+) -> None:
+    lines.append("   - Investigation context:")
+    for item in items:
+        evidence = ", ".join(
+            _markdown_internal_reference(
+                evidence_id,
+                (
+                    index.reference_by_target.get(("evidence", evidence_id))
+                    if evidence_id in rendered_evidence_ids
+                    else None
+                ),
+            )
+            for evidence_id in item.evidence_ids
+        )
+        details = [
+            f"{_context_text(item.relationship_kind.title())}: {_context_text(item.label)}",
+        ]
+        if item.route_url:
+            details.append(f"route {_context_code(item.route_url)}")
+        if item.source_ids:
+            details.append(f"source {_context_code_list(item.source_ids)}")
+        if item.source_urls:
+            details.append(f"source URL {_context_code_list(item.source_urls)}")
+        if item.body_sha256s:
+            details.append(f"body SHA-256 {_context_code_list(item.body_sha256s)}")
+        if item.related_ids:
+            details.append(f"related context {_context_code_list(item.related_ids)}")
+        if evidence:
+            details.append(f"evidence {evidence}")
+        lines.append("     - " + "; ".join(details))
+    lines.append("")
+
+
+def _markdown_internal_reference(value: str, reference: object | None) -> str:
+    anchor = getattr(reference, "anchor_token", "")
+    label = _context_text(value)
+    return f"[`{label}`](#{anchor})" if anchor else f"`{label}`"
+
+
+def _context_text(value: object) -> str:
+    safe = escape_html(str(value), quote=True)
+    return _md(_markdown_literal(safe))
+
+
+def _markdown_literal(value: str) -> str:
+    """Keep target-derived context text readable without Markdown authority."""
+
+    escaped = value.replace("\\", "\\\\")
+    return escaped.translate(
+        str.maketrans(
+            {
+                "`": "\\`",
+                "*": "\\*",
+                "_": "\\_",
+                "[": "\\[",
+                "]": "\\]",
+                "(": "\\(",
+                ")": "\\)",
+                "!": "\\!",
+                "#": "\\#",
+            }
+        )
+    )
+
+
+def _context_code_list(values: tuple[str, ...]) -> str:
+    return ", ".join(_context_code(value) for value in values)
+
+
+def _context_code(value: object) -> str:
+    """Render one target-derived value as a safely delimited code literal."""
+
+    literal = str(value).replace("\n", " ")
+    delimiter = "`" * (_longest_backtick_run(literal) + 1)
+    padding = " " if literal.startswith("`") or literal.endswith("`") else ""
+    return f"{delimiter}{padding}{literal}{padding}{delimiter}"
+
+
+def _longest_backtick_run(value: str) -> int:
+    longest = 0
+    current = 0
+    for character in value:
+        if character == "`":
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
 
 
 def write_project_outputs(
@@ -470,7 +595,11 @@ def _candidate_lines(candidate: Candidate, *, priority: str | None = None) -> li
     return lines
 
 
-def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
+def _evidence_table(
+    lines: list[str],
+    project_state: ProjectState,
+    context_index: InvestigationContextPresentationIndex | None = None,
+) -> None:
     lines.extend(["## Evidence Summary", ""])
     if project_state.recon_summary:
         summary = project_state.recon_summary
@@ -549,9 +678,30 @@ def _evidence_table(lines: list[str], project_state: ProjectState) -> None:
 
     lines.extend(["| Evidence ID | Source File | Type | Value |", "| --- | --- | --- | --- |"])
     for evidence in project_state.evidence:
+        reference = (
+            context_index.reference_by_target.get(("evidence", evidence.id))
+            if context_index is not None
+            else None
+        )
+        evidence_label = evidence.id
+        if reference is not None:
+            evidence_label = (
+                f'<a id="{reference.anchor_token}"></a>{evidence_label}'
+            )
+        backlink = (
+            context_index.evidence_backlink_by_id.get(evidence.id)
+            if context_index is not None
+            else None
+        )
+        if backlink is not None:
+            links = ", ".join(
+                f"[Review First context](#{anchor.anchor_token})"
+                for anchor in backlink.primary_anchor_references
+            )
+            evidence_label += f"<br>Back to: {links}"
         lines.append(
             "| "
-            f"{evidence.id} | "
+            f"{evidence_label} | "
             f"{_md(evidence.source_file)} | "
             f"{_md(evidence.evidence_type)} | "
             f"{_md(_compact(evidence.value))} |"

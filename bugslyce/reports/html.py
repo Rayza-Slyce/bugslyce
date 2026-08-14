@@ -22,6 +22,14 @@ from bugslyce.reports.html_model import (
     HtmlRouteGroup,
     build_html_report_model,
 )
+from bugslyce.reports.investigation_context import (
+    InvestigationContextItem,
+    ReportNavigationReference,
+)
+from bugslyce.reports.investigation_context_presentation import (
+    InvestigationContextPresentationIndex,
+    build_investigation_context_presentation_index,
+)
 
 
 _SOURCE_ARTEFACT_TYPES = frozenset(
@@ -211,13 +219,20 @@ def write_project_html_report(
 
 
 def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
+    context_index = build_investigation_context_presentation_index(
+        model.operator_report_view.investigation_context
+    )
     sections = [
         ("overview", "Overview", _overview_section(model)),
-        ("operator-summary", "Operator summary", _operator_summary_section(model)),
+        (
+            "operator-summary",
+            "Operator summary",
+            _operator_summary_section(model, context_index),
+        ),
         ("human-triage", "Supporting triage evidence", _human_triage_section(model)),
         ("confidence", "Collection confidence", _confidence_section(model)),
         ("manual-review", "Manual review leads", _candidate_section(model)),
-        ("routes", "Routes and provenance", _routes_section(model)),
+        ("routes", "Routes and provenance", _routes_section(model, context_index)),
         ("http-evidence", "HTTP evidence", _http_section(model)),
     ]
     if model.deep_disclosures:
@@ -267,7 +282,7 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
         sections.append(("robots", "Robots evidence", _robots_section(robots_items)))
     sections.extend(
         [
-            ("evidence", "Evidence records", _evidence_section(model)),
+            ("evidence", "Evidence records", _evidence_section(model, context_index)),
             ("artefacts", "Artefact index", _artefact_section(model)),
         ]
     )
@@ -312,7 +327,10 @@ def _overview_section(model: HtmlReportModel) -> str:
     )
 
 
-def _operator_summary_section(model: HtmlReportModel) -> str:
+def _operator_summary_section(
+    model: HtmlReportModel,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
     summary = model.operator_summary
     if summary.ranked_leads:
         review = "".join(
@@ -328,8 +346,22 @@ def _operator_summary_section(model: HtmlReportModel) -> str:
                     ("Signal", lead.signal),
                 ),
                 category=_OPERATOR_SUMMARY_CATEGORY,
+                element_id=(
+                    context.anchor_reference.anchor_token if context is not None else ""
+                ),
+                extra_html=(
+                    _html_investigation_context(
+                        context.context_items,
+                        context_index,
+                        frozenset(item.id for item in model.project_state.evidence),
+                        frozenset(group.url for group in model.route_groups),
+                    )
+                    if context is not None and context.context_items
+                    else ""
+                ),
             )
             for lead in summary.ranked_leads
+            for context in (context_index.primary_by_anchor_id.get(lead.lead_id),)
         )
     else:
         review = _empty("No evidence-backed leads met the existing summary threshold.")
@@ -371,6 +403,107 @@ def _operator_summary_section(model: HtmlReportModel) -> str:
         + coverage
         + "</ul></details>",
     )
+
+
+def _html_investigation_context(
+    items: tuple[InvestigationContextItem, ...],
+    index: InvestigationContextPresentationIndex,
+    rendered_evidence_ids: frozenset[str] = frozenset(),
+    rendered_route_urls: frozenset[str] = frozenset(),
+) -> str:
+    rendered = "".join(
+        _html_context_item(
+            item,
+            index,
+            rendered_evidence_ids,
+            rendered_route_urls,
+        )
+        for item in items
+    )
+    return (
+        '<div class="investigation-context">'
+        "<h4>Investigation context</h4>"
+        f'<ul class="context-list">{rendered}</ul></div>'
+    )
+
+
+def _html_context_item(
+    item: InvestigationContextItem,
+    index: InvestigationContextPresentationIndex,
+    rendered_evidence_ids: frozenset[str],
+    rendered_route_urls: frozenset[str],
+) -> str:
+    details: list[str] = []
+    if item.route_url:
+        route_reference = (
+            index.route_reference_by_url.get(item.route_url)
+            if item.route_url in rendered_route_urls
+            else None
+        )
+        route = f"<code>{_h(item.route_url)}</code>"
+        if route_reference is not None:
+            route = f'<a href="#{_a(route_reference.anchor_token)}">{route}</a>'
+        details.append(f"route {route}")
+    if item.source_ids:
+        details.append(
+            "source " + ", ".join(f"<code>{_h(value)}</code>" for value in item.source_ids)
+        )
+    if item.source_urls:
+        details.append(
+            "source URL "
+            + ", ".join(f"<code>{_h(value)}</code>" for value in item.source_urls)
+        )
+    if item.body_sha256s:
+        details.append(
+            "body SHA-256 "
+            + ", ".join(f"<code>{_h(value)}</code>" for value in item.body_sha256s)
+        )
+    if item.related_ids:
+        details.append(
+            "related context "
+            + ", ".join(f"<code>{_h(value)}</code>" for value in item.related_ids)
+        )
+    if item.evidence_ids:
+        evidence = []
+        for evidence_id in item.evidence_ids:
+            reference = (
+                index.reference_by_target.get(("evidence", evidence_id))
+                if evidence_id in rendered_evidence_ids
+                else None
+            )
+            if reference is None:
+                evidence.append(f"<code>{_h(evidence_id)}</code>")
+            else:
+                evidence.append(
+                    f'<a href="#{_a(reference.anchor_token)}"><code>{_h(evidence_id)}</code></a>'
+                )
+        details.append("evidence " + ", ".join(evidence))
+    suffix = f"; {'; '.join(details)}" if details else ""
+    return (
+        '<li class="context-item">'
+        f'<span class="context-kind">{_h(item.relationship_kind.title())}</span> '
+        f"{_h(item.label)}{suffix}</li>"
+    )
+
+
+def _html_backlinks(references: tuple[ReportNavigationReference, ...]) -> str:
+    links = ", ".join(
+        f'<a href="#{_a(reference.anchor_token)}">'
+        "Review First context</a>"
+        for reference in references
+    )
+    return f'<p class="context-backlinks"><strong>Back to:</strong> {links}</p>'
+
+
+def _html_evidence_identity(
+    evidence_id: str,
+    index: InvestigationContextPresentationIndex,
+) -> _HtmlValue:
+    backlink = index.evidence_backlink_by_id.get(evidence_id)
+    content = _h(evidence_id)
+    if backlink is not None:
+        content += _html_backlinks(backlink.primary_anchor_references)
+    return _HtmlValue(content)
 
 
 def _human_triage_section(model: HtmlReportModel) -> str:
@@ -621,7 +754,10 @@ def _limitations_section(model: HtmlReportModel) -> str:
     )
 
 
-def _routes_section(model: HtmlReportModel) -> str:
+def _routes_section(
+    model: HtmlReportModel,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
     labels = (
         ("assessed", "Assessed-origin URLs"),
         ("external", "External references"),
@@ -633,13 +769,18 @@ def _routes_section(model: HtmlReportModel) -> str:
         if not groups:
             continue
         content += f"<h3>{_h(label)} <span class=\"count\">({len(groups)})</span></h3>"
-        content += "".join(_route_group_card(group) for group in groups)
+        content += "".join(
+            _route_group_card(group, context_index) for group in groups
+        )
     if not content:
         content = _empty("No structured route records are available.")
     return _section("routes", "Routes and provenance", content)
 
 
-def _route_group_card(group: HtmlRouteGroup) -> str:
+def _route_group_card(
+    group: HtmlRouteGroup,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
     statuses = tuple(
         str(value)
         for value in sorted(
@@ -699,12 +840,21 @@ def _route_group_card(group: HtmlRouteGroup) -> str:
         )
         + "</details>"
     )
+    backlink = context_index.route_backlink_by_url.get(group.url)
+    if backlink is not None:
+        details += _html_backlinks(backlink.primary_anchor_references)
     route_statuses = " ".join(statuses)
     route_categories = " ".join(
         sorted({item.record_kind for item in group.observations})
     )
+    route_reference = context_index.route_reference_by_url.get(group.url)
+    id_attribute = (
+        f' id="{_a(route_reference.anchor_token)}"'
+        if route_reference is not None
+        else ""
+    )
     return (
-        f'<details class="record searchable route-group" data-category="{_ROUTE_CATEGORY}" '
+        f'<details{id_attribute} class="record searchable route-group" data-category="{_ROUTE_CATEGORY}" '
         f'data-categories="{_a(route_categories)}" data-status="{_a(route_statuses)}">'
         f'<summary class="route-url">{_h(group.url)}</summary>{details}</details>'
     )
@@ -949,17 +1099,29 @@ def _robots_section(items: tuple[HTTPArtifact, ...]) -> str:
     )
 
 
-def _evidence_section(model: HtmlReportModel) -> str:
+def _evidence_section(
+    model: HtmlReportModel,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
     rows = [
         _row(
             (
-                item.id,
+                _html_evidence_identity(item.id, context_index),
                 _human_label(item.evidence_type),
                 item.value,
                 _path_value(item.source_file),
                 json.dumps(item.context, sort_keys=True, ensure_ascii=True),
             ),
             category=item.evidence_type,
+            row_id=(
+                reference.anchor_token
+                if (
+                    reference := context_index.reference_by_target.get(
+                        ("evidence", item.id)
+                    )
+                ) is not None
+                else ""
+            ),
         )
         for item in model.project_state.evidence
     ]
@@ -1016,16 +1178,20 @@ def _detail_card(
     *,
     category: str,
     status: int | None = None,
+    element_id: str = "",
+    extra_html: str = "",
 ) -> str:
     details = "".join(
         f'<dt>{_h(label)}</dt><dd>{_render_value(value)}</dd>'
         for label, value in fields
         if value
     )
+    id_attribute = f' id="{_a(element_id)}"' if element_id else ""
     return (
-        f'<details class="record searchable" data-category="{_a(category)}" '
+        f'<details{id_attribute} '
+        f'class="record searchable" data-category="{_a(category)}" '
         f'data-status="{_a(str(status) if status is not None else "")}">'
-        f'<summary>{_h(title)}</summary><dl>{details}</dl></details>'
+        f'<summary>{_h(title)}</summary><dl>{details}</dl>{extra_html}</details>'
     )
 
 
@@ -1045,10 +1211,13 @@ def _row(
     *,
     status: int | None = None,
     category: str,
+    row_id: str = "",
 ) -> str:
     cells = "".join(f"<td>{_render_value(value)}</td>" for value in values)
+    id_attribute = f' id="{_a(row_id)}"' if row_id else ""
     return (
-        f'<tr class="record searchable" data-category="{_a(category)}" '
+        f'<tr{id_attribute} '
+        f'class="record searchable" data-category="{_a(category)}" '
         f'data-status="{_a(str(status) if status is not None else "")}">{cells}</tr>'
     )
 
@@ -1295,6 +1464,9 @@ dt { color: var(--muted); font-weight: 700; } dd { margin: 0; overflow-wrap: any
 th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 8px 10px; overflow-wrap: anywhere; max-width: 420px; }
 th { position: sticky; top: 0; background: #eef2f2; font-size: 12px; } tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: #f3f8f7; }.provenance { display: block; color: var(--muted); font-size: 12px; }
+.investigation-context { margin: 4px 18px 15px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.investigation-context h4 { margin: 0 0 6px; font-size: 14px; }.context-list { margin: 0; padding-left: 20px; }
+.context-item { margin: 4px 0; overflow-wrap: anywhere; }.context-kind { font-weight: 700; }.context-backlinks { margin: 5px 0 0; font-size: 12px; }
 .empty { border: 1px dashed #aeb9be; background: var(--panel); padding: 12px; color: var(--muted); } code { overflow-wrap: anywhere; }
 [hidden] { display: none !important; }
 @media (max-width: 860px) { .sidebar { position: static; width: auto; } main { margin: 0; padding: 24px 18px 60px; }

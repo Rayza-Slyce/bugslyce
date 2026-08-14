@@ -26,7 +26,20 @@ from bugslyce.reports.human_triage import (
     render_human_triage_brief_markdown,
 )
 from bugslyce.reports.markdown import export_project_state_json, render_markdown_report
-from bugslyce.reports.operator_summary import OperatorSummaryLead, build_operator_summary
+from bugslyce.reports.operator_summary import (
+    OperatorSummary,
+    OperatorSummaryLead,
+    build_operator_summary,
+)
+from bugslyce.reports.investigation_context import (
+    RELATED,
+    InvestigationContextBacklink,
+    InvestigationContextItem,
+    InvestigationContextSources,
+)
+from bugslyce.reports.investigation_context_presentation import (
+    build_investigation_context_presentation_index,
+)
 from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
 from bugslyce.recon.deep_source_route_collection_export import (
@@ -78,7 +91,7 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert "<details" in html
 
 
-def test_html_model_exposes_shared_semantic_view_without_rendering_it(
+def test_html_model_renders_only_available_investigation_context_semantics(
     tmp_path: Path,
 ) -> None:
     pack = _write_current_pack(tmp_path / "shared-semantic-view")
@@ -98,9 +111,117 @@ def test_html_model_exposes_shared_semantic_view_without_rendering_it(
     assert len(model.operator_report_view.investigation_context.primary_contexts) == len(
         model.operator_summary.ranked_leads
     )
-    assert "Investigation Context" not in html
+    if any(
+        context.context_items
+        for context in model.operator_report_view.investigation_context.primary_contexts
+    ):
+        assert "Investigation context" in html
+    assert "Investigation context" not in html_with_empty_semantics
     assert "Analysis Coverage" not in html
-    assert html_with_empty_semantics == html
+    assert "Analysis Coverage" not in html_with_empty_semantics
+
+
+def test_html_review_first_renders_context_with_resolving_evidence_navigation(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "investigation-context")
+    model = build_html_report_model(pack)
+    evidence_id = model.project_state.evidence[0].id
+    lead = OperatorSummaryLead(
+        title='Controlled <context> "lead"',
+        why="Inspect retained evidence.",
+        endpoints=["https://example.test/search?tenant=alpha"],
+        evidence_ids=[evidence_id],
+        next_action="Review offline.",
+        signal="direct",
+        score=1,
+        lead_type="controlled_context",
+        lead_id="LEAD-CONTEXT",
+        rank=1,
+    )
+    summary = OperatorSummary(review_first=[lead], low_signal=[], coverage=[])
+    view = build_operator_report_view(
+        summary,
+        investigation_sources=InvestigationContextSources(
+            evidence=tuple(model.project_state.evidence),
+        ),
+    )
+    model = replace(model, operator_summary=summary, operator_report_view=view)
+
+    html = render_html_report(model)
+    context = view.investigation_context.primary_contexts[0]
+    evidence_reference = next(
+        reference
+        for reference in context.navigation_references
+        if reference.target_kind == "evidence"
+    )
+
+    assert "Investigation context" in html
+    assert 'Controlled &lt;context&gt; &quot;lead&quot;' in html
+    assert f'id="{context.anchor_reference.anchor_token}"' in html
+    assert f'href="#{evidence_reference.anchor_token}"' in html
+    assert f'id="{evidence_reference.anchor_token}"' in html
+    assert f'href="#{context.anchor_reference.anchor_token}"' in html
+    assert "Analysis Coverage" not in html
+    generated_links = re.findall(r'href="#(ctx-[^"]+)"', html)
+    for anchor in generated_links:
+        assert html.count(f'id="{anchor}"') == 1
+
+
+def test_html_exact_route_navigation_resolves_both_directions(tmp_path: Path) -> None:
+    model = build_html_report_model(_write_current_pack(tmp_path / "route-navigation"))
+    route = model.route_groups[0].url
+    lead = OperatorSummaryLead(
+        title="Controlled route context",
+        why="Inspect the represented route.",
+        endpoints=[route],
+        evidence_ids=[],
+        next_action="Review offline.",
+        signal="direct",
+        score=1,
+        lead_type="controlled_context",
+        lead_id="LEAD-ROUTE",
+        rank=1,
+    )
+    summary = OperatorSummary(review_first=[lead], low_signal=[], coverage=[])
+    view = build_operator_report_view(summary)
+    context = view.investigation_context.primary_contexts[0]
+    context = replace(
+        context,
+        context_items=(
+            InvestigationContextItem(
+                "represented_route",
+                RELATED,
+                "route_relationship",
+                "",
+                "Exact represented route",
+                route,
+                (),
+                (),
+                (),
+                (),
+                (),
+            ),
+        ),
+    )
+    assembly = replace(
+        view.investigation_context,
+        primary_contexts=(context,),
+        route_backlinks=(
+            InvestigationContextBacklink(route, (context.anchor_reference,)),
+        ),
+    )
+    view = replace(view, investigation_context=assembly)
+    index = build_investigation_context_presentation_index(assembly)
+    route_anchor = index.route_reference_by_url[route].anchor_token
+
+    html = render_html_report(
+        replace(model, operator_summary=summary, operator_report_view=view)
+    )
+
+    assert f'href="#{route_anchor}"' in html
+    assert html.count(f'id="{route_anchor}"') == 1
+    assert f'href="#{context.anchor_reference.anchor_token}"' in html
 
 
 def test_html_report_renders_shared_human_triage_source_context(
