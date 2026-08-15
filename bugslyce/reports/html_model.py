@@ -31,6 +31,7 @@ from bugslyce.recon.deep_http_fingerprint_summary import (
     build_deep_http_fingerprint_summary,
 )
 from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
+    DeepInitialRetainedJavaScriptRouteExtractionResult,
     build_deep_initial_retained_javascript_route_extraction,
 )
 from bugslyce.recon.deep_metadata_collection_export import (
@@ -163,6 +164,9 @@ class HtmlReportModel:
     review_occurrence_groups: tuple[ReviewOccurrenceGroup, ...]
     available_artefacts: tuple[str, ...]
     operator_report_view: OperatorReportView
+    initial_retained_javascript_routes: (
+        DeepInitialRetainedJavaScriptRouteExtractionResult | None
+    ) = None
 
 
 def build_html_report_model(input_dir: Path) -> HtmlReportModel:
@@ -284,6 +288,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
             if path.is_file() and not path.is_symlink()
         ),
         operator_report_view=operator_report_view,
+        initial_retained_javascript_routes=initial_retained_routes,
     )
 
 

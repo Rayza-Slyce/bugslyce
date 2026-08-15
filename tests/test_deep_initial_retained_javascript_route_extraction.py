@@ -387,17 +387,43 @@ def test_offline_project_state_reconstruction_rebuilds_initial_route_analysis(
 
     offline_model = build_html_report_model(tmp_path)
     offline_state = offline_model.project_state
+    expected_result = build_deep_initial_retained_javascript_route_extraction(state)
 
-    assert build_deep_initial_retained_javascript_route_extraction(
-        offline_state
-    ) == build_deep_initial_retained_javascript_route_extraction(state)
-    expected_source = build_deep_initial_retained_javascript_route_extraction(
-        state
-    ).candidates[0].source_observations[0]
+    assert (
+        build_deep_initial_retained_javascript_route_extraction(offline_state)
+        == expected_result
+    )
+    assert offline_model.initial_retained_javascript_routes == expected_result
+
+    expected_source = expected_result.candidates[0].source_observations[0]
     assert tuple(
         (item.unit.source_role, item.unit.source_id, item.finding_count)
         for item in offline_model.operator_report_view.analysis_coverage.items
     ) == ((expected_source.source_role, expected_source.source_id, 1),)
+
+    from bugslyce.reports.html import render_html_report
+
+    html = render_html_report(offline_model)
+    candidate = expected_result.candidates[0]
+
+    for expected in (
+        "Initial retained JavaScript routes",
+        candidate.candidate_id,
+        candidate.safe_candidate,
+        candidate.safe_resolved_url,
+        candidate.path,
+        expected_source.source_role,
+        expected_source.manifest_file,
+        expected_source.safe_document_url,
+        expected_source.source_body_sha256,
+        "extracted candidates were not requested",
+        "manual-review context, not confirmed endpoints",
+    ):
+        assert expected in html
+
+    assert candidate.safe_candidate not in repr(
+        offline_model.operator_summary.ranked_leads
+    )
 
 
 @pytest.mark.parametrize(

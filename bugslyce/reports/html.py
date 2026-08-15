@@ -278,6 +278,18 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
     )
     if source_items:
         sections.append(("source-evidence", "Source evidence", _source_section(source_items)))
+    initial_retained_routes = model.initial_retained_javascript_routes
+    if (
+        initial_retained_routes is not None
+        and initial_retained_routes.candidates
+    ):
+        sections.append(
+            (
+                "initial-retained-javascript-routes",
+                "Initial retained JavaScript routes",
+                _initial_retained_javascript_routes_section(model),
+            )
+        )
     robots_items = tuple(
         item
         for item in model.project_state.http_artifacts
@@ -1114,6 +1126,153 @@ def _source_section(items: tuple[HTTPArtifact, ...]) -> str:
         "source-evidence",
         "Source and JavaScript-derived evidence",
         _table(("Type", "URL", "Observed value", "Evidence", "Source artefact", "Tags"), rows),
+    )
+
+
+def _initial_retained_javascript_routes_section(
+    model: HtmlReportModel,
+) -> str:
+    result = model.initial_retained_javascript_routes
+    if result is None or not result.candidates:
+        return _section(
+            "initial-retained-javascript-routes",
+            "Initial retained JavaScript routes",
+            _empty("No initial-retained static JavaScript route candidates are available."),
+        )
+
+    counts = result.summary_counts
+    summary = _detail_card(
+        "Analysis summary",
+        (
+            (
+                "Manifest HTML sources considered",
+                str(counts.manifest_html_sources_considered),
+            ),
+            (
+                "Retained HTML sources scanned",
+                str(counts.retained_html_sources_scanned),
+            ),
+            (
+                "Sources over the Deep source-file limit skipped",
+                str(counts.source_limit_sources_skipped),
+            ),
+            (
+                "Duplicate retained observations skipped",
+                str(counts.duplicate_retained_observations_skipped),
+            ),
+            (
+                "Already represented by Deep collection skipped",
+                str(counts.already_represented_by_deep_collection_skipped),
+            ),
+            (
+                "Missing or unreadable sources skipped",
+                str(counts.unreadable_or_missing_sources_skipped),
+            ),
+            (
+                "Oversized sources skipped",
+                str(counts.oversized_sources_skipped),
+            ),
+            (
+                "Binary sources skipped",
+                str(counts.binary_sources_skipped),
+            ),
+            (
+                "Invalid source URLs skipped",
+                str(counts.invalid_source_urls_skipped),
+            ),
+            (
+                "Static candidate occurrences found",
+                str(counts.candidate_occurrences_found),
+            ),
+            (
+                "Unique aggregated candidates",
+                str(counts.unique_aggregated_candidates),
+            ),
+            (
+                "Dynamic template strings skipped",
+                str(counts.dynamic_template_strings_skipped),
+            ),
+            (
+                "Dynamic concatenation strings skipped",
+                str(counts.dynamic_concatenation_strings_skipped),
+            ),
+            (
+                "Safety notes",
+                _compact_list(
+                    result.safety_notes,
+                    "safety notes",
+                    visible_count=len(result.safety_notes),
+                ),
+            ),
+        ),
+        category="route",
+    )
+
+    candidate_cards = []
+    for candidate in result.candidates:
+        source_rows = [
+            _row(
+                (
+                    observation.source_role,
+                    _path_value(observation.manifest_file),
+                    observation.safe_document_url,
+                    observation.source_body_sha256,
+                    _compact_list(observation.evidence_ids, "evidence IDs"),
+                ),
+                category="route",
+            )
+            for observation in candidate.source_observations
+        ]
+        candidate_cards.append(
+            _detail_card(
+                (
+                    f"{candidate.candidate_id} - "
+                    "Initial retained static route candidate"
+                ),
+                (
+                    ("Candidate", candidate.safe_candidate),
+                    ("Resolved URL", candidate.safe_resolved_url or ""),
+                    ("Path", candidate.path),
+                    (
+                        "Query parameter names",
+                        _compact_list(
+                            candidate.query_parameter_names,
+                            "query parameter names",
+                        ),
+                    ),
+                    ("Occurrences", str(candidate.occurrence_count)),
+                    ("Interpretation", candidate.interpretation),
+                ),
+                category="route",
+                extra_html=(
+                    "<h3>Source provenance</h3>"
+                    + _table(
+                        (
+                            "Role",
+                            "Manifest file",
+                            "Document URL",
+                            "Body SHA-256",
+                            "Evidence",
+                        ),
+                        source_rows,
+                    )
+                ),
+            )
+        )
+
+    return _section(
+        "initial-retained-javascript-routes",
+        "Initial retained JavaScript routes",
+        (
+            '<p class="section-note">'
+            "This is offline static analysis of complete initial HTML retained "
+            "through the recon manifest. These sources were not Deep-collected "
+            "and extracted candidates were not requested. Static candidates are "
+            "manual-review context, not confirmed endpoints."
+            "</p>"
+            + summary
+            + "".join(candidate_cards)
+        ),
     )
 
 
