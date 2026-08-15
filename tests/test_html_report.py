@@ -40,6 +40,11 @@ from bugslyce.reports.investigation_context import (
 from bugslyce.reports.investigation_context_presentation import (
     build_investigation_context_presentation_index,
 )
+from bugslyce.reports.analysis_coverage import (
+    AnalysisCoverageExecutionEvidence,
+    AnalysisCoverageOutcome,
+    AnalysisCoverageUnit,
+)
 from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
 from bugslyce.recon.deep_source_route_collection_export import (
@@ -117,8 +122,74 @@ def test_html_model_renders_only_available_investigation_context_semantics(
     ):
         assert "Investigation context" in html
     assert "Investigation context" not in html_with_empty_semantics
-    assert "Analysis Coverage" not in html
-    assert "Analysis Coverage" not in html_with_empty_semantics
+    assert "Analysis coverage" in html
+    assert "Analysis coverage" in html_with_empty_semantics
+
+
+def test_html_report_renders_only_supplied_analysis_coverage_claims(
+    tmp_path: Path,
+) -> None:
+    model = build_html_report_model(_write_current_pack(tmp_path / "coverage"))
+    summary = OperatorSummary(review_first=[], low_signal=[], coverage=[])
+    view = build_operator_report_view(
+        summary,
+        coverage_evidence=(
+            AnalysisCoverageExecutionEvidence(
+                unit=AnalysisCoverageUnit(
+                    "deep_initial_retained_javascript_route_extraction",
+                    "initial_html",
+                    "https://example.test/search?a=1&b=2",
+                ),
+                input_membership_proven=True,
+                invocation_proven=True,
+                completed=True,
+                finding_count=1,
+                finding_identity="INITIAL-ROUTE-1",
+            ),
+            AnalysisCoverageExecutionEvidence(
+                unit=AnalysisCoverageUnit(
+                    "project_pipeline_step", "deep", "STEP-NOOP"
+                ),
+                not_run_outcome=AnalysisCoverageOutcome.NO_OP_NOT_APPLICABLE,
+            ),
+            AnalysisCoverageExecutionEvidence(
+                unit=AnalysisCoverageUnit(
+                    "controlled", "retained_source", "SOURCE-REUSED"
+                ),
+                input_membership_proven=True,
+                invocation_proven=True,
+                completed=True,
+                finding_count=0,
+                reused_completed_result=True,
+            ),
+            AnalysisCoverageExecutionEvidence(
+                unit=AnalysisCoverageUnit(
+                    "controlled",
+                    "retained_source",
+                    '<script>alert(1)</script> [controlled](javascript:alert(1))',
+                ),
+            ),
+        ),
+    )
+
+    html = render_html_report(
+        replace(model, operator_summary=summary, operator_report_view=view)
+    )
+
+    assert html.count('id="analysis-coverage"') == 1
+    assert html.count('href="#analysis-coverage"') == 1
+    assert "Analysed · Finding present" in html
+    assert "Not run · Not applicable" in html
+    assert "Unknown" in html
+    assert "1 finding" in html
+    assert "https://example.test/search?a=1&amp;b=2" in html
+    assert "Exact execution proof unavailable" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>alert(1)</script>" not in html
+    assert '<dt>Execution</dt><dd>Reused completed result</dd>' in html
+    assert '<dt>Execution</dt><dd>Execution: reused completed result</dd>' not in html
+    assert "No source-attributable analysis coverage claims" not in html
+    assert "safe" not in html[html.index('id="analysis-coverage"'):html.index('id="human-triage"')].lower()
 
 
 def test_html_review_first_renders_context_with_resolving_evidence_navigation(
@@ -162,7 +233,7 @@ def test_html_review_first_renders_context_with_resolving_evidence_navigation(
     assert f'href="#{evidence_reference.anchor_token}"' in html
     assert f'id="{evidence_reference.anchor_token}"' in html
     assert f'href="#{context.anchor_reference.anchor_token}"' in html
-    assert "Analysis Coverage" not in html
+    assert "Analysis coverage" in html
     generated_links = re.findall(r'href="#(ctx-[^"]+)"', html)
     for anchor in generated_links:
         assert html.count(f'id="{anchor}"') == 1

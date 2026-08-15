@@ -25,6 +25,10 @@ from bugslyce.reports.operator_summary import (
     build_operator_summary,
 )
 from bugslyce.reports.operator_report_view import OperatorReportView
+from bugslyce.reports.analysis_coverage import AnalysisCoverageView
+from bugslyce.reports.analysis_coverage_presentation import (
+    build_analysis_coverage_presentation,
+)
 from bugslyce.reports.investigation_context import InvestigationContextItem
 from bugslyce.reports.investigation_context_presentation import (
     InvestigationContextPresentationIndex,
@@ -94,6 +98,14 @@ def render_markdown_report(
         additional_leads=operator_summary_leads,
         summary=operator_summary,
         context_index=context_index,
+    )
+    _analysis_coverage(
+        lines,
+        (
+            operator_report_view.analysis_coverage
+            if operator_report_view is not None
+            else AnalysisCoverageView(())
+        ),
     )
     _optional_prerendered_section(lines, collection_confidence_markdown)
     _optional_prerendered_section(lines, human_triage_brief_markdown)
@@ -206,6 +218,52 @@ def _complete_code_list(values: list[str] | tuple[str, ...]) -> str:
     return ", ".join(
         "`" + str(value).replace("`", "'") + "`" for value in values
     )
+
+
+def _analysis_coverage(lines: list[str], view: AnalysisCoverageView) -> None:
+    """Render only source-attributable C2 claims already supplied to the report."""
+
+    lines.extend(
+        [
+            "## Analysis Coverage",
+            "",
+            (
+                "Coverage is evidence-limited: this report lists only analysis states "
+                "proven by retained execution evidence. An analyser/source not listed "
+                "here may have run; absence is not a clean result."
+            ),
+            "",
+        ]
+    )
+    items = build_analysis_coverage_presentation(view)
+    if not items:
+        lines.extend(
+            [
+                (
+                    "No source-attributable analysis coverage claims can be proven from "
+                    "the retained execution evidence available to this report."
+                ),
+                "",
+            ]
+        )
+        return
+    for presentation in items:
+        unit = presentation.item.unit
+        lines.extend(
+            [
+                f"- **{presentation.state_label}**",
+                f"  - Capability: {_context_code(unit.capability)}",
+                f"  - Source role: {_context_code(unit.source_role)}",
+                f"  - Source identity: {_context_code(unit.source_id)}",
+            ]
+        )
+        if presentation.finding_count_label:
+            lines.append(f"  - Finding count: {presentation.finding_count_label}")
+        if presentation.execution_note_label:
+            lines.append(f"  - Execution: {presentation.execution_note_label}")
+        if presentation.unknown_reason_label:
+            lines.append(f"  - Reason: {presentation.unknown_reason_label}")
+    lines.append("")
 
 
 def _markdown_investigation_context(

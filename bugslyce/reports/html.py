@@ -22,6 +22,9 @@ from bugslyce.reports.html_model import (
     HtmlRouteGroup,
     build_html_report_model,
 )
+from bugslyce.reports.analysis_coverage_presentation import (
+    build_analysis_coverage_presentation,
+)
 from bugslyce.reports.investigation_context import (
     InvestigationContextItem,
     ReportNavigationReference,
@@ -45,6 +48,7 @@ _SOURCE_ARTEFACT_TYPES = frozenset(
     }
 )
 _OPERATOR_SUMMARY_CATEGORY = "operator_summary"
+_ANALYSIS_COVERAGE_CATEGORY = "analysis_coverage"
 _HUMAN_TRIAGE_CATEGORY = "human_triage"
 _SKIPPED_COLLECTION_CATEGORY = "skipped_collection"
 _ENDPOINT_CATEGORY = "endpoint"
@@ -229,6 +233,7 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
             "Operator summary",
             _operator_summary_section(model, context_index),
         ),
+        ("analysis-coverage", "Analysis coverage", _analysis_coverage_section(model)),
         ("human-triage", "Supporting triage evidence", _human_triage_section(model)),
         ("confidence", "Collection confidence", _confidence_section(model)),
         ("manual-review", "Manual review leads", _candidate_section(model)),
@@ -403,6 +408,45 @@ def _operator_summary_section(
         + coverage
         + "</ul></details>",
     )
+
+
+def _analysis_coverage_section(model: HtmlReportModel) -> str:
+    """Render only source-attributable C2 claims supplied by the shared view."""
+
+    items = build_analysis_coverage_presentation(
+        model.operator_report_view.analysis_coverage
+    )
+    introduction = (
+        '<p class="section-note">Coverage is evidence-limited: this report lists only '
+        "analysis states proven by retained execution evidence. An analyser/source not "
+        "listed here may have run; absence is not a clean result.</p>"
+    )
+    if not items:
+        return _section(
+            "analysis-coverage",
+            "Analysis coverage",
+            introduction
+            + _empty(
+                "No source-attributable analysis coverage claims can be proven from "
+                "the retained execution evidence available to this report."
+            ),
+        )
+    records = "".join(
+        _detail_card(
+            presentation.state_label,
+            (
+                ("Capability", presentation.item.unit.capability),
+                ("Source role", presentation.item.unit.source_role),
+                ("Source identity", presentation.item.unit.source_id),
+                ("Finding count", presentation.finding_count_label or ""),
+                ("Execution", presentation.execution_note_label or ""),
+                ("Reason", presentation.unknown_reason_label or ""),
+            ),
+            category=_ANALYSIS_COVERAGE_CATEGORY,
+        )
+        for presentation in items
+    )
+    return _section("analysis-coverage", "Analysis coverage", introduction + records)
 
 
 def _html_investigation_context(
@@ -1296,6 +1340,8 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
     }
     if model.operator_summary.ranked_leads:
         values.add(_OPERATOR_SUMMARY_CATEGORY)
+    if model.operator_report_view.analysis_coverage.items:
+        values.add(_ANALYSIS_COVERAGE_CATEGORY)
     if model.human_triage_brief.start_here or model.human_triage_brief.evidence_values:
         values.add(_HUMAN_TRIAGE_CATEGORY)
     if model.metadata_collection.skipped or model.source_collection.skipped:

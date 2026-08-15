@@ -138,7 +138,7 @@ def test_markdown_review_first_renders_available_investigation_context() -> None
     assert f'[`{evidence_id}`](#{evidence_reference.anchor_token})' in report
     assert f'<a id="{evidence_reference.anchor_token}"></a>{evidence_id}' in report
     assert f"[Review First context](#{first.anchor_reference.anchor_token})" in report
-    assert "Analysis Coverage" not in report
+    assert "## Analysis Coverage" in report
     anchors = re.findall(r'<a id="(ctx-[^"]+)"></a>', report)
     for target in re.findall(r'\]\(#(ctx-[^)]+)\)', report):
         assert anchors.count(target) == 1
@@ -708,7 +708,7 @@ def test_shared_operator_view_does_not_change_markdown_output() -> None:
         operator_summary=summary,
     )
     assert "Investigation Context" not in baseline
-    assert "Analysis Coverage" not in baseline
+    assert "## Analysis Coverage" in baseline
 
 
 def test_report_inserts_deep_recon_markdown_once_as_opaque_block() -> None:

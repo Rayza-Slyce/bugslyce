@@ -53,7 +53,8 @@ def test_helper_returns_report_dataclass_with_markdown_and_metadata() -> None:
         lead.lead_id for lead in report.human_triage_brief.ranked_leads
     )
     assert report.operator_report_view.analysis_coverage.items == ()
-    assert "Analysis Coverage" not in report.markdown
+    assert "## Analysis Coverage" in report.markdown
+    assert "No source-attributable analysis coverage claims can be proven" in report.markdown
 
 
 def test_helper_places_standard_sections_after_operator_summary_before_scope() -> None:
