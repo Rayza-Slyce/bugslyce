@@ -154,6 +154,92 @@ def test_body_fetch_clean_noop_when_all_eligible_bodies_are_already_fetched(
     assert latest_metadata.read_text(encoding="utf-8") == "# Previous Executed Phase\n"
 
 
+def test_body_fetch_clean_noop_when_completed_discovery_found_no_paths(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "empty-discovery"
+    input_dir.mkdir()
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    gobuster = (
+        input_dir
+        / "gobuster-deep-bounded-core-10.10.10.10-80-root.txt"
+    )
+    gobuster.write_text("", encoding="utf-8")
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "artifacts": [
+                    {
+                        "type": "gobuster",
+                        "file": gobuster.name,
+                        "base_url": "http://10.10.10.10/",
+                        "description": (
+                            "Bounded root content discovery from approved "
+                            "BugSlyce content plan"
+                        ),
+                        "tags": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = _NeverRunBodyFetchRunner()
+
+    with pytest.raises(BodyFetchNoWork) as exc_info:
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 0
+    assert runner.called is False
+
+
+def test_body_fetch_partial_empty_discovery_remains_error(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "partial-empty-discovery"
+    input_dir.mkdir()
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    gobuster = (
+        input_dir
+        / "gobuster-deep-bounded-core-10.10.10.10-80-root.txt"
+    )
+    gobuster.write_text("", encoding="utf-8")
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "artifacts": [
+                    {
+                        "type": "gobuster",
+                        "file": gobuster.name,
+                        "base_url": "http://10.10.10.10/",
+                        "description": "Partial gobuster output",
+                        "tags": ["partial", "timed_out"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = _NeverRunBodyFetchRunner()
+
+    with pytest.raises(ValueError, match="No prior content-followup"):
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert runner.called is False
+
+
 def test_body_fetch_caps_total_and_per_origin(tmp_path: Path) -> None:
     input_dir, _scope = _body_fetch_input(tmp_path)
     state = build_project_state(input_dir)

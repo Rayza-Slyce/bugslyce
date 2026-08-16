@@ -164,6 +164,8 @@ def run_body_fetch_workflow(
         )
     considered, selected_urls = select_body_fetch_urls(initial_state, target, manifest)
     if considered == 0:
+        if _completed_content_discovery_is_empty(input_dir, manifest):
+            raise BodyFetchNoWork(0)
         raise ValueError("No prior content-followup header artefacts were found.")
     if not selected_urls:
         raise BodyFetchNoWork(considered)
@@ -426,6 +428,39 @@ def _score_url(url: str) -> int:
     }
     score += 2 * len(segments & INTERESTING_SEGMENTS)
     return score
+
+
+def _completed_content_discovery_is_empty(
+    input_dir: Path,
+    manifest: dict[str, object],
+) -> bool:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        return False
+
+    completed_paths: list[Path] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("type") != "gobuster":
+            continue
+        raw_tags = artifact.get("tags")
+        tags = (
+            {tag for tag in raw_tags if isinstance(tag, str)}
+            if isinstance(raw_tags, list)
+            else set()
+        )
+        if {"partial", "timed_out"} & tags:
+            return False
+        file_value = artifact.get("file")
+        if not isinstance(file_value, str) or not file_value:
+            continue
+        path = input_dir / Path(file_value).name
+        if not path.is_file():
+            return False
+        completed_paths.append(path)
+
+    return bool(completed_paths) and all(
+        path.stat().st_size == 0 for path in completed_paths
+    )
 
 
 def _content_followup_urls(manifest: dict[str, object]) -> set[str]:

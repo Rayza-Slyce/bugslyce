@@ -166,6 +166,8 @@ def run_content_followup_workflow(
         manifest,
     )
     if considered == 0:
+        if _completed_content_discovery_is_empty(input_dir, manifest):
+            raise ContentFollowupNoWork(0)
         raise ValueError("No discovered_path records from content discovery artefacts were found.")
     if not selected_urls:
         raise ContentFollowupNoWork(considered)
@@ -419,6 +421,39 @@ def _is_content_discovery_record(record: DiscoveredPath) -> bool:
     return (
         Path(record.source).name.startswith("gobuster-")
         or "internal_exact_body_comparator" in record.tags
+    )
+
+
+def _completed_content_discovery_is_empty(
+    input_dir: Path,
+    manifest: dict[str, object],
+) -> bool:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        return False
+
+    completed_paths: list[Path] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("type") != "gobuster":
+            continue
+        raw_tags = artifact.get("tags")
+        tags = (
+            {tag for tag in raw_tags if isinstance(tag, str)}
+            if isinstance(raw_tags, list)
+            else set()
+        )
+        if {"partial", "timed_out"} & tags:
+            return False
+        file_value = artifact.get("file")
+        if not isinstance(file_value, str) or not file_value:
+            continue
+        path = input_dir / Path(file_value).name
+        if not path.is_file():
+            return False
+        completed_paths.append(path)
+
+    return bool(completed_paths) and all(
+        path.stat().st_size == 0 for path in completed_paths
     )
 
 
