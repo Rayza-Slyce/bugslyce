@@ -69,6 +69,7 @@ from bugslyce.recon.standard_interpretation import (
 )
 from bugslyce.reports.analysis_coverage import (
     coverage_evidence_from_initial_retained_javascript_routes,
+    load_analysis_coverage_artifact,
 )
 from bugslyce.reports.human_triage import (
     HumanTriageBrief,
@@ -240,6 +241,18 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         if _deep_report_inputs_available(root, project_state, deep_mode_enabled)
         else None
     )
+    persisted_coverage_evidence = load_analysis_coverage_artifact(root)
+    coverage_evidence = (
+        persisted_coverage_evidence
+        if persisted_coverage_evidence is not None
+        else (
+            coverage_evidence_from_initial_retained_javascript_routes(
+                initial_retained_routes
+            )
+            if initial_retained_routes is not None
+            else ()
+        )
+    )
     operator_report_view = build_operator_report_view(
         operator_summary,
         investigation_sources=InvestigationContextSources(
@@ -249,13 +262,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
             route_relationships=relationships,
             workflow_leads=tuple(workflow_leads),
         ),
-        coverage_evidence=(
-            coverage_evidence_from_initial_retained_javascript_routes(
-                initial_retained_routes
-            )
-            if initial_retained_routes is not None
-            else ()
-        ),
+        coverage_evidence=coverage_evidence,
     )
     interpretation = assemble_standard_interpretation_from_project_state(
         project_state,

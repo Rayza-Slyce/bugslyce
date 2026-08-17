@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+from pathlib import Path
 
 import pytest
 
@@ -36,7 +38,10 @@ from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageState,
     AnalysisCoverageUnit,
     AnalysisCoverageUnknownReason,
+    ANALYSIS_COVERAGE_FILENAME,
     build_analysis_coverage,
+    load_analysis_coverage_artifact,
+    write_analysis_coverage_artifact,
     coverage_evidence_from_deep_javascript_routes,
     coverage_evidence_from_initial_retained_javascript_routes,
     coverage_evidence_from_deep_parameter_inventory,
@@ -509,6 +514,178 @@ def test_high_cardinality_explicit_execution_records_remain_sparse_and_determini
     assert coverage.items[0].unit.source_id == "source-0000"
     assert coverage.items[-1].unit.source_id == "source-0399"
 
+
+def test_analysis_coverage_artifact_round_trips_exact_execution_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence = (
+        _execution(
+            "source-c",
+            completed=False,
+            attempted=True,
+            partial_failure=True,
+        ),
+        _execution(
+            "source-a",
+            input_membership_proven=False,
+            invocation_proven=False,
+            completed=False,
+            not_run_outcome=AnalysisCoverageOutcome.UNSUPPORTED,
+        ),
+        _execution(
+            "source-b",
+            finding_count=2,
+            finding_identity="finding-b",
+            reused_completed_result=True,
+        ),
+    )
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_path = write_analysis_coverage_artifact(first_root, evidence)
+    second_path = write_analysis_coverage_artifact(
+        second_root,
+        tuple(reversed(evidence)),
+    )
+
+    assert first_path == first_root / ANALYSIS_COVERAGE_FILENAME
+    assert second_path == second_root / ANALYSIS_COVERAGE_FILENAME
+    assert first_path.read_bytes() == second_path.read_bytes()
+
+    payload = json.loads(first_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["generated_by"] == "bugslyce.analysis_coverage"
+    assert [
+        item["unit"]["source_id"]
+        for item in payload["evidence"]
+    ] == [
+        "source-a",
+        "source-b",
+        "source-c",
+    ]
+
+    loaded = load_analysis_coverage_artifact(first_root)
+
+    assert loaded == (
+        evidence[1],
+        evidence[2],
+        evidence[0],
+    )
+
+
+def test_analysis_coverage_artifact_preserves_empty_authoritative_evidence(
+    tmp_path: Path,
+) -> None:
+    path = write_analysis_coverage_artifact(tmp_path, ())
+
+    assert path.is_file()
+    assert load_analysis_coverage_artifact(tmp_path) == ()
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {
+        "schema_version": 1,
+        "generated_by": "bugslyce.analysis_coverage",
+        "evidence": [],
+    }
+
+
+def test_dangling_analysis_coverage_symlink_is_not_legacy_absence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ANALYSIS_COVERAGE_FILENAME
+    path.symlink_to(tmp_path / "missing-analysis-coverage-target.json")
+
+    assert path.is_symlink()
+    assert not path.exists()
+
+    with pytest.raises(
+        ValueError,
+        match="structured artefact must be a regular file",
+    ):
+        load_analysis_coverage_artifact(tmp_path)
+
+
+def test_missing_analysis_coverage_artifact_is_legacy_absence(
+    tmp_path: Path,
+) -> None:
+    assert load_analysis_coverage_artifact(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    (
+        (
+            {
+                "schema_version": 2,
+                "generated_by": "bugslyce.analysis_coverage",
+                "evidence": [],
+            },
+            "schema_version",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "generated_by": "other.producer",
+                "evidence": [],
+            },
+            "generated_by",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "generated_by": "bugslyce.analysis_coverage",
+                "evidence": {},
+            },
+            "evidence",
+        ),
+    ),
+)
+def test_present_analysis_coverage_artifact_rejects_invalid_document_contract(
+    tmp_path: Path,
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    path = tmp_path / ANALYSIS_COVERAGE_FILENAME
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_analysis_coverage_artifact(tmp_path)
+
+
+def test_present_analysis_coverage_artifact_rejects_invalid_execution_field_type(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ANALYSIS_COVERAGE_FILENAME
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_by": "bugslyce.analysis_coverage",
+                "evidence": [
+                    {
+                        "unit": {
+                            "capability": "fixture_static_analysis",
+                            "source_role": "retained_source",
+                            "source_id": "source-a",
+                        },
+                        "input_membership_proven": "yes",
+                        "invocation_proven": True,
+                        "completed": True,
+                        "finding_count": 0,
+                        "finding_identity": "",
+                        "not_run_outcome": None,
+                        "attempted": False,
+                        "partial_failure": False,
+                        "reused_completed_result": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="input_membership_proven"):
+        load_analysis_coverage_artifact(tmp_path)
 
 def _execution(
     source_id: str,

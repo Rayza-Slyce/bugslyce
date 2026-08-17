@@ -2252,6 +2252,11 @@ def _write_interpretation_report_if_needed(
         workflow_leads=workflow_leads,
         **triage_kwargs,
     )
+    coverage_evidence = (
+        _report_coverage_evidence(orchestration)
+        if orchestration is not None
+        else ()
+    )
     operator_report_view = (
         build_operator_report_view(
             operator_summary,
@@ -2270,7 +2275,7 @@ def _write_interpretation_report_if_needed(
                 ),
                 workflow_leads=tuple(workflow_leads),
             ),
-            coverage_evidence=_report_coverage_evidence(orchestration),
+            coverage_evidence=coverage_evidence,
         )
         if operator_summary is not None
         else None
@@ -2308,6 +2313,7 @@ def _write_interpretation_report_if_needed(
     if deep_recon_markdown is not None:
         report_kwargs["deep_recon_markdown"] = deep_recon_markdown
         report_kwargs["operator_summary_leads"] = operator_summary_leads
+        report_kwargs["analysis_coverage_evidence"] = coverage_evidence
     report_path, json_path = write_project_outputs(
         project_state,
         candidates,

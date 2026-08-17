@@ -31,6 +31,13 @@ from bugslyce.recon.deep_metadata_collection_export import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.export import export_recon_evidence_pack
+from bugslyce.reports.analysis_coverage import (
+    ANALYSIS_COVERAGE_FILENAME,
+    AnalysisCoverageExecutionEvidence,
+    AnalysisCoverageUnit,
+    load_analysis_coverage_artifact,
+    write_analysis_coverage_artifact,
+)
 from bugslyce.reports.markdown import export_project_state_json
 
 
@@ -894,6 +901,153 @@ def test_pack_aware_validation_is_deterministic_under_reversed_metadata_order(
 
     assert actual == expected
     assert actual.validation_status == "complete"
+
+
+def test_export_includes_optional_analysis_coverage_as_top_level_closure_member(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    evidence = (
+        AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability="deep_parameter_inventory",
+                source_role="shallow_route_followup",
+                source_id="DEEP-PARAM-SOURCE-0006",
+            ),
+            input_membership_proven=True,
+            invocation_proven=True,
+            completed=True,
+            finding_count=2,
+            finding_identity="username\x00password",
+        ),
+    )
+    write_analysis_coverage_artifact(input_dir, evidence)
+    output_path = tmp_path / "coverage.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    extracted = tmp_path / "coverage"
+    with zipfile.ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        archive.extractall(extracted)
+
+    assert ANALYSIS_COVERAGE_FILENAME in names
+    assert f"raw/{ANALYSIS_COVERAGE_FILENAME}" not in names
+    assert (
+        ANALYSIS_COVERAGE_FILENAME,
+        "analysis_coverage_evidence",
+        ANALYSIS_COVERAGE_FILENAME,
+        (),
+    ) in _closure_owner_associations(closure)
+    assert load_analysis_coverage_artifact(extracted) == evidence
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_export_without_analysis_coverage_remains_valid_legacy_pack(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    assert not (input_dir / ANALYSIS_COVERAGE_FILENAME).exists()
+    output_path = tmp_path / "legacy.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    extracted = tmp_path / "legacy"
+    with zipfile.ZipFile(output_path) as archive:
+        assert ANALYSIS_COVERAGE_FILENAME not in archive.namelist()
+        archive.extractall(extracted)
+
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "complete"
+    assert ANALYSIS_COVERAGE_FILENAME not in validation.required_metadata_errors
+
+
+def test_standalone_cli_analysis_coverage_export_matches_direct_api_owner(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    write_analysis_coverage_artifact(input_dir, ())
+    api_path = tmp_path / "coverage-api.zip"
+    cli_path = tmp_path / "coverage-cli.zip"
+
+    export_recon_evidence_pack(input_dir, api_path, clock=lambda: FIXED_TIME)
+    assert main(
+        [
+            "recon",
+            "export",
+            "--input-dir",
+            str(input_dir),
+            "--output",
+            str(cli_path),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    with zipfile.ZipFile(api_path) as api_archive, zipfile.ZipFile(cli_path) as cli_archive:
+        api_closure = json.loads(api_archive.read(REFERENCE_CLOSURE_FILENAME))
+        cli_closure = json.loads(cli_archive.read(REFERENCE_CLOSURE_FILENAME))
+        api_names = set(api_archive.namelist())
+        cli_names = set(cli_archive.namelist())
+        cli_archive.extractall(tmp_path / "coverage-cli")
+
+    expected_owner = (
+        ANALYSIS_COVERAGE_FILENAME,
+        "analysis_coverage_evidence",
+        ANALYSIS_COVERAGE_FILENAME,
+        (),
+    )
+    assert expected_owner in _closure_owner_associations(api_closure)
+    assert expected_owner in _closure_owner_associations(cli_closure)
+    assert ANALYSIS_COVERAGE_FILENAME in api_names
+    assert ANALYSIS_COVERAGE_FILENAME in cli_names
+    assert validate_evidence_pack_root(
+        tmp_path / "coverage-cli"
+    ).validation_status == "complete"
+
+
+def test_validator_rejects_removed_declared_analysis_coverage_member_without_making_it_required(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    write_analysis_coverage_artifact(input_dir, ())
+    output_path = tmp_path / "coverage-removal.zip"
+
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+
+    extracted = tmp_path / "coverage-removal"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+
+    (extracted / ANALYSIS_COVERAGE_FILENAME).unlink()
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert ANALYSIS_COVERAGE_FILENAME in validation.missing_declared_member_paths
+    assert ANALYSIS_COVERAGE_FILENAME not in validation.required_metadata_errors
+
+
+def test_export_rejects_malformed_present_analysis_coverage_artifact(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    (input_dir / ANALYSIS_COVERAGE_FILENAME).write_text(
+        "{\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="could not parse analysis_coverage.json",
+    ):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "malformed-coverage.zip",
+            clock=lambda: FIXED_TIME,
+        )
+
+    assert not (tmp_path / "malformed-coverage.zip").exists()
 
 
 def test_direct_api_deep_export_discovers_successful_and_relationship_owners(

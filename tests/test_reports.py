@@ -16,6 +16,12 @@ from bugslyce.reports.human_triage import (
     build_human_triage_brief,
     render_human_triage_brief_markdown,
 )
+from bugslyce.reports.analysis_coverage import (
+    ANALYSIS_COVERAGE_FILENAME,
+    AnalysisCoverageExecutionEvidence,
+    AnalysisCoverageUnit,
+    load_analysis_coverage_artifact,
+)
 from bugslyce.reports.markdown import (
     export_project_state_json,
     format_endpoint_list,
@@ -867,16 +873,70 @@ def test_project_state_json_export_is_valid_and_complete() -> None:
 def test_write_project_outputs_to_temp_directory(tmp_path: Path) -> None:
     state = build_project_state(FIXTURES_ROOT / "basic_saas")
     candidates = generate_candidates(state)
+    output_dir = tmp_path / "bugslyce-output"
 
-    report_path, json_path = write_project_outputs(state, candidates, tmp_path / "bugslyce-output")
+    report_path, json_path = write_project_outputs(state, candidates, output_dir)
 
-    assert report_path == tmp_path / "bugslyce-output" / "report.md"
-    assert json_path == tmp_path / "bugslyce-output" / "project_state.json"
+    assert report_path == output_dir / "report.md"
+    assert json_path == output_dir / "project_state.json"
     assert report_path.exists()
     assert json_path.exists()
     assert "# BugSlyce Recon Pack" in report_path.read_text(encoding="utf-8")
     assert json.loads(json_path.read_text(encoding="utf-8"))["candidates"]
+    assert not (tmp_path / "bugslyce-output" / ANALYSIS_COVERAGE_FILENAME).exists()
 
+
+def test_write_project_outputs_persists_explicit_analysis_coverage_evidence(
+    tmp_path: Path,
+) -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    evidence = (
+        AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability="deep_parameter_inventory",
+                source_role="shallow_route_followup",
+                source_id="DEEP-PARAM-SOURCE-0001",
+            ),
+            input_membership_proven=True,
+            invocation_proven=True,
+            completed=True,
+            finding_count=2,
+            finding_identity="username\x00password",
+        ),
+    )
+    output_dir = tmp_path / "bugslyce-output"
+
+    write_project_outputs(
+        state,
+        candidates,
+        output_dir,
+        analysis_coverage_evidence=evidence,
+    )
+
+    coverage_path = output_dir / ANALYSIS_COVERAGE_FILENAME
+    assert coverage_path.is_file()
+    assert load_analysis_coverage_artifact(output_dir) == evidence
+
+
+def test_write_project_outputs_explicit_empty_coverage_replaces_stale_proof(
+    tmp_path: Path,
+) -> None:
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    output_dir = tmp_path / "bugslyce-output"
+    output_dir.mkdir()
+    coverage_path = output_dir / ANALYSIS_COVERAGE_FILENAME
+    coverage_path.write_text("stale coverage proof\n", encoding="utf-8")
+
+    write_project_outputs(
+        state,
+        candidates,
+        output_dir,
+        analysis_coverage_evidence=(),
+    )
+
+    assert load_analysis_coverage_artifact(output_dir) == ()
 
 def test_long_evidence_lists_are_compacted_in_markdown_tables() -> None:
     report, state, _candidates = _basic_saas_report()

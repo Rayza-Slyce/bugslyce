@@ -41,9 +41,11 @@ from bugslyce.reports.investigation_context_presentation import (
     build_investigation_context_presentation_index,
 )
 from bugslyce.reports.analysis_coverage import (
+    ANALYSIS_COVERAGE_FILENAME,
     AnalysisCoverageExecutionEvidence,
     AnalysisCoverageOutcome,
     AnalysisCoverageUnit,
+    write_analysis_coverage_artifact,
 )
 from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
@@ -124,6 +126,130 @@ def test_html_model_renders_only_available_investigation_context_semantics(
     assert "Investigation context" not in html_with_empty_semantics
     assert "Analysis coverage" in html
     assert "Analysis coverage" in html_with_empty_semantics
+
+
+def test_html_model_prefers_persisted_analysis_coverage_over_legacy_reconstruction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "persisted-coverage")
+    evidence = (
+        AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability="deep_parameter_inventory",
+                source_role="shallow_route_followup",
+                source_id="DEEP-PARAM-SOURCE-0006",
+            ),
+            input_membership_proven=True,
+            invocation_proven=True,
+            completed=True,
+            finding_count=2,
+            finding_identity="username\x00password",
+        ),
+    )
+    write_analysis_coverage_artifact(pack, evidence)
+
+    monkeypatch.setattr(
+        "bugslyce.reports.html_model.coverage_evidence_from_initial_retained_javascript_routes",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Persisted Analysis Coverage must not be merged with legacy reconstruction."
+        ),
+    )
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "Analysed · Finding present" in html
+    assert "DEEP-PARAM-SOURCE-0006" in html
+    assert "2 findings" in html
+
+
+def test_html_model_treats_empty_persisted_analysis_coverage_as_authoritative(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "empty-persisted-coverage")
+    write_analysis_coverage_artifact(pack, ())
+
+    monkeypatch.setattr(
+        "bugslyce.reports.html_model.coverage_evidence_from_initial_retained_javascript_routes",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Present empty persisted coverage must remain authoritative."
+        ),
+    )
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "No source-attributable analysis coverage claims" in html
+
+
+def test_html_model_without_analysis_coverage_artifact_keeps_legacy_reconstruction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = _write_deep_interpretation_pack(tmp_path / "legacy-coverage")
+    assert not (pack / ANALYSIS_COVERAGE_FILENAME).exists()
+
+    legacy_evidence = (
+        AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability="deep_initial_retained_javascript_route_extraction",
+                source_role="initial_html",
+                source_id="LEGACY-COVERAGE-SOURCE",
+            ),
+            input_membership_proven=True,
+            invocation_proven=True,
+            completed=True,
+            finding_count=1,
+            finding_identity="/legacy-route",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "bugslyce.reports.html_model.coverage_evidence_from_initial_retained_javascript_routes",
+        lambda *_args, **_kwargs: legacy_evidence,
+    )
+
+    html = render_html_report(build_html_report_model(pack))
+
+    assert "Analysed · Finding present" in html
+    assert "LEGACY-COVERAGE-SOURCE" in html
+    assert "1 finding" in html
+
+
+def test_html_model_rejects_malformed_present_analysis_coverage_artifact(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "malformed-analysis-coverage")
+    (pack / ANALYSIS_COVERAGE_FILENAME).write_text(
+        "{\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="could not parse analysis_coverage.json",
+    ):
+        build_html_report_model(pack)
+
+
+def test_html_model_rejects_unsupported_analysis_coverage_schema(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "unsupported-analysis-coverage")
+    (pack / ANALYSIS_COVERAGE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "generated_by": "bugslyce.analysis_coverage",
+                "evidence": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="schema_version"):
+        build_html_report_model(pack)
 
 
 def test_html_report_renders_only_supplied_analysis_coverage_claims(

@@ -11,6 +11,8 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
+import json
+from pathlib import Path
 
 from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
     DeepInitialRetainedJavaScriptRouteExtractionResult,
@@ -22,6 +24,11 @@ from bugslyce.recon.deep_parameter_inventory import DeepParameterInventoryResult
 from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
     DeepPostFollowupJavaScriptRouteExtractionResult,
 )
+
+
+ANALYSIS_COVERAGE_FILENAME = "analysis_coverage.json"
+_ANALYSIS_COVERAGE_SCHEMA_VERSION = 1
+_ANALYSIS_COVERAGE_GENERATED_BY = "bugslyce.analysis_coverage"
 
 
 class AnalysisCoverageState(str, Enum):
@@ -134,6 +141,272 @@ class AnalysisCoverageExecutionEvidence:
             and self.finding_count is not None
         ):
             raise ValueError("Reuse provenance requires a completed exact result.")
+
+
+def write_analysis_coverage_artifact(
+    root: Path,
+    evidence: Sequence[AnalysisCoverageExecutionEvidence],
+) -> Path:
+    """Persist exact report-only execution proof deterministically."""
+
+    if isinstance(evidence, (str, bytes)) or not isinstance(evidence, Sequence):
+        raise TypeError(
+            "Analysis coverage evidence must be a sequence of execution evidence."
+        )
+    values = tuple(evidence)
+    if any(
+        not isinstance(item, AnalysisCoverageExecutionEvidence)
+        for item in values
+    ):
+        raise TypeError(
+            "Analysis coverage evidence must contain execution evidence values."
+        )
+
+    ordered = tuple(sorted(values, key=_persistence_execution_sort_key))
+    payload = {
+        "schema_version": _ANALYSIS_COVERAGE_SCHEMA_VERSION,
+        "generated_by": _ANALYSIS_COVERAGE_GENERATED_BY,
+        "evidence": [_execution_evidence_to_dict(item) for item in ordered],
+    }
+
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / ANALYSIS_COVERAGE_FILENAME
+    if path.is_symlink():
+        raise ValueError(
+            f"structured artefact must be a regular file: {ANALYSIS_COVERAGE_FILENAME}"
+        )
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_analysis_coverage_artifact(
+    root: Path,
+) -> tuple[AnalysisCoverageExecutionEvidence, ...] | None:
+    """Load exact persisted coverage proof, or None for legacy absence."""
+
+    path = root / ANALYSIS_COVERAGE_FILENAME
+    if path.is_symlink():
+        raise ValueError(
+            f"structured artefact must be a regular file: {ANALYSIS_COVERAGE_FILENAME}"
+        )
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ValueError(
+            f"structured artefact must be a regular file: {ANALYSIS_COVERAGE_FILENAME}"
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"could not parse {ANALYSIS_COVERAGE_FILENAME}: {exc}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"{ANALYSIS_COVERAGE_FILENAME} must contain a JSON object"
+        )
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != _ANALYSIS_COVERAGE_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"{ANALYSIS_COVERAGE_FILENAME} has an unsupported schema_version"
+        )
+    if payload.get("generated_by") != _ANALYSIS_COVERAGE_GENERATED_BY:
+        raise ValueError(
+            f"{ANALYSIS_COVERAGE_FILENAME} has an invalid generated_by value"
+        )
+
+    raw_evidence = payload.get("evidence")
+    if not isinstance(raw_evidence, list):
+        raise ValueError(
+            f"{ANALYSIS_COVERAGE_FILENAME} field 'evidence' must be a list"
+        )
+
+    evidence = tuple(
+        _execution_evidence_from_dict(item, index)
+        for index, item in enumerate(raw_evidence)
+    )
+    return tuple(sorted(evidence, key=_persistence_execution_sort_key))
+
+
+def _execution_evidence_to_dict(
+    item: AnalysisCoverageExecutionEvidence,
+) -> dict[str, object]:
+    return {
+        "unit": {
+            "capability": item.unit.capability,
+            "source_role": item.unit.source_role,
+            "source_id": item.unit.source_id,
+        },
+        "input_membership_proven": item.input_membership_proven,
+        "invocation_proven": item.invocation_proven,
+        "completed": item.completed,
+        "finding_count": item.finding_count,
+        "finding_identity": item.finding_identity,
+        "not_run_outcome": (
+            item.not_run_outcome.value
+            if item.not_run_outcome is not None
+            else None
+        ),
+        "attempted": item.attempted,
+        "partial_failure": item.partial_failure,
+        "reused_completed_result": item.reused_completed_result,
+    }
+
+
+def _execution_evidence_from_dict(
+    value: object,
+    index: int,
+) -> AnalysisCoverageExecutionEvidence:
+    label = f"{ANALYSIS_COVERAGE_FILENAME} evidence[{index}]"
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+
+    raw_unit = value.get("unit")
+    if not isinstance(raw_unit, dict):
+        raise ValueError(f"{label}.unit must be a JSON object")
+
+    capability = _coverage_text_field(
+        raw_unit,
+        "capability",
+        f"{label}.unit",
+    )
+    source_role = _coverage_text_field(
+        raw_unit,
+        "source_role",
+        f"{label}.unit",
+    )
+    source_id = _coverage_text_field(
+        raw_unit,
+        "source_id",
+        f"{label}.unit",
+    )
+
+    input_membership_proven = _coverage_bool_field(
+        value,
+        "input_membership_proven",
+        label,
+    )
+    invocation_proven = _coverage_bool_field(
+        value,
+        "invocation_proven",
+        label,
+    )
+    completed = _coverage_bool_field(
+        value,
+        "completed",
+        label,
+    )
+    attempted = _coverage_bool_field(
+        value,
+        "attempted",
+        label,
+    )
+    partial_failure = _coverage_bool_field(
+        value,
+        "partial_failure",
+        label,
+    )
+    reused_completed_result = _coverage_bool_field(
+        value,
+        "reused_completed_result",
+        label,
+    )
+
+    finding_count = value.get("finding_count")
+    if finding_count is not None and (
+        isinstance(finding_count, bool)
+        or not isinstance(finding_count, int)
+    ):
+        raise ValueError(f"{label}.finding_count must be an integer or null")
+    if isinstance(finding_count, int) and finding_count < 0:
+        raise ValueError(f"{label}.finding_count cannot be negative")
+
+    finding_identity = value.get("finding_identity")
+    if not isinstance(finding_identity, str):
+        raise ValueError(f"{label}.finding_identity must be text")
+
+    raw_not_run_outcome = value.get("not_run_outcome")
+    if raw_not_run_outcome is None:
+        not_run_outcome = None
+    elif isinstance(raw_not_run_outcome, str):
+        try:
+            not_run_outcome = AnalysisCoverageOutcome(raw_not_run_outcome)
+        except ValueError as exc:
+            raise ValueError(
+                f"{label}.not_run_outcome is invalid"
+            ) from exc
+    else:
+        raise ValueError(
+            f"{label}.not_run_outcome must be text or null"
+        )
+
+    try:
+        return AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability=capability,
+                source_role=source_role,
+                source_id=source_id,
+            ),
+            input_membership_proven=input_membership_proven,
+            invocation_proven=invocation_proven,
+            completed=completed,
+            finding_count=finding_count,
+            finding_identity=finding_identity,
+            not_run_outcome=not_run_outcome,
+            attempted=attempted,
+            partial_failure=partial_failure,
+            reused_completed_result=reused_completed_result,
+        )
+    except ValueError as exc:
+        raise ValueError(f"{label} is invalid: {exc}") from exc
+
+
+def _coverage_text_field(
+    value: dict[str, object],
+    key: str,
+    label: str,
+) -> str:
+    field = value.get(key)
+    if not isinstance(field, str):
+        raise ValueError(f"{label}.{key} must be text")
+    return field
+
+
+def _coverage_bool_field(
+    value: dict[str, object],
+    key: str,
+    label: str,
+) -> bool:
+    field = value.get(key)
+    if type(field) is not bool:
+        raise ValueError(f"{label}.{key} must be boolean")
+    return field
+
+
+def _persistence_execution_sort_key(
+    item: AnalysisCoverageExecutionEvidence,
+) -> tuple[object, ...]:
+    return (
+        item.unit.capability,
+        item.unit.source_role,
+        item.unit.source_id,
+        item.input_membership_proven,
+        item.invocation_proven,
+        item.completed,
+        item.finding_count if item.finding_count is not None else -1,
+        item.finding_identity,
+        item.not_run_outcome.value if item.not_run_outcome is not None else "",
+        item.attempted,
+        item.partial_failure,
+        item.reused_completed_result,
+    )
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,10 @@ from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     build_successful_deep_content_reviews,
 )
+from bugslyce.reports.analysis_coverage import (
+    ANALYSIS_COVERAGE_FILENAME,
+    load_analysis_coverage_artifact,
+)
 from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
     build_http_route_relationship_clusters,
@@ -78,6 +82,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "successful_deep_content",
         "http_route_relationship_edge",
         "collection_confidence_notice",
+        "analysis_coverage_evidence",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -260,6 +265,7 @@ def discover_evidence_pack_references(
         )
 
     references.extend(_deep_output_references(root))
+    references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     return tuple(
@@ -328,6 +334,7 @@ def discover_expected_pack_references(
             )
         )
     references.extend(_deep_output_references(root))
+    references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     return tuple(
@@ -1510,6 +1517,21 @@ def _packed_project_evidence_by_source(root: Path) -> dict[str, tuple[str, ...]]
         portable_path: tuple(sorted(evidence_ids))
         for portable_path, evidence_ids in sorted(grouped.items())
     }
+
+
+def _analysis_coverage_references(
+    root: Path,
+) -> tuple[EvidencePackReference, ...]:
+    evidence = load_analysis_coverage_artifact(root)
+    if evidence is None:
+        return ()
+    return (
+        EvidencePackReference(
+            portable_path=ANALYSIS_COVERAGE_FILENAME,
+            owner_kind="analysis_coverage_evidence",
+            owner_id=ANALYSIS_COVERAGE_FILENAME,
+        ),
+    )
 
 
 def _deep_output_references(root: Path) -> tuple[EvidencePackReference, ...]:

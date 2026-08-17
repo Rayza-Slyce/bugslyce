@@ -86,6 +86,10 @@ from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.evidence_pack_closure import validate_evidence_pack_root
 from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
+from bugslyce.reports.analysis_coverage import (
+    AnalysisCoverageExecutionEvidence,
+    AnalysisCoverageUnit,
+)
 from bugslyce.reports.markdown import render_markdown_report
 from bugslyce.reports.operator_summary import (
     OperatorSummary,
@@ -1758,6 +1762,10 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._report_coverage_evidence",
+        lambda *_: (),
+    )
 
     def body_fetch_with_operational_warning(*_args, **_kwargs):
         calls.append("body-fetch")
@@ -2330,6 +2338,10 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     monkeypatch.setattr(
+        "bugslyce.project_pipeline._report_coverage_evidence",
+        lambda *_: (),
+    )
+    monkeypatch.setattr(
         "bugslyce.project_pipeline.build_project_state",
         lambda path: SimpleNamespace(project_name="pipeline-test"),
     )
@@ -2739,6 +2751,10 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
     calls: list[str] = []
     observed: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._report_coverage_evidence",
+        lambda *_: (),
+    )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_content_discovery_plan",
         lambda **kwargs: observed.append(kwargs["profile"]) or SimpleNamespace(),
@@ -3404,6 +3420,21 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         parameter_inventory=SimpleNamespace(parameters=()),
     )
     captured: dict[str, object] = {}
+    coverage_evidence = (
+        AnalysisCoverageExecutionEvidence(
+            unit=AnalysisCoverageUnit(
+                capability="deep_parameter_inventory",
+                source_role="shallow_route_followup",
+                source_id="DEEP-PARAM-SOURCE-0001",
+            ),
+            input_membership_proven=True,
+            invocation_proven=True,
+            completed=True,
+            finding_count=2,
+            finding_identity="username\x00password",
+        ),
+    )
+    coverage_calls: list[object] = []
 
     monkeypatch.setattr(project_pipeline, "build_project_state", lambda _: project_state)
     monkeypatch.setattr(project_pipeline, "build_collection_confidence_notices_from_project", lambda *args, **kwargs: ())
@@ -3431,10 +3462,32 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     monkeypatch.setattr(project_pipeline, "render_http_route_relationship_clusters_markdown", lambda *args, **kwargs: "")
     monkeypatch.setattr(project_pipeline, "_deep_operator_summary_leads", lambda *_: ())
     monkeypatch.setattr(project_pipeline, "_render_deep_report_index", lambda *_: "")
-    monkeypatch.setattr(project_pipeline, "_report_coverage_evidence", lambda *_: ())
+
+    def report_coverage(orchestration_arg):
+        coverage_calls.append(orchestration_arg)
+        return coverage_evidence
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "_report_coverage_evidence",
+        report_coverage,
+    )
+
+    original_build_operator_report_view = project_pipeline.build_operator_report_view
+
+    def build_report_view(*args, **kwargs):
+        captured["view_coverage"] = kwargs["coverage_evidence"]
+        return original_build_operator_report_view(*args, **kwargs)
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_operator_report_view",
+        build_report_view,
+    )
 
     def write_outputs(*_args, **kwargs):
         captured["view"] = kwargs["operator_report_view"]
+        captured["persisted_coverage"] = kwargs["analysis_coverage_evidence"]
         return tmp_path / "report.md", tmp_path / "project_state.json"
 
     monkeypatch.setattr(project_pipeline, "write_project_outputs", write_outputs)
@@ -3452,6 +3505,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         context.anchor_id for context in view.investigation_context.primary_contexts
     ) == ("LEAD-CONTROLLED",)
     assert view is context["completion_summary"].operator_report_view
+    assert coverage_calls == [orchestration]
+    assert captured["view_coverage"] is coverage_evidence
+    assert captured["persisted_coverage"] is coverage_evidence
 
 
 def test_deep_report_coverage_evidence_uses_each_admitted_positive_adapter(
