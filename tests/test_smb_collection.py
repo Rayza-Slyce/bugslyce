@@ -355,3 +355,176 @@ def test_smb_collection_validates_all_endpoint_scope_before_any_runner(
         )
 
     assert attempted == []
+
+
+def test_smb_collection_retries_session_setup_rejection_with_guest_on_same_port(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    collection = import_module("bugslyce.recon.smb_collection")
+
+    monkeypatch.setattr(
+        collection,
+        "build_project_state",
+        lambda _path: _state((_service(port=31337),)),
+    )
+
+    attempted_users: list[str] = []
+    attempted_ports: list[str] = []
+
+    def command_result(
+        command,
+        *,
+        exit_code: int,
+        stderr_path: str | None,
+        error: str | None,
+    ) -> ReconCommandResult:
+        return ReconCommandResult(
+            command_id=command.id,
+            tool=command.tool,
+            exit_code=exit_code,
+            stdout_path=None,
+            stderr_path=stderr_path,
+            output_file=command.output_file,
+            started_at="2026-08-18T18:00:00Z",
+            ended_at="2026-08-18T18:00:01Z",
+            duration_seconds=1.0,
+            executed=True,
+            simulated=False,
+            error=error,
+        )
+
+    def runner_factory(_target):
+        class Runner:
+            def run(self, command):
+                attempted_users.append(
+                    next(
+                        value
+                        for value in command.argv
+                        if value.startswith("--user=")
+                    )
+                )
+                attempted_ports.append(
+                    next(
+                        value
+                        for value in command.argv
+                        if value.startswith("--port=")
+                    )
+                )
+
+                if "--user=%" in command.argv:
+                    output_path = Path(command.output_file)
+                    output_path.write_text("", encoding="utf-8")
+                    stderr_path = output_path.with_suffix(
+                        output_path.suffix + ".stderr.log"
+                    )
+                    stderr_path.write_text(
+                        "session setup failed: NT_STATUS_ACCESS_DENIED\n",
+                        encoding="utf-8",
+                    )
+                    return command_result(
+                        command,
+                        exit_code=1,
+                        stderr_path=str(stderr_path),
+                        error="smbclient exited with code 1.",
+                    )
+
+                assert "--user=guest%" in command.argv
+                Path(command.output_file).write_text(
+                    "Disk|nt4wrksv|\n",
+                    encoding="utf-8",
+                )
+                return command_result(
+                    command,
+                    exit_code=0,
+                    stderr_path=None,
+                    error=None,
+                )
+
+        return Runner()
+
+    result = collection.collect_smb_share_evidence(
+        tmp_path,
+        _scope(tmp_path),
+        runner_factory=runner_factory,
+    )
+
+    assert attempted_users == [
+        "--user=%",
+        "--user=guest%",
+    ]
+    assert attempted_ports == [
+        "--port=31337",
+        "--port=31337",
+    ]
+    assert result.execution_count == 2
+    assert result.commands_succeeded == 1
+    assert result.commands_unsuccessful == 1
+    assert tuple(item.share_name for item in result.shares) == (
+        "nt4wrksv",
+    )
+
+
+def test_smb_collection_does_not_guest_retry_transport_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    collection = import_module("bugslyce.recon.smb_collection")
+
+    monkeypatch.setattr(
+        collection,
+        "build_project_state",
+        lambda _path: _state(
+            (_service(port=31337, service="netbios-ssn"),)
+        ),
+    )
+
+    attempted_users: list[str] = []
+
+    def runner_factory(_target):
+        class Runner:
+            def run(self, command):
+                attempted_users.append(
+                    next(
+                        value
+                        for value in command.argv
+                        if value.startswith("--user=")
+                    )
+                )
+                output_path = Path(command.output_file)
+                output_path.write_text("", encoding="utf-8")
+                stderr_path = output_path.with_suffix(
+                    output_path.suffix + ".stderr.log"
+                )
+                stderr_path.write_text(
+                    "do_connect: Connection failed "
+                    "(Error NT_STATUS_RESOURCE_NAME_NOT_FOUND)\n",
+                    encoding="utf-8",
+                )
+                return ReconCommandResult(
+                    command_id=command.id,
+                    tool=command.tool,
+                    exit_code=1,
+                    stdout_path=None,
+                    stderr_path=str(stderr_path),
+                    output_file=command.output_file,
+                    started_at="2026-08-18T18:00:00Z",
+                    ended_at="2026-08-18T18:00:01Z",
+                    duration_seconds=1.0,
+                    executed=True,
+                    simulated=False,
+                    error="smbclient exited with code 1.",
+                )
+
+        return Runner()
+
+    result = collection.collect_smb_share_evidence(
+        tmp_path,
+        _scope(tmp_path),
+        runner_factory=runner_factory,
+    )
+
+    assert attempted_users == ["--user=%"]
+    assert result.execution_count == 1
+    assert result.commands_succeeded == 0
+    assert result.commands_unsuccessful == 1

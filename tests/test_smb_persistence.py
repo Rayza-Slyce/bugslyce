@@ -496,3 +496,111 @@ def test_evidence_pack_validator_rejects_missing_smb_trigger_source_reference(
         error.startswith("portable_project_state_smb_share")
         for error in validation.metadata_consistency_errors
     )
+
+
+def test_null_success_replaces_previous_guest_success_for_same_endpoint(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.recon.smb_collection import collect_smb_share_evidence
+
+    _write_project(
+        tmp_path,
+        include_smb_artefact=False,
+    )
+
+    class GuestFallbackRunner:
+        def run(self, command):
+            output_path = Path(command.output_file)
+
+            if "--user=%" in command.argv:
+                output_path.write_text("", encoding="utf-8")
+                stderr_path = output_path.with_suffix(
+                    output_path.suffix + ".stderr.log"
+                )
+                stderr_path.write_text(
+                    "session setup failed: NT_STATUS_ACCESS_DENIED\n",
+                    encoding="utf-8",
+                )
+                return ReconCommandResult(
+                    command_id=command.id,
+                    tool=command.tool,
+                    exit_code=1,
+                    stdout_path=None,
+                    stderr_path=str(stderr_path),
+                    output_file=command.output_file,
+                    started_at="2026-08-18T18:00:00Z",
+                    ended_at="2026-08-18T18:00:01Z",
+                    duration_seconds=1.0,
+                    executed=True,
+                    simulated=False,
+                    error="smbclient exited with code 1.",
+                )
+
+            assert "--user=guest%" in command.argv
+            output_path.write_text(
+                "Disk|guest-old|Old guest result\n",
+                encoding="utf-8",
+            )
+            return _command_result(command)
+
+    first = collect_smb_share_evidence(
+        tmp_path,
+        tmp_path / "scope.md",
+        runner_factory=lambda _target: GuestFallbackRunner(),
+    )
+
+    assert first.commands_succeeded == 1
+    assert first.commands_unsuccessful == 1
+
+    first_manifest = json.loads(
+        (tmp_path / "recon_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [
+        item["file"]
+        for item in first_manifest["artifacts"]
+        if item.get("type") == "smb_shares"
+    ] == [
+        "smb-shares-files.example.test-31337-guest.txt"
+    ]
+
+    class NullSuccessRunner:
+        def run(self, command):
+            assert "--user=%" in command.argv
+            assert "--user=guest%" not in command.argv
+
+            Path(command.output_file).write_text(
+                "Disk|null-fresh|Fresh null result\n",
+                encoding="utf-8",
+            )
+            return _command_result(command)
+
+    second = collect_smb_share_evidence(
+        tmp_path,
+        tmp_path / "scope.md",
+        runner_factory=lambda _target: NullSuccessRunner(),
+    )
+
+    assert second.commands_succeeded == 1
+    assert second.commands_unsuccessful == 0
+    assert second.execution_count == 1
+
+    second_manifest = json.loads(
+        (tmp_path / "recon_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [
+        item["file"]
+        for item in second_manifest["artifacts"]
+        if item.get("type") == "smb_shares"
+    ] == [
+        "smb-shares-files.example.test-31337.txt"
+    ]
+
+    rebuilt = build_project_state(tmp_path)
+
+    assert tuple(
+        item.share_name for item in rebuilt.smb_shares
+    ) == ("null-fresh",)

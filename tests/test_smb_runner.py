@@ -107,7 +107,10 @@ def test_smb_runner_refuses_forged_endpoint_before_process_start(
     assert result.executed is False
     assert result.exit_code is None
     assert result.error is not None
-    assert "approved anonymous share-list argv shape" in result.error
+    assert (
+        "approved null-identity or guest share-list argv shape"
+        in result.error
+    )
     assert not Path(command.output_file).exists()
 
 

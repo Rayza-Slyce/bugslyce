@@ -709,6 +709,7 @@ def _portable_confidence_command_content(content: bytes, input_dir: Path) -> byt
                 raw_size,
             )
     portable_results = []
+    retained_diagnostics: list[dict[str, str]] = []
     for index, result in enumerate(results, start=1):
         if not isinstance(result, dict):
             raise ValueError(f"Command confidence result #{index} must be an object.")
@@ -761,6 +762,30 @@ def _portable_confidence_command_content(content: bytes, input_dir: Path) -> byt
                 )
             portable_result["simulated"] = simulated
         portable_results.append(portable_result)
+
+        command_id = portable_result["command_id"]
+        tool = portable_result["tool"]
+        stderr_path = result.get("stderr_path")
+        if (
+            tool == "smbclient"
+            and command_id.startswith("CMD-SMB-SHARES-")
+            and executed is True
+            and (exit_code not in {0, None} or bool(error))
+            and isinstance(stderr_path, str)
+            and stderr_path.strip()
+        ):
+            _source, relative = _resolve_reference(
+                input_dir,
+                stderr_path,
+                f"SMB confidence diagnostic for {command_id}",
+            )
+            retained_diagnostics.append(
+                {
+                    "command_id": command_id,
+                    "portable_path": f"raw/{relative.as_posix()}",
+                }
+            )
+
     portable_results.sort(
         key=lambda item: (
             item["command_id"],
@@ -775,6 +800,15 @@ def _portable_confidence_command_content(content: bytes, input_dir: Path) -> byt
         "generated_by": "bugslyce.collection_confidence.command_execution",
         "command_results": portable_results,
     }
+    if retained_diagnostics:
+        portable["retained_diagnostic_artefacts"] = sorted(
+            retained_diagnostics,
+            key=lambda item: (
+                item["command_id"],
+                item["portable_path"],
+            ),
+        )
+
     if execution_mode == "body-fetch":
         portable["mode"] = "body-fetch"
         portable["retained_partial_artefacts"] = sorted(

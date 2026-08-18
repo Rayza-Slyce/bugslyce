@@ -525,36 +525,99 @@ def _pipeline_step_notices(
 def _command_result_notices(
     command_results: Iterable[object],
 ) -> tuple[CollectionConfidenceNotice, ...]:
+    results = tuple(command_results)
+    successful_smb_guest_bases = frozenset(
+        command_id.removesuffix("-GUEST")
+        for result in results
+        if (
+            str(_field(result, "tool") or "").strip() == "smbclient"
+            and (
+                command_id := str(
+                    _field(result, "command_id") or ""
+                ).strip()
+            ).startswith("CMD-SMB-SHARES-")
+            and command_id.endswith("-GUEST")
+            and _field(result, "executed") is not False
+            and _field(result, "exit_code") == 0
+            and not _field(result, "error")
+        )
+    )
+
     notices = []
-    for result in command_results:
+    for result in results:
         exit_code = _field(result, "exit_code")
         error = _field(result, "error")
         executed = _field(result, "executed")
-        command_id = str(_field(result, "command_id") or "unknown-command").strip()
+        command_id = str(
+            _field(result, "command_id") or "unknown-command"
+        ).strip()
         tool = str(_field(result, "tool") or "unknown-tool").strip()
         artefact = str(
-            _field(result, "confidence_artifact") or "recon_execution.json"
+            _field(result, "confidence_artifact")
+            or "recon_execution.json"
         )
+
         if executed is False:
             notices.append(
                 CollectionConfidenceNotice(
-                    notice_id=collection_confidence_command_notice_id(command_id),
+                    notice_id=collection_confidence_command_notice_id(
+                        command_id
+                    ),
                     category=SKIPPED_OR_UNAVAILABLE,
-                    title=f"Collection command was not attempted: {command_id}",
+                    title=(
+                        "Collection command was not attempted: "
+                        f"{command_id}"
+                    ),
                     direct_fact=(
-                        f"Structured execution metadata records `{command_id}` as not "
-                        "executed."
+                        f"Structured execution metadata records "
+                        f"`{command_id}` as not executed."
                     ),
                     operator_implication=(
-                        "No result should be inferred from this unexecuted command."
+                        "No result should be inferred from this "
+                        "unexecuted command."
                     ),
                     stage_or_tool=tool,
                     artefact_references=(artefact,),
                 )
             )
             continue
+
         if (exit_code in {0, None}) and not error:
             continue
+
+        if (
+            tool == "smbclient"
+            and command_id.startswith("CMD-SMB-SHARES-")
+            and command_id in successful_smb_guest_bases
+        ):
+            guest_command_id = f"{command_id}-GUEST"
+            notices.append(
+                CollectionConfidenceNotice(
+                    notice_id=collection_confidence_command_notice_id(
+                        command_id
+                    ),
+                    category=PARTIAL_OR_DEGRADED,
+                    title=(
+                        "SMB share listing recovered with guest fallback"
+                    ),
+                    direct_fact=(
+                        f"The initial null-identity SMB share-list "
+                        f"command `{command_id}` was unsuccessful; "
+                        f"the approved guest/no-password fallback "
+                        f"`{guest_command_id}` succeeded."
+                    ),
+                    operator_implication=(
+                        "SMB share-list evidence was recovered by the "
+                        "approved fallback; review the retained share "
+                        "evidence without treating the initial "
+                        "null-identity rejection as absence."
+                    ),
+                    stage_or_tool=tool,
+                    artefact_references=(artefact,),
+                )
+            )
+            continue
+
         recoverable_body_fetch = _recoverable_body_fetch_notice(
             result,
             command_id=command_id,
@@ -564,17 +627,27 @@ def _command_result_notices(
         if recoverable_body_fetch is not None:
             notices.append(recoverable_body_fetch)
             continue
-        reason = str(error).strip() if error else f"exit code {exit_code}"
+
+        reason = (
+            str(error).strip()
+            if error
+            else f"exit code {exit_code}"
+        )
         reason = reason.rstrip(".")
         notices.append(
             CollectionConfidenceNotice(
-                notice_id=collection_confidence_command_notice_id(command_id),
+                notice_id=collection_confidence_command_notice_id(
+                    command_id
+                ),
                 category=FAILED,
                 title=f"Collection command failed: {command_id}",
-                direct_fact=f"The `{tool}` command `{command_id}` failed: {reason}.",
+                direct_fact=(
+                    f"The `{tool}` command `{command_id}` failed: "
+                    f"{reason}."
+                ),
                 operator_implication=(
-                    "Expected evidence from this command may be absent; do not infer a "
-                    "negative result."
+                    "Expected evidence from this command may be absent; "
+                    "do not infer a negative result."
                 ),
                 stage_or_tool=tool,
                 artefact_references=(artefact,),

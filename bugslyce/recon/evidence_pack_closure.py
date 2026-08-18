@@ -1658,10 +1658,19 @@ def _collection_confidence_references(
         return ()
     notices = build_collection_confidence_notices_from_project(project_state, root)
     references = list(evidence_pack_references_from_collection_confidence(notices))
+    notice_ids = frozenset(
+        notice.notice_id for notice in notices
+    )
     references.extend(
         _retained_partial_body_references(
             root,
-            frozenset(notice.notice_id for notice in notices),
+            notice_ids,
+        )
+    )
+    references.extend(
+        _retained_command_diagnostic_references(
+            root,
+            notice_ids,
         )
     )
     return tuple(
@@ -1676,6 +1685,125 @@ def _collection_confidence_references(
             ),
         )
     )
+
+
+def _retained_command_diagnostic_references(
+    root: Path,
+    notice_ids: frozenset[str],
+) -> tuple[EvidencePackReference, ...]:
+    references: list[EvidencePackReference] = []
+
+    for path in sorted(root.glob("recon_execution*.json")):
+        payload = _load_structured_json_object(
+            root,
+            path,
+            required=False,
+            label=path.name,
+        )
+        if payload is None:
+            continue
+
+        if payload.get("portable_confidence_schema") == 1:
+            retained = payload.get(
+                "retained_diagnostic_artefacts"
+            )
+            if not isinstance(retained, list):
+                continue
+
+            for item in retained:
+                if not isinstance(item, dict):
+                    continue
+                command_id = item.get("command_id")
+                portable_path = item.get("portable_path")
+                if (
+                    not isinstance(command_id, str)
+                    or not command_id.strip()
+                    or not isinstance(portable_path, str)
+                    or not portable_path.strip()
+                ):
+                    continue
+
+                owner_id = (
+                    collection_confidence_command_notice_id(
+                        command_id
+                    )
+                )
+                if owner_id not in notice_ids:
+                    continue
+
+                references.append(
+                    EvidencePackReference(
+                        portable_path=_normalise_portable_path(
+                            portable_path
+                        ),
+                        owner_kind=(
+                            "collection_confidence_notice"
+                        ),
+                        owner_id=owner_id,
+                    )
+                )
+            continue
+
+        command_results = payload.get("command_results")
+        if not isinstance(command_results, list):
+            continue
+
+        for result in command_results:
+            if not isinstance(result, dict):
+                continue
+
+            command_id = result.get("command_id")
+            tool = result.get("tool")
+            stderr_path = result.get("stderr_path")
+            executed = result.get("executed")
+            exit_code = result.get("exit_code")
+            error = result.get("error")
+
+            if (
+                tool != "smbclient"
+                or not isinstance(command_id, str)
+                or not command_id.startswith(
+                    "CMD-SMB-SHARES-"
+                )
+                or executed is not True
+                or (
+                    exit_code in {0, None}
+                    and not error
+                )
+                or not isinstance(stderr_path, str)
+                or not stderr_path.strip()
+            ):
+                continue
+
+            owner_id = (
+                collection_confidence_command_notice_id(
+                    command_id
+                )
+            )
+            if owner_id not in notice_ids:
+                continue
+
+            source_path = _project_relative_source(
+                root,
+                stderr_path,
+            )
+            portable_path = (
+                _archive_path_for_project_source(
+                    source_path
+                )
+            )
+            references.append(
+                EvidencePackReference(
+                    portable_path=portable_path,
+                    owner_kind=(
+                        "collection_confidence_notice"
+                    ),
+                    owner_id=owner_id,
+                    source_path=source_path,
+                )
+            )
+
+    return tuple(references)
 
 
 def _retained_partial_body_references(

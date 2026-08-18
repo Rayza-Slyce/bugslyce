@@ -157,3 +157,30 @@ def test_smb_command_ids_are_unique_per_host_and_port(tmp_path) -> None:
     assert first.id == repeated.id
     assert first.id.startswith("CMD-SMB-SHARES-")
     assert second.id.startswith("CMD-SMB-SHARES-")
+
+
+def test_guest_fallback_command_preserves_exact_evidence_derived_port(
+    tmp_path,
+) -> None:
+    smb_commands = import_module("bugslyce.recon.smb_commands")
+
+    command = smb_commands.build_live_smb_share_list_command(
+        _target(port=31337),
+        tmp_path,
+        auth_mode=smb_commands.SMB_AUTH_GUEST,
+    )
+
+    assert "--user=guest%" in command.argv
+    assert "--no-pass" in command.argv
+    assert "--port=31337" in command.argv
+    assert command.id.endswith("-GUEST")
+    assert command.output_file.endswith("-31337-guest.txt")
+
+    validation = smb_commands.validate_live_smb_share_list_command(
+        command,
+        tmp_path,
+        _target(port=31337),
+    )
+
+    assert validation.valid is True
+    assert validation.errors == []

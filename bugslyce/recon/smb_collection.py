@@ -12,7 +12,10 @@ from bugslyce.core.models import ReconCommandResult, SMBShare
 from bugslyce.core.project import build_project_state
 from bugslyce.parsers.smbclient import parse_smbclient_share_list
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
-from bugslyce.recon.smb_commands import build_live_smb_share_list_command
+from bugslyce.recon.smb_commands import (
+    SMB_AUTH_GUEST,
+    build_live_smb_share_list_command,
+)
 from bugslyce.recon.smb_eligibility import (
     SMBEnumerationTarget,
     select_smb_enumeration_targets,
@@ -123,33 +126,45 @@ def collect_smb_share_evidence(
         else:
             runner = runner_factory(target)
 
-        result = runner.run(command)
-        command_results.append(result)
+        results_for_target = [runner.run(command)]
 
-        if result.exit_code == 0 and result.error is None:
-            commands_succeeded += 1
-            successful_artifacts.append((target, result))
-            shares.extend(
-                parse_smbclient_share_list(
-                    Path(result.output_file),
-                    target,
-                )
-            )
-        elif result.executed and result.exit_code is None:
-            _retire_previous_smb_artifact(
+        if _smb_session_setup_rejected(results_for_target[0]):
+            guest_command = build_live_smb_share_list_command(
+                target,
                 input_dir,
-                result.output_file,
-                remove_output=True,
+                auth_mode=SMB_AUTH_GUEST,
             )
-            commands_timed_out += 1
-        else:
-            if result.executed:
+            results_for_target.append(
+                runner.run(guest_command)
+            )
+
+        for result in results_for_target:
+            command_results.append(result)
+
+            if result.exit_code == 0 and result.error is None:
+                commands_succeeded += 1
+                successful_artifacts.append((target, result))
+                shares.extend(
+                    parse_smbclient_share_list(
+                        Path(result.output_file),
+                        target,
+                    )
+                )
+            elif result.executed and result.exit_code is None:
                 _retire_previous_smb_artifact(
                     input_dir,
                     result.output_file,
-                    remove_output=False,
+                    remove_output=True,
                 )
-            commands_unsuccessful += 1
+                commands_timed_out += 1
+            else:
+                if result.executed:
+                    _retire_previous_smb_artifact(
+                        input_dir,
+                        result.output_file,
+                        remove_output=False,
+                    )
+                commands_unsuccessful += 1
 
     if successful_artifacts:
         _register_successful_smb_artifacts(
@@ -168,6 +183,33 @@ def collect_smb_share_evidence(
         shares=tuple(shares),
         warnings=tuple(initial_state.warnings),
     )
+
+def _smb_session_setup_rejected(
+    result: ReconCommandResult,
+) -> bool:
+    """Return whether a null-identity attempt reached and failed SMB session setup."""
+
+    if (
+        not result.executed
+        or result.exit_code in {0, None}
+        or not result.stderr_path
+    ):
+        return False
+
+    path = Path(result.stderr_path)
+    if not path.is_file() or path.is_symlink():
+        return False
+
+    try:
+        stderr = path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return False
+
+    return "session setup failed:" in stderr.casefold()
+
 
 def write_smb_share_execution_result(
     result: SMBShareCollectionResult,
@@ -338,9 +380,13 @@ def _register_successful_smb_artifacts(
             "Recon manifest field 'artifacts' must be a list."
         )
 
-    generated_names = {
-        Path(result.output_file).name
-        for _target, result in successful_artifacts
+    refreshed_endpoints = {
+        (
+            target.host.casefold(),
+            target.port,
+            "tcp",
+        )
+        for target, _result in successful_artifacts
     }
 
     artifacts = [
@@ -348,7 +394,13 @@ def _register_successful_smb_artifacts(
         for artifact in existing
         if not (
             isinstance(artifact, dict)
-            and artifact.get("file") in generated_names
+            and artifact.get("type") == "smb_shares"
+            and (
+                str(artifact.get("host") or "").casefold(),
+                artifact.get("port"),
+                str(artifact.get("protocol") or "").casefold(),
+            )
+            in refreshed_endpoints
         )
     ]
 

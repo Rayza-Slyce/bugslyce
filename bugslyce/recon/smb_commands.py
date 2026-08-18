@@ -14,16 +14,24 @@ from bugslyce.recon.smb_eligibility import SMBEnumerationTarget
 SMB_REQUEST_TIMEOUT_SECONDS = 10
 SMB_PROCESS_TIMEOUT_SECONDS = 30
 SMB_SERVICE_NAMES = frozenset({"microsoft-ds", "netbios-ssn"})
+SMB_AUTH_NULL = "null"
+SMB_AUTH_GUEST = "guest"
+SMB_AUTH_MODES = frozenset({SMB_AUTH_NULL, SMB_AUTH_GUEST})
 
 
 def build_live_smb_share_list_command(
     target: SMBEnumerationTarget,
     output_dir: Path,
+    *,
+    auth_mode: str = SMB_AUTH_NULL,
 ) -> ReconCommand:
-    """Build one non-interactive no-credential SMB share-list command."""
+    """Build one bounded null-identity or guest SMB share-list command."""
 
     host = _normalise_target_host(target.host)
     port = _validated_port(target.port)
+
+    if auth_mode not in SMB_AUTH_MODES:
+        raise ValueError("Unsupported SMB share-list authentication mode.")
 
     if not any(
         name.casefold() in SMB_SERVICE_NAMES
@@ -38,15 +46,20 @@ def build_live_smb_share_list_command(
         )
 
     output_dir = output_dir.expanduser().resolve()
+    guest_suffix = "-guest" if auth_mode == SMB_AUTH_GUEST else ""
+    command_suffix = "-GUEST" if auth_mode == SMB_AUTH_GUEST else ""
     output_file = (
         output_dir
-        / f"smb-shares-{_safe_host(host)}-{port}.txt"
+        / f"smb-shares-{_safe_host(host)}-{port}{guest_suffix}.txt"
     )
 
     return ReconCommand(
-        id=f"CMD-SMB-SHARES-{_safe_host(host)}-{port}",
+        id=(
+            f"CMD-SMB-SHARES-{_safe_host(host)}-{port}"
+            f"{command_suffix}"
+        ),
         tool="smbclient",
-        argv=_approved_argv(host, port),
+        argv=_approved_argv(host, port, auth_mode),
         output_file=str(output_file),
         timeout_seconds=SMB_PROCESS_TIMEOUT_SECONDS,
         phase="smb-share-list",
@@ -83,18 +96,25 @@ def validate_live_smb_share_list_command(
         )
 
     try:
-        expected = build_live_smb_share_list_command(
-            target,
-            output_dir,
+        expected = tuple(
+            build_live_smb_share_list_command(
+                target,
+                output_dir,
+                auth_mode=auth_mode,
+            )
+            for auth_mode in (
+                SMB_AUTH_NULL,
+                SMB_AUTH_GUEST,
+            )
         )
     except ValueError as exc:
         errors.append(str(exc))
-        expected = None
+        expected = ()
 
-    if expected is not None and command != expected:
+    if expected and command not in expected:
         errors.append(
-            "SMB command must match the approved anonymous "
-            "share-list argv shape."
+            "SMB command must match an approved null-identity or "
+            "guest share-list argv shape."
         )
 
     output_path = Path(command.output_file).expanduser()
@@ -124,7 +144,16 @@ def validate_live_smb_share_list_command(
     )
 
 
-def _approved_argv(host: str, port: int) -> list[str]:
+def _approved_argv(
+    host: str,
+    port: int,
+    auth_mode: str,
+) -> list[str]:
+    user_argument = (
+        "--user=guest%"
+        if auth_mode == SMB_AUTH_GUEST
+        else "--user=%"
+    )
     return [
         "smbclient",
         "--configfile=/dev/null",
@@ -132,7 +161,7 @@ def _approved_argv(host: str, port: int) -> list[str]:
         "--grepable",
         "--stderr",
         "--no-pass",
-        "--user=%",
+        user_argument,
         "--use-kerberos=off",
         "--name-resolve=host",
         f"--port={port}",

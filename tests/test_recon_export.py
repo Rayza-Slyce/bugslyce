@@ -4540,3 +4540,90 @@ def _write_retained_partial_body_execution(
         encoding="utf-8",
     )
     return partial_path
+
+
+def test_failed_smb_stderr_is_retained_as_confidence_diagnostic(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+
+    stderr_path = (
+        input_dir
+        / "smb-shares-files.example.test-31337.txt.stderr.log"
+    )
+    stderr_path.write_text(
+        "session setup failed: NT_STATUS_ACCESS_DENIED\n",
+        encoding="utf-8",
+    )
+
+    execution_path = input_dir / "recon_execution_smb_shares.json"
+    execution_path.write_text(
+        json.dumps(
+            {
+                "command_results": [
+                    {
+                        "command_id": (
+                            "CMD-SMB-SHARES-files.example.test-31337"
+                        ),
+                        "tool": "smbclient",
+                        "executed": True,
+                        "exit_code": 1,
+                        "error": "smbclient exited with code 1.",
+                        "stderr_path": str(stderr_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_path = tmp_path / "smb-failed-diagnostic.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+
+    extracted = tmp_path / "smb-failed-diagnostic"
+
+    with zipfile.ZipFile(output_path) as archive:
+        members = set(archive.namelist())
+        closure = json.loads(
+            archive.read(REFERENCE_CLOSURE_FILENAME)
+        )
+        packed_execution = json.loads(
+            archive.read("recon_execution_smb_shares.json")
+        )
+        archive.extractall(extracted)
+
+    expected_diagnostic = (
+        "raw/smb-shares-files.example.test-31337.txt.stderr.log"
+    )
+
+    assert expected_diagnostic in members
+    assert (
+        packed_execution["retained_diagnostic_artefacts"]
+        == [
+            {
+                "command_id": (
+                    "CMD-SMB-SHARES-files.example.test-31337"
+                ),
+                "portable_path": expected_diagnostic,
+            }
+        ]
+    )
+
+    assert (
+        expected_diagnostic,
+        "collection_confidence_notice",
+        (
+            "CONFIDENCE-COMMAND-"
+            "CMD-SMB-SHARES-FILES-EXAMPLE-TEST-31337"
+        ),
+        (),
+    ) in _closure_owner_associations(closure)
+
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "complete"
+
+    (extracted / expected_diagnostic).unlink()
+
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "incomplete"
+    assert expected_diagnostic in validation.missing_declared_member_paths

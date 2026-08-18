@@ -726,3 +726,37 @@ def _deep_notice(source: DeepSourceRouteCollectionResult) -> CollectionConfidenc
         )
         if notice.notice_id == "CONFIDENCE-DEEP-SOURCE-ROUTES"
     )
+
+
+def test_smb_guest_recovery_is_not_reported_as_unrecovered_failure() -> None:
+    notices = build_collection_confidence_notices(
+        _state(),
+        command_results=(
+            {
+                "command_id": "CMD-SMB-SHARES-files.example.test-31337",
+                "tool": "smbclient",
+                "exit_code": 1,
+                "error": "smbclient exited with code 1.",
+                "executed": True,
+            },
+            {
+                "command_id": "CMD-SMB-SHARES-files.example.test-31337-GUEST",
+                "tool": "smbclient",
+                "exit_code": 0,
+                "error": None,
+                "executed": True,
+            },
+        ),
+    )
+
+    assert len(notices) == 1
+
+    notice = notices[0]
+    assert notice.notice_id == (
+        "CONFIDENCE-COMMAND-CMD-SMB-SHARES-FILES-EXAMPLE-TEST-31337"
+    )
+    assert notice.category == PARTIAL_OR_DEGRADED
+    assert notice.title == "SMB share listing recovered with guest fallback"
+    assert "guest" in notice.direct_fact.lower()
+    assert "succeeded" in notice.direct_fact.lower()
+    assert "may be absent" not in notice.operator_implication.lower()
