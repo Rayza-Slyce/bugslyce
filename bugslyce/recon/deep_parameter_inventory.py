@@ -25,7 +25,10 @@ from bugslyce.recon.deep_post_followup_javascript_route_extraction import (
     DeepPostFollowupJavaScriptRouteSourceObservation,
 )
 from bugslyce.recon.deep_shallow_route_followup import DeepShallowRouteFollowupResult
-from bugslyce.recon.deep_source_route_collector import DeepSourceRouteCollectionResult
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
+)
 
 
 MAX_PARAMETER_NAME_CHARS = 256
@@ -68,8 +71,9 @@ CONTEXT_ORDER = {
     "post_followup_javascript_route_query": 5,
     "source_requested_url_query": 6,
     "source_final_url_query": 7,
-    "shallow_observed_query": 8,
-    "shallow_final_url_query": 9,
+    "source_skipped_url_query": 8,
+    "shallow_observed_query": 9,
+    "shallow_final_url_query": 10,
 }
 SAFETY_NOTES = (
     "This is offline inventory from already collected evidence and existing extraction models.",
@@ -115,6 +119,7 @@ class DeepParameterInventoryObservation:
     safe_source_urls: tuple[str, ...] = ()
     source_collection_sections: tuple[str, ...] = ()
     source_selection_reasons: tuple[str, ...] = ()
+    source_skip_reasons: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     post_followup_candidate_id: str = ""
     post_followup_source_observation: (
@@ -375,6 +380,13 @@ class DeepParameterInventoryItem:
             for value in item.initial_retained_source_observation.source_selection_reasons
         )
         return _unique_sorted(tuple(values))
+
+    @property
+    def source_skip_reasons(self) -> tuple[str, ...]:
+        return _observation_tuple_values(
+            self.observations,
+            "source_skip_reasons",
+        )
 
     @property
     def evidence_ids(self) -> tuple[str, ...]:
@@ -666,6 +678,9 @@ def build_deep_parameter_inventory(
         controls_outside += parsed.controls_outside_forms
         observations.extend(_form_observations(source, parsed, skipped))
 
+    observations.extend(
+        _skipped_source_route_query_observations(source_collection, skipped)
+    )
     observations.extend(_html_route_observations(html_extraction, skipped))
     observations.extend(_javascript_route_observations(javascript_extraction, skipped))
     if initial_retained_javascript_route_extraction is not None:
@@ -858,6 +873,99 @@ def _source_with_id(source: _Source, index: int) -> _Source:
         shallow_query_parameter_names=source.shallow_query_parameter_names,
         evidence_ids=source.evidence_ids,
         body=source.body,
+    )
+
+
+def _skipped_source_route_query_observations(
+    source_collection: DeepSourceRouteCollectionResult,
+    skipped: list[DeepParameterInventorySkippedItem],
+) -> tuple[DeepParameterInventoryObservation, ...]:
+    """Inventory query names retained on policy-skipped source/route URLs."""
+
+    eligible = tuple(
+        item
+        for item in source_collection.skipped
+        if (
+            item.reason == "query_string_not_allowed"
+            and item.source == "source_route_coverage"
+        )
+    )
+    ordered = tuple(sorted(eligible, key=_skipped_source_route_sort_key))
+    observations: list[DeepParameterInventoryObservation] = []
+
+    for index, item in enumerate(ordered, start=1):
+        source_id = f"DEEP-PARAM-SKIPPED-{index:04d}"
+        source_kind = "source_route_collection_skipped"
+        evidence_ids = _unique_sorted(item.evidence_ids)
+        safe_url = _safe_url(item.url)
+
+        if safe_url == "unresolved":
+            skipped.append(
+                _skip(
+                    source_kind,
+                    source_id,
+                    "source_skipped_url_query",
+                    "invalid_source_url",
+                    evidence_ids,
+                )
+            )
+            continue
+
+        try:
+            raw_query = urlparse(item.url).query
+        except (TypeError, ValueError):
+            skipped.append(
+                _skip(
+                    source_kind,
+                    source_id,
+                    "source_skipped_url_query",
+                    "invalid_source_url",
+                    evidence_ids,
+                )
+            )
+            continue
+
+        names, reasons = _query_name_results_from_raw_query(raw_query)
+        for reason in reasons:
+            skipped.append(
+                _skip(
+                    source_kind,
+                    source_id,
+                    "source_skipped_url_query",
+                    reason,
+                    evidence_ids,
+                )
+            )
+
+        for name in names:
+            observations.append(
+                DeepParameterInventoryObservation(
+                    name=name,
+                    context="source_skipped_url_query",
+                    occurrence_count=1,
+                    source_kind=source_kind,
+                    source_id=source_id,
+                    safe_source_urls=(safe_url,),
+                    source_collection_sections=(
+                        (item.source,) if item.source else ()
+                    ),
+                    source_skip_reasons=(item.reason,),
+                    evidence_ids=evidence_ids,
+                )
+            )
+
+    return tuple(observations)
+
+
+def _skipped_source_route_sort_key(
+    item: DeepSourceRouteSkippedItem,
+) -> tuple[object, ...]:
+    return (
+        item.method.upper(),
+        _safe_url(item.url),
+        item.reason,
+        item.source,
+        _unique_sorted(item.evidence_ids),
     )
 
 
@@ -1330,6 +1438,14 @@ def _render_parameter(parameter: DeepParameterInventoryItem) -> list[str]:
         "- Source request IDs: " + _format_values(parameter.source_request_ids),
         "- Collection sections: " + _format_values(parameter.source_collection_sections),
         "- Selection reasons: " + _format_values(parameter.source_selection_reasons),
+        *(
+            [
+                "- Source skip reasons: "
+                + _format_values(parameter.source_skip_reasons)
+            ]
+            if parameter.source_skip_reasons
+            else []
+        ),
         "- Evidence: " + _format_values(parameter.evidence_ids),
         f"- Interpretation: {parameter.interpretation}",
         "",
@@ -1576,6 +1692,7 @@ def _observation_sort_key(observation: DeepParameterInventoryObservation) -> tup
         observation.javascript_candidate_reference,
         observation.source_collection_sections,
         observation.source_selection_reasons,
+        observation.source_skip_reasons,
         observation.evidence_ids,
         observation.control_tag,
         observation.control_type,

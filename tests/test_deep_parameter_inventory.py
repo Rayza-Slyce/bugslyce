@@ -49,6 +49,7 @@ def test_value_list_truncation_never_renders_negative_remaining_count() -> None:
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
 )
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
@@ -237,6 +238,188 @@ def test_actions_bases_queries_fragments_credentials_and_malformed_values_are_sa
     assert by_name["g"].action_resolution_contexts == ("document_url_default",)
     for secret in ("SECRET_VIEW", "SECRET_FRAGMENT", "user:pass", "SECRET_TOKEN", "SECRET_FRAG", "SECRET_ACTION", "bad-secret"):
         assert secret not in public
+
+
+def test_query_policy_skipped_source_route_parameter_is_inventoried_offline() -> None:
+    source_collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="http://example.test/post.php?post=SECRET_VALUE",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-A", "EVID-B"),
+            ),
+        ),
+        total_considered=1,
+        total_collected=0,
+        total_skipped=1,
+    )
+
+    result = build_deep_parameter_inventory(
+        source_collection,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+    rendered = render_deep_parameter_inventory_markdown(result)
+
+    assert tuple(parameter.name for parameter in result.parameters) == ("post",)
+
+    parameter = result.parameters[0]
+    observation = parameter.observations[0]
+
+    assert observation.context == "source_skipped_url_query"
+    assert observation.source_kind == "source_route_collection_skipped"
+    assert observation.source_id == "DEEP-PARAM-SKIPPED-0001"
+    assert observation.safe_source_urls == (
+        "http://example.test/post.php?post",
+    )
+    assert observation.source_collection_sections == ("source_route_coverage",)
+    assert observation.source_selection_reasons == ()
+    assert observation.source_skip_reasons == ("query_string_not_allowed",)
+    assert observation.evidence_ids == ("EVID-A", "EVID-B")
+    assert observation.occurrence_count == 1
+    assert result.summary_counts.total_parameter_name_occurrences == 1
+    assert result.summary_counts.unique_parameters == 1
+    assert result.summary_counts.unique_url_query_only_parameters == 1
+    assert "Source skip reasons: `query_string_not_allowed`" in rendered
+    assert "SECRET_VALUE" not in repr(result)
+    assert "SECRET_VALUE" not in rendered
+
+
+def test_other_skipped_source_route_reasons_do_not_enter_parameter_inventory() -> None:
+    source_collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="http://example.test/private?token=SECRET_VALUE",
+                method="GET",
+                reason="cross_origin_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-OTHER",),
+            ),
+        ),
+        total_considered=1,
+        total_collected=0,
+        total_skipped=1,
+    )
+
+    result = build_deep_parameter_inventory(
+        source_collection,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+
+    assert result.parameters == ()
+    assert result.summary_counts.total_parameter_name_occurrences == 0
+    assert result.summary_counts.unique_parameters == 0
+    assert "SECRET_VALUE" not in repr(result)
+
+
+def test_query_policy_skipped_non_source_route_request_is_not_inventoried() -> None:
+    source_collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="http://example.test/metadata?token=SECRET_VALUE",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="metadata_coverage",
+                evidence_ids=("EVID-META",),
+            ),
+        ),
+        total_considered=1,
+        total_collected=0,
+        total_skipped=1,
+    )
+
+    result = build_deep_parameter_inventory(
+        source_collection,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+
+    assert result.parameters == ()
+    assert result.summary_counts.total_parameter_name_occurrences == 0
+    assert "SECRET_VALUE" not in repr(result)
+
+
+def test_query_policy_skipped_source_routes_are_deterministic_and_aggregate() -> None:
+    first = DeepSourceRouteSkippedItem(
+        url="http://example.test/post.php?post=FIRST_SECRET",
+        method="GET",
+        reason="query_string_not_allowed",
+        source="source_route_coverage",
+        evidence_ids=("EVID-B",),
+    )
+    second = DeepSourceRouteSkippedItem(
+        url="http://example.test/post.php?post=SECOND_SECRET",
+        method="GET",
+        reason="query_string_not_allowed",
+        source="source_route_coverage",
+        evidence_ids=("EVID-A",),
+    )
+    directory_sort = DeepSourceRouteSkippedItem(
+        url="http://example.test/css/?C=N;O=D",
+        method="GET",
+        reason="query_string_not_allowed",
+        source="source_route_coverage",
+        evidence_ids=("EVID-C",),
+    )
+
+    normal_source = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(first, second, directory_sort),
+        total_considered=3,
+        total_collected=0,
+        total_skipped=3,
+    )
+    reversed_source = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(directory_sort, second, first),
+        total_considered=3,
+        total_collected=0,
+        total_skipped=3,
+    )
+
+    normal = build_deep_parameter_inventory(
+        normal_source,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+    reversed_result = build_deep_parameter_inventory(
+        reversed_source,
+        _shallow_result(),
+        _html_result(),
+        _js_result(),
+    )
+
+    assert normal == reversed_result
+    assert (
+        render_deep_parameter_inventory_markdown(normal)
+        == render_deep_parameter_inventory_markdown(reversed_result)
+    )
+
+    by_name = {parameter.name: parameter for parameter in normal.parameters}
+
+    assert set(by_name) == {"post", "C"}
+    assert by_name["post"].occurrence_count == 2
+    assert by_name["C"].occurrence_count == 1
+    assert by_name["post"].source_skip_reasons == ("query_string_not_allowed",)
+    assert by_name["post"].evidence_ids == ("EVID-A", "EVID-B")
+    assert normal.summary_counts.total_parameter_name_occurrences == 3
+    assert normal.summary_counts.unique_parameters == 2
+    assert normal.summary_counts.unique_url_query_only_parameters == 2
+
+    public = repr(normal) + render_deep_parameter_inventory_markdown(normal)
+    assert "FIRST_SECRET" not in public
+    assert "SECOND_SECRET" not in public
+    assert "N;O=D" not in public
 
 
 def test_routes_javascript_original_and_shallow_query_metadata_are_inventoried() -> None:

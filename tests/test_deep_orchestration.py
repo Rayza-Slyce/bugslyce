@@ -35,6 +35,7 @@ from bugslyce.recon.deep_shallow_route_followup import (
 from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
+    DeepSourceRouteSkippedItem,
 )
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.modes import (
@@ -84,6 +85,155 @@ def test_builder_produces_all_stages_and_preserves_inputs() -> None:
     assert "### Offline Static Route Candidates\n\n- None." in (
         result.deep_recon_markdown
     )
+
+
+def test_watcher_shaped_skipped_query_routes_reach_parameter_inventory_offline() -> None:
+    source = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/post.php?post=striped.php",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0010", "EVID-ART-0046"),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/post.php?post=round.php",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0011", "EVID-ART-0047"),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/post.php?post=bunch.php",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0012", "EVID-ART-0048"),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/css/?C=N;O=D",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0019",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/css/?C=M;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0020",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/css/?C=S;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0021",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/css/?C=D;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0022",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/images/?C=N;O=D",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0030",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/images/?C=M;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0031",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/images/?C=S;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0032",),
+            ),
+            DeepSourceRouteSkippedItem(
+                url="http://10.82.165.175/images/?C=D;O=A",
+                method="GET",
+                reason="query_string_not_allowed",
+                source="source_route_coverage",
+                evidence_ids=("EVID-ART-0033",),
+            ),
+        ),
+        total_considered=11,
+        total_collected=0,
+        total_skipped=11,
+    )
+
+    result = build_deep_recon_orchestration(
+        source,
+        _shallow_result(),
+    )
+
+    by_name = {
+        parameter.name: parameter
+        for parameter in result.parameter_inventory.parameters
+    }
+
+    assert set(by_name) == {"post", "C"}
+
+    post = by_name["post"]
+    assert post.contexts == ("source_skipped_url_query",)
+    assert post.occurrence_count == 3
+    assert post.source_skip_reasons == ("query_string_not_allowed",)
+    assert post.source_collection_sections == ("source_route_coverage",)
+    assert post.safe_source_urls == (
+        "http://10.82.165.175/post.php?post",
+    )
+    assert post.evidence_ids == (
+        "EVID-ART-0010",
+        "EVID-ART-0011",
+        "EVID-ART-0012",
+        "EVID-ART-0046",
+        "EVID-ART-0047",
+        "EVID-ART-0048",
+    )
+
+    directory_sort = by_name["C"]
+    assert directory_sort.occurrence_count == 8
+    assert directory_sort.source_skip_reasons == (
+        "query_string_not_allowed",
+    )
+
+    counts = result.parameter_inventory.summary_counts
+    assert counts.total_parameter_name_occurrences == 11
+    assert counts.unique_parameters == 2
+    assert counts.unique_url_query_only_parameters == 2
+    assert dict(result.stage_counts)["parameter_inventory"] == 2
+
+    parameter_section = result.deep_recon_markdown[
+        result.deep_recon_markdown.index("## Deep Parameter Inventory") :
+    ]
+
+    assert "#### DEEP-PARAM-" in parameter_section
+    assert "`post`" in parameter_section
+    assert "Source skip reasons: `query_string_not_allowed`" in parameter_section
+
+    for retained_value in (
+        "striped.php",
+        "round.php",
+        "bunch.php",
+        "N;O=D",
+        "M;O=A",
+        "S;O=A",
+        "D;O=A",
+    ):
+        assert retained_value not in repr(result.parameter_inventory)
+        assert retained_value not in parameter_section
 
 
 def test_orchestration_surfaces_post_followup_javascript_routes_offline() -> None:
