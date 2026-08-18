@@ -123,6 +123,7 @@ def test_pipeline_records_tcp_skip_nmap_stages_as_noops(
                 "PIPELINE-STEP-001",
                 "PIPELINE-STEP-002",
                 "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
                 "PIPELINE-STEP-004",
                 "PIPELINE-STEP-005",
                 "PIPELINE-STEP-006",
@@ -1248,6 +1249,8 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
         "nmap-discover-write",
         "nmap-services",
         "nmap-services-write",
+        "smb-shares",
+        "smb-shares-write",
         "http-metadata",
         "http-metadata-write",
         "path-followup",
@@ -1272,13 +1275,13 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
         "export",
     ]
     assert result.final_status == "completed"
-    assert [step.status for step in result.steps] == ["completed"] * 12
+    assert [step.status for step in result.steps] == ["completed"] * 13
     assert result.report_path == str(output_dir / "report.md")
     assert result.runbook_path == str(output_dir / "runbook.md")
     assert result.export_path == f"{output_dir}-evidence-pack.zip"
     assert runbook_sections == [None, None]
-    assert "[1/12] environment and project validation starting..." in progress
-    assert "[12/12] evidence pack export complete" in progress
+    assert "[1/13] environment and project validation starting..." in progress
+    assert "[13/13] evidence pack export complete" in progress
 
     json_path = output_dir / PIPELINE_JSON_FILENAME
     markdown_path = output_dir / PIPELINE_MARKDOWN_FILENAME
@@ -1288,7 +1291,7 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     assert payload["target"] == "10.10.10.10"
     assert payload["final_status"] == "completed"
     assert payload["no_unapproved_actions"] is True
-    assert len(payload["steps"]) == 12
+    assert len(payload["steps"]) == 13
     html_path = output_dir / "report.html"
     assert html_path.read_text(encoding="utf-8") == "<!doctype html><title>Fixture report</title>\n"
     rendered_summary = render_project_pipeline_summary(result)
@@ -1303,7 +1306,7 @@ def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
     )
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "## Summary" in markdown
-    assert "- Completed steps: `12`" in markdown
+    assert "- Completed steps: `13`" in markdown
     assert "- Skipped existing steps: `0`" in markdown
     assert "## Final Outputs" in markdown
     assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown
@@ -1349,12 +1352,12 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
     )
 
     assert result.final_status == "completed"
-    assert "[7/12] bounded content discovery execution starting..." in progress
+    assert "[8/13] bounded content discovery execution starting..." in progress
     assert (
-        "[7/12] bounded content discovery execution: 250/1753 candidates checked; "
+        "[8/13] bounded content discovery execution: 250/1753 candidates checked; "
         "7 retained; 243 baseline-equivalent; elapsed 24s"
     ) in progress
-    assert "[7/12] bounded content discovery execution complete" in progress
+    assert "[8/13] bounded content discovery execution complete" in progress
     assert all("\r" not in message for message in progress)
 
 
@@ -1572,6 +1575,8 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
         "nmap-discover-write",
         "nmap-services",
         "nmap-services-write",
+        "smb-shares",
+        "smb-shares-write",
         "http-metadata",
         "http-metadata-write",
         "path-followup",
@@ -1598,7 +1603,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     ]
     assert result.profile == STANDARD_PIPELINE_PROFILE
     assert result.report_path == str(output_dir / "report.md")
-    assert [step.status for step in result.steps] == ["completed"] * 12
+    assert [step.status for step in result.steps] == ["completed"] * 13
     report = (output_dir / "report.md").read_text(encoding="utf-8")
     assert "## Human Triage Brief" in report
     assert "## Manual Review Leads" in report
@@ -2158,6 +2163,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         "PIPELINE-STEP-001",
         "PIPELINE-STEP-002",
         "PIPELINE-STEP-003",
+        "PIPELINE-STEP-003S",
         "PIPELINE-STEP-004",
         "PIPELINE-STEP-005",
         "PIPELINE-STEP-006",
@@ -2172,7 +2178,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     ]
     assert result.profile == "deep-bounded"
     assert result.final_status == "completed"
-    assert result.completed_steps == 14
+    assert result.completed_steps == 15
     assert (output_dir / "report.html").is_file()
     assert calls.count("deep-source-collect") == 1
     assert calls.count("deep-metadata-collect") == 1
@@ -3196,7 +3202,7 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     assert result.runbook_path == str(output_dir / "runbook.md")
     assert result.export_path == str(export_path)
     assert result.completed_steps == 1
-    assert result.skipped_steps == 13
+    assert result.skipped_steps == 14
     assert result.completion_summary is None
     assert "BugSlyce Run Summary" not in render_project_pipeline_summary(result)
     markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
@@ -3229,7 +3235,7 @@ def test_deep_completed_resume_skips_deep_tail_and_preserves_outputs(
     )
 
     assert second_result.completed_steps == 1
-    assert second_result.skipped_steps == 13
+    assert second_result.skipped_steps == 14
     assert {path: path.read_bytes() for path in canonical_paths} == before
 
 
@@ -3604,9 +3610,10 @@ def test_deep_source_writer_oserror_records_collection_step_failure(
 
     result = exc_info.value.result
     assert result.failed_step == "PIPELINE-STEP-010D"
-    assert result.steps[9].status == "failed"
-    assert result.steps[10].status == "pending"
-    assert result.steps[13].status == "pending"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-010D"] == "failed"
+    assert statuses["PIPELINE-STEP-011D"] == "pending"
+    assert statuses["PIPELINE-STEP-012"] == "pending"
 
 
 def test_deep_orchestration_writer_oserror_records_orchestration_step_failure(
@@ -3642,9 +3649,10 @@ def test_deep_orchestration_writer_oserror_records_orchestration_step_failure(
 
     result = exc_info.value.result
     assert result.failed_step == "PIPELINE-STEP-011D"
-    assert result.steps[9].status == "completed"
-    assert result.steps[10].status == "failed"
-    assert result.steps[13].status == "pending"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-010D"] == "completed"
+    assert statuses["PIPELINE-STEP-011D"] == "failed"
+    assert statuses["PIPELINE-STEP-012"] == "pending"
 
 
 def test_pipeline_records_noop_followups_and_continues(
@@ -3669,10 +3677,11 @@ def test_pipeline_records_noop_followups_and_continues(
         clock=lambda: FIXED_TIME,
     )
 
-    assert result.steps[7].status == "noop"
-    assert result.steps[8].status == "noop"
-    assert result.steps[9].status == "completed"
-    assert result.steps[11].status == "completed"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-008"] == "noop"
+    assert statuses["PIPELINE-STEP-009"] == "noop"
+    assert statuses["PIPELINE-STEP-010"] == "completed"
+    assert statuses["PIPELINE-STEP-012"] == "completed"
     assert "content-followup-write" not in calls
     assert "body-fetch-write" not in calls
     assert "export" in calls
@@ -3703,12 +3712,13 @@ def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
     )
 
     assert result.final_status == "completed"
-    assert result.steps[4].status == "noop"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-005"] == "noop"
     assert result.no_op_steps == 1
     assert "path-followup-write" not in calls
     assert "content-plan" in calls
     assert calls.index("content-plan") < calls.index("content-run")
-    assert "[5/12] discovered-path follow-up no-op" in progress
+    assert "[6/13] discovered-path follow-up no-op" in progress
     assert "export" in calls
 
 
@@ -3746,40 +3756,46 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert "http-metadata" not in calls
     assert "path-followup" not in calls
     assert calls[0] == "content-plan"
-    assert [step.status for step in result.steps[:4]] == [
-        "completed",
-        "skipped_existing",
-        "skipped_existing",
-        "skipped_existing",
-    ]
-    assert result.steps[4].status == "noop"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-001"] == "completed"
+    assert statuses["PIPELINE-STEP-002"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-003"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-003S"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-004"] == "skipped_existing"
+    assert statuses["PIPELINE-STEP-005"] == "noop"
     assert result.resume_requested is True
     assert result.reused_existing_evidence is True
-    assert result.skipped_steps == 3
+    assert result.skipped_steps == 4
     assert result.no_op_steps == 1
     assert "Resume: true" in progress[0]
     assert (
-        "[2/12] nmap full TCP discovery skipped.\n"
+        "[2/13] nmap full TCP discovery skipped.\n"
         "Existing nmap discovery evidence detected; phase skipped during resume."
         in progress
     )
     assert (
-        "[3/12] nmap service/version scan skipped.\n"
+        "[3/13] nmap service/version scan skipped.\n"
         "Existing service/version evidence detected; phase skipped during resume."
         in progress
     )
     assert (
-        "[4/12] HTTP metadata collection skipped.\n"
+        "[4/13] bounded anonymous SMB share enumeration skipped.\n"
+        "Legacy pipeline metadata predates SMB share enumeration; SMB phase "
+        "skipped during resume to avoid introducing new live network traffic."
+        in progress
+    )
+    assert (
+        "[5/13] HTTP metadata collection skipped.\n"
         "Existing HTTP metadata evidence detected; phase skipped during resume."
         in progress
     )
-    assert "[5/12] discovered-path follow-up no-op" in progress
+    assert "[6/13] discovered-path follow-up no-op" in progress
     payload = json.loads(
         (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
     )
     assert payload["resume_requested"] is True
     assert payload["reused_existing_evidence"] is True
-    assert payload["skipped_steps"] == 3
+    assert payload["skipped_steps"] == 4
     assert "Resume requested: `true`" in (
         output_dir / PIPELINE_MARKDOWN_FILENAME
     ).read_text(encoding="utf-8")
@@ -3851,12 +3867,13 @@ def test_resume_records_followup_noops_and_continues(
         clock=lambda: FIXED_TIME,
     )
 
-    assert result.steps[7].status == "noop"
-    assert result.steps[8].status == "noop"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-008"] == "noop"
+    assert statuses["PIPELINE-STEP-009"] == "noop"
     assert result.no_op_steps == 2
-    assert result.steps[9].status == "completed"
-    assert result.steps[10].status == "completed"
-    assert result.steps[11].status == "completed"
+    assert statuses["PIPELINE-STEP-010"] == "completed"
+    assert statuses["PIPELINE-STEP-011"] == "completed"
+    assert statuses["PIPELINE-STEP-012"] == "completed"
 
 
 def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
@@ -4101,30 +4118,31 @@ def test_resume_export_requires_verified_completion_and_can_be_skipped(
         "runbook",
         "runbook-write",
     ]
-    assert result.steps[11].status == "skipped_existing"
-    assert result.steps[11].message == (
+    steps = {step.step_id: step for step in result.steps}
+    assert steps["PIPELINE-STEP-012"].status == "skipped_existing"
+    assert steps["PIPELINE-STEP-012"].message == (
         "Existing completed evidence pack detected; export skipped during resume."
     )
     assert result.export_path == str(export_path)
     assert result.final_status == "completed"
     assert (
-        "[12/12] evidence pack export skipped.\n"
+        "[13/13] evidence pack export skipped.\n"
         "Existing completed evidence pack detected; export skipped during resume."
         in progress
     )
-    assert result.steps[4].message.startswith(
-            "Existing evidence-derived path follow-up artefacts"
+    assert steps["PIPELINE-STEP-005"].message.startswith(
+        "Existing evidence-derived path follow-up artefacts"
     )
-    assert result.steps[5].message.startswith(
+    assert steps["PIPELINE-STEP-006"].message.startswith(
         "Existing bounded content plan"
     )
-    assert result.steps[6].message.startswith(
+    assert steps["PIPELINE-STEP-007"].message.startswith(
         "Existing bounded content discovery output"
     )
-    assert result.steps[7].message.startswith(
+    assert steps["PIPELINE-STEP-008"].message.startswith(
         "Existing content-result follow-up artefacts"
     )
-    assert result.steps[8].message.startswith(
+    assert steps["PIPELINE-STEP-009"].message.startswith(
         "Existing selective body-fetch artefacts"
     )
 
@@ -4189,16 +4207,21 @@ def test_pipeline_stops_on_required_failure_and_records_pending_later_steps(
 
     result = exc_info.value.result
     assert result.final_status == "failed"
-    assert result.steps[3].status == "failed"
-    assert result.steps[4].status == "pending"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-004"] == "failed"
+    assert statuses["PIPELINE-STEP-005"] == "pending"
     assert "path-followup" not in calls
     assert "export" not in calls
     payload = json.loads(
         (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
     )
-    assert payload["steps"][3]["message"] == "mocked HTTP failure"
-    assert payload["steps"][4]["status"] == "pending"
-    assert payload["steps"][4]["message"] == ""
+    payload_steps = {
+        step["step_id"]: step
+        for step in payload["steps"]
+    }
+    assert payload_steps["PIPELINE-STEP-004"]["message"] == "mocked HTTP failure"
+    assert payload_steps["PIPELINE-STEP-005"]["status"] == "pending"
+    assert payload_steps["PIPELINE-STEP-005"]["message"] == ""
 
 
 def test_deep_content_failure_continues_independent_deep_and_local_steps(
@@ -4228,6 +4251,7 @@ def test_deep_content_failure_continues_independent_deep_and_local_steps(
                 "PIPELINE-STEP-001",
                 "PIPELINE-STEP-002",
                 "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
                 "PIPELINE-STEP-004",
                 "PIPELINE-STEP-005",
                 "PIPELINE-STEP-006",
@@ -4711,6 +4735,7 @@ def _patch_controlled_failure_runners(
                 "PIPELINE-STEP-001",
                 "PIPELINE-STEP-002",
                 "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
                 "PIPELINE-STEP-004",
                 "PIPELINE-STEP-005",
                 "PIPELINE-STEP-006",
@@ -5020,6 +5045,24 @@ def _patch_successful_pipeline(
         "bugslyce.project_pipeline.write_nmap_service_execution_result",
         writer("nmap-services-write"),
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.collect_smb_share_evidence",
+        phase(
+            "smb-shares",
+            execution_count=1,
+            commands_succeeded=1,
+            commands_unsuccessful=0,
+            commands_timed_out=0,
+            command_results=(),
+            shares=(),
+            warnings=(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_smb_share_execution_result",
+        writer("smb-shares-write"),
+    )
+
     monkeypatch.setattr(
         "bugslyce.project_pipeline.run_http_metadata_workflow",
         phase(
@@ -5445,3 +5488,255 @@ def _patch_minimal_metadata_collection(monkeypatch) -> None:
             ("deep_metadata_collection.md", "deep_metadata_collection.json"),
         ),
     )
+
+
+def test_fresh_lab_pipeline_inserts_smb_share_step_after_service_enrichment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def collect_smb(*_args, **_kwargs):
+        calls.append("smb-shares")
+        return SimpleNamespace(
+            execution_count=1,
+            commands_succeeded=1,
+            commands_unsuccessful=0,
+            commands_timed_out=0,
+            command_results=(),
+            shares=(),
+            warnings=(),
+        )
+
+    def write_smb(*_args, **_kwargs):
+        calls.append("smb-shares-write")
+        return (
+            output_dir / "recon_execution.json",
+            output_dir / "recon_execution.md",
+        )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "collect_smb_share_evidence",
+        collect_smb,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "write_smb_share_execution_result",
+        write_smb,
+        raising=False,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    step_ids = [step.step_id for step in result.steps]
+
+    assert step_ids[:5] == [
+        "PIPELINE-STEP-001",
+        "PIPELINE-STEP-002",
+        "PIPELINE-STEP-003",
+        "PIPELINE-STEP-003S",
+        "PIPELINE-STEP-004",
+    ]
+
+    steps = {step.step_id: step for step in result.steps}
+    assert steps["PIPELINE-STEP-003S"].status == "completed"
+
+    assert calls.index("nmap-services-write") < calls.index("smb-shares")
+    assert calls.index("smb-shares") < calls.index("smb-shares-write")
+    assert calls.index("smb-shares-write") < calls.index("http-metadata")
+
+
+def test_smb_pipeline_no_evidence_is_noop_and_http_collection_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+    from bugslyce.recon.smb_collection import SMBEnumerationNoWork
+
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def no_smb_work(*_args, **_kwargs):
+        raise SMBEnumerationNoWork(0)
+
+    def forbidden_writer(*_args, **_kwargs):
+        raise AssertionError(
+            "SMB execution metadata writer must not run for NoWork."
+        )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "collect_smb_share_evidence",
+        no_smb_work,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "write_smb_share_execution_result",
+        forbidden_writer,
+        raising=False,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    steps = {step.step_id: step for step in result.steps}
+
+    assert steps["PIPELINE-STEP-003S"].status == "noop"
+    assert steps["PIPELINE-STEP-004"].status == "completed"
+    assert "http-metadata" in calls
+    assert result.no_op_steps == 1
+
+
+def test_legacy_resume_does_not_acquire_new_smb_network_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+
+    project_file, output_dir = _fresh_project(tmp_path)
+    export_path = Path(f"{output_dir}-evidence-pack.zip")
+
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+            "gobuster-tiny-10.10.10.10-80-root.txt",
+            "curl-headers-content-followup-10.10.10.10-80-admin.txt",
+            "body-fetch-10.10.10.10-80-admin.html",
+        ],
+    )
+    plan_path = _write_plan_file(output_dir)
+    _patch_plan_loader(
+        monkeypatch,
+        project_file,
+        output_dir,
+        plan_path,
+    )
+
+    export_path.write_bytes(b"legacy completed evidence pack")
+
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        export_path,
+        final_status="completed",
+        step_statuses={
+            "PIPELINE-STEP-002": "completed",
+            "PIPELINE-STEP-003": "completed",
+            "PIPELINE-STEP-004": "completed",
+            "PIPELINE-STEP-005": "completed",
+            "PIPELINE-STEP-006": "completed",
+            "PIPELINE-STEP-007": "completed",
+            "PIPELINE-STEP-008": "completed",
+            "PIPELINE-STEP-009": "completed",
+            "PIPELINE-STEP-010": "completed",
+            "PIPELINE-STEP-011": "completed",
+            "PIPELINE-STEP-012": "completed",
+        },
+    )
+
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def forbidden_smb(*_args, **_kwargs):
+        raise AssertionError(
+            "Legacy resume attempted newly introduced SMB traffic."
+        )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "collect_smb_share_evidence",
+        forbidden_smb,
+        raising=False,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    steps = {step.step_id: step for step in result.steps}
+
+    assert steps["PIPELINE-STEP-003S"].status == "skipped_existing"
+    assert "SMB" in steps["PIPELINE-STEP-003S"].message
+    assert "resume" in steps["PIPELINE-STEP-003S"].message.lower()
+
+
+def test_bug_bounty_pipeline_does_not_gain_smb_live_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+
+    project_file, output_dir, runtime, process = _tcp_skip_project_runtime(
+        tmp_path
+    )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_bug_bounty_project_runtime",
+        lambda *_args, **_kwargs: runtime,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def forbidden_smb(*_args, **_kwargs):
+        raise AssertionError(
+            "Bug-bounty pipeline attempted SMB collection."
+        )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "collect_smb_share_evidence",
+        forbidden_smb,
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_path_followup_workflow",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("stop after HTTP metadata")
+        ),
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            STANDARD_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    steps = {
+        step.step_id: step
+        for step in exc_info.value.result.steps
+    }
+
+    assert steps["PIPELINE-STEP-002"].status == "noop"
+    assert steps["PIPELINE-STEP-003"].status == "noop"
+    assert steps["PIPELINE-STEP-003S"].status == "noop"
+    assert steps["PIPELINE-STEP-004"].status == "completed"
+    assert exc_info.value.result.failed_step == "PIPELINE-STEP-005"
+
+    assert len(process.calls) == 3
+    assert all(call[0] == "curl" for call in process.calls)

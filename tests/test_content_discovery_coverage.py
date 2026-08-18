@@ -151,7 +151,7 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "review the Operator Summary in `report.md`" in local_status
     assert "Optional additional bounded collection:" in local_status
     local_runbook = (output_dir / "runbook.md").read_text(encoding="utf-8")
-    assert "Pipeline steps satisfied: 14/14" in local_runbook
+    assert "Pipeline steps satisfied: 15/15" in local_runbook
     assert "Deep pipeline phases: 2/2" in local_runbook
     assert "Review the Operator Summary and raw evidence manually." in local_runbook
     assert "Optional bounded" in local_runbook
@@ -245,11 +245,11 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "* Scope file: `scope.md`" in packed_runbook
     assert "* Output directory: `.`" in packed_runbook
     assert "* Project file: `bugslyce_project.json`" in packed_runbook
-    assert "Pipeline steps satisfied: 14/14" in packed_runbook
+    assert "Pipeline steps satisfied: 15/15" in packed_runbook
     assert "Review the Operator Summary and raw evidence manually." in packed_runbook
     assert "review the Operator Summary in `report.md`" in packed_status_markdown
     assert "Optional additional bounded collection:" in packed_status_markdown
-    assert "Pipeline steps satisfied: 14/14" in packed_runbook
+    assert "Pipeline steps satisfied: 15/15" in packed_runbook
     assert "Deep pipeline phases: 2/2" in packed_runbook
     assert packed_orchestration["deep_mode_enabled"] is True
     assert packed_orchestration["deep_profile_selected"] is True

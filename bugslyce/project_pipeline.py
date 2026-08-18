@@ -138,6 +138,11 @@ from bugslyce.recon.path_followup import (
     run_path_followup_workflow,
     write_path_followup_execution_result,
 )
+from bugslyce.recon.smb_collection import (
+    SMBEnumerationNoWork,
+    collect_smb_share_evidence,
+    write_smb_share_execution_result,
+)
 from bugslyce.recon.route_source_review import (
     build_route_source_review,
     render_route_source_review_markdown,
@@ -215,6 +220,10 @@ SKIPPED_STEP_MESSAGES = {
     "PIPELINE-STEP-003": (
         "Existing service/version evidence detected; phase skipped during resume."
     ),
+    "PIPELINE-STEP-003S": (
+        "Existing bounded SMB share-enumeration outcome detected; "
+        "phase skipped during resume."
+    ),
     "PIPELINE-STEP-004": (
         "Existing HTTP metadata evidence detected; phase skipped during resume."
     ),
@@ -290,6 +299,10 @@ class ServiceVersionNoWork(ValueError):
 
 class TCPDiscoveryNoWork(ValueError):
     """Signal a policy-approved TCP-discovery no-op without producing traffic."""
+
+
+class SMBPipelinePolicyNoWork(ValueError):
+    """Signal an SMB policy no-op without producing traffic."""
 
 
 @dataclass(frozen=True)
@@ -595,6 +608,8 @@ def run_project_pipeline(
         except (
             TCPDiscoveryNoWork,
             ServiceVersionNoWork,
+            SMBEnumerationNoWork,
+            SMBPipelinePolicyNoWork,
             PathFollowupNoWork,
             ContentFollowupNoWork,
             BodyFetchNoWork,
@@ -1175,6 +1190,10 @@ def _assess_resume_state(
         plan_complete = True
 
     prior_statuses = _prior_step_statuses(prior_pipeline)
+    legacy_smb_resume = (
+        prior_pipeline is None
+        or "PIPELINE-STEP-003S" not in prior_statuses
+    )
     if profile == DEEP_PIPELINE_PROFILE:
         if _deep_completed_resume_verified(
             output_dir=output_dir,
@@ -1199,6 +1218,21 @@ def _assess_resume_state(
         "PIPELINE-STEP-003": any(
             name.startswith("nmap-services") for name in artifact_names
         ) or prior_statuses.get("PIPELINE-STEP-003") == "noop",
+        "PIPELINE-STEP-003S": (
+            (
+                legacy_smb_resume
+                and (
+                    any(
+                        name.startswith("nmap-services")
+                        for name in artifact_names
+                    )
+                    or prior_statuses.get("PIPELINE-STEP-003") == "noop"
+                )
+            )
+            or any(name.startswith("smb-shares-") for name in artifact_names)
+            or prior_statuses.get("PIPELINE-STEP-003S")
+            in {"completed", "noop", "skipped_existing"}
+        ),
         "PIPELINE-STEP-004": any(
             name.startswith(("homepage-", "robots-", "curl-headers-"))
             and not name.startswith(
@@ -1377,6 +1411,7 @@ def _completed_deep_resume_skipped_steps(
         for step_id in (
             "PIPELINE-STEP-002",
             "PIPELINE-STEP-003",
+            "PIPELINE-STEP-003S",
             "PIPELINE-STEP-004",
             "PIPELINE-STEP-005",
             "PIPELINE-STEP-006",
@@ -1389,7 +1424,13 @@ def _completed_deep_resume_skipped_steps(
             "PIPELINE-STEP-011",
             "PIPELINE-STEP-012",
         )
-        if prior_statuses.get(step_id) in reusable
+        if (
+            prior_statuses.get(step_id) in reusable
+            or (
+                step_id == "PIPELINE-STEP-003S"
+                and step_id not in prior_statuses
+            )
+        )
     )
 
 
@@ -1497,6 +1538,7 @@ def _validate_resume_phase_order(detected: dict[str, bool]) -> None:
     for step_id in (
         "PIPELINE-STEP-002",
         "PIPELINE-STEP-003",
+        "PIPELINE-STEP-003S",
         "PIPELINE-STEP-004",
         "PIPELINE-STEP-005",
         "PIPELINE-STEP-006",
@@ -1527,6 +1569,11 @@ def _skipped_step_message(
         return (
             "Prior policy-approved service/version no-op verified; phase skipped "
             "during resume."
+        )
+    if step_id == "PIPELINE-STEP-003S" and step_id not in prior_statuses:
+        return (
+            "Legacy pipeline metadata predates SMB share enumeration; SMB phase "
+            "skipped during resume to avoid introducing new live network traffic."
         )
     return SKIPPED_STEP_MESSAGES[step_id]
 
@@ -1596,6 +1643,11 @@ def _pending_steps(profile: str) -> list[PipelineStep]:
         ("PIPELINE-STEP-001", "environment and project validation", "local-validation"),
         ("PIPELINE-STEP-002", "nmap full TCP discovery", "nmap-discover"),
         ("PIPELINE-STEP-003", "nmap service/version scan", "nmap-services"),
+        (
+            "PIPELINE-STEP-003S",
+            "bounded anonymous SMB share enumeration",
+            "smb-share-list",
+        ),
         ("PIPELINE-STEP-004", "HTTP metadata collection", "http-metadata"),
         ("PIPELINE-STEP-005", "discovered-path follow-up", "path-followup"),
         ("PIPELINE-STEP-006", "bounded content discovery planning", "content-plan"),
@@ -1728,6 +1780,42 @@ def _step_runners(
             "Service/version detection completed on discovered open TCP ports.",
             [result.nmap_output_path, *(str(path) for path in metadata)],
             {"report_path": result.report_path},
+        )
+
+    def smb_shares():
+        if project_runtime is not None:
+            raise SMBPipelinePolicyNoWork(
+                "Bounded SMB share enumeration is intentionally disabled for "
+                "live bug-bounty project pipelines."
+            )
+
+        result = collect_smb_share_evidence(
+            output_dir,
+            scope_file,
+        )
+        metadata = write_smb_share_execution_result(
+            result,
+            output_dir,
+        )
+        successful_outputs = list(
+            dict.fromkeys(
+                item.output_file
+                for item in result.command_results
+                if item.exit_code == 0 and item.error is None
+            )
+        )
+        return (
+            (
+                "Bounded anonymous SMB share enumeration completed: "
+                f"{result.commands_succeeded} succeeded, "
+                f"{result.commands_unsuccessful} unsuccessful, "
+                f"{result.commands_timed_out} timed out."
+            ),
+            [
+                *successful_outputs,
+                *(str(path) for path in metadata),
+            ],
+            {},
         )
 
     def http_metadata():
@@ -2048,6 +2136,7 @@ def _step_runners(
         "PIPELINE-STEP-001": validation,
         "PIPELINE-STEP-002": nmap_discover,
         "PIPELINE-STEP-003": nmap_services,
+        "PIPELINE-STEP-003S": smb_shares,
         "PIPELINE-STEP-004": http_metadata,
         "PIPELINE-STEP-005": path_followup,
         "PIPELINE-STEP-006": content_plan,

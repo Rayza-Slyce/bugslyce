@@ -19,6 +19,7 @@ from bugslyce.core.models import (
     PortService,
     ReconManifest,
     ReconManifestArtifact,
+    SMBShare,
 )
 from bugslyce.core.normalise import dedupe_preserve_order, normalise_hostname, normalise_url
 from bugslyce.parsers.gobuster import parse_gobuster
@@ -33,6 +34,11 @@ from bugslyce.parsers.nmap import (
     parse_nmap_normal,
 )
 from bugslyce.parsers.robots import parse_robots
+from bugslyce.parsers.smbclient import parse_smbclient_share_list
+from bugslyce.recon.smb_eligibility import (
+    SMBEnumerationTarget,
+    select_smb_enumeration_targets,
+)
 
 
 @dataclass
@@ -42,6 +48,7 @@ class RawAssemblyResult:
     port_services: list[PortService]
     http_artifacts: list[HTTPArtifact]
     discovered_paths: list[DiscoveredPath]
+    smb_shares: list[SMBShare]
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,8 @@ def assemble_raw_artifacts(
     port_service_http_evidence: dict[tuple[str, int, str], list[str]] = {}
     http_artifacts: list[HTTPArtifact] = []
     discovered_paths: list[DiscoveredPath] = []
+    smb_shares: list[SMBShare] = []
+    smb_contexts: list[_ArtifactContext] = []
 
     for context in _artifact_contexts(input_dir, manifest):
         if context.type == "nmap":
@@ -155,6 +164,8 @@ def assemble_raw_artifacts(
                 warnings,
                 endpoint_tags,
             )
+        elif context.type == "smb_shares":
+            smb_contexts.append(context)
 
     _finalise_nmap_services(
         port_services,
@@ -163,8 +174,28 @@ def assemble_raw_artifacts(
         host_tags,
         port_service_http_evidence,
     )
+    smb_targets = select_smb_enumeration_targets(
+        port_services,
+        evidence,
+    )
+    for context in smb_contexts:
+        _assemble_smb_shares(
+            context,
+            default_host,
+            smb_targets,
+            evidence,
+            smb_shares,
+            processed_files,
+            warnings,
+        )
+
     _apply_root_page_titles(http_artifacts, service_records)
-    return RawAssemblyResult(port_services, http_artifacts, discovered_paths)
+    return RawAssemblyResult(
+        port_services,
+        http_artifacts,
+        discovered_paths,
+        smb_shares,
+    )
 
 
 def _artifact_contexts(input_dir: Path, manifest: ReconManifest | None) -> list[_ArtifactContext]:
@@ -286,6 +317,83 @@ def _assemble_nmap(
                     existing.product = record.product
                 if not existing.version and record.version:
                     existing.version = record.version
+
+
+def _assemble_smb_shares(
+    context: _ArtifactContext,
+    default_host: str | None,
+    targets: tuple[SMBEnumerationTarget, ...],
+    evidence: list[Evidence],
+    smb_shares: list[SMBShare],
+    processed_files: list[str],
+    warnings: list[str],
+) -> None:
+    """Reconstruct direct SMB share facts from one manifest-owned artefact."""
+
+    metadata = context.metadata
+    host = _context_host(
+        metadata,
+        context.manifest_target,
+        default_host,
+    )
+    port = metadata.port if metadata is not None else None
+
+    if not host or port is None:
+        warnings.append(
+            "Skipping SMB share artefact without manifest "
+            f"host/port context: {context.path.name}"
+        )
+        return
+
+    target = next(
+        (
+            item
+            for item in targets
+            if item.host == host and item.port == port
+        ),
+        None,
+    )
+    if target is None:
+        warnings.append(
+            "Skipping SMB share artefact without evidence-backed "
+            f"SMB endpoint: {context.path.name}"
+        )
+        return
+
+    parsed = _parse_present(
+        context.path,
+        lambda path: parse_smbclient_share_list(
+            path,
+            target,
+        ),
+        processed_files,
+        warnings,
+    )
+
+    if not isinstance(parsed, list):
+        return
+
+    for share in parsed:
+        if not isinstance(share, SMBShare):
+            continue
+
+        evidence_id = _append_evidence(
+            evidence,
+            "SMB",
+            share.source_file,
+            "smb_share",
+            share.share_name,
+            {
+                "host": share.host,
+                "port": share.port,
+                "share_type": share.share_type,
+                "comment": share.comment,
+                **_manifest_context(metadata),
+            },
+        )
+        share.evidence_ids = [evidence_id]
+        smb_shares.append(share)
+
 
 
 def _assemble_headers(

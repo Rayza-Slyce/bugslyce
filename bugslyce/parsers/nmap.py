@@ -109,6 +109,19 @@ def is_http_capable_port_service(record: PortService) -> bool:
     return http_scheme_for_port_service(record) is not None
 
 
+def is_smb_capable_port_service(record: PortService) -> bool:
+    """Return whether retained open-TCP service evidence identifies SMB."""
+
+    service = (record.service or "").casefold()
+    protocol = (record.protocol or "").casefold()
+    state = (record.state or "").casefold()
+    return (
+        protocol == "tcp"
+        and state == "open"
+        and service in {"microsoft-ds", "netbios-ssn"}
+    )
+
+
 def http_scheme_for_port_service(record: PortService) -> str | None:
     """Return the evidence-backed HTTP scheme without changing the raw service label."""
 

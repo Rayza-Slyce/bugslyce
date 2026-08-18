@@ -891,6 +891,7 @@ def _portable_project_state_payload(
     for collection_name, path_map in (
         ("evidence", preferred_paths),
         ("http_artifacts", relationship_paths),
+        ("smb_shares", preferred_paths),
     ):
         collection = state.get(collection_name, [])
         if not isinstance(collection, list):
@@ -911,6 +912,36 @@ def _portable_project_state_payload(
                 if _is_exact_local_file_alias(item.get("value"), source_file, input_dir):
                     item["value"] = portable_source
                 item["source_file"] = portable_source
+    smb_shares = state.get("smb_shares", [])
+    if not isinstance(smb_shares, list):
+        raise ValueError("Project state smb_shares must be a list.")
+
+    for index, share in enumerate(smb_shares, start=1):
+        if not isinstance(share, dict):
+            raise ValueError(
+                f"Project state SMB share #{index} must be an object."
+            )
+
+        trigger_sources = share.get(
+            "trigger_source_files",
+            [],
+        )
+        if not isinstance(trigger_sources, list):
+            raise ValueError(
+                f"Project state SMB share #{index} "
+                "trigger_source_files must be a list."
+            )
+
+        share["trigger_source_files"] = [
+            _portable_project_file(
+                value,
+                input_dir,
+                preferred_paths,
+                f"SMB share #{index} trigger source artefact",
+            )
+            for value in trigger_sources
+        ]
+
     port_services = state.get("port_services", [])
     if not isinstance(port_services, list):
         raise ValueError("Project state port_services must be a list.")

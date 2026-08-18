@@ -205,6 +205,7 @@ def build_project_state(input_dir: Path) -> ProjectState:
     port_services = raw.port_services
     http_artifacts = raw.http_artifacts
     discovered_paths = raw.discovered_paths
+    smb_shares = raw.smb_shares
 
     assets = [
         Asset(
@@ -247,6 +248,7 @@ def build_project_state(input_dir: Path) -> ProjectState:
         warnings=warnings,
         generated_at=utc_now_iso(),
         engagement_context=engagement_context,
+        smb_shares=smb_shares,
     )
 
 

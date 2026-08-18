@@ -138,6 +138,23 @@ class PortService:
 
 
 @dataclass
+class SMBShare:
+    """Structured SMB share evidence from bounded share enumeration."""
+
+    host: str
+    port: int
+    share_name: str
+    share_type: str
+    comment: str
+    source_file: str
+    trigger_service_names: list[str]
+    trigger_evidence_ids: list[str]
+    trigger_source_files: list[str]
+    evidence_ids: list[str]
+    tags: list[str]
+
+
+@dataclass
 class HTTPArtifact:
     """Structured HTTP artifact foundation for future recon ingestion."""
 
@@ -633,6 +650,7 @@ class ProjectState:
     warnings: list[str]
     generated_at: str
     engagement_context: str = "unknown"
+    smb_shares: list[SMBShare] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

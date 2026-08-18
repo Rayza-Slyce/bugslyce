@@ -1224,6 +1224,48 @@ def _collect_project_state_file_errors(
                 errors.add(
                     f"portable_project_state_{collection_name}_file_alias_invalid:{index}"
                 )
+    smb_shares = state.get("smb_shares", [])
+    _validate_source_file_collection(
+        root,
+        smb_shares,
+        "smb_share",
+        closure_declared,
+        manifest_declared,
+        errors,
+    )
+    if isinstance(smb_shares, list):
+        for share_index, share in enumerate(smb_shares, start=1):
+            if not isinstance(share, dict):
+                continue
+
+            trigger_sources = share.get(
+                "trigger_source_files",
+                [],
+            )
+            if not isinstance(trigger_sources, list):
+                errors.add(
+                    "portable_project_state_smb_share_"
+                    f"trigger_sources_invalid:{share_index}"
+                )
+                continue
+
+            for source_index, value in enumerate(
+                trigger_sources,
+                start=1,
+            ):
+                _validate_project_state_member(
+                    root,
+                    value,
+                    (
+                        "portable_project_state_smb_share_"
+                        "trigger_source_invalid:"
+                        f"{share_index}:{source_index}"
+                    ),
+                    closure_declared,
+                    manifest_declared,
+                    errors,
+                )
+
     recon_manifest = state.get("recon_manifest")
     if recon_manifest is not None:
         if not isinstance(recon_manifest, dict):

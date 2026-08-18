@@ -16,6 +16,7 @@ SUPPORTED_ARTIFACT_TYPES = {
     "http_headers",
     "robots",
     "html",
+    "smb_shares",
 }
 
 

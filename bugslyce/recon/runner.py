@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import os
 import subprocess
 
 from bugslyce.core.models import ReconCommand, ReconCommandResult
@@ -16,6 +17,8 @@ from bugslyce.recon.content_commands import validate_live_content_discovery_comm
 from bugslyce.recon.content_followup_commands import validate_live_content_followup_command
 from bugslyce.recon.http_metadata_commands import validate_live_http_metadata_command
 from bugslyce.recon.path_followup_commands import validate_live_path_followup_command
+from bugslyce.recon.smb_commands import validate_live_smb_share_list_command
+from bugslyce.recon.smb_eligibility import SMBEnumerationTarget
 from bugslyce.recon.nmap_profiles import (
     validate_live_nmap_discovery_command,
     validate_live_nmap_service_scan_command,
@@ -259,6 +262,119 @@ class LiveNmapServiceRunner:
             stderr_file = str(stderr_path)
         ended = utc_now()
         error = None if completed.returncode == 0 else f"Nmap exited with code {completed.returncode}."
+        return _live_result(
+            command,
+            started,
+            ended,
+            exit_code=completed.returncode,
+            stderr_path=stderr_file,
+            error=error,
+        )
+
+
+class LiveSMBShareListRunner:
+    """Execute only the approved bounded anonymous SMB share-list command."""
+
+    def __init__(
+        self,
+        output_dir: Path,
+        target: SMBEnumerationTarget,
+    ) -> None:
+        self.output_dir = output_dir
+        self.target = target
+
+    def run(self, command: ReconCommand) -> ReconCommandResult:
+        """Run one validated non-interactive SMB share-list command."""
+
+        started = utc_now()
+        validation = validate_live_smb_share_list_command(
+            command,
+            self.output_dir,
+            self.target,
+        )
+        if not validation.valid:
+            ended = utc_now()
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error="; ".join(validation.errors),
+            )
+
+        output_path = Path(command.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path = output_path.with_suffix(
+            output_path.suffix + ".stderr.log"
+        )
+
+        environment = os.environ.copy()
+        for name in (
+            "USER",
+            "LOGNAME",
+            "PASSWD",
+            "PASSWD_FD",
+            "PASSWD_FILE",
+        ):
+            environment.pop(name, None)
+
+        try:
+            completed = subprocess.run(
+                command.argv,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=command.timeout_seconds,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired:
+            ended = utc_now()
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=(
+                    "SMB share listing exceeded "
+                    f"{command.timeout_seconds} seconds."
+                ),
+                executed=True,
+            )
+        except OSError as exc:
+            ended = utc_now()
+            return _live_result(
+                command,
+                started,
+                ended,
+                exit_code=None,
+                stderr_path=None,
+                error=f"SMB share listing could not start: {exc}",
+            )
+
+        output_path.write_text(
+            completed.stdout or "",
+            encoding="utf-8",
+        )
+
+        stderr_file: str | None = None
+        if completed.stderr:
+            stderr_path.write_text(
+                completed.stderr,
+                encoding="utf-8",
+            )
+            stderr_file = str(stderr_path)
+
+        ended = utc_now()
+        error = (
+            None
+            if completed.returncode == 0
+            else f"smbclient exited with code {completed.returncode}."
+        )
+
         return _live_result(
             command,
             started,
