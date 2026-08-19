@@ -519,6 +519,7 @@ def build_operator_summary(
     robots_lead = _unusual_robots_lead(project_state)
     if robots_lead:
         leads.append(robots_lead)
+    leads.extend(_smb_disk_share_leads(project_state))
     leads.extend(_non_http_service_leads(project_state))
 
     normalised = [_normalise_lead_membership(lead) for lead in leads]
@@ -821,6 +822,70 @@ def _unusual_robots_lead(project_state: ProjectState) -> OperatorSummaryLead | N
         score=48,
         lead_type="unusual_robots_user_agent",
     )
+
+
+def _smb_disk_share_leads(
+    project_state: ProjectState,
+) -> list[OperatorSummaryLead]:
+    leads: list[OperatorSummaryLead] = []
+
+    for share in project_state.smb_shares:
+        if share.share_type.casefold() != "disk":
+            continue
+
+        share_name = share.share_name.strip()
+        if not share_name or not share.evidence_ids:
+            continue
+
+        folded_name = share_name.casefold()
+        drive_admin_share = (
+            len(share_name) == 2
+            and share_name[0].isascii()
+            and share_name[0].isalpha()
+            and share_name[1] == "$"
+        )
+        if folded_name == "admin$" or drive_admin_share:
+            continue
+
+        trigger_evidence_ids = set(share.trigger_evidence_ids)
+        matching_protocols = sorted(
+            {
+                service.protocol
+                for service in project_state.port_services
+                if service.host.casefold() == share.host.casefold()
+                and service.port == share.port
+                and service.state == "open"
+                and service.protocol
+                and trigger_evidence_ids.intersection(service.evidence_ids)
+            }
+        )
+        if not matching_protocols:
+            continue
+
+        leads.append(
+            OperatorSummaryLead(
+                title=f"SMB Disk share observed for review: {share_name}",
+                why=(
+                    "Bounded SMB share enumeration directly observed a Disk share "
+                    "outside the obvious built-in administrative-share patterns."
+                ),
+                endpoints=[
+                    f"{share.host}:{share.port}/{protocol}"
+                    for protocol in matching_protocols
+                ],
+                evidence_ids=share.evidence_ids,
+                next_action=(
+                    "Review the retained share name and expected service purpose in "
+                    "authorised scope. Do not connect to, traverse, read from, write to, "
+                    "or test access to the share from this lead."
+                ),
+                signal="direct SMB share evidence",
+                score=64,
+                lead_type="smb_disk_share_review",
+            )
+        )
+
+    return leads
 
 
 def _non_http_service_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:

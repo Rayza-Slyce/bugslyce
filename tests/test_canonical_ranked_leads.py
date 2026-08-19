@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+from bugslyce.core.models import PortService, SMBShare
 from bugslyce.core.project import build_project_state
 from bugslyce.project_pipeline import _render_compact_run_summary
 from bugslyce.reports.human_triage import (
@@ -192,3 +194,189 @@ def test_compact_presentation_preserves_canonical_rank_and_identity() -> None:
     assert [(lead.lead_id, lead.rank) for lead in summary.review_first] == ranks_before
     for lead in summary.review_first[:5]:
         assert f"{lead.rank}. [{lead.lead_id}]" in rendered
+
+
+def _smb_share(
+    name: str,
+    *,
+    share_type: str = "Disk",
+    evidence_id: str = "EVID-SMB-CUSTOM",
+) -> SMBShare:
+    return SMBShare(
+        host="files.example.test",
+        port=31337,
+        share_name=name,
+        share_type=share_type,
+        comment="",
+        source_file="smb-shares-files.example.test-31337-guest.txt",
+        trigger_service_names=["microsoft-ds"],
+        trigger_evidence_ids=["EVID-PORT-SMB"],
+        trigger_source_files=["nmap-services-all.txt"],
+        evidence_ids=[evidence_id],
+        tags=[],
+    )
+
+
+def _state_with_smb_shares(
+    shares: list[SMBShare],
+):
+    state = build_project_state(FIXTURE)
+    return replace(
+        state,
+        http_services=[],
+        http_artifacts=[],
+        discovered_paths=[],
+        port_services=[
+            PortService(
+                host="files.example.test",
+                port=31337,
+                protocol="tcp",
+                state="open",
+                service="microsoft-ds",
+                product=None,
+                version=None,
+                source_file="nmap-services-all.txt",
+                evidence_ids=["EVID-PORT-SMB"],
+                tags=[],
+            )
+        ],
+        smb_shares=shares,
+    )
+
+
+def test_custom_smb_disk_share_becomes_canonical_review_lead() -> None:
+    state = _state_with_smb_shares(
+        [_smb_share("nt4wrksv")]
+    )
+
+    summary = build_operator_summary(state, [])
+
+    lead = next(
+        item
+        for item in summary.ranked_leads
+        if item.lead_type == "smb_disk_share_review"
+    )
+
+    assert lead.title == "SMB Disk share observed for review: nt4wrksv"
+    assert lead.endpoints == ["files.example.test:31337/tcp"]
+    assert lead.evidence_ids == ["EVID-SMB-CUSTOM"]
+    assert "EVID-PORT-SMB" not in lead.evidence_ids
+    assert lead.score == 64
+    assert lead.lead_id
+    assert lead.rank > 0
+
+    service_lead = next(
+        item
+        for item in summary.ranked_leads
+        if item.lead_type == "non_http_service_context"
+    )
+
+    assert lead.rank < service_lead.rank
+    assert lead.score > service_lead.score
+
+
+def test_custom_smb_disk_share_reaches_markdown_review_first() -> None:
+    state = _state_with_smb_shares(
+        [_smb_share("nt4wrksv")]
+    )
+    summary = build_operator_summary(state, [])
+
+    report = render_markdown_report(
+        state,
+        [],
+        operator_summary=summary,
+    )
+    review_first = report.split(
+        "### Review First",
+        1,
+    )[1].split(
+        "##",
+        1,
+    )[0]
+
+    assert "SMB Disk share observed for review: nt4wrksv" in review_first
+    assert "EVID-SMB-CUSTOM" in review_first
+    assert "files.example.test:31337/tcp" in review_first
+
+
+def test_obvious_administrative_smb_shares_are_not_promoted() -> None:
+    state = _state_with_smb_shares(
+        [
+            _smb_share("ADMIN$", evidence_id="EVID-SMB-ADMIN"),
+            _smb_share("admin$", evidence_id="EVID-SMB-ADMIN-LOWER"),
+            _smb_share("C$", evidence_id="EVID-SMB-C"),
+            _smb_share("z$", evidence_id="EVID-SMB-Z"),
+            _smb_share(
+                "IPC$",
+                share_type="IPC",
+                evidence_id="EVID-SMB-IPC",
+            ),
+            _smb_share(
+                "OfficePrinter",
+                share_type="Printer",
+                evidence_id="EVID-SMB-PRINTER",
+            ),
+        ]
+    )
+
+    summary = build_operator_summary(state, [])
+
+    assert not any(
+        lead.lead_type == "smb_disk_share_review"
+        for lead in summary.ranked_leads
+    )
+
+
+def test_custom_hidden_smb_disk_share_remains_review_eligible() -> None:
+    state = _state_with_smb_shares(
+        [_smb_share("private$")]
+    )
+
+    summary = build_operator_summary(state, [])
+
+    lead = next(
+        item
+        for item in summary.ranked_leads
+        if item.lead_type == "smb_disk_share_review"
+    )
+
+    assert lead.title == "SMB Disk share observed for review: private$"
+    assert lead.evidence_ids == ["EVID-SMB-CUSTOM"]
+
+
+def test_smb_share_lead_order_and_identity_are_input_stable() -> None:
+    shares = [
+        _smb_share(
+            "engineering",
+            evidence_id="EVID-SMB-ENGINEERING",
+        ),
+        _smb_share(
+            "backups",
+            evidence_id="EVID-SMB-BACKUPS",
+        ),
+    ]
+
+    forwards = build_operator_summary(
+        _state_with_smb_shares(shares),
+        [],
+    ).ranked_leads
+    backwards = build_operator_summary(
+        _state_with_smb_shares(list(reversed(shares))),
+        [],
+    ).ranked_leads
+
+    forwards_smb = [
+        lead
+        for lead in forwards
+        if lead.lead_type == "smb_disk_share_review"
+    ]
+    backwards_smb = [
+        lead
+        for lead in backwards
+        if lead.lead_type == "smb_disk_share_review"
+    ]
+
+    assert backwards_smb == forwards_smb
+    assert [lead.lead_id for lead in backwards_smb] == [
+        lead.lead_id for lead in forwards_smb
+    ]
