@@ -355,8 +355,18 @@ class LiveSMBShareListRunner:
                 error=f"SMB share listing could not start: {exc}",
             )
 
+        stdout_text = completed.stdout or ""
+        authoritative_output = stdout_text
+
+        if (
+            completed.returncode == 0
+            and not stdout_text.strip()
+            and completed.stderr
+        ):
+            authoritative_output = completed.stderr
+
         output_path.write_text(
-            completed.stdout or "",
+            authoritative_output,
             encoding="utf-8",
         )
 

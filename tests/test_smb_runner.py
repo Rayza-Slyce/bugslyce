@@ -248,3 +248,71 @@ def test_smb_runner_neutralises_authentication_environment(
     assert result.executed is True
     assert result.exit_code == 0
     assert result.error is None
+
+
+def test_smb_runner_preserves_successful_stderr_share_listing_as_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from bugslyce.parsers.smbclient import parse_smbclient_share_list
+
+    live_samba_output = (
+        "Disk|ADMIN$|Remote Admin\n"
+        "Disk|C$|Default share\n"
+        "IPC|IPC$|Remote IPC\n"
+        "Disk|nt4wrksv|\n"
+        "SMB1 disabled -- no workgroup available\n"
+    )
+
+    def fake_run(_argv, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr=live_samba_output,
+        )
+
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        fake_run,
+    )
+
+    target = _target(port=31337)
+    command = build_live_smb_share_list_command(
+        target,
+        tmp_path,
+    )
+
+    assert "--stderr" in command.argv
+
+    runner = runner_module.LiveSMBShareListRunner(
+        tmp_path,
+        target,
+    )
+    result = runner.run(command)
+
+    assert result.executed is True
+    assert result.exit_code == 0
+    assert result.error is None
+
+    output_path = Path(command.output_file)
+    authoritative = output_path.read_text(encoding="utf-8")
+
+    assert "Disk|nt4wrksv|" in authoritative
+    assert "IPC|IPC$|Remote IPC" in authoritative
+
+    shares = parse_smbclient_share_list(
+        output_path,
+        target,
+    )
+    assert tuple(item.share_name for item in shares) == (
+        "ADMIN$",
+        "C$",
+        "IPC$",
+        "nt4wrksv",
+    )
+
+    assert result.stderr_path is not None
+    assert Path(result.stderr_path).read_text(
+        encoding="utf-8"
+    ) == live_samba_output
