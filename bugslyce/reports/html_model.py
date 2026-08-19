@@ -18,6 +18,7 @@ from bugslyce.core.models import (
     HTTPService,
     PortService,
     ProjectState,
+    SMBShare,
     ReconManifest,
     ReconManifestArtifact,
     ReconPackSummary,
@@ -521,6 +522,11 @@ def _project_state_from_payload(
             ),
             port_services=_dataclass_list(
                 PortService, raw_state.get("port_services"), "project_state.port_services"
+            ),
+            smb_shares=_dataclass_list(
+                SMBShare,
+                raw_state.get("smb_shares", []),
+                "project_state.smb_shares",
             ),
             http_artifacts=_dataclass_list(
                 HTTPArtifact, raw_state.get("http_artifacts"), "project_state.http_artifacts"

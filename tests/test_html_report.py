@@ -2040,3 +2040,89 @@ def _request_reflecting_html(url: str) -> str:
         "<a href='/public/help'>Documentation</a>"
         "</main></body></html>"
     )
+
+
+
+def test_html_model_restores_persisted_smb_shares_into_canonical_ranking(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "persisted-smb-share")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state = payload["project_state"]
+
+    state["port_services"].append(
+        {
+            "host": "files.example.test",
+            "port": 31337,
+            "protocol": "tcp",
+            "state": "open",
+            "service": "microsoft-ds",
+            "product": None,
+            "version": None,
+            "source_file": "nmap-services-all.txt",
+            "evidence_ids": ["EVID-PORT-SMB"],
+            "tags": [],
+        }
+    )
+    state["smb_shares"] = [
+        {
+            "host": "files.example.test",
+            "port": 31337,
+            "share_name": "nt4wrksv",
+            "share_type": "Disk",
+            "comment": "",
+            "source_file": "smb-shares-files.example.test-31337-guest.txt",
+            "trigger_service_names": ["microsoft-ds"],
+            "trigger_evidence_ids": ["EVID-PORT-SMB"],
+            "trigger_source_files": ["nmap-services-all.txt"],
+            "evidence_ids": ["EVID-SMB-0004"],
+            "tags": [],
+        }
+    ]
+
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+
+    assert len(model.project_state.smb_shares) == 1
+    share = model.project_state.smb_shares[0]
+    assert share.share_name == "nt4wrksv"
+    assert share.share_type == "Disk"
+    assert share.port == 31337
+    assert share.evidence_ids == ["EVID-SMB-0004"]
+
+    lead = next(
+        item
+        for item in model.operator_summary.ranked_leads
+        if item.lead_type == "smb_disk_share_review"
+    )
+    assert lead.title == "SMB Disk share observed for review: nt4wrksv"
+    assert lead.endpoints == ["files.example.test:31337/tcp"]
+    assert lead.evidence_ids == ["EVID-SMB-0004"]
+
+    html = unescape(render_html_report(model))
+    assert "SMB Disk share observed for review: nt4wrksv" in html
+    assert "EVID-SMB-0004" in html
+
+
+def test_html_model_accepts_legacy_state_without_smb_shares(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "legacy-without-smb-shares")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+    payload["project_state"].pop("smb_shares", None)
+
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+
+    assert model.project_state.smb_shares == []
