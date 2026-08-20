@@ -25,6 +25,11 @@ from bugslyce.reports.operator_summary import (
     build_operator_summary,
 )
 from bugslyce.reports.operator_report_view import OperatorReportView
+from bugslyce.reports.operator_brief import (
+    OperatorBriefView,
+    retire_operator_brief_artifact,
+    write_operator_brief_artifact,
+)
 from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageExecutionEvidence,
     AnalysisCoverageView,
@@ -381,11 +386,15 @@ def write_project_outputs(
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
     operator_summary: OperatorSummary | None = None,
     operator_report_view: OperatorReportView | None = None,
+    operator_brief: OperatorBriefView | None = None,
     analysis_coverage_evidence: tuple[AnalysisCoverageExecutionEvidence, ...] | None = None,
 ) -> tuple[Path, Path]:
     """Write report.md and project_state.json to the provided output directory."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if operator_brief is None:
+        retire_operator_brief_artifact(output_dir)
+
     report_path = output_dir / "report.md"
     json_path = output_dir / "project_state.json"
 
@@ -408,6 +417,11 @@ def write_project_outputs(
         encoding="utf-8",
     )
     json_path.write_text(export_project_state_json(project_state, candidates), encoding="utf-8")
+    if operator_brief is not None:
+        write_operator_brief_artifact(
+            output_dir,
+            operator_brief,
+        )
     if analysis_coverage_evidence is not None:
         write_analysis_coverage_artifact(
             output_dir,

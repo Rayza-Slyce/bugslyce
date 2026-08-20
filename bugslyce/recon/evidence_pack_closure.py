@@ -38,6 +38,10 @@ from bugslyce.reports.analysis_coverage import (
     ANALYSIS_COVERAGE_FILENAME,
     load_analysis_coverage_artifact,
 )
+from bugslyce.reports.operator_brief import (
+    OPERATOR_BRIEF_FILENAME,
+    load_operator_brief_artifact,
+)
 from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
     build_http_route_relationship_clusters,
@@ -83,6 +87,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "http_route_relationship_edge",
         "collection_confidence_notice",
         "analysis_coverage_evidence",
+        "operator_brief",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -266,6 +271,7 @@ def discover_evidence_pack_references(
 
     references.extend(_deep_output_references(root))
     references.extend(_analysis_coverage_references(root))
+    references.extend(_operator_brief_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     return tuple(
@@ -335,6 +341,7 @@ def discover_expected_pack_references(
         )
     references.extend(_deep_output_references(root))
     references.extend(_analysis_coverage_references(root))
+    references.extend(_operator_brief_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     return tuple(
@@ -1572,6 +1579,21 @@ def _analysis_coverage_references(
             portable_path=ANALYSIS_COVERAGE_FILENAME,
             owner_kind="analysis_coverage_evidence",
             owner_id=ANALYSIS_COVERAGE_FILENAME,
+        ),
+    )
+
+
+def _operator_brief_references(
+    root: Path,
+) -> tuple[EvidencePackReference, ...]:
+    brief = load_operator_brief_artifact(root)
+    if brief is None:
+        return ()
+    return (
+        EvidencePackReference(
+            portable_path=OPERATOR_BRIEF_FILENAME,
+            owner_kind="operator_brief",
+            owner_id=OPERATOR_BRIEF_FILENAME,
         ),
     )
 

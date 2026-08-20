@@ -3493,6 +3493,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
 
     def write_outputs(*_args, **kwargs):
         captured["view"] = kwargs["operator_report_view"]
+        captured["brief"] = kwargs["operator_brief"]
         captured["persisted_coverage"] = kwargs["analysis_coverage_evidence"]
         return tmp_path / "report.md", tmp_path / "project_state.json"
 
@@ -3505,7 +3506,17 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         context,
     )
 
+    from bugslyce.reports.operator_brief import build_operator_brief_view
+
     view = captured["view"]
+    brief = captured["brief"]
+
+    assert brief == build_operator_brief_view(summary)
+    assert tuple(
+        disposition.source_id
+        for disposition in brief.dispositions
+    ) == ("LEAD-CONTROLLED",)
+
     assert view.primary_anchor_ids == ("LEAD-CONTROLLED",)
     assert tuple(
         context.anchor_id for context in view.investigation_context.primary_contexts
@@ -5740,3 +5751,60 @@ def test_bug_bounty_pipeline_does_not_gain_smb_live_authority(
 
     assert len(process.calls) == 3
     assert all(call[0] == "curl" for call in process.calls)
+
+
+def test_standard_report_generation_persists_operator_brief_end_to_end(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    from bugslyce import project_pipeline
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        build_operator_brief_view,
+        load_operator_brief_artifact,
+    )
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "demo_recon"
+        / "basic_saas"
+    )
+    output_dir = tmp_path / "standard-report"
+    shutil.copytree(source, output_dir)
+
+    context: dict[str, object] = {}
+
+    outputs = project_pipeline._write_interpretation_report_if_needed(
+        STANDARD_PIPELINE_PROFILE,
+        output_dir,
+        context,
+    )
+
+    assert outputs == [
+        str(output_dir / "report.md"),
+        str(output_dir / "project_state.json"),
+    ]
+    assert (output_dir / "report.md").is_file()
+    assert (output_dir / "project_state.json").is_file()
+    assert (output_dir / OPERATOR_BRIEF_FILENAME).is_file()
+
+    persisted = load_operator_brief_artifact(output_dir)
+    assert persisted is not None
+
+    completion = context["completion_summary"]
+    assert isinstance(completion, PipelineCompletionSummary)
+
+    expected = build_operator_brief_view(
+        completion.operator_summary,
+    )
+    assert persisted == expected
+
+    assert tuple(
+        disposition.source_id
+        for disposition in persisted.dispositions
+    ) == tuple(
+        lead.lead_id
+        for lead in completion.operator_summary.ranked_leads
+    )

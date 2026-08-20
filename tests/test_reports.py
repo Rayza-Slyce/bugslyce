@@ -2705,3 +2705,113 @@ def _fetched_page_project_state(tmp_path: Path):
         encoding="utf-8",
     )
     return build_project_state(tmp_path)
+
+
+def test_write_project_outputs_persists_explicit_operator_brief(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        build_operator_brief_view,
+        load_operator_brief_artifact,
+    )
+
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    summary = build_operator_summary(state, candidates)
+    brief = build_operator_brief_view(summary)
+    output_dir = tmp_path / "bugslyce-output"
+
+    write_project_outputs(
+        state,
+        candidates,
+        output_dir,
+        operator_summary=summary,
+        operator_brief=brief,
+    )
+
+    assert (output_dir / OPERATOR_BRIEF_FILENAME).is_file()
+    assert load_operator_brief_artifact(output_dir) == brief
+
+
+def test_write_project_outputs_without_operator_brief_keeps_legacy_absence(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        load_operator_brief_artifact,
+    )
+
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    output_dir = tmp_path / "bugslyce-output"
+
+    write_project_outputs(
+        state,
+        candidates,
+        output_dir,
+    )
+
+    assert not (output_dir / OPERATOR_BRIEF_FILENAME).exists()
+    assert load_operator_brief_artifact(output_dir) is None
+
+
+def test_write_project_outputs_without_operator_brief_retires_stale_brief(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        build_operator_brief_view,
+        load_operator_brief_artifact,
+        write_operator_brief_artifact,
+    )
+
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+    summary = build_operator_summary(state, candidates)
+    output_dir = tmp_path / "bugslyce-output"
+
+    write_operator_brief_artifact(
+        output_dir,
+        build_operator_brief_view(summary),
+    )
+    assert (output_dir / OPERATOR_BRIEF_FILENAME).is_file()
+
+    write_project_outputs(
+        state,
+        candidates,
+        output_dir,
+    )
+
+    assert not (output_dir / OPERATOR_BRIEF_FILENAME).exists()
+    assert load_operator_brief_artifact(output_dir) is None
+
+
+def test_write_project_outputs_without_operator_brief_refuses_stale_symlink(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import OPERATOR_BRIEF_FILENAME
+
+    state = build_project_state(FIXTURES_ROOT / "basic_saas")
+    candidates = generate_candidates(state)
+
+    outside = tmp_path / "outside.json"
+    outside.write_text("do not remove", encoding="utf-8")
+
+    output_dir = tmp_path / "bugslyce-output"
+    output_dir.mkdir()
+    stale_path = output_dir / OPERATOR_BRIEF_FILENAME
+    stale_path.symlink_to(outside)
+
+    with pytest.raises(
+        ValueError,
+        match="structured artefact must be a regular file",
+    ):
+        write_project_outputs(
+            state,
+            candidates,
+            output_dir,
+        )
+
+    assert stale_path.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "do not remove"

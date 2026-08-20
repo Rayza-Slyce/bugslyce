@@ -166,6 +166,7 @@ from bugslyce.reports.human_triage import (
 from bugslyce.reports.html import write_project_html_report
 from bugslyce.reports.investigation_context import InvestigationContextSources
 from bugslyce.reports.markdown import write_project_outputs
+from bugslyce.reports.operator_brief import build_operator_brief_view
 from bugslyce.reports.operator_report_view import (
     OperatorReportView,
     build_operator_report_view,
@@ -2392,6 +2393,9 @@ def _write_interpretation_report_if_needed(
     }
     if operator_summary is not None:
         report_kwargs["operator_summary"] = operator_summary
+        report_kwargs["operator_brief"] = build_operator_brief_view(
+            operator_summary,
+        )
         if operator_report_view is not None:
             report_kwargs["operator_report_view"] = operator_report_view
     confidence_markdown = render_collection_confidence_markdown(confidence_notices)

@@ -77,6 +77,11 @@ from bugslyce.reports.human_triage import (
     build_human_triage_brief,
 )
 from bugslyce.reports.investigation_context import InvestigationContextSources
+from bugslyce.reports.operator_brief import (
+    OperatorBriefView,
+    build_operator_brief_view,
+    load_operator_brief_artifact,
+)
 from bugslyce.reports.operator_report_view import (
     OperatorReportView,
     build_operator_report_view,
@@ -147,6 +152,7 @@ class HtmlReportModel:
     project_state: ProjectState
     candidates: tuple[Candidate, ...]
     operator_summary: OperatorSummary
+    operator_brief: OperatorBriefView
     human_triage_brief: HumanTriageBrief
     confidence_notices: tuple[CollectionConfidenceNotice, ...]
     http_fingerprints: DeepHttpFingerprintSummary
@@ -184,6 +190,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     payload = _read_json_object(root, "project_state.json", required=True)
     project_state, candidates = _project_state_from_payload(payload, root)
     _validate_optional_structured_objects(root)
+    persisted_operator_brief = load_operator_brief_artifact(root)
 
     source_collection = _load_source_collection(root)
     metadata_collection = _load_metadata_collection(root)
@@ -226,6 +233,11 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         additional_leads=deep_summary_leads,
         response_similarity_review=similarities,
         route_reasoning_review=route_reasoning,
+    )
+    operator_brief = (
+        persisted_operator_brief
+        if persisted_operator_brief is not None
+        else build_operator_brief_view(operator_summary)
     )
     human_triage_brief = build_human_triage_brief(
         project_state,
@@ -273,6 +285,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         project_state=project_state,
         candidates=tuple(candidates),
         operator_summary=operator_summary,
+        operator_brief=operator_brief,
         human_triage_brief=human_triage_brief,
         confidence_notices=notices,
         http_fingerprints=fingerprints,

@@ -4627,3 +4627,158 @@ def test_failed_smb_stderr_is_retained_as_confidence_diagnostic(
     validation = validate_evidence_pack_root(extracted)
     assert validation.validation_status == "incomplete"
     assert expected_diagnostic in validation.missing_declared_member_paths
+
+
+def test_export_includes_optional_operator_brief_as_top_level_closure_member(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        OperatorBriefDisposition,
+        OperatorBriefThread,
+        OperatorBriefView,
+        PRIMARY_THREAD,
+        load_operator_brief_artifact,
+        write_operator_brief_artifact,
+    )
+
+    input_dir = _export_input(tmp_path)
+
+    thread = OperatorBriefThread(
+        thread_id="THREAD-EXPORT",
+        title="Persisted export thread",
+        rank=1,
+        score=80,
+        signal="direct retained evidence",
+        source_lead_ids=(),
+        endpoints=("http://example.test/admin",),
+        evidence_ids=("EVID-EXPORT",),
+        why_review="Deterministic retained evidence warrants review.",
+        next_review_step="Review retained evidence offline.",
+    )
+    brief = OperatorBriefView(
+        threads=(thread,),
+        dispositions=(
+            OperatorBriefDisposition(
+                source_kind="workflow_lead",
+                source_id="WORKFLOW-EXPORT",
+                disposition=PRIMARY_THREAD,
+                thread_id=thread.thread_id,
+            ),
+        ),
+    )
+    write_operator_brief_artifact(input_dir, brief)
+
+    output_path = tmp_path / "operator-brief.zip"
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+
+    extracted = tmp_path / "operator-brief"
+    with zipfile.ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        archive.extractall(extracted)
+
+    assert OPERATOR_BRIEF_FILENAME in names
+    assert f"raw/{OPERATOR_BRIEF_FILENAME}" not in names
+    assert (
+        OPERATOR_BRIEF_FILENAME,
+        "operator_brief",
+        OPERATOR_BRIEF_FILENAME,
+        (),
+    ) in _closure_owner_associations(closure)
+    assert load_operator_brief_artifact(extracted) == brief
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_export_without_operator_brief_remains_valid_legacy_pack(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import OPERATOR_BRIEF_FILENAME
+
+    input_dir = _export_input(tmp_path)
+    assert not (input_dir / OPERATOR_BRIEF_FILENAME).exists()
+
+    output_path = tmp_path / "operator-brief-legacy.zip"
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+
+    extracted = tmp_path / "operator-brief-legacy"
+    with zipfile.ZipFile(output_path) as archive:
+        assert OPERATOR_BRIEF_FILENAME not in archive.namelist()
+        archive.extractall(extracted)
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "complete"
+    assert OPERATOR_BRIEF_FILENAME not in validation.required_metadata_errors
+
+
+def test_validator_rejects_removed_declared_operator_brief_without_making_it_required(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        OperatorBriefView,
+        write_operator_brief_artifact,
+    )
+
+    input_dir = _export_input(tmp_path)
+    write_operator_brief_artifact(
+        input_dir,
+        OperatorBriefView(
+            threads=(),
+            dispositions=(),
+        ),
+    )
+
+    output_path = tmp_path / "operator-brief-removal.zip"
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+
+    extracted = tmp_path / "operator-brief-removal"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+
+    (extracted / OPERATOR_BRIEF_FILENAME).unlink()
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert OPERATOR_BRIEF_FILENAME in validation.missing_declared_member_paths
+    assert OPERATOR_BRIEF_FILENAME not in validation.required_metadata_errors
+
+
+def test_export_rejects_malformed_present_operator_brief_artifact(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import OPERATOR_BRIEF_FILENAME
+
+    input_dir = _export_input(tmp_path)
+    (input_dir / OPERATOR_BRIEF_FILENAME).write_text(
+        "{not valid json",
+        encoding="utf-8",
+    )
+
+    output_path = tmp_path / "malformed-operator-brief.zip"
+
+    with pytest.raises(
+        ValueError,
+        match=r"could not parse operator_brief\.json",
+    ):
+        export_recon_evidence_pack(
+            input_dir,
+            output_path,
+            clock=lambda: FIXED_TIME,
+        )
+
+    assert not output_path.exists()

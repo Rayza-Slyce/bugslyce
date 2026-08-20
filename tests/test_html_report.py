@@ -2126,3 +2126,112 @@ def test_html_model_accepts_legacy_state_without_smb_shares(
     model = build_html_report_model(pack)
 
     assert model.project_state.smb_shares == []
+
+
+def test_html_model_prefers_persisted_operator_brief(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OperatorBriefDisposition,
+        OperatorBriefThread,
+        OperatorBriefView,
+        PRIMARY_THREAD,
+        write_operator_brief_artifact,
+    )
+
+    pack = _write_current_pack(tmp_path / "persisted-operator-brief")
+
+    thread = OperatorBriefThread(
+        thread_id="THREAD-PERSISTED",
+        title="Persisted workflow thread",
+        rank=1,
+        score=81,
+        signal="direct retained evidence",
+        source_lead_ids=(),
+        endpoints=("http://example.test/account",),
+        evidence_ids=("EVID-PERSISTED",),
+        why_review="Persisted deterministic workflow composition.",
+        next_review_step="Review the retained workflow evidence offline.",
+    )
+    persisted = OperatorBriefView(
+        threads=(thread,),
+        dispositions=(
+            OperatorBriefDisposition(
+                source_kind="workflow_lead",
+                source_id="WORKFLOW-PERSISTED",
+                disposition=PRIMARY_THREAD,
+                thread_id=thread.thread_id,
+            ),
+        ),
+    )
+    write_operator_brief_artifact(pack, persisted)
+
+    model = build_html_report_model(pack)
+
+    assert model.operator_brief == persisted
+    assert model.operator_brief.threads[0].title == "Persisted workflow thread"
+
+
+def test_html_model_treats_empty_persisted_operator_brief_as_authoritative(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OperatorBriefView,
+        write_operator_brief_artifact,
+    )
+
+    pack = _write_current_pack(tmp_path / "empty-persisted-operator-brief")
+    persisted = OperatorBriefView(
+        threads=(),
+        dispositions=(),
+    )
+    write_operator_brief_artifact(pack, persisted)
+
+    model = build_html_report_model(pack)
+
+    assert model.operator_summary.ranked_leads
+    assert model.operator_brief == persisted
+    assert model.operator_brief.threads == ()
+
+
+def test_html_model_without_operator_brief_keeps_legacy_reconstruction(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        OPERATOR_BRIEF_FILENAME,
+        build_operator_brief_view,
+    )
+
+    pack = _write_current_pack(tmp_path / "legacy-operator-brief")
+    assert not (pack / OPERATOR_BRIEF_FILENAME).exists()
+
+    model = build_html_report_model(pack)
+
+    assert model.operator_brief == build_operator_brief_view(
+        model.operator_summary,
+    )
+    assert tuple(
+        disposition.source_id
+        for disposition in model.operator_brief.dispositions
+    ) == tuple(
+        lead.lead_id
+        for lead in model.operator_summary.ranked_leads
+    )
+
+
+def test_html_model_rejects_malformed_present_operator_brief(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import OPERATOR_BRIEF_FILENAME
+
+    pack = _write_current_pack(tmp_path / "malformed-operator-brief")
+    (pack / OPERATOR_BRIEF_FILENAME).write_text(
+        "{not valid json",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"could not parse operator_brief\.json",
+    ):
+        build_html_report_model(pack)
