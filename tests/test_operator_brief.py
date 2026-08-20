@@ -170,7 +170,7 @@ def test_operator_brief_artifact_round_trips_and_is_byte_deterministic(
     assert first_path.read_bytes() == second_path.read_bytes()
 
     payload = json.loads(first_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["generated_by"] == "bugslyce.operator_brief"
     assert len(payload["threads"]) == 2
     assert len(payload["dispositions"]) == 2
