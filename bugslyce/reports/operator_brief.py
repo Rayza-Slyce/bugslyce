@@ -127,6 +127,8 @@ class OperatorBriefFact:
     share_name: str = ""
     share_type: str = ""
     body_sha256: str = ""
+    http_method: str = ""
+    http_status_code: int | None = None
 
     def __post_init__(self) -> None:
         if not self.fact_id.strip():
@@ -137,6 +139,13 @@ class OperatorBriefFact:
             raise ValueError("Operator Brief fact semantic class is invalid.")
         if not isinstance(self.role, OperatorBriefFactRole):
             raise ValueError("Operator Brief fact role is invalid.")
+        if not isinstance(self.http_method, str):
+            raise ValueError("Operator Brief HTTP method must be text.")
+        if self.http_status_code is not None and (
+            isinstance(self.http_status_code, bool)
+            or not isinstance(self.http_status_code, int)
+        ):
+            raise ValueError("Operator Brief HTTP status must be an integer or null.")
         if (
             self.role is OperatorBriefFactRole.DIRECT_EVIDENCE
             and self.semantic_class is not OperatorBriefSemanticClass.OBSERVED
@@ -149,6 +158,18 @@ class OperatorBriefFact:
             raise ValueError(
                 "Operator Brief response equivalence requires derived relationship context."
             )
+        if self.kind is OperatorBriefFactKind.HTTP_RESPONSE:
+            if (
+                self.semantic_class is not OperatorBriefSemanticClass.OBSERVED
+                or self.role is not OperatorBriefFactRole.DIRECT_EVIDENCE
+            ):
+                raise ValueError(
+                    "Operator Brief HTTP responses require observed direct evidence."
+                )
+            if not self.http_method.strip():
+                raise ValueError("Operator Brief HTTP responses require a method.")
+            if self.http_status_code is None:
+                raise ValueError("Operator Brief HTTP responses require a status.")
         if not self.label.strip() or not self.summary.strip():
             raise ValueError("Operator Brief facts require a label and summary.")
         if any(not isinstance(value, str) for value in self.endpoints):
@@ -935,6 +956,8 @@ def _fact_to_dict(fact: OperatorBriefFact) -> dict[str, object]:
         "share_name": fact.share_name,
         "share_type": fact.share_type,
         "body_sha256": fact.body_sha256,
+        "http_method": fact.http_method,
+        "http_status_code": fact.http_status_code,
     }
 
 
@@ -1209,6 +1232,8 @@ def _fact_from_dict(value: object, label: str) -> OperatorBriefFact:
         share_name=_text_field(value, "share_name", label),
         share_type=_text_field(value, "share_type", label),
         body_sha256=_text_field(value, "body_sha256", label),
+        http_method=_optional_text_field(value, "http_method", label, default=""),
+        http_status_code=_optional_int_field(value, "http_status_code", label),
     )
 
 
@@ -1376,6 +1401,18 @@ def _text_field(
     return field
 
 
+def _optional_text_field(
+    value: dict[str, object],
+    key: str,
+    label: str,
+    *,
+    default: str,
+) -> str:
+    if key not in value:
+        return default
+    return _text_field(value, key, label)
+
+
 def _int_field(
     value: dict[str, object],
     key: str,
@@ -1385,6 +1422,16 @@ def _int_field(
     if isinstance(field, bool) or not isinstance(field, int):
         raise ValueError(f"{label}.{key} must be an integer")
     return field
+
+
+def _optional_int_field(
+    value: dict[str, object],
+    key: str,
+    label: str,
+) -> int | None:
+    if key not in value or value[key] is None:
+        return None
+    return _int_field(value, key, label)
 
 
 def _text_tuple_field(

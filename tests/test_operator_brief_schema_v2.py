@@ -845,3 +845,281 @@ def test_schema_v2_normalises_only_declared_set_like_fact_fields() -> None:
         _source(api, "route", "SOURCE-A"),
         _source(api, "route", "SOURCE-Z"),
     )
+
+
+def _http_response_fact(
+    api,
+    *,
+    fact_id: str = "FACT-HTTP-RESPONSE",
+    semantic_class=None,
+    role=None,
+    http_method: object = "GET",
+    http_status_code: object = 200,
+):
+    return api["OperatorBriefFact"](
+        fact_id=fact_id,
+        kind=api["OperatorBriefFactKind"].HTTP_RESPONSE,
+        semantic_class=(
+            api["OperatorBriefSemanticClass"].OBSERVED
+            if semantic_class is None
+            else semantic_class
+        ),
+        role=(
+            api["OperatorBriefFactRole"].DIRECT_EVIDENCE if role is None else role
+        ),
+        label="Retained HTTP response",
+        summary="A retained response has exact method and status semantics.",
+        endpoints=("https://example.test/admin",),
+        origins=("https://example.test",),
+        evidence_ids=("EVID-HTTP-ADMIN",),
+        artefact_references=("deep_source_route_collection.json",),
+        source_references=(
+            _source(api, "deep_http_response", "DEEP-HTTP-ADMIN"),
+        ),
+        route="https://example.test/admin",
+        body_sha256="a" * 64,
+        http_method=http_method,
+        http_status_code=http_status_code,
+    )
+
+
+def _schema_2_non_http_fact_payload() -> dict[str, object]:
+    """Explicit pre-HTTP-field schema-2 payload for loader compatibility."""
+
+    return {
+        "schema_version": 2,
+        "generated_by": "bugslyce.operator_brief",
+        "threads": [
+            {
+                "thread_id": "THREAD-SCHEMA2-LEGACY-NON-HTTP",
+                "identity_key": "smb:files.example.test:nt4wrksv",
+                "subject_kind": "smb_surface",
+                "title": "Legacy structured SMB subject",
+                "rank": 1,
+                "signal": "direct retained evidence",
+                "source_lead_ids": ["LEAD-SMB"],
+                "endpoints": ["files.example.test:445/tcp"],
+                "origins": [],
+                "evidence_ids": ["EVID-SMB-ONE"],
+                "why_review": "Direct retained SMB evidence warrants review.",
+                "next_review_step": "Review retained SMB enumeration evidence.",
+                "facts": [
+                    {
+                        "fact_id": "FACT-SMB-ONE",
+                        "kind": "smb_share",
+                        "semantic_class": "observed",
+                        "role": "direct_evidence",
+                        "label": "SMB Disk share observed",
+                        "summary": "A custom Disk share was directly observed.",
+                        "endpoints": ["files.example.test:445/tcp"],
+                        "origins": [],
+                        "evidence_ids": ["EVID-SMB-ONE"],
+                        "artefact_references": ["smb-shares.txt"],
+                        "source_references": [
+                            {
+                                "source_kind": "smb_share",
+                                "source_id": "files.example.test:445:nt4wrksv",
+                            }
+                        ],
+                        "route": "",
+                        "parameter_name": "",
+                        "form_method": "",
+                        "form_action": "",
+                        "service": "",
+                        "share_name": "nt4wrksv",
+                        "share_type": "Disk",
+                        "body_sha256": "",
+                    }
+                ],
+                "conflicts": [],
+                "coverage_limitations": [],
+                "source_rankings": [
+                    {
+                        "source_lead_id": "LEAD-SMB",
+                        "rank": 1,
+                        "score": 80,
+                        "signal": "direct retained evidence",
+                    }
+                ],
+                "legacy_context": [],
+                "source_artefacts": ["smb-shares.txt"],
+            }
+        ],
+        "dispositions": [
+            {
+                "source_kind": "operator_summary_lead",
+                "source_id": "LEAD-SMB",
+                "disposition": "primary_thread",
+                "thread_id": "THREAD-SCHEMA2-LEGACY-NON-HTTP",
+                "reason_code": "primary_subject",
+                "represented_fact_ids": ["FACT-SMB-ONE"],
+            }
+        ],
+    }
+
+
+def test_http_response_fact_preserves_typed_method_and_status() -> None:
+    api = _api()
+
+    fact = _http_response_fact(api)
+
+    assert fact.http_method == "GET"
+    assert fact.http_status_code == 200
+
+
+@pytest.mark.parametrize("http_method", ("", "   "))
+def test_http_response_fact_rejects_missing_or_blank_method(http_method: str) -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(api, http_method=http_method)
+
+
+def test_http_response_fact_rejects_missing_status() -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(api, http_status_code=None)
+
+
+def test_http_response_fact_rejects_boolean_status() -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(api, http_status_code=True)
+
+
+def test_http_response_fact_rejects_non_integer_status() -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(api, http_status_code="200")
+
+
+def test_http_response_fact_rejects_derived_relationship_semantics() -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(
+            api,
+            semantic_class=api["OperatorBriefSemanticClass"].DERIVED,
+            role=api["OperatorBriefFactRole"].RELATIONSHIP_CONTEXT,
+        )
+
+
+def test_http_response_fact_rejects_observed_relationship_context() -> None:
+    api = _api()
+
+    with pytest.raises(ValueError):
+        _http_response_fact(
+            api,
+            role=api["OperatorBriefFactRole"].RELATIONSHIP_CONTEXT,
+        )
+
+
+def test_http_response_schema_v2_round_trip_preserves_method_and_status(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    fact = _http_response_fact(api)
+    thread = _thread(
+        api,
+        facts=(fact,),
+        source_lead_ids=("LEAD-HTTP",),
+        source_rankings=(_source_ranking(api, "LEAD-HTTP"),),
+    )
+    brief = api["OperatorBriefView"](
+        threads=(thread,),
+        dispositions=(
+            _disposition(api, thread.thread_id, "LEAD-HTTP", (fact.fact_id,)),
+        ),
+    )
+
+    api["write_operator_brief_artifact"](tmp_path, brief)
+
+    loaded = api["load_operator_brief_artifact"](tmp_path)
+    assert loaded is not None
+    assert loaded.threads[0].facts[0].http_method == "GET"
+    assert loaded.threads[0].facts[0].http_status_code == 200
+
+
+def test_http_response_schema_v2_serialization_is_byte_deterministic(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    fact = _http_response_fact(api)
+    thread = _thread(
+        api,
+        facts=(fact,),
+        source_lead_ids=("LEAD-HTTP",),
+        source_rankings=(_source_ranking(api, "LEAD-HTTP"),),
+    )
+    brief = api["OperatorBriefView"](
+        threads=(thread,),
+        dispositions=(
+            _disposition(api, thread.thread_id, "LEAD-HTTP", (fact.fact_id,)),
+        ),
+    )
+
+    first = api["write_operator_brief_artifact"](tmp_path / "first", brief)
+    second = api["write_operator_brief_artifact"](tmp_path / "second", brief)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_pre_http_field_schema_v2_non_http_fact_remains_loadable(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    _write_payload(tmp_path, _schema_2_non_http_fact_payload())
+
+    brief = api["load_operator_brief_artifact"](tmp_path)
+
+    assert brief is not None
+    assert brief.threads[0].facts[0].kind is api["OperatorBriefFactKind"].SMB_SHARE
+
+
+def test_pre_http_field_schema_v2_empty_brief_remains_loadable(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    _write_payload(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "generated_by": "bugslyce.operator_brief",
+            "threads": [],
+            "dispositions": [],
+        },
+    )
+
+    brief = api["load_operator_brief_artifact"](tmp_path)
+
+    assert brief is not None
+    assert brief.threads == ()
+    assert brief.dispositions == ()
+
+
+def test_pre_http_field_schema_v2_http_response_fails_closed(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    payload = _schema_2_non_http_fact_payload()
+    fact = payload["threads"][0]["facts"][0]
+    fact["kind"] = "http_response"
+    fact["label"] = "Legacy HTTP response"
+    fact["summary"] = "Missing typed HTTP response semantics."
+    fact["route"] = "https://example.test/admin"
+    fact["body_sha256"] = "a" * 64
+    _write_payload(tmp_path, payload)
+
+    with pytest.raises(ValueError):
+        api["load_operator_brief_artifact"](tmp_path)
+
+
+def test_operator_brief_fact_has_no_arbitrary_raw_response_body_field() -> None:
+    api = _api()
+
+    field_names = {field.name for field in fields(api["OperatorBriefFact"])}
+
+    assert {"body", "response_body", "body_text"}.isdisjoint(field_names)
