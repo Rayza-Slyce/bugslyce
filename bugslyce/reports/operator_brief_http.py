@@ -1,11 +1,11 @@
-"""Standalone deterministic composition of retained Deep HTTP observations."""
+"""Standalone deterministic composition of retained HTTP evidence."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
-from typing import Iterable
+from typing import Iterable, TypeAlias
 
 from bugslyce.recon.deep_http_fingerprint_summary import (
     EMPTY_BODY_SHA256,
@@ -61,21 +61,83 @@ class OperatorBriefHttpObservation:
 
 
 @dataclass(frozen=True)
+class OperatorBriefHttpRetainedBodyObservation:
+    """One endpoint-associated retained body without response semantics."""
+
+    observation_id: str
+    source_kind: str
+    endpoint: str
+    origin: HttpOrigin
+    body_sha256: str
+    body_bytes: int
+    body_empty: bool
+    evidence_ids: tuple[str, ...]
+    artefact_references: tuple[str, ...]
+    source_references: tuple[OperatorBriefSourceReference, ...]
+
+    def __post_init__(self) -> None:
+        if not self.observation_id.strip() or not self.source_kind.strip():
+            raise ValueError("Retained HTTP content requires semantic identities.")
+        if not self.endpoint or self.origin != http_origin_from_url(self.endpoint):
+            raise ValueError(
+                "Retained HTTP content requires a canonical HTTP endpoint."
+            )
+        if not self.body_sha256.strip():
+            raise ValueError("Retained HTTP content requires a body digest.")
+        if (
+            isinstance(self.body_bytes, bool)
+            or not isinstance(self.body_bytes, int)
+            or self.body_bytes < 0
+        ):
+            raise ValueError("Retained HTTP content byte count must be non-negative.")
+        if self.body_empty != (self.body_bytes == 0):
+            raise ValueError("Retained HTTP content empty state must match byte count.")
+
+
+_HttpMember: TypeAlias = (
+    OperatorBriefHttpObservation | OperatorBriefHttpRetainedBodyObservation
+)
+
+
+@dataclass(frozen=True)
 class OperatorBriefHttpExactEquivalence:
-    """Authoritative exact non-empty response-body relationship."""
+    """Authoritative exact retained-body relationship."""
 
     equivalence_id: str
-    source_repeated_body_group_id: str
     body_sha256: str
     observation_ids: tuple[str, ...]
+    authority_references: tuple[OperatorBriefSourceReference, ...]
+
+    def __post_init__(self) -> None:
+        if not self.equivalence_id.strip() or not self.body_sha256.strip():
+            raise ValueError("Exact HTTP equivalence requires semantic identities.")
+        if not self.authority_references:
+            raise ValueError("Exact HTTP equivalence requires authority provenance.")
+        deep_ids = {
+            item.source_id
+            for item in self.authority_references
+            if item.source_kind == _REPEATED_BODY_SOURCE_KIND
+        }
+        if len(deep_ids) > 1:
+            raise ValueError("Exact HTTP equivalence has ambiguous Deep authority.")
+
+    @property
+    def source_repeated_body_group_id(self) -> str | None:
+        deep_ids = {
+            item.source_id
+            for item in self.authority_references
+            if item.source_kind == _REPEATED_BODY_SOURCE_KIND
+        }
+        return next(iter(deep_ids)) if deep_ids else None
 
 
 @dataclass(frozen=True)
 class OperatorBriefHttpCompositionInput:
-    """Normalized Deep inputs accepted by the standalone HTTP composer."""
+    """Normalized inputs accepted by the standalone HTTP composer."""
 
     observations: tuple[OperatorBriefHttpObservation, ...]
     exact_equivalences: tuple[OperatorBriefHttpExactEquivalence, ...]
+    retained_content: tuple[OperatorBriefHttpRetainedBodyObservation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,6 +161,164 @@ class OperatorBriefHttpComposition:
     subjects: tuple[OperatorBriefHttpSubject, ...]
     facts: tuple[OperatorBriefFact, ...]
     conflicts: tuple[OperatorBriefConflict, ...]
+
+
+def build_operator_brief_http_retained_body_observation(
+    *,
+    source_kind: str,
+    source_id: str,
+    endpoint: str,
+    body_sha256: str,
+    body_bytes: int,
+    evidence_ids: tuple[str, ...] = (),
+    artefact_references: tuple[str, ...] = (),
+) -> OperatorBriefHttpRetainedBodyObservation:
+    """Build one normalized partial retained-body observation."""
+
+    if not isinstance(source_kind, str) or not source_kind.strip():
+        raise ValueError("Retained HTTP content requires a source kind.")
+    if not isinstance(source_id, str) or not source_id.strip():
+        raise ValueError("Retained HTTP content requires a source ID.")
+    if isinstance(body_bytes, bool) or not isinstance(body_bytes, int):
+        raise ValueError("Retained HTTP content byte count must be an integer.")
+    canonical_endpoint = canonical_relationship_url(endpoint)
+    origin = http_origin_from_url(canonical_endpoint)
+    if not canonical_endpoint or origin is None:
+        raise ValueError("Retained HTTP content contains an invalid HTTP endpoint.")
+    evidence = _normalised_membership(evidence_ids, "evidence IDs")
+    artefacts = _normalised_membership(
+        artefact_references, "artefact references"
+    )
+    return OperatorBriefHttpRetainedBodyObservation(
+        observation_id=_semantic_id(
+            "HTTP-RETAINED",
+            (
+                source_kind,
+                canonical_endpoint,
+                body_sha256,
+                str(body_bytes),
+            ),
+        ),
+        source_kind=source_kind,
+        endpoint=canonical_endpoint,
+        origin=origin,
+        body_sha256=body_sha256,
+        body_bytes=body_bytes,
+        body_empty=body_bytes == 0,
+        evidence_ids=evidence,
+        artefact_references=artefacts,
+        source_references=(OperatorBriefSourceReference(source_kind, source_id),),
+    )
+
+
+def build_operator_brief_http_exact_equivalence(
+    *,
+    body_sha256: str,
+    observation_ids: tuple[str, ...],
+    authority_references: tuple[OperatorBriefSourceReference, ...],
+) -> OperatorBriefHttpExactEquivalence:
+    """Build one generic exact retained-byte relationship."""
+
+    if not isinstance(body_sha256, str) or not body_sha256.strip():
+        raise ValueError("Exact HTTP equivalence requires a body digest.")
+    member_ids = _normalised_membership(observation_ids, "observation IDs")
+    if len(observation_ids) < 2:
+        raise ValueError("Exact HTTP equivalence requires multiple observations.")
+    if len(set(observation_ids)) != len(observation_ids):
+        raise ValueError("Exact HTTP equivalence contains duplicate observations.")
+    authorities = tuple(sorted(set(authority_references)))
+    return OperatorBriefHttpExactEquivalence(
+        equivalence_id=_semantic_id(
+            "HTTP-EQUIV", (body_sha256, *member_ids)
+        ),
+        body_sha256=body_sha256,
+        observation_ids=member_ids,
+        authority_references=authorities,
+    )
+
+
+def combine_operator_brief_http_inputs(
+    *inputs: OperatorBriefHttpCompositionInput,
+) -> OperatorBriefHttpCompositionInput:
+    """Combine independently normalized HTTP composition inputs."""
+
+    observations_by_id: dict[str, OperatorBriefHttpObservation] = {}
+    retained_by_id: dict[str, OperatorBriefHttpRetainedBodyObservation] = {}
+    equivalences_by_id: dict[str, OperatorBriefHttpExactEquivalence] = {}
+    for source in inputs:
+        for observation in source.observations:
+            existing = observations_by_id.get(observation.observation_id)
+            if existing is not None and existing != observation:
+                raise ValueError(
+                    "Complete HTTP observations contain a conflicting semantic ID."
+                )
+            observations_by_id[observation.observation_id] = observation
+        for retained in source.retained_content:
+            existing = retained_by_id.get(retained.observation_id)
+            if existing is None:
+                retained_by_id[retained.observation_id] = retained
+                continue
+            if _retained_semantic_core(existing) != _retained_semantic_core(
+                retained
+            ):
+                raise ValueError(
+                    "Retained HTTP content contains a conflicting semantic ID."
+                )
+            retained_by_id[retained.observation_id] = replace(
+                existing,
+                evidence_ids=_membership(
+                    (existing.evidence_ids, retained.evidence_ids)
+                ),
+                artefact_references=_membership(
+                    (
+                        existing.artefact_references,
+                        retained.artefact_references,
+                    )
+                ),
+                source_references=tuple(
+                    sorted(
+                        set(existing.source_references)
+                        | set(retained.source_references)
+                    )
+                ),
+            )
+        for equivalence in source.exact_equivalences:
+            existing = equivalences_by_id.get(equivalence.equivalence_id)
+            if existing is None:
+                equivalences_by_id[equivalence.equivalence_id] = equivalence
+                continue
+            if _equivalence_semantic_core(existing) != _equivalence_semantic_core(
+                equivalence
+            ):
+                raise ValueError(
+                    "Exact HTTP equivalences contain a conflicting semantic ID."
+                )
+            equivalences_by_id[equivalence.equivalence_id] = replace(
+                existing,
+                authority_references=tuple(
+                    sorted(
+                        set(existing.authority_references)
+                        | set(equivalence.authority_references)
+                    )
+                ),
+            )
+
+    if set(observations_by_id).intersection(retained_by_id):
+        raise ValueError("HTTP member types contain a conflicting semantic ID.")
+    return OperatorBriefHttpCompositionInput(
+        observations=tuple(
+            sorted(observations_by_id.values(), key=_observation_sort_key)
+        ),
+        exact_equivalences=tuple(
+            sorted(
+                equivalences_by_id.values(),
+                key=lambda item: item.equivalence_id,
+            )
+        ),
+        retained_content=tuple(
+            sorted(retained_by_id.values(), key=_retained_sort_key)
+        ),
+    )
 
 
 def build_operator_brief_http_inputs_from_deep(
@@ -128,14 +348,14 @@ def build_operator_brief_http_inputs_from_deep(
             ) from exc
         observation_ids = tuple(sorted(item.observation_id for item in members))
         exact_equivalences.append(
-            OperatorBriefHttpExactEquivalence(
-                equivalence_id=_semantic_id(
-                    "HTTP-EQUIV",
-                    (group.body_sha256, *observation_ids),
-                ),
-                source_repeated_body_group_id=group.repeated_body_id,
+            build_operator_brief_http_exact_equivalence(
                 body_sha256=group.body_sha256,
                 observation_ids=observation_ids,
+                authority_references=(
+                    OperatorBriefSourceReference(
+                        _REPEATED_BODY_SOURCE_KIND, group.repeated_body_id
+                    ),
+                ),
             )
         )
     return OperatorBriefHttpCompositionInput(
@@ -149,31 +369,37 @@ def build_operator_brief_http_inputs_from_deep(
 def compose_operator_brief_http(
     inputs: OperatorBriefHttpCompositionInput,
 ) -> OperatorBriefHttpComposition:
-    """Compose normalized Deep HTTP observations into provisional subjects."""
+    """Compose normalized HTTP observations into provisional subjects."""
 
     observations = tuple(sorted(inputs.observations, key=_observation_sort_key))
-    observation_by_id = {item.observation_id: item for item in observations}
-    if len(observation_by_id) != len(observations):
-        raise ValueError("Deep HTTP observations contain duplicate semantic IDs.")
+    retained_content = tuple(
+        sorted(inputs.retained_content, key=_retained_sort_key)
+    )
+    members: tuple[_HttpMember, ...] = (*observations, *retained_content)
+    member_by_id = {item.observation_id: item for item in members}
+    if len(member_by_id) != len(members):
+        raise ValueError("HTTP composition inputs contain duplicate semantic IDs.")
 
     equivalences = tuple(
         sorted(inputs.exact_equivalences, key=lambda item: item.equivalence_id)
     )
-    parent = {item.observation_id: item.observation_id for item in observations}
+    parent = {item.observation_id: item.observation_id for item in members}
     for equivalence in equivalences:
-        members = _equivalence_members(equivalence, observation_by_id)
-        if _is_merge_candidate(equivalence, members):
-            first_id = members[0].observation_id
-            for member in members[1:]:
+        equivalence_members = _equivalence_members(equivalence, member_by_id)
+        if _is_merge_candidate(equivalence, equivalence_members):
+            first_id = equivalence_members[0].observation_id
+            for member in equivalence_members[1:]:
                 _union(parent, first_id, member.observation_id)
 
-    direct_facts = tuple(_direct_fact(item) for item in observations)
+    direct_facts = tuple(_direct_fact(item) for item in observations) + tuple(
+        _retained_direct_fact(item) for item in retained_content
+    )
     direct_fact_by_observation_id = {
         observation.observation_id: fact
-        for observation, fact in zip(observations, direct_facts, strict=True)
+        for observation, fact in zip(members, direct_facts, strict=True)
     }
     equivalence_facts = tuple(
-        _equivalence_fact(item, _equivalence_members(item, observation_by_id))
+        _equivalence_fact(item, _equivalence_members(item, member_by_id))
         for item in equivalences
     )
     facts = tuple(
@@ -181,8 +407,8 @@ def compose_operator_brief_http(
     )
     conflicts = _build_status_conflicts(observations)
 
-    grouped: dict[str, list[OperatorBriefHttpObservation]] = {}
-    for observation in observations:
+    grouped: dict[str, list[_HttpMember]] = {}
+    for observation in members:
         grouped.setdefault(_find(parent, observation.observation_id), []).append(
             observation
         )
@@ -276,37 +502,50 @@ def _direct_fact(observation: OperatorBriefHttpObservation) -> OperatorBriefFact
     )
 
 
+def _retained_direct_fact(
+    observation: OperatorBriefHttpRetainedBodyObservation,
+) -> OperatorBriefFact:
+    return OperatorBriefFact(
+        fact_id=_semantic_id("HTTP-RETAINED-FACT", (observation.observation_id,)),
+        kind=OperatorBriefFactKind.RETAINED_CONTENT,
+        semantic_class=OperatorBriefSemanticClass.OBSERVED,
+        role=OperatorBriefFactRole.DIRECT_EVIDENCE,
+        label="Retained HTTP content",
+        summary="Exact retained content associated with an HTTP endpoint.",
+        endpoints=(observation.endpoint,),
+        origins=(observation.origin.origin_url,),
+        evidence_ids=observation.evidence_ids,
+        artefact_references=observation.artefact_references,
+        source_references=observation.source_references,
+        route=observation.endpoint,
+        body_sha256=observation.body_sha256,
+    )
+
+
 def _equivalence_fact(
     equivalence: OperatorBriefHttpExactEquivalence,
-    members: tuple[OperatorBriefHttpObservation, ...],
+    members: tuple[_HttpMember, ...],
 ) -> OperatorBriefFact:
-    source_references = [
-        OperatorBriefSourceReference(
-            source_kind=_REPEATED_BODY_SOURCE_KIND,
-            source_id=equivalence.source_repeated_body_group_id,
-        )
-    ]
+    source_references = list(equivalence.authority_references)
     source_references.extend(
-        OperatorBriefSourceReference(
-            source_kind=_FINGERPRINT_SOURCE_KIND,
-            source_id=item.source_fingerprint_id,
-        )
+        reference
         for item in members
+        for reference in _member_source_references(item)
     )
     return OperatorBriefFact(
         fact_id=_semantic_id("HTTP-EQUIV-FACT", (equivalence.equivalence_id,)),
         kind=OperatorBriefFactKind.RESPONSE_EQUIVALENCE,
         semantic_class=OperatorBriefSemanticClass.DERIVED,
         role=OperatorBriefFactRole.RELATIONSHIP_CONTEXT,
-        label="Exact retained response-body equivalence",
-        summary="Retained response bodies have the same SHA-256.",
+        label="Exact retained-body equivalence",
+        summary="Retained body bytes have the same SHA-256.",
         endpoints=tuple(sorted({item.endpoint for item in members})),
         origins=tuple(sorted({item.origin.origin_url for item in members})),
         evidence_ids=_membership(item.evidence_ids for item in members),
         artefact_references=_membership(
             item.artefact_references for item in members
         ),
-        source_references=tuple(source_references),
+        source_references=tuple(sorted(set(source_references))),
         body_sha256=equivalence.body_sha256,
     )
 
@@ -360,14 +599,14 @@ def _build_status_conflicts(
 
 
 def _subject(
-    members: tuple[OperatorBriefHttpObservation, ...],
+    members: tuple[_HttpMember, ...],
     *,
     equivalences: tuple[OperatorBriefHttpExactEquivalence, ...],
     direct_fact_by_observation_id: dict[str, OperatorBriefFact],
     equivalence_facts: tuple[OperatorBriefFact, ...],
     conflicts: tuple[OperatorBriefConflict, ...],
 ) -> OperatorBriefHttpSubject:
-    ordered_members = tuple(sorted(members, key=_observation_sort_key))
+    ordered_members = tuple(sorted(members, key=_member_sort_key))
     observation_ids = tuple(item.observation_id for item in ordered_members)
     observation_id_set = set(observation_ids)
     direct_facts = tuple(
@@ -416,8 +655,8 @@ def _subject(
 
 def _equivalence_members(
     equivalence: OperatorBriefHttpExactEquivalence,
-    observation_by_id: dict[str, OperatorBriefHttpObservation],
-) -> tuple[OperatorBriefHttpObservation, ...]:
+    observation_by_id: dict[str, _HttpMember],
+) -> tuple[_HttpMember, ...]:
     if len(equivalence.observation_ids) < 2:
         raise ValueError("Exact HTTP equivalence requires multiple observations.")
     if len(set(equivalence.observation_ids)) != len(equivalence.observation_ids):
@@ -426,7 +665,7 @@ def _equivalence_members(
         members = tuple(
             sorted(
                 (observation_by_id[item] for item in equivalence.observation_ids),
-                key=_observation_sort_key,
+                key=_member_sort_key,
             )
         )
     except KeyError as exc:
@@ -440,11 +679,12 @@ def _equivalence_members(
 
 def _is_merge_candidate(
     equivalence: OperatorBriefHttpExactEquivalence,
-    members: tuple[OperatorBriefHttpObservation, ...],
+    members: tuple[_HttpMember, ...],
 ) -> bool:
     return bool(
         len(members) > 1
         and equivalence.body_sha256 != EMPTY_BODY_SHA256
+        and all(isinstance(item, OperatorBriefHttpObservation) for item in members)
         and all(
             not item.body_empty
             and item.body_bytes > 0
@@ -471,7 +711,29 @@ def _observation_sort_key(item: OperatorBriefHttpObservation) -> tuple:
     )
 
 
-def _subject_anchor(item: OperatorBriefHttpObservation) -> str:
+def _retained_sort_key(
+    item: OperatorBriefHttpRetainedBodyObservation,
+) -> tuple:
+    return (
+        item.endpoint,
+        item.source_kind,
+        item.body_sha256,
+        item.body_bytes,
+        item.observation_id,
+    )
+
+
+def _member_sort_key(item: _HttpMember) -> tuple:
+    if isinstance(item, OperatorBriefHttpObservation):
+        return (0, *_observation_sort_key(item))
+    return (1, *_retained_sort_key(item))
+
+
+def _subject_anchor(item: _HttpMember) -> str:
+    if isinstance(item, OperatorBriefHttpRetainedBodyObservation):
+        return _semantic_id(
+            "HTTP-RETAINED-SUBJECT-ANCHOR", (item.observation_id,)
+        )
     return _semantic_id(
         "HTTP-SUBJECT-ANCHOR",
         (
@@ -483,6 +745,38 @@ def _subject_anchor(item: OperatorBriefHttpObservation) -> str:
             str(item.body_bytes),
         ),
     )
+
+
+def _member_source_references(
+    item: _HttpMember,
+) -> tuple[OperatorBriefSourceReference, ...]:
+    if isinstance(item, OperatorBriefHttpRetainedBodyObservation):
+        return item.source_references
+    return (
+        OperatorBriefSourceReference(
+            source_kind=_FINGERPRINT_SOURCE_KIND,
+            source_id=item.source_fingerprint_id,
+        ),
+    )
+
+
+def _retained_semantic_core(
+    item: OperatorBriefHttpRetainedBodyObservation,
+) -> tuple:
+    return (
+        item.source_kind,
+        item.endpoint,
+        item.origin,
+        item.body_sha256,
+        item.body_bytes,
+        item.body_empty,
+    )
+
+
+def _equivalence_semantic_core(
+    item: OperatorBriefHttpExactEquivalence,
+) -> tuple[str, tuple[str, ...]]:
+    return item.body_sha256, item.observation_ids
 
 
 def _resolve_subject_id_collisions(
@@ -515,7 +809,7 @@ def _resolve_subject_id_collisions(
         )
     )
     if len({item.subject_id for item in final}) != len(final):
-        raise ValueError("Deep HTTP composition contains duplicate subject IDs.")
+        raise ValueError("HTTP composition contains duplicate subject IDs.")
     return final
 
 
@@ -541,6 +835,14 @@ def _union(parent: dict[str, str], first: str, second: str) -> None:
 
 def _membership(values: Iterable[tuple[str, ...]]) -> tuple[str, ...]:
     return tuple(sorted({value for group in values for value in group}))
+
+
+def _normalised_membership(
+    values: tuple[str, ...], label: str
+) -> tuple[str, ...]:
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ValueError(f"HTTP composition {label} cannot contain blanks.")
+    return tuple(sorted(set(values)))
 
 
 def _semantic_id(prefix: str, values: tuple[str, ...]) -> str:
