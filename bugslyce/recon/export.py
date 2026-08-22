@@ -21,9 +21,11 @@ from bugslyce.recon.evidence_pack_closure import (
     EvidencePackReferenceRecord,
     discover_evidence_pack_references,
     group_evidence_pack_references,
+    portable_archive_path_preference,
     portable_pipeline_step_message_is_valid,
     render_reference_closure_payload,
 )
+from bugslyce.reports.operator_brief import OPERATOR_BRIEF_FILENAME
 from bugslyce.time_utils import Clock, utc_now_iso
 
 
@@ -212,6 +214,11 @@ def export_recon_evidence_pack(
         if all(record.included for record in closure_records) and not missing_files
         else "incomplete"
     )
+    operator_brief_paths = _operator_brief_portable_paths(
+        input_dir,
+        included,
+        closure_records,
+    )
 
     archive_files = sorted(
         [
@@ -284,6 +291,7 @@ def export_recon_evidence_pack(
                         archive_name,
                         input_dir,
                         included,
+                        operator_brief_paths,
                     ),
                 )
         temp_path.replace(output_path)
@@ -542,6 +550,7 @@ def _portable_pack_content(
     archive_name: str,
     input_dir: Path,
     included: dict[str, Path],
+    operator_brief_paths: dict[Path, str],
 ) -> bytes:
     content = source_path.read_bytes()
     preferred_paths = _preferred_portable_paths(included)
@@ -616,6 +625,12 @@ def _portable_pack_content(
             )
             + "\n"
         ).encode("utf-8")
+    if archive_name == OPERATOR_BRIEF_FILENAME:
+        return _portable_operator_brief_content(
+            content,
+            input_dir,
+            operator_brief_paths,
+        )
     if archive_name not in {"report.md", "runbook.md"}:
         return content
     try:
@@ -851,11 +866,132 @@ def _preferred_portable_paths(included: dict[str, Path]) -> dict[Path, str]:
     for candidate_name, candidate_source in included.items():
         resolved_source = candidate_source.resolve()
         current = preferred_paths.get(resolved_source)
-        if current is None or _portable_archive_path_preference(candidate_name) < (
-            _portable_archive_path_preference(current)
+        if current is None or portable_archive_path_preference(candidate_name) < (
+            portable_archive_path_preference(current)
         ):
             preferred_paths[resolved_source] = candidate_name
     return preferred_paths
+
+
+def _operator_brief_portable_paths(
+    input_dir: Path,
+    included: dict[str, Path],
+    closure_records: tuple[EvidencePackReferenceRecord, ...],
+) -> dict[Path, str]:
+    preferred_paths = _preferred_portable_paths(included)
+    for record in closure_records:
+        source_path, _relative = _resolve_reference(
+            input_dir,
+            record.source_path or record.portable_path,
+            "Operator Brief artefact reference",
+        )
+        current = preferred_paths.get(source_path)
+        if current is None or portable_archive_path_preference(
+            record.portable_path
+        ) < portable_archive_path_preference(current):
+            preferred_paths[source_path] = record.portable_path
+    return preferred_paths
+
+
+def _portable_operator_brief_content(
+    content: bytes,
+    input_dir: Path,
+    portable_paths: dict[Path, str],
+) -> bytes:
+    payload = _json_object(content, OPERATOR_BRIEF_FILENAME)
+    raw_threads = payload.get("threads")
+    if not isinstance(raw_threads, list):
+        raise ValueError("Operator Brief field 'threads' must be a list.")
+    for thread_index, thread in enumerate(raw_threads, start=1):
+        if not isinstance(thread, dict):
+            raise ValueError(
+                f"Operator Brief thread #{thread_index} must be an object."
+            )
+        raw_facts = thread.get("facts", [])
+        if not isinstance(raw_facts, list):
+            raise ValueError(
+                f"Operator Brief thread #{thread_index} facts must be a list."
+            )
+        for fact_index, fact in enumerate(raw_facts, start=1):
+            if not isinstance(fact, dict):
+                raise ValueError(
+                    "Operator Brief fact "
+                    f"#{thread_index}.{fact_index} must be an object."
+                )
+            _rewrite_operator_brief_artefact_references(
+                fact,
+                "artefact_references",
+                input_dir,
+                portable_paths,
+                f"Operator Brief fact #{thread_index}.{fact_index}",
+            )
+        _rewrite_operator_brief_artefact_references(
+            thread,
+            "source_artefacts",
+            input_dir,
+            portable_paths,
+            f"Operator Brief thread #{thread_index}",
+        )
+        raw_conflicts = thread.get("conflicts", [])
+        if not isinstance(raw_conflicts, list):
+            raise ValueError(
+                f"Operator Brief thread #{thread_index} conflicts must be a list."
+            )
+        for conflict_index, conflict in enumerate(raw_conflicts, start=1):
+            if not isinstance(conflict, dict):
+                raise ValueError(
+                    "Operator Brief conflict "
+                    f"#{thread_index}.{conflict_index} must be an object."
+                )
+            observations = conflict.get("observations", [])
+            if not isinstance(observations, list):
+                raise ValueError(
+                    "Operator Brief conflict "
+                    f"#{thread_index}.{conflict_index} observations must be a list."
+                )
+            for observation_index, observation in enumerate(
+                observations,
+                start=1,
+            ):
+                if not isinstance(observation, dict):
+                    raise ValueError(
+                        "Operator Brief conflict observation "
+                        f"#{thread_index}.{conflict_index}."
+                        f"{observation_index} must be an object."
+                    )
+                _rewrite_operator_brief_artefact_references(
+                    observation,
+                    "artefact_references",
+                    input_dir,
+                    portable_paths,
+                    "Operator Brief conflict observation "
+                    f"#{thread_index}.{conflict_index}.{observation_index}",
+                )
+    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _rewrite_operator_brief_artefact_references(
+    owner: dict[str, object],
+    field: str,
+    input_dir: Path,
+    portable_paths: dict[Path, str],
+    label: str,
+) -> None:
+    if field not in owner:
+        return
+    values = owner.get(field, [])
+    if not isinstance(values, list) or any(
+        not isinstance(value, str) or not value.strip() for value in values
+    ):
+        raise ValueError(f"{label} {field} must be a list of non-empty paths.")
+    rewritten: set[str] = set()
+    for value in values:
+        source_path, _relative = _resolve_reference(input_dir, value, label)
+        portable_path = portable_paths.get(source_path)
+        if portable_path is None:
+            raise ValueError(f"{label} is not represented in evidence-pack closure.")
+        rewritten.add(portable_path)
+    owner[field] = sorted(rewritten)
 
 
 def _preferred_project_state_paths(included: dict[str, Path]) -> dict[Path, str]:
@@ -1088,14 +1224,6 @@ def _is_exact_local_file_alias(
     except (OSError, RuntimeError, ValueError):
         return False
     return value_path == source_path
-
-
-def _portable_archive_path_preference(value: str) -> tuple[int, int, str]:
-    return (
-        1 if value.startswith(("raw/", "metadata/")) else 0,
-        len(PurePosixPath(value).parts),
-        value,
-    )
 
 
 def _write_bytes(archive: zipfile.ZipFile, archive_name: str, content: bytes) -> None:

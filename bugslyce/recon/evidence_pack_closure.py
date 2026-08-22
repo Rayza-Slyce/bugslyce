@@ -271,9 +271,15 @@ def discover_evidence_pack_references(
 
     references.extend(_deep_output_references(root))
     references.extend(_analysis_coverage_references(root))
-    references.extend(_operator_brief_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
+    references.extend(
+        _operator_brief_references(
+            root,
+            tuple(references),
+            references_are_portable=False,
+        )
+    )
     return tuple(
         sorted(
             references,
@@ -341,9 +347,15 @@ def discover_expected_pack_references(
         )
     references.extend(_deep_output_references(root))
     references.extend(_analysis_coverage_references(root))
-    references.extend(_operator_brief_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
+    references.extend(
+        _operator_brief_references(
+            root,
+            tuple(references),
+            references_are_portable=True,
+        )
+    )
     return tuple(
         sorted(
             references,
@@ -1585,17 +1597,128 @@ def _analysis_coverage_references(
 
 def _operator_brief_references(
     root: Path,
+    existing_references: tuple[EvidencePackReference, ...],
+    *,
+    references_are_portable: bool,
 ) -> tuple[EvidencePackReference, ...]:
     brief = load_operator_brief_artifact(root)
     if brief is None:
         return ()
-    return (
+    references = [
         EvidencePackReference(
             portable_path=OPERATOR_BRIEF_FILENAME,
             owner_kind="operator_brief",
             owner_id=OPERATOR_BRIEF_FILENAME,
-        ),
+        )
+    ]
+    portable_paths = _preferred_reference_paths_by_source(
+        root,
+        existing_references,
     )
+
+    for thread in brief.threads:
+        references.extend(
+            _operator_brief_nested_references(
+                root,
+                thread.source_artefacts,
+                owner_kind="operator_brief_thread",
+                owner_id=thread.thread_id,
+                evidence_ids=thread.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+        for fact in thread.facts:
+            references.extend(
+                _operator_brief_nested_references(
+                    root,
+                    fact.artefact_references,
+                    owner_kind="operator_brief_fact",
+                    owner_id=fact.fact_id,
+                    evidence_ids=fact.evidence_ids,
+                    portable_paths=portable_paths,
+                    references_are_portable=references_are_portable,
+                )
+            )
+        for conflict in thread.conflicts:
+            conflict_evidence_ids = tuple(
+                sorted(
+                    {
+                        evidence_id
+                        for observation in conflict.observations
+                        for evidence_id in observation.evidence_ids
+                    }
+                )
+            )
+            references.extend(
+                _operator_brief_nested_references(
+                    root,
+                    tuple(
+                        reference
+                        for observation in conflict.observations
+                        for reference in observation.artefact_references
+                    ),
+                    owner_kind="operator_brief_conflict",
+                    owner_id=conflict.conflict_id,
+                    evidence_ids=conflict_evidence_ids,
+                    portable_paths=portable_paths,
+                    references_are_portable=references_are_portable,
+                )
+            )
+    return tuple(references)
+
+
+def _operator_brief_nested_references(
+    root: Path,
+    artefact_references: tuple[str, ...],
+    *,
+    owner_kind: str,
+    owner_id: str,
+    evidence_ids: tuple[str, ...],
+    portable_paths: dict[str, str],
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    references: list[EvidencePackReference] = []
+    for artefact_reference in artefact_references:
+        source_path = _project_relative_source(root, artefact_reference)
+        portable_path = (
+            source_path
+            if references_are_portable
+            else portable_paths.get(
+                source_path,
+                _archive_path_for_project_source(source_path),
+            )
+        )
+        references.append(
+            EvidencePackReference(
+                portable_path=portable_path,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                evidence_ids=evidence_ids,
+                source_path=(
+                    source_path if source_path != portable_path else None
+                ),
+            )
+        )
+    return tuple(references)
+
+
+def _preferred_reference_paths_by_source(
+    root: Path,
+    references: tuple[EvidencePackReference, ...],
+) -> dict[str, str]:
+    preferred: dict[str, str] = {}
+    for reference in references:
+        source_path = _project_relative_source(
+            root,
+            reference.source_path or reference.portable_path,
+        )
+        current = preferred.get(source_path)
+        if current is None or portable_archive_path_preference(
+            reference.portable_path
+        ) < portable_archive_path_preference(current):
+            preferred[source_path] = reference.portable_path
+    return preferred
 
 
 def _deep_output_references(root: Path) -> tuple[EvidencePackReference, ...]:
@@ -2081,6 +2204,16 @@ def _archive_path_for_project_source(source_path: str) -> str:
     if source_path.startswith(("recon_execution", "content_discovery_execution")):
         return f"metadata/{PurePosixPath(source_path).name}"
     return f"raw/{source_path}"
+
+
+def portable_archive_path_preference(value: str) -> tuple[int, int, str]:
+    """Order alternative pack paths for one physical project artefact."""
+
+    return (
+        1 if value.startswith(("raw/", "metadata/")) else 0,
+        len(PurePosixPath(value).parts),
+        value,
+    )
 
 
 def _load_structured_json_object(
