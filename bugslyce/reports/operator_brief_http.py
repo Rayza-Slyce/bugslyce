@@ -38,6 +38,7 @@ _ARTEFACT_BY_COLLECTION_STAGE = {
 }
 _FINGERPRINT_SOURCE_KIND = "deep_http_fingerprint"
 _REPEATED_BODY_SOURCE_KIND = "deep_http_repeated_body_group"
+_CROSS_SOURCE_BODY_EXACT_HASH_KIND = "cross_source_body_exact_hash"
 
 
 @dataclass(frozen=True)
@@ -317,6 +318,61 @@ def combine_operator_brief_http_inputs(
         ),
         retained_content=tuple(
             sorted(retained_by_id.values(), key=_retained_sort_key)
+        ),
+    )
+
+
+def discover_operator_brief_http_cross_source_exact_equivalences(
+    inputs: OperatorBriefHttpCompositionInput,
+) -> OperatorBriefHttpCompositionInput:
+    """Discover exact retained-body relationships across normalized sources."""
+
+    groups: dict[tuple[str, int], list[_HttpMember]] = {}
+    for member in (*inputs.observations, *inputs.retained_content):
+        if (
+            member.body_empty
+            or member.body_bytes == 0
+            or member.body_sha256 == EMPTY_BODY_SHA256
+        ):
+            continue
+        groups.setdefault((member.body_sha256, member.body_bytes), []).append(
+            member
+        )
+
+    relationships: list[OperatorBriefHttpExactEquivalence] = []
+    for (body_sha256, body_bytes), members in groups.items():
+        if not any(
+            isinstance(item, OperatorBriefHttpObservation) for item in members
+        ) or not any(
+            isinstance(item, OperatorBriefHttpRetainedBodyObservation)
+            for item in members
+        ):
+            continue
+        member_ids = tuple(sorted({item.observation_id for item in members}))
+        if len(member_ids) < 2:
+            continue
+        relationships.append(
+            build_operator_brief_http_exact_equivalence(
+                body_sha256=body_sha256,
+                observation_ids=member_ids,
+                authority_references=(
+                    OperatorBriefSourceReference(
+                        source_kind=_CROSS_SOURCE_BODY_EXACT_HASH_KIND,
+                        source_id=_semantic_id(
+                            "CROSS-HTTP-EXACT",
+                            (body_sha256, str(body_bytes), *member_ids),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+    return combine_operator_brief_http_inputs(
+        inputs,
+        OperatorBriefHttpCompositionInput(
+            observations=(),
+            exact_equivalences=tuple(relationships),
+            retained_content=(),
         ),
     )
 
