@@ -571,10 +571,12 @@ class OperatorBriefThread:
             )
 
     @property
-    def score(self) -> int:
+    def score(self) -> int | None:
         """Legacy one-for-one projection access without an aggregate model field."""
 
-        return self.source_rankings[0].score if self.source_rankings else 0
+        if len(self.source_rankings) == 1:
+            return self.source_rankings[0].score
+        return None
 
     @property
     def observed_facts(self) -> tuple[str, ...]:
