@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 import re
 from urllib.parse import parse_qsl, urljoin, urlparse
 
@@ -136,6 +137,111 @@ OBJECT_REFERENCE_MANUAL_ACTION = (
 )
 
 
+class WorkflowAccountObservationKind(str, Enum):
+    """Closed account-workflow observation vocabulary retained for later assembly."""
+
+    OBSERVED_ROUTE = "observed_route"
+    OBSERVED_FORM = "observed_form"
+    AUTHENTICATION_REDIRECT = "authentication_redirect"
+    ACCOUNT_ROUTE_REDIRECT = "account_route_redirect"
+    ACCESS_BOUNDARY = "access_boundary"
+
+
+@dataclass(frozen=True)
+class WorkflowAccountObservation:
+    """One safe structured account observation retained without input values."""
+
+    kind: WorkflowAccountObservationKind
+    url: str
+    evidence_ids: tuple[str, ...] = ()
+    methods: tuple[str, ...] = ()
+    field_names: tuple[str, ...] = ()
+    redirect_target_url: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, WorkflowAccountObservationKind):
+            raise ValueError("Workflow account observation kind is invalid.")
+        canonical_url = canonical_workflow_url(self.url)
+        if not canonical_url:
+            raise ValueError("Workflow account observations require a URL.")
+        redirect_target = (
+            canonical_workflow_url(self.redirect_target_url)
+            if self.redirect_target_url
+            else None
+        )
+        if redirect_target and self.kind not in {
+            WorkflowAccountObservationKind.AUTHENTICATION_REDIRECT,
+            WorkflowAccountObservationKind.ACCOUNT_ROUTE_REDIRECT,
+        }:
+            raise ValueError(
+                "Only workflow redirect observations may retain redirect targets."
+            )
+        object.__setattr__(self, "url", canonical_url)
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            _canonical_evidence_ids(self.evidence_ids),
+        )
+        object.__setattr__(
+            self,
+            "methods",
+            _canonical_text_values(self.methods, uppercase=True),
+        )
+        object.__setattr__(
+            self,
+            "field_names",
+            _canonical_text_values(self.field_names),
+        )
+        object.__setattr__(self, "redirect_target_url", redirect_target)
+
+
+@dataclass(frozen=True)
+class WorkflowAccountRetention:
+    """Canonical account-workflow origin and its structured observations."""
+
+    origin: str
+    observations: tuple[WorkflowAccountObservation, ...]
+
+    def __post_init__(self) -> None:
+        origin = http_origin_from_url(self.origin)
+        if origin is None:
+            raise ValueError("Workflow account retention requires an HTTP origin.")
+        if any(
+            not isinstance(item, WorkflowAccountObservation)
+            for item in self.observations
+        ):
+            raise ValueError("Workflow account retention observations are invalid.")
+        if not self.observations:
+            raise ValueError("Workflow account retention requires observations.")
+        object.__setattr__(self, "origin", origin.origin_url)
+        object.__setattr__(
+            self,
+            "observations",
+            tuple(sorted(self.observations, key=_account_observation_order)),
+        )
+
+
+@dataclass(frozen=True)
+class WorkflowObjectReferenceRetention:
+    """Canonical object-reference origin and safe parameter names."""
+
+    origin: str
+    parameter_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        origin = http_origin_from_url(self.origin)
+        if origin is None:
+            raise ValueError("Object-reference retention requires an HTTP origin.")
+        parameter_names = _canonical_text_values(
+            self.parameter_names,
+            lowercase=True,
+        )
+        if not parameter_names:
+            raise ValueError("Object-reference retention requires parameter names.")
+        object.__setattr__(self, "origin", origin.origin_url)
+        object.__setattr__(self, "parameter_names", parameter_names)
+
+
 @dataclass(frozen=True)
 class WorkflowLead:
     """One bounded grouped decision shared by report and runbook renderers."""
@@ -150,6 +256,23 @@ class WorkflowLead:
     covered_urls: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     signal: str
+    retention: (
+        WorkflowAccountRetention | WorkflowObjectReferenceRetention | None
+    ) = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.retention, WorkflowAccountRetention):
+            if self.category != "account_workflow":
+                raise ValueError(
+                    "Account workflow retention requires account_workflow category."
+                )
+        elif isinstance(self.retention, WorkflowObjectReferenceRetention):
+            if self.category != "object_reference_surface":
+                raise ValueError(
+                    "Object-reference retention requires object_reference_surface category."
+                )
+        elif self.retention is not None:
+            raise ValueError("Workflow retention type is invalid.")
 
 
 @dataclass(frozen=True)
@@ -214,6 +337,69 @@ def canonical_workflow_url(value: str | None) -> str:
     netloc = host if port in {None, default_port} else f"{host}:{port}"
     path = parsed.path or "/"
     return f"{scheme}://{netloc}{path.rstrip('/') or '/'}"
+
+
+def _canonical_text_values(
+    values: Iterable[str],
+    *,
+    uppercase: bool = False,
+    lowercase: bool = False,
+) -> tuple[str, ...]:
+    if uppercase and lowercase:
+        raise ValueError("Text canonicalization cannot change case in both directions.")
+    canonical: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("Workflow retained text values must be strings.")
+        compact = value.strip()
+        if not compact:
+            continue
+        if uppercase:
+            compact = compact.upper()
+        elif lowercase:
+            compact = compact.lower()
+        canonical.add(compact)
+    return tuple(sorted(canonical))
+
+
+def _canonical_evidence_ids(values: Iterable[str]) -> tuple[str, ...]:
+    return _canonical_text_values(values)
+
+
+def _account_observation_order(
+    observation: WorkflowAccountObservation,
+) -> tuple[object, ...]:
+    return (
+        observation.url,
+        observation.kind.value,
+        observation.redirect_target_url or "",
+        observation.methods,
+        observation.field_names,
+        observation.evidence_ids,
+    )
+
+
+def _retained_account_observation(
+    observation: _AccountObservation,
+) -> WorkflowAccountObservation:
+    kind = WorkflowAccountObservationKind(observation.kind)
+    redirect_target = (
+        observation.redirect_target_url
+        if kind
+        in {
+            WorkflowAccountObservationKind.AUTHENTICATION_REDIRECT,
+            WorkflowAccountObservationKind.ACCOUNT_ROUTE_REDIRECT,
+        }
+        else None
+    )
+    return WorkflowAccountObservation(
+        kind=kind,
+        url=observation.url,
+        evidence_ids=observation.evidence_ids,
+        methods=observation.methods,
+        field_names=observation.field_names,
+        redirect_target_url=redirect_target,
+    )
 
 
 def _account_workflow_leads(
@@ -448,16 +634,20 @@ def _account_origin_workflow_lead(
         ),
         representative_urls=route_urls[:_MAX_REPRESENTATIVE_ROUTES],
         covered_urls=route_urls,
-        evidence_ids=tuple(
-            _dedupe(
-                evidence_id
-                for item in observations
-                for evidence_id in item.evidence_ids
-            )
+        evidence_ids=_canonical_evidence_ids(
+            evidence_id
+            for item in observations
+            for evidence_id in item.evidence_ids
         )[:_MAX_EVIDENCE_IDS],
         signal=(
             f"grouped account workflow; origin={origin.origin_url}"
             + (f"; methods={','.join(sorted(methods))}" if methods else "")
+        ),
+        retention=WorkflowAccountRetention(
+            origin=origin.origin_url,
+            observations=tuple(
+                _retained_account_observation(item) for item in observations
+            ),
         ),
     )
 
@@ -572,7 +762,7 @@ def _object_reference_workflow_leads(
         urls = sorted(
             {url for _name, _entry, values in qualifying for url in values}
         )
-        evidence_ids = _dedupe(
+        evidence_ids = _canonical_evidence_ids(
             evidence_id
             for _name, entry, _urls in qualifying
             for evidence_id in entry.evidence_ids
@@ -596,10 +786,14 @@ def _object_reference_workflow_leads(
                 suggested_manual_action=OBJECT_REFERENCE_MANUAL_ACTION,
                 representative_urls=tuple(urls[:_MAX_REPRESENTATIVE_ROUTES]),
                 covered_urls=tuple(urls),
-                evidence_ids=tuple(evidence_ids[:_MAX_EVIDENCE_IDS]),
+                evidence_ids=evidence_ids[:_MAX_EVIDENCE_IDS],
                 signal=(
                     "repeated direct query-parameter evidence; "
                     f"origin={origin.origin_url}"
+                ),
+                retention=WorkflowObjectReferenceRetention(
+                    origin=origin.origin_url,
+                    parameter_names=tuple(names),
                 ),
             )
         )
