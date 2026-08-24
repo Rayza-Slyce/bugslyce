@@ -113,6 +113,59 @@ class _FakeTime:
             self.now += duration
 
 
+class _ConcurrentPacingTime:
+    """Test-controlled shared clock for concurrent aggregate pacing."""
+
+    def __init__(self) -> None:
+        self.now = Decimal("0")
+        self.sleeps: list[Decimal] = []
+        self._active_sleepers: set[int] = set()
+        self._condition = threading.Condition()
+
+    def monotonic(self) -> float:
+        with self._condition:
+            return float(self.now)
+
+    def sleep(self, seconds: float) -> None:
+        duration = Decimal(str(seconds))
+        sleeper_id = threading.get_ident()
+        with self._condition:
+            self.sleeps.append(duration)
+            target = self.now + duration
+            self._active_sleepers.add(sleeper_id)
+            self._condition.notify_all()
+            try:
+                while self.now < target:
+                    self._condition.wait()
+            finally:
+                self._active_sleepers.remove(sleeper_id)
+                self._condition.notify_all()
+
+    def wait_for_active_sleepers(self, count: int) -> tuple[int, ...]:
+        with self._condition:
+            if not self._condition.wait_for(
+                lambda: len(self._active_sleepers) >= count,
+                timeout=2,
+            ):
+                raise AssertionError("test pacing sleepers did not wait")
+            return tuple(sorted(self._active_sleepers))
+
+    def wait_for_sleep_count(self, count: int) -> None:
+        with self._condition:
+            if not self._condition.wait_for(
+                lambda: len(self.sleeps) >= count,
+                timeout=2,
+            ):
+                raise AssertionError("test pacing sleeper did not re-enter wait")
+
+    def advance_to(self, target: Decimal) -> None:
+        with self._condition:
+            if target < self.now:
+                raise AssertionError("test clock cannot move backwards")
+            self.now = target
+            self._condition.notify_all()
+
+
 class _RecordingTransport:
     def __init__(
         self,
@@ -2156,7 +2209,7 @@ def test_limiter_rechecks_monotonic_time_after_an_early_sleeper_return() -> None
 
 
 def test_concurrent_callers_still_receive_distinct_aggregate_start_slots() -> None:
-    clock = _FakeTime()
+    clock = _ConcurrentPacingTime()
     transport = _RecordingTransport(
         [_response(), _response(), _response()],
         clock=clock,
@@ -2167,20 +2220,34 @@ def test_concurrent_callers_still_receive_distinct_aggregate_start_slots() -> No
         monotonic=clock.monotonic,
         sleep=clock.sleep,
     )
+    start_barrier = threading.Barrier(4)
+
+    def paced_request(index: int) -> None:
+        start_barrier.wait()
+        executor.request(f"https://example.test/{index}")
+
     threads = [
         threading.Thread(
-            target=executor.request,
-            args=(f"https://example.test/{index}",),
+            target=paced_request,
+            args=(index,),
         )
         for index in range(3)
     ]
 
     for thread in threads:
         thread.start()
+    start_barrier.wait()
+    initial_waiters = clock.wait_for_active_sleepers(2)
+    assert len(initial_waiters) >= 2
+
+    clock.advance_to(Decimal("0.5"))
+    clock.wait_for_sleep_count(3)
+    clock.advance_to(Decimal("1.0"))
     for thread in threads:
         thread.join(timeout=2)
 
     assert all(not thread.is_alive() for thread in threads)
+    assert len(transport.starts) == 3
     assert sorted(transport.starts) == [Decimal("0"), Decimal("0.5"), Decimal("1.0")]
 
 
