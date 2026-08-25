@@ -86,6 +86,10 @@ from bugslyce.reports.operator_brief_assembly import OperatorBriefComposition
 from bugslyce.reports.operator_brief_composition_persistence import (
     load_operator_brief_composition_artifact,
 )
+from bugslyce.reports.operator_brief_html_presentation import (
+    OperatorBriefHtmlPresentation,
+    build_operator_brief_html_presentation,
+)
 from bugslyce.reports.operator_report_view import (
     OperatorReportView,
     build_operator_report_view,
@@ -180,6 +184,7 @@ class HtmlReportModel:
         DeepInitialRetainedJavaScriptRouteExtractionResult | None
     ) = None
     operator_brief_composition: OperatorBriefComposition | None = None
+    operator_brief_presentation: OperatorBriefHtmlPresentation | None = None
 
 
 def build_html_report_model(input_dir: Path) -> HtmlReportModel:
@@ -193,6 +198,11 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     root = root.resolve()
 
     operator_brief_composition = load_operator_brief_composition_artifact(root)
+    operator_brief_presentation = (
+        build_operator_brief_html_presentation(operator_brief_composition)
+        if operator_brief_composition is not None
+        else None
+    )
     payload = _read_json_object(root, "project_state.json", required=True)
     project_state, candidates = _project_state_from_payload(payload, root)
     _validate_optional_structured_objects(root)
@@ -317,6 +327,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         operator_report_view=operator_report_view,
         initial_retained_javascript_routes=initial_retained_routes,
         operator_brief_composition=operator_brief_composition,
+        operator_brief_presentation=operator_brief_presentation,
     )
 
 

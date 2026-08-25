@@ -258,6 +258,21 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
             3,
             ("limitations", "Warnings and skipped collection", _limitations_section(model)),
         )
+    canonical_presentation = model.operator_brief_presentation
+    if canonical_presentation is not None:
+        legacy_primary_sections = {"operator-summary", "human-triage", "manual-review"}
+        sections = [
+            section for section in sections if section[0] not in legacy_primary_sections
+        ]
+        if canonical_presentation.investigation_subjects:
+            sections.insert(
+                1,
+                (
+                    "investigation-priorities",
+                    "Investigation priorities",
+                    _investigation_priorities_section(model),
+                ),
+            )
     if model.relationship_clusters:
         sections.append(
             ("relationships", "Route relationships", _relationship_section(model))
@@ -304,6 +319,150 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
         ]
     )
     return sections
+
+
+def _investigation_priorities_section(model: HtmlReportModel) -> str:
+    presentation = model.operator_brief_presentation
+    if presentation is None:
+        raise ValueError("Investigation priorities require a canonical presentation.")
+    return _section(
+        "investigation-priorities",
+        "Investigation priorities",
+        "".join(
+            _investigation_subject(item) for item in presentation.investigation_subjects
+        ),
+    )
+
+
+def _investigation_subject(item: object) -> str:
+    identity = item.semantic_subject_key or item.subject_kind.value
+    metadata = (
+        ("Disposition", _human_label(item.disposition)),
+        ("Subject kind", item.subject_kind.value),
+        ("Source family", item.source_family),
+    )
+    rank = (
+        f'<p class="investigation-rank searchable">Rank {_h(item.rank)}</p>'
+        if item.rank is not None
+        else ""
+    )
+    fields = "".join(
+        f'<dt>{_h(label)}</dt><dd>{_h(value)}</dd>' for label, value in metadata
+    )
+    return (
+        f'<article class="investigation-subject searchable" '
+        f'data-policy-key="{_a(item.policy_key)}">'
+        f'<h3>{_h(identity)}</h3>{rank}<dl class="investigation-meta">{fields}</dl>'
+        f'{_investigation_facts(item.facts)}'
+        f'{_investigation_conflicts(item.conflicts)}'
+        f'{_investigation_coverage(item.coverage_limitations)}'
+        f'{_investigation_source_native_detail(item.source_native_detail)}'
+        f'{_investigation_provenance(item)}'
+        "</article>"
+    )
+
+
+def _investigation_facts(facts: tuple[object, ...]) -> str:
+    if not facts:
+        return ""
+    rows = "".join(
+        "<li>"
+        f'<code>{_h(fact.fact_id)}</code>: {_h(fact.summary)}'
+        f'{_investigation_text_values("Evidence IDs", fact.evidence_ids)}'
+        f'{_investigation_text_values("Artefact references", fact.artefact_references)}'
+        "</li>"
+        for fact in facts
+    )
+    return '<div class="direct-evidence"><p><strong>Direct facts</strong></p><ul>' + rows + "</ul></div>"
+
+
+def _investigation_conflicts(conflicts: tuple[object, ...]) -> str:
+    if not conflicts:
+        return ""
+    rows = "".join(
+        "<li>"
+        f'<code>{_h(conflict.conflict_id)}</code>: {_h(conflict.summary)}'
+        + "<ul>"
+        + "".join(
+            "<li>"
+            f'<code>{_h(observation.observation_id)}</code>: '
+            f'{_h(observation.method)} {_h(observation.endpoint)} '
+            f'(status {_h(observation.status_code)})'
+            f'{_investigation_text_values("Evidence IDs", observation.evidence_ids)}'
+            f'{_investigation_text_values("Artefact references", observation.artefact_references)}'
+            "</li>"
+            for observation in conflict.observations
+        )
+        + "</ul></li>"
+        for conflict in conflicts
+    )
+    return (
+        '<div class="conflicting-observations"><p><strong>Conflicting observations</strong></p><ul>'
+        + rows
+        + "</ul></div>"
+    )
+
+
+def _investigation_coverage(limitations: tuple[object, ...]) -> str:
+    if not limitations:
+        return ""
+    rows = "".join(
+        "<li>"
+        f'<code>{_h(limitation.source_id)}</code>: {_h(limitation.summary)}'
+        "</li>"
+        for limitation in limitations
+    )
+    return (
+        '<div class="coverage-limitation"><p><strong>Coverage limitation</strong></p><ul>'
+        + rows
+        + "</ul></div>"
+    )
+
+
+def _investigation_source_native_detail(detail: object | None) -> str:
+    if detail is None:
+        return ""
+    interpretation = detail.interpretation
+    interpretation_fields = "".join(
+        f'<li>{_h(label)}: {_h(value)}</li>'
+        for label, value in (
+            ("Artefact type", getattr(interpretation, "artefact_type", "")),
+            ("Value SHA-256", getattr(interpretation, "value_sha256", "")),
+        )
+        if value
+    )
+    return (
+        '<div class="source-native-detail"><p><strong>Source-native detail</strong></p><ul>'
+        f'<li>Family: {_h(detail.family.value)}</li>'
+        f'{_investigation_list_values("Endpoints", detail.endpoints)}'
+        f'{_investigation_list_values("Origins", detail.origins)}'
+        f'{_investigation_list_values("Source references", tuple(reference.source_id for reference in detail.source_references))}'
+        f"{interpretation_fields}"
+        "</ul></div>"
+    )
+
+
+def _investigation_provenance(item: object) -> str:
+    values = (
+        _investigation_list_values("Evidence IDs", item.evidence_ids),
+        _investigation_list_values("Artefact references", item.artefact_references),
+        _investigation_list_values("Source lead IDs", item.source_lead_ids),
+    )
+    if not any(values):
+        return ""
+    return '<div class="provenance"><p><strong>Provenance</strong></p><ul>' + "".join(values) + "</ul></div>"
+
+
+def _investigation_list_values(label: str, values: tuple[object, ...]) -> str:
+    if not values:
+        return ""
+    return f"<li>{_h(label)}: {_h(', '.join(str(value) for value in values))}</li>"
+
+
+def _investigation_text_values(label: str, values: tuple[object, ...]) -> str:
+    if not values:
+        return ""
+    return f'<p class="provenance">{_h(label)}: {_h(", ".join(str(value) for value in values))}</p>'
 
 
 def _overview_section(model: HtmlReportModel) -> str:
@@ -1658,6 +1817,11 @@ button { cursor: pointer; font-weight: 700; } #filter-result { grid-column: 1 / 
 h3 { font-size: 17px; margin: 18px 0 10px; }.section-note, .scope { color: var(--muted); }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; }
 .metric { background: var(--panel); border: 1px solid var(--line); padding: 12px; }.metric span { display: block; color: var(--muted); font-size: 12px; }.metric strong { font-size: 18px; white-space: nowrap; }
+.investigation-subject { margin: 12px 0; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.investigation-subject > h3 { margin-top: 0; }.investigation-rank { margin: 0 0 8px; color: var(--accent); font-weight: 700; }
+.investigation-meta { margin: 0; }.direct-evidence, .conflicting-observations, .coverage-limitation, .source-native-detail, .investigation-subject .provenance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.direct-evidence > p, .conflicting-observations > p, .coverage-limitation > p, .source-native-detail > p, .investigation-subject .provenance > p { margin: 0 0 6px; }
+.conflicting-observations { border-left: 3px solid var(--warning); padding-left: 10px; }.coverage-limitation { color: var(--muted); }
 details { background: var(--panel); border: 1px solid var(--line); margin: 8px 0; } summary { cursor: pointer; font-weight: 700; padding: 11px 13px; }
 details > dl, details > ul { margin: 0; padding: 3px 18px 15px; } dl { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 6px 14px; }
 dt { color: var(--muted); font-weight: 700; } dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }

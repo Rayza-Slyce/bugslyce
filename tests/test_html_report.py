@@ -98,6 +98,35 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert "<details" in html
 
 
+def test_legacy_html_keeps_analysis_coverage_before_collection_warnings(
+    tmp_path: Path,
+) -> None:
+    model = build_html_report_model(_write_current_pack(tmp_path / "legacy-warnings"))
+    model = replace(
+        model,
+        project_state=replace(
+            model.project_state,
+            warnings=("Legacy collection warning.",),
+        ),
+    )
+
+    assert model.operator_brief_presentation is None
+    assert model.deep_disclosures == ()
+
+    html = render_html_report(model)
+
+    assert html.index("<h2>Overview</h2>") < html.index("<h2>Operator summary</h2>")
+    assert html.index("<h2>Operator summary</h2>") < html.index(
+        "<h2>Analysis coverage</h2>"
+    )
+    assert html.index("<h2>Analysis coverage</h2>") < html.index(
+        "<h2>Warnings and skipped collection</h2>"
+    )
+    assert html.index("<h2>Warnings and skipped collection</h2>") < html.index(
+        "<h2>Supporting triage evidence</h2>"
+    )
+
+
 def test_html_model_renders_only_available_investigation_context_semantics(
     tmp_path: Path,
 ) -> None:
