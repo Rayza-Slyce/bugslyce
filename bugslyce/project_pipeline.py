@@ -167,6 +167,14 @@ from bugslyce.reports.html import write_project_html_report
 from bugslyce.reports.investigation_context import InvestigationContextSources
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.reports.operator_brief import build_operator_brief_view
+from bugslyce.reports.operator_brief_composition_persistence import (
+    OPERATOR_BRIEF_COMPOSITION_FILENAME,
+    load_operator_brief_composition_artifact,
+    write_operator_brief_composition_artifact,
+)
+from bugslyce.reports.operator_brief_project import (
+    build_project_operator_brief_composition,
+)
 from bugslyce.reports.operator_report_view import (
     OperatorReportView,
     build_operator_report_view,
@@ -1165,6 +1173,10 @@ def _assess_resume_state(
             output_dir=output_dir,
             profile=profile,
         )
+    canonical_resume = _validate_canonical_operator_brief_resume_state(
+        prior_pipeline,
+        output_dir,
+    )
 
     if plan_dir.exists() and not plan_dir.is_dir():
         raise ValueError(f"Content plan path is not a directory: {plan_dir}")
@@ -1261,6 +1273,16 @@ def _assess_resume_state(
     _validate_resume_phase_order(detected)
 
     skipped = {step_id for step_id, complete in detected.items() if complete}
+    if (
+        canonical_resume
+        and prior_pipeline is not None
+        and prior_pipeline.get("final_status") == "completed"
+        and all(
+            prior_statuses.get(step_id) == "completed"
+            for step_id in ("PIPELINE-STEP-010", "PIPELINE-STEP-011")
+        )
+    ):
+        skipped.update({"PIPELINE-STEP-010", "PIPELINE-STEP-011"})
     if export_path.exists():
         if not export_path.is_file():
             raise ValueError(f"Evidence pack output is not a file: {export_path}")
@@ -1293,6 +1315,49 @@ def _assess_resume_state(
         skipped.add("PIPELINE-STEP-012")
 
     return ResumeAssessment(frozenset(skipped), prior_pipeline)
+
+
+def _validate_canonical_operator_brief_resume_state(
+    prior_pipeline: dict[str, object] | None,
+    output_dir: Path,
+) -> bool:
+    """Validate the canonical snapshot declared by current pipeline metadata."""
+
+    canonical_path = output_dir / OPERATOR_BRIEF_COMPOSITION_FILENAME
+    expected = canonical_path.resolve(strict=False)
+    declared = False
+    raw_steps = prior_pipeline.get("steps") if prior_pipeline is not None else None
+    if isinstance(raw_steps, list):
+        for step in raw_steps:
+            if not isinstance(step, dict) or step.get("step_id") != "PIPELINE-STEP-010":
+                continue
+            output_paths = step.get("output_paths")
+            if not isinstance(output_paths, list):
+                break
+            for raw_path in output_paths:
+                if not isinstance(raw_path, str):
+                    continue
+                candidate = Path(raw_path).expanduser()
+                if candidate.name != OPERATOR_BRIEF_COMPOSITION_FILENAME:
+                    continue
+                if candidate.resolve(strict=False) != expected:
+                    raise ValueError(
+                        "Stage 010 declares a noncanonical Operator Brief "
+                        "composition path."
+                    )
+                declared = True
+            break
+
+    if declared:
+        if load_operator_brief_composition_artifact(output_dir) is None:
+            raise ValueError("Declared canonical Operator Brief composition is missing.")
+        return True
+    if canonical_path.exists() or canonical_path.is_symlink():
+        raise ValueError(
+            "Canonical Operator Brief composition exists without a Stage 010 "
+            "declaration; resume state is ambiguous."
+        )
+    return False
 
 
 def _reject_existing_deep_fixed_artefacts(output_dir: Path) -> None:
@@ -2055,6 +2120,24 @@ def _step_runners(
         )
 
     def status():
+        project_state = build_project_state(output_dir)
+        deep_source_collection = None
+        deep_orchestration_result = None
+        if profile == DEEP_PIPELINE_PROFILE:
+            deep_outputs = _deep_outputs_from_context(context)
+            deep_source_collection = deep_outputs.source_collection
+            deep_orchestration_result = deep_outputs.orchestration
+        operator_brief_composition = build_project_operator_brief_composition(
+            project_root=output_dir,
+            project_state=project_state,
+            profile=profile,
+            deep_source_collection=deep_source_collection,
+            deep_orchestration=deep_orchestration_result,
+        )
+        operator_brief_composition_path = write_operator_brief_composition_artifact(
+            output_dir,
+            operator_brief_composition,
+        )
         report_paths = _write_interpretation_report_if_needed(
             profile,
             output_dir,
@@ -2066,7 +2149,12 @@ def _step_runners(
                 context["completion_summary"] = completion_summary
         result = build_recon_status(output_dir, scope_file, clock=clock)
         json_path, markdown_path = write_recon_status(result, output_dir)
-        output_paths = [*report_paths, str(json_path), str(markdown_path)]
+        output_paths = [
+            str(operator_brief_composition_path),
+            *report_paths,
+            str(json_path),
+            str(markdown_path),
+        ]
         updates = (
             {"report_path": report_paths[0]}
             if report_paths

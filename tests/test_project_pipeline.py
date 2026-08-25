@@ -96,6 +96,9 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_operator_summary,
 )
+from bugslyce.reports.operator_brief_project import (
+    build_project_operator_brief_composition,
+)
 
 
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -830,6 +833,25 @@ def _quick_completion_state(output_dir: Path) -> ProjectState:
     )
 
 
+def _isolate_stage6c_operator_brief_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    output_dir: Path,
+) -> None:
+    """Keep legacy pipeline doubles outside the canonical semantic owner."""
+
+    composition = build_project_operator_brief_composition(
+        project_root=output_dir,
+        project_state=_quick_completion_state(output_dir),
+        profile=STANDARD_PIPELINE_PROFILE,
+        deep_source_collection=None,
+        deep_orchestration=None,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_project_operator_brief_composition",
+        lambda **_kwargs: composition,
+    )
+
+
 def test_cli_project_run_handles_finalisation_failure_without_failed_ordinary_step(
     tmp_path: Path,
     monkeypatch,
@@ -1449,6 +1471,7 @@ def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
 
     project_state = SimpleNamespace(project_name="pipeline-test")
     monkeypatch.setattr(
@@ -1695,6 +1718,7 @@ def test_project_pipeline_selects_standard_bounded_core_content_profile(
             fake_build_content_plan,
         )
         if profile == STANDARD_PIPELINE_PROFILE:
+            _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
             monkeypatch.setattr(
                 "bugslyce.project_pipeline.build_project_state",
                 lambda path: SimpleNamespace(project_name="pipeline-test"),
@@ -1767,6 +1791,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline._report_coverage_evidence",
         lambda *_: (),
@@ -2343,6 +2368,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline._report_coverage_evidence",
         lambda *_: (),
@@ -2757,6 +2783,7 @@ def test_deep_pipeline_selects_standard_bounded_core_content_profile(
     calls: list[str] = []
     observed: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline._report_coverage_evidence",
         lambda *_: (),

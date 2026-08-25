@@ -42,6 +42,11 @@ from bugslyce.reports.operator_brief import (
     OPERATOR_BRIEF_FILENAME,
     load_operator_brief_artifact,
 )
+from bugslyce.reports.operator_brief_assembly import OperatorBriefComposition
+from bugslyce.reports.operator_brief_composition_persistence import (
+    OPERATOR_BRIEF_COMPOSITION_FILENAME,
+    load_operator_brief_composition_artifact,
+)
 from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
     build_http_route_relationship_clusters,
@@ -88,6 +93,21 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "collection_confidence_notice",
         "analysis_coverage_evidence",
         "operator_brief",
+        "operator_brief_composition",
+        "operator_brief_composition_http_subject",
+        "operator_brief_composition_http_fact",
+        "operator_brief_composition_http_conflict",
+        "operator_brief_composition_network_subject",
+        "operator_brief_composition_network_fact",
+        "operator_brief_composition_network_smb_trigger",
+        "operator_brief_composition_network_smb_share",
+        "operator_brief_composition_network_service",
+        "operator_brief_composition_web_context_subject",
+        "operator_brief_composition_web_context_fact",
+        "operator_brief_composition_web_context_clue",
+        "operator_brief_composition_web_context_route",
+        "operator_brief_composition_web_context_relationship",
+        "operator_brief_composition_source_native_subject",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -274,6 +294,13 @@ def discover_evidence_pack_references(
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     references.extend(
+        _operator_brief_composition_references(
+            root,
+            tuple(references),
+            references_are_portable=False,
+        )
+    )
+    references.extend(
         _operator_brief_references(
             root,
             tuple(references),
@@ -349,6 +376,13 @@ def discover_expected_pack_references(
     references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
+    references.extend(
+        _operator_brief_composition_references(
+            root,
+            tuple(references),
+            references_are_portable=True,
+        )
+    )
     references.extend(
         _operator_brief_references(
             root,
@@ -1701,6 +1735,279 @@ def _operator_brief_nested_references(
             )
         )
     return tuple(references)
+
+
+def _operator_brief_composition_references(
+    root: Path,
+    existing_references: tuple[EvidencePackReference, ...],
+    *,
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    composition: OperatorBriefComposition | None = (
+        load_operator_brief_composition_artifact(root)
+    )
+    if composition is None:
+        return ()
+    portable_paths = _composition_preferred_reference_paths_by_source(
+        root,
+        existing_references,
+    )
+    references = [
+        EvidencePackReference(
+            portable_path=OPERATOR_BRIEF_COMPOSITION_FILENAME,
+            owner_kind="operator_brief_composition",
+            owner_id=OPERATOR_BRIEF_COMPOSITION_FILENAME,
+        )
+    ]
+
+    for subject in composition.http.subjects:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                subject.artefact_references,
+                owner_kind="operator_brief_composition_http_subject",
+                owner_id=subject.subject_id,
+                evidence_ids=subject.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for fact in composition.http.facts:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                fact.artefact_references,
+                owner_kind="operator_brief_composition_http_fact",
+                owner_id=fact.fact_id,
+                evidence_ids=fact.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for conflict in composition.http.conflicts:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                tuple(
+                    reference
+                    for observation in conflict.observations
+                    for reference in observation.artefact_references
+                ),
+                owner_kind="operator_brief_composition_http_conflict",
+                owner_id=conflict.conflict_id,
+                evidence_ids=tuple(
+                    sorted(
+                        {
+                            evidence_id
+                            for observation in conflict.observations
+                            for evidence_id in observation.evidence_ids
+                        }
+                    )
+                ),
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+
+    for subject in composition.network.subjects:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                subject.artefact_references,
+                owner_kind="operator_brief_composition_network_subject",
+                owner_id=subject.subject_id,
+                evidence_ids=subject.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for fact in composition.network.facts:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                fact.artefact_references,
+                owner_kind="operator_brief_composition_network_fact",
+                owner_id=fact.fact_id,
+                evidence_ids=fact.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for observation in composition.network.smb_shares:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                observation.trigger_artefact_references,
+                owner_kind="operator_brief_composition_network_smb_trigger",
+                owner_id=observation.observation_id,
+                evidence_ids=observation.trigger_evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                observation.artefact_references,
+                owner_kind="operator_brief_composition_network_smb_share",
+                owner_id=observation.observation_id,
+                evidence_ids=observation.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for observation in composition.network.services:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                observation.artefact_references,
+                owner_kind="operator_brief_composition_network_service",
+                owner_id=observation.observation_id,
+                evidence_ids=observation.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+
+    for subject in composition.web_context.subjects:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                subject.artefact_references,
+                owner_kind="operator_brief_composition_web_context_subject",
+                owner_id=subject.subject_id,
+                evidence_ids=subject.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for fact in composition.web_context.facts:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                fact.artefact_references,
+                owner_kind="operator_brief_composition_web_context_fact",
+                owner_id=fact.fact_id,
+                evidence_ids=fact.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for clue in composition.web_context.clues:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                clue.artefact_references,
+                owner_kind="operator_brief_composition_web_context_clue",
+                owner_id=clue.observation_id,
+                evidence_ids=clue.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for route in composition.web_context.routes:
+        route_references = (
+            *route.artefact_references,
+            *(
+                reference
+                for record in route.provenance_records
+                for reference in record.artefact_references
+            ),
+        )
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                route_references,
+                owner_kind="operator_brief_composition_web_context_route",
+                owner_id=route.observation_id,
+                evidence_ids=route.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    for relationship in composition.web_context.relationships:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                relationship.artefact_references,
+                owner_kind="operator_brief_composition_web_context_relationship",
+                owner_id=relationship.relationship_id,
+                evidence_ids=relationship.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+
+    for subject in composition.source_native.subjects:
+        references.extend(
+            _operator_brief_composition_nested_references(
+                root,
+                subject.artefact_references,
+                owner_kind="operator_brief_composition_source_native_subject",
+                owner_id=subject.subject_id,
+                evidence_ids=subject.evidence_ids,
+                portable_paths=portable_paths,
+                references_are_portable=references_are_portable,
+            )
+        )
+    return tuple(references)
+
+
+def _operator_brief_composition_nested_references(
+    root: Path,
+    artefact_references: tuple[str, ...],
+    *,
+    owner_kind: str,
+    owner_id: str,
+    evidence_ids: tuple[str, ...],
+    portable_paths: dict[str, str],
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    references: list[EvidencePackReference] = []
+    for artefact_reference in artefact_references:
+        source_path = _project_relative_source(root, artefact_reference)
+        portable_path = portable_paths.get(
+            source_path,
+            _archive_path_for_project_source(source_path),
+        )
+        references.append(
+            EvidencePackReference(
+                portable_path=portable_path,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                evidence_ids=evidence_ids,
+                source_path=(
+                    None
+                    if references_are_portable or source_path == portable_path
+                    else source_path
+                ),
+            )
+        )
+    return tuple(references)
+
+
+def _composition_preferred_reference_paths_by_source(
+    root: Path,
+    references: tuple[EvidencePackReference, ...],
+) -> dict[str, str]:
+    preferred = _preferred_reference_paths_by_source(root, references)
+    for reference in references:
+        if reference.source_path is not None:
+            continue
+        portable_path = reference.portable_path
+        if portable_path.startswith("raw/"):
+            source_value = portable_path.removeprefix("raw/")
+        elif portable_path.startswith("metadata/"):
+            source_value = PurePosixPath(portable_path).name
+        else:
+            source_value = portable_path
+        source_path = _project_relative_source(root, source_value)
+        current = preferred.get(source_path)
+        if current is None or portable_archive_path_preference(
+            portable_path
+        ) < portable_archive_path_preference(current):
+            preferred[source_path] = portable_path
+    return preferred
 
 
 def _preferred_reference_paths_by_source(
