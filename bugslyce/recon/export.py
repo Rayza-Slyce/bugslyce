@@ -1126,6 +1126,22 @@ def _portable_project_state_payload(
                 preferred_paths,
                 f"port service #{index} source artefact",
             )
+    relationships = state.get("nmap_reported_host_peers", [])
+    if not isinstance(relationships, list):
+        raise ValueError("Project state nmap_reported_host_peers must be a list.")
+    for index, relationship in enumerate(relationships, start=1):
+        if not isinstance(relationship, dict):
+            raise ValueError(
+                f"Project state Nmap reported-host peer #{index} must be an object."
+            )
+        source_file = relationship.get("source_file")
+        if isinstance(source_file, str) and source_file.strip():
+            relationship["source_file"] = _portable_project_file(
+                source_file,
+                input_dir,
+                preferred_paths,
+                f"Nmap reported-host peer #{index} source artefact",
+            )
     recon_manifest = state.get("recon_manifest")
     if recon_manifest is not None:
         if not isinstance(recon_manifest, dict):

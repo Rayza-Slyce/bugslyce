@@ -2981,6 +2981,12 @@ def test_packed_project_state_rewrites_all_established_file_provenance_fields(
         "raw/nested/homepage-target-80.html",
     ]
     assert state["port_services"][0]["source_file"] == "raw/nmap-allports.txt"
+    assert state["nmap_reported_host_peers"][0] == {
+        "peer_host": "192.0.2.25",
+        "report_line": 1,
+        "reported_host": "portal.example.test",
+        "source_file": "raw/nmap-allports.txt",
+    }
     assert state["recon_manifest"]["source_file"] == "recon_manifest.json"
     assert state["recon_manifest"]["artifacts"][0]["file"] == (
         "raw/nmap-allports.txt"
@@ -4357,6 +4363,14 @@ def _project_state_provenance_export_input(tmp_path: Path) -> Path:
                     "source_file": str(input_dir / "nmap-allports.txt"),
                     "evidence_ids": ["EVID-PORT"],
                     "tags": [],
+                }
+            ],
+            "nmap_reported_host_peers": [
+                {
+                    "reported_host": "portal.example.test",
+                    "peer_host": "192.0.2.25",
+                    "source_file": str(input_dir / "nmap-allports.txt"),
+                    "report_line": 1,
                 }
             ],
             "recon_manifest": {

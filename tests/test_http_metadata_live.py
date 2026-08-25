@@ -27,6 +27,7 @@ from bugslyce.recon.robots_policy import (
     robots_policy_review_eligible,
 )
 from bugslyce.recon.runner import LiveHTTPMetadataRunner
+from bugslyce.recon.status import build_recon_status
 from bugslyce.recon.standard_interpretation import (
     assemble_standard_interpretation_from_project_state,
 )
@@ -655,6 +656,56 @@ def test_http_origins_use_reconciled_nmap_service_identity(tmp_path: Path) -> No
     ]
 
 
+def test_http_metadata_preserves_hostname_target_for_parenthesized_nmap_peer(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _hostname_target_nmap_service_directory(tmp_path)
+    state = build_project_state(input_dir)
+
+    assert [
+        (service.host, service.port, service.service)
+        for service in state.port_services
+        if service.state == "open" and service.protocol == "tcp"
+    ] == [
+        ("10.82.174.151", 80, "http"),
+        ("10.82.174.152", 8080, "http"),
+    ]
+    assert [service.url for service in state.http_services] == [
+        "http://10.82.174.151/",
+        "http://10.82.174.152:8080/",
+    ]
+    assert "blog.thm" in scope.read_text(encoding="utf-8")
+    assert "10.82.174.151" in scope.read_text(encoding="utf-8")
+    assert "10.82.174.152" in scope.read_text(encoding="utf-8")
+    assert "Nmap scan report for blog.thm (10.82.174.151)" in (
+        input_dir / "nmap-services-all.txt"
+    ).read_text(encoding="utf-8")
+    status = build_recon_status(input_dir)
+    assert status.artifact_overview["http_services"] == 2
+    assert "`bugslyce recon http-metadata`" in status.next_actions[0]
+
+    runner = _RecordingHTTPMetadataRunner()
+    result = run_http_metadata_workflow(input_dir, scope, runner=runner)
+
+    assert result.target == "blog.thm"
+    assert result.http_services == ["http://blog.thm/"]
+    assert [command.argv[-1] for command in runner.calls] == [
+        "http://blog.thm/",
+        "http://blog.thm/robots.txt",
+        "http://blog.thm/",
+    ]
+
+
+def test_http_metadata_ip_target_keeps_exact_service_selection_with_other_scoped_peer(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _hostname_target_nmap_service_directory(tmp_path)
+
+    assert discover_http_origins(build_project_state(input_dir), "10.82.174.151") == [
+        "http://10.82.174.151/"
+    ]
+
+
 def _scope(tmp_path: Path) -> Path:
     scope = tmp_path / "scope.md"
     scope.write_text("# Scope\n\n## In Scope\n\n- 10.10.10.10\n", encoding="utf-8")
@@ -709,6 +760,54 @@ def _nmap_service_directory(
                         "file": "nmap-services-all.txt",
                         "description": "Service output",
                     },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return input_dir, scope
+
+
+def _hostname_target_nmap_service_directory(tmp_path: Path) -> tuple[Path, Path]:
+    input_dir = tmp_path / "hostname-output"
+    input_dir.mkdir()
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n"
+        "- blog.thm\n"
+        "- 10.82.174.151\n"
+        "- 10.82.174.152\n",
+        encoding="utf-8",
+    )
+    (input_dir / "nmap-allports.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (input_dir / "nmap-services-all.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  http Apache httpd 2.4.29 ((Ubuntu))\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "8080/tcp open  http nginx 1.24.0\n",
+        encoding="utf-8",
+    )
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "blog.thm",
+                "scope_file": scope.name,
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "lab-tcp-full-plus-services",
+                "artifacts": [
+                    {"type": "nmap", "file": "nmap-allports.txt"},
+                    {"type": "nmap", "file": "nmap-services-all.txt"},
                 ],
             }
         ),

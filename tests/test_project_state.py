@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from bugslyce.core.project import build_project_state
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.reports.markdown import render_markdown_report
 
 
@@ -23,6 +24,99 @@ def test_build_project_state_basic_saas() -> None:
     assert state.http_services
     assert state.endpoints
     assert state.generated_at
+    assert state.nmap_reported_host_peers == []
+
+
+def test_project_state_deduplicates_nmap_host_peers_and_resolves_all_target_ports(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "nmap-allports.txt"
+    second = tmp_path / "nmap-services-all.txt"
+    first.write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n"
+        "443/tcp  open  https\n"
+        "8080/tcp open  http\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+    second.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "blog.thm",
+                "artifacts": [
+                    {"type": "nmap", "file": first.name},
+                    {"type": "nmap", "file": second.name},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [
+        (item.reported_host, item.peer_host, item.source_file, item.report_line)
+        for item in state.nmap_reported_host_peers
+    ] == [
+        ("blog.thm", "10.82.174.151", str(first), 1),
+        ("unrelated.thm", "10.82.174.152", str(first), 6),
+    ]
+    assert [
+        (item.observed_origin, item.logical_origin)
+        for item in resolve_target_http_origins(state, "blog.thm")
+    ] == [
+        ("http://10.82.174.151/", "http://blog.thm/"),
+        ("http://10.82.174.151:8080/", "http://blog.thm:8080/"),
+        ("https://10.82.174.151/", "https://blog.thm/"),
+    ]
+
+
+def test_hostname_only_nmap_service_keeps_exact_logical_origin(tmp_path: Path) -> None:
+    (tmp_path / "nmap-services.txt").write_text(
+        "Nmap scan report for blog.thm\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert [item.logical_origin for item in resolve_target_http_origins(state, "blog.thm")] == [
+        "http://blog.thm/"
+    ]
+
+
+def test_parenthesized_ipv6_peer_projects_to_hostname_without_malformed_authority(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-services.txt").write_text(
+        "Nmap scan report for blog.thm (2001:db8::151)\n"
+        "PORT     STATE SERVICE\n"
+        "443/tcp  open  https\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [item.url for item in state.http_services] == [
+        "https://[2001:db8::151]/",
+        "http://[2001:db8::151]:8080/",
+    ]
+    assert [
+        (item.observed_origin, item.logical_origin)
+        for item in resolve_target_http_origins(state, "blog.thm")
+    ] == [
+        ("http://[2001:db8::151]:8080/", "http://blog.thm:8080/"),
+        ("https://[2001:db8::151]/", "https://blog.thm/"),
+    ]
 
 
 def test_assets_include_expected_fake_hosts() -> None:

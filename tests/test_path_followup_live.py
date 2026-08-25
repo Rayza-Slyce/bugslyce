@@ -44,6 +44,25 @@ def test_path_followup_discovers_only_evidence_derived_same_origin_paths(
     assert all(not url.endswith("/robots.txt") for url in urls)
 
 
+def test_path_followup_preserves_hostname_target_for_parenthesized_nmap_peer(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _hostname_target_path_followup_directory(tmp_path)
+    state = build_project_state(input_dir)
+
+    assert [
+        (service.host, service.port, service.service)
+        for service in state.port_services
+        if service.state == "open" and service.protocol == "tcp"
+    ] == [
+        ("10.82.174.151", 80, "http"),
+        ("10.82.174.152", 8080, "http"),
+    ]
+    assert discover_same_origin_followup_urls(state, "blog.thm") == [
+        "http://blog.thm/manual"
+    ]
+
+
 def test_path_followup_builds_fixed_head_commands(tmp_path: Path) -> None:
     urls = [
         "http://10.10.10.10:65524/manual",
@@ -379,6 +398,62 @@ def _http_metadata_directory(
                         "type": "robots",
                         "file": "robots-10.10.10.10-65524.txt",
                         "url": "http://10.10.10.10:65524/robots.txt",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return input_dir, scope
+
+
+def _hostname_target_path_followup_directory(tmp_path: Path) -> tuple[Path, Path]:
+    input_dir = tmp_path / "hostname-recon"
+    input_dir.mkdir(parents=True)
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n"
+        "- blog.thm\n"
+        "- 10.82.174.151\n"
+        "- 10.82.174.152\n",
+        encoding="utf-8",
+    )
+    (input_dir / "nmap-services-all.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  http Apache httpd 2.4.29 ((Ubuntu))\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "8080/tcp open  http nginx 1.24.0\n",
+        encoding="utf-8",
+    )
+    (input_dir / "homepage-blog.html").write_text(
+        '<html><body><a href="/manual">manual</a></body></html>',
+        encoding="utf-8",
+    )
+    (input_dir / "homepage-unrelated.html").write_text(
+        '<html><body><a href="/admin">admin</a></body></html>',
+        encoding="utf-8",
+    )
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "blog.thm",
+                "scope_file": "scope.md",
+                "created_by": "bugslyce-http-metadata",
+                "profile": "lab-tcp-full-plus-services-plus-http-metadata",
+                "artifacts": [
+                    {"type": "nmap", "file": "nmap-services-all.txt"},
+                    {
+                        "type": "html",
+                        "file": "homepage-blog.html",
+                        "url": "http://10.82.174.151/",
+                    },
+                    {
+                        "type": "html",
+                        "file": "homepage-unrelated.html",
+                        "url": "http://10.82.174.152:8080/",
                     },
                 ],
             }

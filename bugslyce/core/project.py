@@ -249,6 +249,7 @@ def build_project_state(input_dir: Path) -> ProjectState:
         generated_at=utc_now_iso(),
         engagement_context=engagement_context,
         smb_shares=smb_shares,
+        nmap_reported_host_peers=raw.nmap_reported_host_peers,
     )
 
 

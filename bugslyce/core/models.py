@@ -137,6 +137,16 @@ class PortService:
     tags: list[str]
 
 
+@dataclass(frozen=True)
+class NmapReportedHostPeer:
+    """Explicit report-name to peer-host relationship retained from Nmap output."""
+
+    reported_host: str
+    peer_host: str
+    source_file: str
+    report_line: int
+
+
 @dataclass
 class SMBShare:
     """Structured SMB share evidence from bounded share enumeration."""
@@ -651,6 +661,7 @@ class ProjectState:
     generated_at: str
     engagement_context: str = "unknown"
     smb_shares: list[SMBShare] = field(default_factory=list)
+    nmap_reported_host_peers: list[NmapReportedHostPeer] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

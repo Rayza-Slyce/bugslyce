@@ -16,6 +16,7 @@ from bugslyce.core.models import (
     ReconPlannedArtifact,
 )
 from bugslyce.core.project import build_project_state
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 
 
@@ -239,12 +240,10 @@ def discover_content_plan_origins(
 ) -> list[str]:
     """Return deterministic root origins from structured HTTP services."""
 
-    origins: set[str] = set()
-    for service in project_state.http_services:
-        parsed = urlparse(service.url)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname != target:
-            continue
-        origins.add(urlunparse((parsed.scheme, parsed.netloc, "/", "", "", "")))
+    origins = {
+        binding.logical_origin
+        for binding in resolve_target_http_origins(project_state, target)
+    }
     return sorted(origins, key=_origin_sort_key)[:max_origins]
 
 

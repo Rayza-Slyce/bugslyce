@@ -96,6 +96,36 @@ def test_content_plan_uses_only_discovered_service_roots(tmp_path: Path) -> None
     assert "example.org" not in rendered
 
 
+def test_content_plan_preserves_hostname_target_for_parenthesized_nmap_peer(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _hostname_target_content_plan_input(tmp_path)
+    state = build_project_state(input_dir)
+
+    assert [
+        (service.host, service.port, service.service)
+        for service in state.port_services
+        if service.state == "open" and service.protocol == "tcp"
+    ] == [
+        ("10.82.174.151", 80, "http"),
+        ("10.82.174.152", 8080, "http"),
+    ]
+    assert [service.url for service in state.http_services] == [
+        "http://10.82.174.151/",
+        "http://10.82.174.152:8080/",
+    ]
+
+    plan = build_content_discovery_plan(
+        input_dir,
+        scope,
+        CONTENT_DISCOVERY_TINY_PROFILE,
+        tmp_path / "bugslyce-output" / "hostname-content-plan",
+    )
+
+    assert plan.target == "blog.thm"
+    assert plan.origins == ["http://blog.thm/"]
+
+
 def test_content_plan_previews_fixed_gobuster_root_shape(tmp_path: Path) -> None:
     input_dir, scope = _content_plan_input(tmp_path)
     output_dir = tmp_path / "bugslyce-output" / "content-plan"
@@ -457,6 +487,44 @@ def _content_plan_input(
                         "file": "homepage-80.html",
                         "url": "http://10.10.10.10/",
                     },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return input_dir, scope
+
+
+def _hostname_target_content_plan_input(tmp_path: Path) -> tuple[Path, Path]:
+    input_dir = tmp_path / "hostname-input"
+    input_dir.mkdir(parents=True)
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n"
+        "- blog.thm\n"
+        "- 10.82.174.151\n"
+        "- 10.82.174.152\n",
+        encoding="utf-8",
+    )
+    (input_dir / "nmap-services-all.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "80/tcp   open  http Apache httpd 2.4.29 ((Ubuntu))\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE VERSION\n"
+        "8080/tcp open  http nginx 1.24.0\n",
+        encoding="utf-8",
+    )
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "blog.thm",
+                "scope_file": "scope.md",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "lab-tcp-full-plus-services",
+                "artifacts": [
+                    {"type": "nmap", "file": "nmap-services-all.txt"},
                 ],
             }
         ),

@@ -98,6 +98,33 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert "<details" in html
 
 
+def test_html_model_loads_additive_nmap_reported_host_peer_state(tmp_path: Path) -> None:
+    pack = _write_current_pack(tmp_path / "reported-host-peer")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["nmap_reported_host_peers"] = [
+        {
+            "reported_host": "blog.thm",
+            "peer_host": "10.82.174.151",
+            "source_file": "raw/nmap-services-all.txt",
+            "report_line": 1,
+        }
+    ]
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    model = build_html_report_model(pack)
+
+    assert [
+        (
+            item.reported_host,
+            item.peer_host,
+            item.source_file,
+            item.report_line,
+        )
+        for item in model.project_state.nmap_reported_host_peers
+    ] == [("blog.thm", "10.82.174.151", "raw/nmap-services-all.txt", 1)]
+
+
 def test_legacy_html_keeps_analysis_coverage_before_collection_warnings(
     tmp_path: Path,
 ) -> None:

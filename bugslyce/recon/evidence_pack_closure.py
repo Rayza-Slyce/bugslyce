@@ -1250,6 +1250,14 @@ def _collect_project_state_file_errors(
         manifest_declared,
         errors,
     )
+    _validate_source_file_collection(
+        root,
+        state.get("nmap_reported_host_peers", []),
+        "nmap_reported_host_peer",
+        closure_declared,
+        manifest_declared,
+        errors,
+    )
     for collection_name in ("evidence", "http_artifacts"):
         collection = state.get(collection_name, [])
         _validate_source_file_collection(

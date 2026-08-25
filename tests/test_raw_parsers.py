@@ -12,6 +12,7 @@ from bugslyce.parsers.nmap import (
     NMAP_OUTPUT_SERVICE_VERSION,
     classify_nmap_output_role,
     parse_nmap_normal,
+    parse_nmap_normal_with_host_peers,
 )
 from bugslyce.parsers.robots import parse_robots
 
@@ -41,6 +42,56 @@ def test_nmap_parser_extracts_varied_http_ssh_and_database_services(tmp_path: Pa
     assert all(record.host == "192.0.2.25" for record in records)
     assert records[0].product == "Caddy"
     assert records[0].version == "2.7"
+
+
+def test_nmap_parser_preserves_reported_host_peer_relationships(tmp_path: Path) -> None:
+    source = tmp_path / "nmap-services.txt"
+    source.write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n"
+        "Nmap scan report for unrelated.thm (10.82.174.152)\n"
+        "PORT     STATE SERVICE\n"
+        "8080/tcp open  http\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_nmap_normal_with_host_peers(source)
+
+    assert [(item.host, item.port) for item in parsed.port_services] == [
+        ("10.82.174.151", 80),
+        ("10.82.174.152", 8080),
+    ]
+    assert [
+        (item.reported_host, item.peer_host, item.source_file, item.report_line)
+        for item in parsed.reported_host_peers
+    ] == [
+        ("blog.thm", "10.82.174.151", str(source), 1),
+        ("unrelated.thm", "10.82.174.152", str(source), 4),
+    ]
+
+
+def test_nmap_parser_keeps_single_identity_report_forms_relation_free(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "nmap-services.txt"
+    source.write_text(
+        "Nmap scan report for blog.thm\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n"
+        "Nmap scan report for 10.82.174.151\n"
+        "PORT    STATE SERVICE\n"
+        "443/tcp open  https\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_nmap_normal_with_host_peers(source)
+
+    assert [item.host for item in parsed.port_services] == [
+        "blog.thm",
+        "10.82.174.151",
+    ]
+    assert parsed.reported_host_peers == []
 
 
 def test_nmap_output_role_uses_retained_table_shape_not_filename(tmp_path: Path) -> None:

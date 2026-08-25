@@ -16,6 +16,7 @@ from bugslyce.core.models import (
     Evidence,
     HTTPArtifact,
     HTTPService,
+    NmapReportedHostPeer,
     PortService,
     ProjectState,
     SMBShare,
@@ -553,6 +554,11 @@ def _project_state_from_payload(
             ),
             port_services=_dataclass_list(
                 PortService, raw_state.get("port_services"), "project_state.port_services"
+            ),
+            nmap_reported_host_peers=_dataclass_list(
+                NmapReportedHostPeer,
+                raw_state.get("nmap_reported_host_peers", []),
+                "project_state.nmap_reported_host_peers",
             ),
             smb_shares=_dataclass_list(
                 SMBShare,

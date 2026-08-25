@@ -28,9 +28,11 @@ from bugslyce.core.models import (
     Evidence,
     HTTPArtifact,
     ProjectState,
+    ReconCommandResult,
     ReconManifest,
     ReconManifestArtifact,
 )
+from bugslyce.core.project import build_project_state
 from bugslyce.core.programme_scope import (
     build_programme_scope_policy,
     build_programme_scope_rule,
@@ -5638,6 +5640,120 @@ def test_smb_pipeline_no_evidence_is_noop_and_http_collection_continues(
     assert steps["PIPELINE-STEP-004"].status == "completed"
     assert "http-metadata" in calls
     assert result.no_op_steps == 1
+
+
+def test_pipeline_http_metadata_preserves_hostname_for_parenthesized_nmap_peer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- blog.thm\n- 10.82.174.151\n",
+        encoding="utf-8",
+    )
+    _project, project_file = initialize_project(
+        "http-handoff",
+        "blog.thm",
+        scope,
+        tmp_path / "output",
+        engagement_context="ctf",
+    )
+    output_dir = tmp_path / "output"
+    (output_dir / "nmap-allports.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (output_dir / "nmap-services-all.txt").write_text(
+        "Nmap scan report for blog.thm (10.82.174.151)\n"
+        "PORT   STATE SERVICE VERSION\n"
+        "80/tcp open  http Apache httpd 2.4.29 ((Ubuntu))\n",
+        encoding="utf-8",
+    )
+    (output_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "blog.thm",
+                "scope_file": "scope.md",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "lab-tcp-full-plus-services",
+                "artifacts": [
+                    {"type": "nmap", "file": "nmap-allports.txt"},
+                    {"type": "nmap", "file": "nmap-services-all.txt"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = build_project_state(output_dir)
+    assert [
+        (service.host, service.port, service.service)
+        for service in state.port_services
+        if service.state == "open" and service.protocol == "tcp"
+    ] == [("10.82.174.151", 80, "http")]
+
+    class _PipelineHTTPRunner:
+        calls: list[object] = []
+
+        def __init__(self, *_args) -> None:
+            pass
+
+        def run(self, command):
+            self.calls.append(command)
+            output = Path(command.output_file)
+            if command.phase == "http-headers":
+                output.write_text("HTTP/1.1 200 OK\n\n", encoding="utf-8")
+            elif command.phase == "http-robots":
+                output.write_text("User-agent: *\n", encoding="utf-8")
+            else:
+                output.write_text("<html><title>Blog</title></html>\n", encoding="utf-8")
+            return ReconCommandResult(
+                command_id=command.id,
+                tool=command.tool,
+                exit_code=0,
+                stdout_path=None,
+                stderr_path=None,
+                output_file=command.output_file,
+                started_at="2026-01-01T00:00:00+00:00",
+                ended_at="2026-01-01T00:00:01+00:00",
+                duration_seconds=1.0,
+                executed=True,
+                simulated=False,
+                error=None,
+            )
+
+    monkeypatch.setattr(
+        "bugslyce.recon.http_metadata.LiveHTTPMetadataRunner",
+        _PipelineHTTPRunner,
+    )
+    context = {
+        "project_file": project_file,
+        "scope_file": scope,
+        "output_dir": output_dir,
+        "plan_dir": tmp_path / "plan",
+        "plan_path": tmp_path / "plan" / "content_discovery_plan.json",
+        "export_path": tmp_path / "export.zip",
+        "published_export_path": None,
+        "target": "blog.thm",
+        "resume": True,
+        "profile": PIPELINE_PROFILE,
+        "deep_outputs": DeepPipelineOutputs(),
+        "project_runtime": None,
+    }
+
+    message, output_paths, _updates = _step_runners(context, None)[
+        "PIPELINE-STEP-004"
+    ]()
+
+    assert message == "HTTP metadata collection completed for discovered services."
+    assert output_paths
+    assert [command.argv[-1] for command in _PipelineHTTPRunner.calls] == [
+        "http://blog.thm/",
+        "http://blog.thm/robots.txt",
+        "http://blog.thm/",
+    ]
 
 
 def test_legacy_resume_does_not_acquire_new_smb_network_step(

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import warnings
 
-from bugslyce.core.models import PortService
+from bugslyce.core.models import NmapReportedHostPeer, PortService
 
 
 SERVICE_LINE = re.compile(
@@ -23,6 +24,14 @@ HTTP_RESPONSE_STATUS = re.compile(
     r'(?:^|%)r\([^,\r\n]+,[^,\r\n]+,"'
     r'HTTP/1\.[01][ \t]+[1-5]\d{2}(?=[ \t]|\\r|\\n|"|$)'
 )
+
+
+@dataclass(frozen=True)
+class NmapNormalParseResult:
+    """Port rows and explicit report-name to peer-host observations."""
+
+    port_services: list[PortService]
+    reported_host_peers: list[NmapReportedHostPeer]
 
 
 def classify_nmap_output_role(path: Path) -> str:
@@ -51,19 +60,38 @@ def classify_nmap_output_role(path: Path) -> str:
 def parse_nmap_normal(path: Path, default_host: str | None = None) -> list[PortService]:
     """Parse service table rows from nmap normal output."""
 
+    return parse_nmap_normal_with_host_peers(path, default_host).port_services
+
+
+def parse_nmap_normal_with_host_peers(
+    path: Path,
+    default_host: str | None = None,
+) -> NmapNormalParseResult:
+    """Parse service rows and explicit Nmap report-name peer relationships."""
+
     if not path.exists():
         warnings.warn(f"Nmap output file does not exist: {path}", RuntimeWarning, stacklevel=2)
-        return []
+        return NmapNormalParseResult([], [])
 
     lines = path.read_text(encoding="utf-8").splitlines()
     http_fingerprint_keys = _http_fingerprint_keys(lines, default_host)
     host = default_host or ""
     records: list[PortService] = []
+    reported_host_peers: list[NmapReportedHostPeer] = []
 
     for line_number, line in enumerate(lines, start=1):
         stripped = line.strip()
         if stripped.startswith("Nmap scan report for "):
-            host = _extract_report_host(stripped)
+            host, reported_host = _extract_report_identity(stripped)
+            if reported_host is not None:
+                reported_host_peers.append(
+                    NmapReportedHostPeer(
+                        reported_host=reported_host,
+                        peer_host=host,
+                        source_file=str(path),
+                        report_line=line_number,
+                    )
+                )
             continue
         if not stripped or stripped.startswith(("PORT ", "Service detection", "Nmap done")):
             continue
@@ -100,7 +128,7 @@ def parse_nmap_normal(path: Path, default_host: str | None = None) -> list[PortS
             )
         )
 
-    return records
+    return NmapNormalParseResult(records, reported_host_peers)
 
 
 def is_http_capable_port_service(record: PortService) -> bool:
@@ -173,9 +201,20 @@ def _contains_http_status_line(payload: str) -> bool:
 
 
 def _extract_report_host(line: str) -> str:
+    host, _reported_host = _extract_report_identity(line)
+    return host
+
+
+def _extract_report_identity(line: str) -> tuple[str, str | None]:
     value = line.removeprefix("Nmap scan report for ").strip()
     parenthesized = re.search(r"\(([^()]+)\)$", value)
-    return parenthesized.group(1) if parenthesized else value
+    if parenthesized is None:
+        return value, None
+    peer_host = parenthesized.group(1).strip()
+    reported_host = value[: parenthesized.start()].strip()
+    if not reported_host or not peer_host or reported_host == peer_host:
+        return peer_host, None
+    return peer_host, reported_host
 
 
 def _split_product_version(details: str) -> tuple[str | None, str | None]:

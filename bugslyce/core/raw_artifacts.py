@@ -15,6 +15,7 @@ from bugslyce.core.models import (
     Evidence,
     HTTPArtifact,
     HTTPService,
+    NmapReportedHostPeer,
     ParsedHTTPHeaders,
     PortService,
     ReconManifest,
@@ -31,7 +32,7 @@ from bugslyce.parsers.nmap import (
     classify_nmap_output_role,
     http_scheme_for_port_service,
     is_http_capable_port_service,
-    parse_nmap_normal,
+    parse_nmap_normal_with_host_peers,
 )
 from bugslyce.parsers.robots import parse_robots
 from bugslyce.parsers.smbclient import parse_smbclient_share_list
@@ -49,6 +50,7 @@ class RawAssemblyResult:
     http_artifacts: list[HTTPArtifact]
     discovered_paths: list[DiscoveredPath]
     smb_shares: list[SMBShare]
+    nmap_reported_host_peers: list[NmapReportedHostPeer]
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,8 @@ def assemble_raw_artifacts(
     http_artifacts: list[HTTPArtifact] = []
     discovered_paths: list[DiscoveredPath] = []
     smb_shares: list[SMBShare] = []
+    nmap_reported_host_peers: list[NmapReportedHostPeer] = []
+    nmap_reported_host_peer_keys: set[tuple[str, str]] = set()
     smb_contexts: list[_ArtifactContext] = []
 
     for context in _artifact_contexts(input_dir, manifest):
@@ -100,6 +104,8 @@ def assemble_raw_artifacts(
                 port_service_keys,
                 port_service_roles,
                 port_service_http_evidence,
+                nmap_reported_host_peers,
+                nmap_reported_host_peer_keys,
                 processed_files,
                 warnings,
                 host_tags,
@@ -191,10 +197,11 @@ def assemble_raw_artifacts(
 
     _apply_root_page_titles(http_artifacts, service_records)
     return RawAssemblyResult(
-        port_services,
-        http_artifacts,
-        discovered_paths,
-        smb_shares,
+        port_services=port_services,
+        http_artifacts=http_artifacts,
+        discovered_paths=discovered_paths,
+        smb_shares=smb_shares,
+        nmap_reported_host_peers=nmap_reported_host_peers,
     )
 
 
@@ -231,6 +238,8 @@ def _assemble_nmap(
     port_service_keys: dict[tuple[str, int, str], PortService],
     port_service_roles: dict[tuple[str, int, str], str],
     port_service_http_evidence: dict[tuple[str, int, str], list[str]],
+    nmap_reported_host_peers: list[NmapReportedHostPeer],
+    nmap_reported_host_peer_keys: set[tuple[str, str]],
     processed_files: list[str],
     warnings: list[str],
     host_tags: Callable[[str], list[str]],
@@ -238,12 +247,28 @@ def _assemble_nmap(
     metadata = context.metadata
     output_role = classify_nmap_output_role(context.path)
     context_host = _context_host(metadata, context.manifest_target, default_host)
-    records = _parse_present(
+    parsed = _parse_present(
         context.path,
-        lambda path: parse_nmap_normal(path, context_host),
+        lambda path: parse_nmap_normal_with_host_peers(path, context_host),
         processed_files,
         warnings,
     )
+    for relationship in parsed.reported_host_peers:
+        reported_host = normalise_hostname(relationship.reported_host)
+        peer_host = normalise_hostname(relationship.peer_host)
+        key = (reported_host, peer_host)
+        if not reported_host or not peer_host or key in nmap_reported_host_peer_keys:
+            continue
+        nmap_reported_host_peer_keys.add(key)
+        nmap_reported_host_peers.append(
+            NmapReportedHostPeer(
+                reported_host=reported_host,
+                peer_host=peer_host,
+                source_file=relationship.source_file,
+                report_line=relationship.report_line,
+            )
+        )
+    records = parsed.port_services
     for record in records:
         host = normalise_hostname(
             context_host if metadata and metadata.host else record.host or context_host or ""
@@ -895,7 +920,8 @@ def _service_url(host: str, record: PortService) -> str:
         raise ValueError("Port service does not contain recognised HTTP evidence.")
     port = record.port
     default_port = 443 if scheme == "https" else 80
-    netloc = host if port == default_port else f"{host}:{port}"
+    authority = f"[{host}]" if ":" in host else host
+    netloc = authority if port == default_port else f"{authority}:{port}"
     return f"{scheme}://{netloc}/"
 
 

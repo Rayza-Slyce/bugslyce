@@ -13,6 +13,7 @@ from bugslyce.core.models import (
     ReconPathFollowupExecutionResult,
 )
 from bugslyce.core.project import build_project_state
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 from bugslyce.recon.path_followup_commands import (
     MAX_PATH_FOLLOWUPS,
@@ -43,7 +44,10 @@ def discover_same_origin_followup_urls(
 ) -> list[str]:
     """Return deterministic evidence-derived same-origin URLs."""
 
-    allowed_origins = _discovered_origins(project_state, target)
+    origin_bindings = {
+        binding.observed_origin: binding.logical_origin
+        for binding in resolve_target_http_origins(project_state, target)
+    }
     urls: set[str] = set()
     for artifact in project_state.http_artifacts:
         if artifact.artifact_type not in FOLLOWUP_ARTIFACT_TYPES:
@@ -53,9 +57,10 @@ def discover_same_origin_followup_urls(
             continue
         source = urlparse(artifact.url)
         origin = urlunparse((source.scheme, source.netloc, "/", "", "", ""))
-        if origin not in allowed_origins:
+        logical_origin = origin_bindings.get(origin)
+        if logical_origin is None:
             continue
-        joined = urljoin(origin, value)
+        joined = urljoin(logical_origin, value)
         parsed = urlparse(joined)
         if parsed.hostname != target or parsed.scheme not in {"http", "https"}:
             continue
@@ -245,12 +250,10 @@ def render_path_followup_execution_summary(
 
 
 def _discovered_origins(project_state: ProjectState, target: str) -> set[str]:
-    origins: set[str] = set()
-    for service in project_state.http_services:
-        parsed = urlparse(service.url)
-        if parsed.scheme in {"http", "https"} and parsed.hostname == target:
-            origins.add(urlunparse((parsed.scheme, parsed.netloc, "/", "", "", "")))
-    return origins
+    return {
+        binding.logical_origin
+        for binding in resolve_target_http_origins(project_state, target)
+    }
 
 
 def _is_concrete_relative_path(value: str) -> bool:

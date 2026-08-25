@@ -21,9 +21,9 @@ def normalise_url(value: str) -> str:
         return stripped
 
     hostname = (parsed.hostname or "").lower()
-    netloc = hostname
+    netloc = f"[{hostname}]" if ":" in hostname else hostname
     if parsed.port:
-        netloc = f"{hostname}:{parsed.port}"
+        netloc = f"{netloc}:{parsed.port}"
     if parsed.username:
         userinfo = parsed.username
         if parsed.password:

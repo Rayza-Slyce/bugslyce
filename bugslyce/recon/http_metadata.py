@@ -10,7 +10,7 @@ from urllib.parse import urlparse, urlunparse
 from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.models import ProjectState, ReconHTTPMetadataExecutionResult
 from bugslyce.core.project import build_project_state
-from bugslyce.parsers.nmap import http_scheme_for_port_service
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.recon.http_metadata_commands import (
     MAX_HTTP_METADATA_SERVICES,
     build_http_metadata_commands,
@@ -28,20 +28,11 @@ def discover_http_origins(
 ) -> list[str]:
     """Return deterministic origins for open HTTP services found by nmap."""
 
-    origins: set[str] = set()
-    for service in project_state.port_services:
-        scheme = http_scheme_for_port_service(service)
-        if (
-            service.host != target
-            or service.state != "open"
-            or service.protocol != "tcp"
-            or scheme is None
-        ):
-            continue
-        default_port = 443 if scheme == "https" else 80
-        host = f"[{target}]" if ":" in target else target
-        netloc = host if service.port == default_port else f"{host}:{service.port}"
-        origins.add(f"{scheme}://{netloc}/")
+    origins = {
+        binding.logical_origin
+        for binding in resolve_target_http_origins(project_state, target)
+        if binding.nmap_discovered
+    }
     return sorted(origins, key=_origin_sort_key)[:max_services]
 
 
