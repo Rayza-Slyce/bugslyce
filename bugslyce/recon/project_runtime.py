@@ -45,6 +45,7 @@ from bugslyce.recon.external_enforcement import (
     ToolCapabilities,
     assess_tool_capabilities,
 )
+from bugslyce.recon.content_commands import gobuster_request_timeout_seconds
 from bugslyce.recon.http_enforcement import (
     InternalHTTPExecutor,
     IPv4Resolver,
@@ -287,7 +288,7 @@ class BugBountyProjectRuntime:
                     origin=command.argv[3],
                     wordlist=Path(command.argv[5]),
                     output_file=Path(command.output_file),
-                    timeout_seconds=command.timeout_seconds,
+                    timeout_seconds=gobuster_request_timeout_seconds(command.argv),
                 )
                 if plan.compatibility_status != COMPONENT_SUPPORTED:
                     raise ValueError(plan.reason)

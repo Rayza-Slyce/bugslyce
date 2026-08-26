@@ -1385,6 +1385,57 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
     assert all("\r" not in message for message in progress)
 
 
+def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    progress: list[str] = []
+
+    def content_run(*_args, gobuster_progress_callback=None, **_kwargs):
+        calls.append("content-run")
+        assert gobuster_progress_callback is not None
+        gobuster_progress_callback(
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=1052,
+                total=1753,
+                elapsed_seconds=277,
+                trusted=True,
+            )
+        )
+        return SimpleNamespace(
+            profile="lab-root-light",
+            artifact_paths=[str(output_dir / "gobuster.txt")],
+            report_path=str(output_dir / "report.md"),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_discovery_workflow",
+        content_run,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
+    )
+
+    assert result.final_status == "completed"
+    forwarded = [
+        message
+        for message in progress
+        if message.startswith("[8/13] bounded content discovery execution:")
+    ]
+    assert any("Content discovery" in message for message in forwarded)
+    assert any("1052/1753" in message for message in forwarded)
+    assert any("60%" in message for message in forwarded)
+    assert any("04:37" in message for message in forwarded)
+
+
 def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
     tmp_path: Path,
     monkeypatch,

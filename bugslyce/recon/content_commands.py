@@ -14,12 +14,10 @@ from bugslyce.core.models import (
 from bugslyce.recon.argv_safety import argv_control_character_errors
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_PROFILE,
+    GOBUSTER_REQUEST_TIMEOUT_SECONDS,
     SHELL_METACHARACTERS,
     get_content_discovery_profile,
 )
-
-
-CONTENT_DISCOVERY_TIMEOUT_SECONDS = 900
 
 
 def build_live_content_discovery_command(
@@ -33,9 +31,14 @@ def build_live_content_discovery_command(
     command = ReconCommand(
         id=step.step_id,
         tool="gobuster",
-        argv=list(step.command_preview),
+        argv=_expected_argv(
+            step.origin,
+            profile,
+            output_file,
+            GOBUSTER_REQUEST_TIMEOUT_SECONDS,
+        ),
         output_file=str(output_file),
-        timeout_seconds=profile.timeout_seconds,
+        timeout_seconds=None,
         phase="content-discovery-root",
         risk_level=step.risk_level,
         requires_confirmation=step.requires_confirmation,
@@ -88,23 +91,17 @@ def validate_live_content_discovery_command(
         profile = None
         errors.append(str(exc))
 
-    if len(argv) != 10 or profile is None:
+    if len(argv) != 12 or profile is None:
         errors.append("Gobuster command must match the approved content profile argv shape.")
     else:
         origin = argv[3]
-        output_file = argv[9]
-        expected = [
-            "gobuster",
-            "dir",
-            "-u",
+        output_file = argv[11]
+        expected = _expected_argv(
             origin,
-            "-w",
-            str(profile.wordlist),
-            "-t",
-            str(profile.threads),
-            "-o",
-            output_file,
-        ]
+            profile,
+            Path(output_file),
+            GOBUSTER_REQUEST_TIMEOUT_SECONDS,
+        )
         if argv != expected:
             errors.append("Gobuster command must match the approved content profile argv shape.")
         parsed = urlparse(origin)
@@ -127,12 +124,8 @@ def validate_live_content_discovery_command(
                 f"{_expected_filename(origin, profile.output_prefix)}."
             )
 
-    expected_timeout = profile.timeout_seconds if profile is not None else None
-    if expected_timeout is not None and command.timeout_seconds != expected_timeout:
-        errors.append(
-            f"Content discovery profile '{profile_name}' requires "
-            f"timeout_seconds={expected_timeout}."
-        )
+    if command.timeout_seconds is not None:
+        errors.append("Generic content discovery must not have a process deadline.")
     if not command.ready_for_execution:
         errors.append("Live content discovery command must be marked ready for execution.")
     if command.placeholders:
@@ -148,6 +141,65 @@ def validate_live_content_discovery_command(
         errors=list(dict.fromkeys(errors)),
         warnings=[],
     )
+
+
+def gobuster_request_timeout_seconds(argv: list[str]) -> int:
+    """Return the approved finite Gobuster request timeout from argv."""
+
+    if argv.count("--timeout") != 1:
+        raise ValueError("Gobuster command must contain exactly one --timeout option.")
+    index = argv.index("--timeout")
+    if index + 1 >= len(argv):
+        raise ValueError("Gobuster --timeout requires a value.")
+    value = argv[index + 1]
+    if not value.endswith("s"):
+        raise ValueError("Gobuster --timeout must use whole seconds.")
+    try:
+        timeout = int(value[:-1])
+    except ValueError:
+        raise ValueError("Gobuster --timeout must use whole seconds.") from None
+    if timeout <= 0:
+        raise ValueError("Gobuster --timeout must be positive.")
+    return timeout
+
+
+def gobuster_candidate_count(wordlist: Path) -> int:
+    """Count the actual non-empty candidate lines supplied to Gobuster."""
+
+    try:
+        count = 0
+        with wordlist.open("rb") as handle:
+            for line in handle:
+                # Gobuster receives the file unchanged, so duplicates remain work.
+                if line.strip():
+                    count += 1
+    except OSError:
+        raise ValueError("Content discovery wordlist is unreadable.") from None
+    if count <= 0:
+        raise ValueError("Content discovery wordlist has no usable candidates.")
+    return count
+
+
+def _expected_argv(
+    origin: str,
+    profile,
+    output_file: Path,
+    request_timeout_seconds: int,
+) -> list[str]:
+    return [
+        "gobuster",
+        "dir",
+        "-u",
+        origin,
+        "-w",
+        str(profile.wordlist),
+        "-t",
+        str(profile.threads),
+        "--timeout",
+        f"{request_timeout_seconds}s",
+        "-o",
+        str(output_file),
+    ]
 
 
 def _expected_filename(origin: str, output_prefix: str) -> str:

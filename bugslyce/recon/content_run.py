@@ -37,6 +37,7 @@ from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_CREATED_BY,
     CONTENT_DISCOVERY_PROFILE,
     CONTENT_DISCOVERY_SCHEMA_VERSION,
+    GOBUSTER_REQUEST_TIMEOUT_SECONDS,
     MAX_CONTENT_PLAN_ORIGINS,
     discover_content_plan_origins,
     get_content_discovery_profile,
@@ -54,7 +55,11 @@ from bugslyce.recon.http_enforcement import (
     InternalHTTPResponse,
     build_http_enforcement_configuration,
 )
-from bugslyce.recon.runner import LiveContentDiscoveryRunner
+from bugslyce.recon.runner import (
+    ContentDiscoveryProgressEvent,
+    LiveContentDiscoveryRunner,
+    render_content_discovery_progress,
+)
 from bugslyce.reports.markdown import write_project_outputs
 from bugslyce.triage.candidates import generate_candidates
 
@@ -460,6 +465,9 @@ def run_content_discovery_workflow(
     comparator_monotonic: Callable[[], float] = time.monotonic,
     comparator_progress_callback: Callable[[str], None] | None = None,
     comparator_progress_interval_seconds: float = COMPARATOR_PROGRESS_INTERVAL_SECONDS,
+    gobuster_progress_callback: (
+        Callable[[ContentDiscoveryProgressEvent], None] | None
+    ) = None,
     project_runtime=None,
 ) -> ReconContentDiscoveryExecutionResult:
     """Execute exact root discovery commands from one validated plan."""
@@ -536,6 +544,7 @@ def run_content_discovery_workflow(
             runner=runner,
             step_id=step_id,
             progress_callback=progress_callback,
+            gobuster_progress_callback=gobuster_progress_callback,
         )
     finally:
         if owns_executor:
@@ -560,6 +569,7 @@ def _execute_content_discovery(
     runner: LiveContentDiscoveryRunner | None,
     step_id: str | None,
     progress_callback: Callable[[str], None] | None,
+    gobuster_progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
 ) -> ReconContentDiscoveryExecutionResult:
     baseline_decisions = tuple(
         collect_content_discovery_baseline(
@@ -641,14 +651,32 @@ def _execute_content_discovery(
                     f"Progress: {index}/{total_steps}",
                     f"Origin: {step.origin}",
                     f"Profile: {plan.profile}",
-                    f"Timeout: {command.timeout_seconds} seconds",
                 ]
             ),
         )
         started = time.monotonic()
         assert live_runner is not None
         discovery_started_origins.add(step.origin)
-        result = live_runner.run(command)
+
+        def forward_gobuster_progress(event: ContentDiscoveryProgressEvent) -> None:
+            if gobuster_progress_callback is not None:
+                gobuster_progress_callback(event)
+            _emit_progress(
+                progress_callback,
+                render_content_discovery_progress(
+                    origin=event.origin,
+                    completed=event.completed,
+                    total=event.total,
+                    elapsed_seconds=event.elapsed_seconds,
+                    trusted=event.trusted,
+                ),
+            )
+
+        result = (
+            live_runner.run(command, progress_callback=forward_gobuster_progress)
+            if isinstance(live_runner, LiveContentDiscoveryRunner)
+            else live_runner.run(command)
+        )
         elapsed = max(0.0, time.monotonic() - started)
         if result.executed:
             command_results.append(result)
@@ -1339,6 +1367,8 @@ def _parse_step(
         str(profile_definition.wordlist),
         "-t",
         str(profile_definition.threads),
+        "--timeout",
+        f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
         "-o",
         str(output_dir / expected_file),
     ]

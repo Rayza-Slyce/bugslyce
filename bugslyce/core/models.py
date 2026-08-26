@@ -381,7 +381,7 @@ class ReconCommand:
     tool: str
     argv: list[str]
     output_file: str
-    timeout_seconds: int
+    timeout_seconds: int | None
     phase: str
     risk_level: str
     requires_confirmation: bool

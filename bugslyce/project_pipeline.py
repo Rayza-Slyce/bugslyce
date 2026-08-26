@@ -24,6 +24,10 @@ from bugslyce.recon.project_runtime import (
     BugBountyProjectRuntime,
     build_bug_bounty_project_runtime,
 )
+from bugslyce.recon.runner import (
+    ContentDiscoveryProgressEvent,
+    render_content_discovery_progress,
+)
 from bugslyce.recon.body_fetch import (
     BodyFetchExecutionIncomplete,
     BodyFetchNoWork,
@@ -587,10 +591,28 @@ def run_project_pipeline(
         if progress_callback is not None
         else None
     )
+    gobuster_progress_callback = (
+        lambda event: _emit(
+            progress_callback,
+            (
+                f"[{content_step_position}/{total_steps}] {content_step_name}: "
+                + render_content_discovery_progress(
+                    origin=event.origin,
+                    completed=event.completed,
+                    total=event.total,
+                    elapsed_seconds=event.elapsed_seconds,
+                    trusted=event.trusted,
+                )
+            ),
+        )
+        if progress_callback is not None
+        else None
+    )
     step_runners = _step_runners(
         context,
         clock,
         comparator_progress_callback=comparator_progress_callback,
+        gobuster_progress_callback=gobuster_progress_callback,
     )
     deferred_failure_diagnostic: str | None = None
     for index in range(len(result.steps)):
@@ -1760,6 +1782,9 @@ def _step_runners(
     clock: Clock | None,
     *,
     comparator_progress_callback: Callable[[str], None] | None = None,
+    gobuster_progress_callback: (
+        Callable[[ContentDiscoveryProgressEvent], None] | None
+    ) = None,
 ) -> dict[str, Callable[[], tuple[str, list[str], dict[str, object]]]]:
     output_dir = context["output_dir"]
     scope_file = context["scope_file"]
@@ -1953,6 +1978,7 @@ def _step_runners(
                 plan_path,
                 scope_file,
                 comparator_progress_callback=comparator_progress_callback,
+                gobuster_progress_callback=gobuster_progress_callback,
                 runner=project_runtime.gobuster_runner(),
                 http_executor=project_runtime.http_executor,
                 project_runtime=project_runtime,
@@ -1962,6 +1988,7 @@ def _step_runners(
                 plan_path,
                 scope_file,
                 comparator_progress_callback=comparator_progress_callback,
+                gobuster_progress_callback=gobuster_progress_callback,
             )
         )
         metadata = write_content_discovery_execution_result(result, plan_dir)

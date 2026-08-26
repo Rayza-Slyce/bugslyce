@@ -22,6 +22,7 @@ from bugslyce.recon.content_followup_commands import (
     validate_live_content_followup_command,
 )
 from bugslyce.recon.content_plan import (
+    GOBUSTER_REQUEST_TIMEOUT_SECONDS,
     STANDARD_BOUNDED_CORE_PROFILE,
     get_content_discovery_profile,
 )
@@ -131,7 +132,8 @@ def test_curl_followup_validators_reject_control_character_urls(
     assert _has_control_error(errors)
 
 
-def test_subprocess_usage_never_invokes_shell_or_popen() -> None:
+def test_subprocess_usage_never_invokes_shell_and_limits_supervised_popen() -> None:
+    popen_calls: list[tuple[Path, ast.Call]] = []
     for source_path in sorted(Path("bugslyce").rglob("*.py")):
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -140,7 +142,15 @@ def test_subprocess_usage_never_invokes_shell_or_popen() -> None:
             if isinstance(node.func, ast.Attribute):
                 full_name = _attribute_name(node.func)
                 assert full_name != "os.system", source_path
-                assert full_name != "subprocess.Popen", source_path
+                if full_name == "subprocess.Popen":
+                    popen_calls.append((source_path, node))
+                    assert source_path == Path("bugslyce/recon/runner.py")
+                    assert any(
+                        keyword.arg == "shell"
+                        and isinstance(keyword.value, ast.Constant)
+                        and keyword.value.value is False
+                        for keyword in node.keywords
+                    ), source_path
                 if full_name == "subprocess.run":
                     assert not any(
                         keyword.arg == "shell"
@@ -148,6 +158,7 @@ def test_subprocess_usage_never_invokes_shell_or_popen() -> None:
                         and keyword.value.value is True
                         for keyword in node.keywords
                     ), source_path
+    assert len(popen_calls) == 1
 
 
 def test_scope_and_origin_checks_reject_deceptive_hosts(tmp_path: Path) -> None:
@@ -275,11 +286,13 @@ def _gobuster_command(tmp_path: Path, origin: str) -> ReconCommand:
             str(profile.wordlist),
             "-t",
             str(profile.threads),
+            "--timeout",
+            f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
             "-o",
             str(output_file),
         ],
         output_file=str(output_file),
-        timeout_seconds=profile.timeout_seconds,
+        timeout_seconds=None,
         phase="content-discovery-root",
         risk_level="low",
         requires_confirmation=True,

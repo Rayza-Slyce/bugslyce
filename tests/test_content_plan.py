@@ -14,6 +14,7 @@ from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
     DEEP_BOUNDED_CORE_PROFILE,
     DEEP_BOUNDED_CORE_WORDLIST,
+    GOBUSTER_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_WORDLIST,
     MAX_CONTENT_PLAN_ORIGINS,
     STANDARD_AUTH_CORE_PROFILE,
@@ -144,6 +145,8 @@ def test_content_plan_previews_fixed_gobuster_root_shape(tmp_path: Path) -> None
         str(DEFAULT_WORDLIST),
         "-t",
         "10",
+        "--timeout",
+        f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
         "-o",
         str(output_dir.resolve() / "gobuster-10.10.10.10-80-root.txt"),
     ]

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+import errno
 from itertools import count
 import json
+import os
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,7 +21,7 @@ from bugslyce.core.engagement_policy import (
     IdentificationHeader,
     build_bug_bounty_policy,
 )
-from bugslyce.core.models import ReconCommandResult
+from bugslyce.core.models import ReconCommand, ReconCommandResult
 from bugslyce.core.programme_scope import (
     ACTION_EXCLUDE,
     ACTION_INCLUDE,
@@ -33,9 +36,10 @@ from bugslyce.project_session import (
     save_project_programme_scope_policy,
 )
 from bugslyce.recon.content_commands import (
-    CONTENT_DISCOVERY_TIMEOUT_SECONDS,
     build_live_content_discovery_command,
+    validate_live_content_discovery_command,
 )
+from bugslyce.recon.commands import validate_recon_command
 from bugslyce.recon.body_fetch import select_body_fetch_urls
 from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.content_plan import (
@@ -67,6 +71,7 @@ from bugslyce.recon.http_enforcement import (
     InternalHTTPResponse,
     PeerBoundHTTPTransport,
 )
+from bugslyce.recon import runner as runner_module
 from bugslyce.recon.runner import LiveContentDiscoveryRunner
 
 
@@ -241,7 +246,6 @@ def test_content_run_progress_reports_selected_step_before_and_after_runner(
     assert "Progress: 1/1" in output
     assert "Origin: http://10.10.10.10:65524/" in output
     assert "Profile: lab-root-light" in output
-    assert "Timeout: 900 seconds" in output
     assert "BugSlyce content discovery step complete" in output
     assert "Elapsed seconds:" in output
     assert "Artefact:" in output
@@ -414,30 +418,375 @@ def test_content_run_loader_accepts_legacy_structurally_exact_plan(tmp_path: Pat
     assert all(step.recursive_discovery is False for step in plan.steps)
 
 
-def test_content_runner_uses_list_argv_and_timeout(tmp_path: Path, monkeypatch) -> None:
-    plan_path, _scope, _input_dir, output_dir = _written_plan(tmp_path)
+def test_generic_bounded_gobuster_command_has_validated_request_timeout(
+    tmp_path: Path,
+) -> None:
+    plan_path, _scope, _input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=STANDARD_BOUNDED_CORE_PROFILE,
+    )
     plan = load_content_discovery_plan(plan_path)
     command = build_live_content_discovery_command(plan.steps[0], plan)
-    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(argv, **kwargs):
-        calls.append((argv, kwargs))
-        Path(command.output_file).write_text("/admin (Status: 200) [Size: 10]\n", encoding="utf-8")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    validation = validate_live_content_discovery_command(
+        command,
+        Path(plan.output_dir),
+        plan.target,
+        {step.origin for step in plan.steps},
+        plan.profile,
+    )
 
-    monkeypatch.setattr("bugslyce.recon.runner.subprocess.run", fake_run)
+    assert validation.valid is True
+    assert _gobuster_request_timeout_seconds(command.argv) > 0
+
+
+def test_generic_bounded_gobuster_rejects_request_timeout_tampering(
+    tmp_path: Path,
+) -> None:
+    plan_path, _scope, _input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=STANDARD_BOUNDED_CORE_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    argv = list(command.argv)
+    argv[argv.index("--timeout") + 1] = "0s"
+
+    validation = validate_live_content_discovery_command(
+        replace(command, argv=argv),
+        Path(plan.output_dir),
+        plan.target,
+        {step.origin for step in plan.steps},
+        plan.profile,
+    )
+
+    assert validation.valid is False
+    assert any("approved content profile argv shape" in error for error in validation.errors)
+
+
+def test_generic_bounded_gobuster_command_has_no_normal_process_deadline(
+    tmp_path: Path,
+) -> None:
+    plan_path, _scope, _input_dir, _output_dir = _written_plan(
+        tmp_path,
+        profile=STANDARD_BOUNDED_CORE_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    validation = validate_live_content_discovery_command(
+        command,
+        Path(plan.output_dir),
+        plan.target,
+        {step.origin for step in plan.steps},
+        plan.profile,
+    )
+
+    assert command.timeout_seconds is None
+    assert validation.valid is True
+
+
+def test_unrelated_recon_commands_still_require_a_finite_process_deadline(
+    tmp_path: Path,
+) -> None:
+    command = ReconCommand(
+        id="CONTENT-SUPERVISION-CONTROL-001",
+        tool="curl",
+        argv=["curl", "--head", "http://10.10.10.10/"],
+        output_file=str(tmp_path / "curl-headers.txt"),
+        timeout_seconds=None,
+        phase="http-metadata",
+        risk_level="low",
+        requires_confirmation=True,
+        scope_sensitive=True,
+        description="Control command must not inherit the Gobuster exception.",
+        ready_for_execution=True,
+        placeholders=[],
+    )
+    validation = validate_recon_command(command, tmp_path)
+
+    assert validation.valid is False
+    assert "timeout_seconds must be an integer." in validation.errors
+
+
+def test_gobuster_progress_parser_handles_observed_pty_rendering() -> None:
+    parser = _required_supervision_callable("parse_gobuster_progress")
+
+    initial = parser("Progress: 0 / 1 (0.00%)")
+    ansi = parser("\x1b[2KProgress: 22 / 31 (70.97%)\r")
+    error_interleaved = parser(
+        "Progress: 0 / 9 (0.00%)[ERROR] error on word slow-01: timeout occurred"
+    )
+
+    assert (initial.completed, initial.reported_total) == (0, 1)
+    assert (ansi.completed, ansi.reported_total) == (22, 31)
+    assert (error_interleaved.completed, error_interleaved.reported_total) == (0, 9)
+    assert parser("Progress: -1 / 31 (0.00%)") is None
+    assert parser("Progress: 2 / no-total (6.45%)") is None
+    assert parser("/admin (Status: 200) [Size: 10]") is None
+
+
+def test_gobuster_progress_trusts_only_known_total_and_never_regresses() -> None:
+    observer = _required_supervision_callable("observe_gobuster_progress")
+
+    startup = observer("Progress: 0 / 1 (0.00%)", expected_total=31, previous=None)
+    first = observer("Progress: 2 / 31 (6.45%)", expected_total=31, previous=startup)
+    duplicate = observer("Progress: 2 / 31 (6.45%)", expected_total=31, previous=first)
+    regression = observer("Progress: 1 / 31 (3.23%)", expected_total=31, previous=duplicate)
+
+    assert startup.trusted is False
+    assert startup.completed is None
+    assert first.trusted is True
+    assert (first.completed, first.total) == (2, 31)
+    assert duplicate.trusted is True
+    assert duplicate.completed == 2
+    assert regression.trusted is False
+    assert regression.completed is None
+
+
+def test_gobuster_progress_regression_latches_indeterminate_state() -> None:
+    observer = _required_supervision_callable("observe_gobuster_progress")
+
+    trusted = observer("Progress: 2 / 31", expected_total=31, previous=None)
+    regression = observer(
+        "Progress: 1 / 31",
+        expected_total=31,
+        previous=trusted,
+    )
+    later_valid = observer(
+        "Progress: 3 / 31",
+        expected_total=31,
+        previous=regression,
+    )
+
+    assert regression.trusted is False
+    assert later_valid.trusted is False
+    assert later_valid.completed is None
+
+
+def test_terminal_progress_renderer_distinguishes_determinate_and_indeterminate() -> None:
+    renderer = _required_supervision_callable("render_content_discovery_progress")
+
+    determinate = renderer(
+        origin="http://blog.thm/",
+        completed=1052,
+        total=1753,
+        elapsed_seconds=277,
+        trusted=True,
+    )
+    indeterminate = renderer(
+        origin="http://blog.thm/",
+        completed=None,
+        total=None,
+        elapsed_seconds=277,
+        trusted=False,
+    )
+
+    assert "Content discovery" in determinate
+    assert "1052/1753" in determinate
+    assert "60%" in determinate
+    assert "04:37" in determinate
+    assert "Content discovery" in indeterminate
+    assert "04:37" in indeterminate
+    assert "%" not in indeterminate
+
+
+def test_generic_gobuster_runner_uses_supervision_without_a_normal_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    events: list[object] = []
+    process, calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"\x1b[2KProgress: 2 / 25 (8.00%)\r",),
+        exit_code=7,
+    )
+
     result = LiveContentDiscoveryRunner(
         output_dir,
         plan.target,
         set(plan.origins),
-    ).run(command)
+        plan.profile,
+    ).run(command, progress_callback=events.append)
 
-    assert result.executed is True
-    argv, kwargs = calls[0]
-    assert isinstance(argv, list)
-    assert argv == command.argv
-    assert kwargs["timeout"] == CONTENT_DISCOVERY_TIMEOUT_SECONDS
-    assert "shell" not in kwargs
+    assert calls["blocking_run"] == 0
+    assert calls["popen"] == 1
+    assert process.poll() == 7
+    assert result.exit_code == 7
+    assert any(
+        getattr(event, "trusted", False)
+        and getattr(event, "completed", None) == 2
+        and getattr(event, "total", None) == 25
+        for event in events
+    )
+
+
+def test_generic_gobuster_runner_treats_pty_eio_after_exit_as_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    process, _calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"Progress: 25 / 25 (100.00%)\r",),
+        exit_code=0,
+        eof_as_eio=True,
+    )
+
+    result = LiveContentDiscoveryRunner(
+        output_dir,
+        plan.target,
+        set(plan.origins),
+        plan.profile,
+    ).run(command, progress_callback=lambda _event: None)
+
+    assert result.exit_code == 0
+    assert result.error is None
+    assert process.poll() == 0
+
+
+def test_generic_gobuster_runner_buffers_fragmented_pty_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    events: list[object] = []
+    _process, _calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"Progress: 2 / 25 (8.00%)\r",),
+        exit_code=0,
+        read_chunks=(b"Progress: 2 /", b" 25 (8.00%)\r"),
+    )
+
+    result = LiveContentDiscoveryRunner(
+        output_dir,
+        plan.target,
+        set(plan.origins),
+        plan.profile,
+    ).run(command, progress_callback=events.append)
+
+    assert result.exit_code == 0
+    assert any(
+        getattr(event, "trusted", False)
+        and getattr(event, "completed", None) == 2
+        and getattr(event, "total", None) == 25
+        for event in events
+    )
+
+
+def test_unknown_gobuster_progress_remains_indeterminate_without_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    events: list[object] = []
+    process, _calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"unrecognised Gobuster status output\r",),
+        exit_code=0,
+    )
+
+    result = LiveContentDiscoveryRunner(
+        output_dir,
+        plan.target,
+        set(plan.origins),
+        plan.profile,
+    ).run(command, progress_callback=events.append)
+
+    assert result.exit_code == 0
+    assert process.terminate_calls == 0
+    assert process.kill_calls == 0
+    assert events
+    assert all(getattr(event, "trusted", None) is False for event in events)
+
+
+def test_generic_gobuster_manual_cancellation_gracefully_terminates_direct_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    partial_output = Path(command.output_file)
+    partial_output.write_text("/admin (Status: 200) [Size: 10]\n", encoding="utf-8")
+
+    def cancelled_callback(_event) -> None:
+        raise KeyboardInterrupt
+
+    process, _calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"Progress: 2 / 25 (8.00%)\r",),
+        exit_code=None,
+        exit_on_terminate=True,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        LiveContentDiscoveryRunner(
+            output_dir,
+            plan.target,
+            set(plan.origins),
+            plan.profile,
+        ).run(command, progress_callback=cancelled_callback)
+
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 0
+    assert process.wait_calls
+    assert process.poll() is not None
+    assert partial_output.read_text(encoding="utf-8") == "/admin (Status: 200) [Size: 10]\n"
+
+
+def test_generic_gobuster_manual_cancellation_force_kills_nonexiting_direct_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _scope, _input_dir, output_dir = _written_plan(
+        tmp_path,
+        profile=CONTENT_DISCOVERY_TINY_PROFILE,
+    )
+    plan = load_content_discovery_plan(plan_path)
+    command = build_live_content_discovery_command(plan.steps[0], plan)
+    process, _calls = _install_fake_gobuster_process(
+        monkeypatch,
+        frames=(b"Progress: 2 / 25 (8.00%)\r",),
+        exit_code=None,
+        exit_on_terminate=False,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        LiveContentDiscoveryRunner(
+            output_dir,
+            plan.target,
+            set(plan.origins),
+            plan.profile,
+        ).run(command, progress_callback=_raise_keyboard_interrupt)
+
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert any(timeout is not None for timeout in process.wait_calls)
+    assert process.poll() is not None
 
 
 @pytest.mark.parametrize(
@@ -475,28 +824,6 @@ def test_content_runner_refuses_unapproved_commands(
 
     assert result.executed is False
     assert called is False
-
-
-def test_content_runner_enforces_timeout(tmp_path: Path, monkeypatch) -> None:
-    plan_path, _scope, _input_dir, output_dir = _written_plan(tmp_path)
-    plan = load_content_discovery_plan(plan_path)
-    command = build_live_content_discovery_command(plan.steps[0], plan)
-
-    def fake_run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-
-    monkeypatch.setattr("bugslyce.recon.runner.subprocess.run", fake_run)
-    result = LiveContentDiscoveryRunner(
-        output_dir,
-        plan.target,
-        set(plan.origins),
-    ).run(command)
-
-    assert result.executed is True
-    assert result.error == (
-        "Content discovery command CONTENT-STEP-001 for http://10.10.10.10/ "
-        "started and exceeded 900 seconds."
-    )
 
 
 def test_content_run_timeout_without_output_records_started_and_timed_out(
@@ -1686,6 +2013,126 @@ def _written_plan(
     return plan_path, scope, input_dir, output_dir
 
 
+def _gobuster_request_timeout_seconds(argv: list[str]) -> int:
+    for index, value in enumerate(argv):
+        if value == "--timeout" and index + 1 < len(argv):
+            timeout = argv[index + 1]
+            break
+        if value.startswith("--timeout="):
+            timeout = value.split("=", 1)[1]
+            break
+    else:
+        raise AssertionError("Generic Gobuster argv must include an explicit --timeout.")
+
+    assert timeout.endswith("s")
+    seconds = int(timeout[:-1])
+    assert seconds > 0
+    return seconds
+
+
+def _required_supervision_callable(name: str):
+    candidate = getattr(runner_module, name, None)
+    assert callable(candidate), f"Gobuster supervision must expose {name}()."
+    return candidate
+
+
+def _install_fake_gobuster_process(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    frames: tuple[bytes, ...],
+    exit_code: int | None,
+    exit_on_terminate: bool = True,
+    eof_as_eio: bool = False,
+    read_chunks: tuple[bytes, ...] | None = None,
+) -> tuple["_FakeGobusterProcess", dict[str, int]]:
+    """Install a no-network PTY/Popen lifecycle for the supervised runner."""
+
+    process = _FakeGobusterProcess(exit_code, exit_on_terminate=exit_on_terminate)
+    calls = {"blocking_run": 0, "popen": 0}
+    pty_state = _FakePtyState(frames, read_chunks=read_chunks)
+
+    def forbidden_blocking_run(*_args, **_kwargs):
+        calls["blocking_run"] += 1
+        raise AssertionError("generic Gobuster must not use subprocess.run with a deadline")
+
+    def fake_popen(*_args, **kwargs):
+        calls["popen"] += 1
+        pty_state.write_to(kwargs.get("stdout"))
+        return process
+
+    monkeypatch.setattr(runner_module.subprocess, "run", forbidden_blocking_run)
+    monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        runner_module,
+        "pty",
+        SimpleNamespace(openpty=pty_state.openpty),
+        raising=False,
+    )
+    if eof_as_eio or read_chunks is not None:
+        monkeypatch.setattr(runner_module.os, "read", pty_state.read_then_eio)
+    return process, calls
+
+
+def _raise_keyboard_interrupt(_event) -> None:
+    raise KeyboardInterrupt
+
+
+class _FakePtyState:
+    def __init__(
+        self,
+        frames: tuple[bytes, ...],
+        *,
+        read_chunks: tuple[bytes, ...] | None,
+    ) -> None:
+        self.frames = list(frames)
+        self.read_chunks = list(read_chunks if read_chunks is not None else frames)
+        self.master_fd: int | None = None
+        self.slave_fd: int | None = None
+
+    def openpty(self) -> tuple[int, int]:
+        self.master_fd, self.slave_fd = os.openpty()
+        return self.master_fd, self.slave_fd
+
+    def write_to(self, stdout) -> None:
+        assert isinstance(stdout, int)
+        for frame in self.frames:
+            os.write(stdout, frame)
+
+    def read_then_eio(self, _fd: int, _size: int) -> bytes:
+        if self.read_chunks:
+            return self.read_chunks.pop(0)
+        raise OSError(errno.EIO, "synthetic PTY EOF")
+
+
+class _FakeGobusterProcess:
+    def __init__(self, exit_code: int | None, *, exit_on_terminate: bool) -> None:
+        self.returncode = exit_code
+        self.exit_on_terminate = exit_on_terminate
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_calls: list[float | None] = []
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls.append(timeout)
+        if self.returncode is None:
+            if timeout is None:
+                raise AssertionError("cancellation must use a bounded termination grace")
+            raise subprocess.TimeoutExpired(["gobuster"], timeout)
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        if self.exit_on_terminate:
+            self.returncode = -15
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+
+
 def _configure_bug_bounty_project(
     input_dir: Path,
     scope: Path,
@@ -1758,6 +2205,6 @@ def _mutate_origin(payload: dict, origin: str) -> None:
 
 def _escape_output(payload: dict) -> None:
     payload["steps"][0]["expected_artifact"]["file"] = "../escape.txt"
-    payload["steps"][0]["command_preview"][9] = str(
+    payload["steps"][0]["command_preview"][11] = str(
         Path(payload["output_dir"]).parent / "escape.txt"
     )

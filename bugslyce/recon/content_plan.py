@@ -40,6 +40,7 @@ DEEP_BOUNDED_CORE_WORDLIST = (
 )
 MAX_CONTENT_PLAN_ORIGINS = 5
 CONTENT_PLAN_THREADS = 10
+GOBUSTER_REQUEST_TIMEOUT_SECONDS = 10
 SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<")
 NO_EXECUTION_NOTE = "No commands were executed."
 STANDARD_AUTH_SURFACE_ROUTES = (
@@ -69,7 +70,6 @@ class ContentDiscoveryProfileDefinition:
     description: str
     wordlist: Path
     threads: int
-    timeout_seconds: int
     output_prefix: str
 
 
@@ -82,7 +82,6 @@ CONTENT_DISCOVERY_PROFILES = {
         ),
         wordlist=TINY_WORDLIST,
         threads=5,
-        timeout_seconds=120,
         output_prefix="gobuster-tiny",
     ),
     STANDARD_AUTH_CORE_PROFILE: ContentDiscoveryProfileDefinition(
@@ -95,7 +94,6 @@ CONTENT_DISCOVERY_PROFILES = {
         ),
         wordlist=STANDARD_AUTH_CORE_WORDLIST,
         threads=5,
-        timeout_seconds=120,
         output_prefix="gobuster-standard-auth-core",
     ),
     STANDARD_BOUNDED_CORE_PROFILE: ContentDiscoveryProfileDefinition(
@@ -111,7 +109,6 @@ CONTENT_DISCOVERY_PROFILES = {
         ),
         wordlist=STANDARD_BOUNDED_CORE_WORDLIST,
         threads=5,
-        timeout_seconds=120,
         output_prefix="gobuster-standard-bounded-core",
     ),
     DEEP_BOUNDED_CORE_PROFILE: ContentDiscoveryProfileDefinition(
@@ -126,7 +123,6 @@ CONTENT_DISCOVERY_PROFILES = {
         ),
         wordlist=DEEP_BOUNDED_CORE_WORDLIST,
         threads=5,
-        timeout_seconds=120,
         output_prefix="gobuster-deep-bounded-core",
     ),
     CONTENT_DISCOVERY_PROFILE: ContentDiscoveryProfileDefinition(
@@ -134,7 +130,6 @@ CONTENT_DISCOVERY_PROFILES = {
         description="Broader bounded root discovery profile for authorised lab targets.",
         wordlist=DEFAULT_WORDLIST,
         threads=CONTENT_PLAN_THREADS,
-        timeout_seconds=900,
         output_prefix="gobuster",
     ),
 }
@@ -349,6 +344,8 @@ def _build_step(
         str(profile.wordlist),
         "-t",
         str(profile.threads),
+        "--timeout",
+        f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
         "-o",
         str(output_dir / filename),
     ]
@@ -389,6 +386,8 @@ def _validate_preview(
         str(profile.wordlist),
         "-t",
         str(profile.threads),
+        "--timeout",
+        f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
         "-o",
         str(output_file),
     ]

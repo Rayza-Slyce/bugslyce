@@ -180,14 +180,15 @@ def test_curl_header_workflow_rejects_host_absent_from_scope(tmp_path: Path) -> 
         )
 
 
-def test_live_runner_source_uses_only_narrow_process_api() -> None:
+def test_live_runner_source_limits_supervised_process_api() -> None:
     source = (
         Path(__file__).resolve().parents[1] / "bugslyce" / "recon" / "runner.py"
     ).read_text(encoding="utf-8")
 
     assert "subprocess.run(" in source
     assert "shell=True" not in source
-    assert "subprocess.Popen" not in source
+    assert source.count("subprocess.Popen(") == 1
+    assert "shell=False" in source
     assert "os.system" not in source
     assert "pexpect" not in source
 
