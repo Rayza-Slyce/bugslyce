@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 from urllib.parse import urlparse
 
-from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
+from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState, SMBShare
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
     LIKELY_SIGNAL,
@@ -827,7 +827,7 @@ def _unusual_robots_lead(project_state: ProjectState) -> OperatorSummaryLead | N
 def _smb_disk_share_leads(
     project_state: ProjectState,
 ) -> list[OperatorSummaryLead]:
-    leads: list[OperatorSummaryLead] = []
+    observations: list[tuple[SMBShare, str, tuple[str, ...]]] = []
 
     for share in project_state.smb_shares:
         if share.share_type.casefold() != "disk":
@@ -848,44 +848,124 @@ def _smb_disk_share_leads(
             continue
 
         trigger_evidence_ids = set(share.trigger_evidence_ids)
-        matching_protocols = sorted(
-            {
-                service.protocol
-                for service in project_state.port_services
-                if service.host.casefold() == share.host.casefold()
-                and service.port == share.port
-                and service.state == "open"
-                and service.protocol
-                and trigger_evidence_ids.intersection(service.evidence_ids)
-            }
+        matching_protocols = tuple(
+            sorted(
+                {
+                    service.protocol
+                    for service in project_state.port_services
+                    if service.host.casefold() == share.host.casefold()
+                    and service.port == share.port
+                    and service.state == "open"
+                    and service.protocol
+                    and trigger_evidence_ids.intersection(service.evidence_ids)
+                }
+            )
         )
         if not matching_protocols:
             continue
 
-        leads.append(
-            OperatorSummaryLead(
-                title=f"SMB Disk share observed for review: {share_name}",
-                why=(
-                    "Bounded SMB share enumeration directly observed a Disk share "
-                    "outside the obvious built-in administrative-share patterns."
-                ),
-                endpoints=[
-                    f"{share.host}:{share.port}/{protocol}"
-                    for protocol in matching_protocols
-                ],
-                evidence_ids=share.evidence_ids,
-                next_action=(
-                    "Review the retained share name and expected service purpose in "
-                    "authorised scope. Do not connect to, traverse, read from, write to, "
-                    "or test access to the share from this lead."
-                ),
-                signal="direct SMB share evidence",
-                score=64,
-                lead_type="smb_disk_share_review",
-            )
-        )
+        observations.append((share, share_name, matching_protocols))
 
+    standard_observations: dict[
+        tuple[str, str],
+        list[tuple[SMBShare, str, tuple[str, ...]]],
+    ] = {}
+    for observation in observations:
+        share, share_name, matching_protocols = observation
+        if share.port in {139, 445} and "tcp" in matching_protocols:
+            standard_observations.setdefault(
+                (share.host.casefold(), share_name.casefold()),
+                [],
+            ).append(observation)
+
+    mergeable = {
+        identity
+        for identity, grouped in standard_observations.items()
+        if {share.port for share, _name, _protocols in grouped} == {139, 445}
+    }
+    emitted: set[tuple[str, str]] = set()
+    leads: list[OperatorSummaryLead] = []
+    for observation in observations:
+        share, share_name, matching_protocols = observation
+        identity = (share.host.casefold(), share_name.casefold())
+        standard_transport = share.port in {139, 445} and "tcp" in matching_protocols
+        if standard_transport and identity in mergeable:
+            if identity not in emitted:
+                leads.append(
+                    _merged_smb_disk_share_lead(standard_observations[identity])
+                )
+                emitted.add(identity)
+            continue
+        leads.append(_smb_disk_share_lead(share, share_name, matching_protocols))
     return leads
+
+
+def _smb_disk_share_lead(
+    share: SMBShare,
+    share_name: str,
+    matching_protocols: tuple[str, ...],
+) -> OperatorSummaryLead:
+    return OperatorSummaryLead(
+        title=f"SMB Disk share observed for review: {share_name}",
+        why=(
+            "Bounded SMB share enumeration directly observed a Disk share "
+            "outside the obvious built-in administrative-share patterns."
+        ),
+        endpoints=[
+            f"{share.host}:{share.port}/{protocol}"
+            for protocol in matching_protocols
+        ],
+        evidence_ids=share.evidence_ids,
+        next_action=(
+            "Review the retained share name and expected service purpose in "
+            "authorised scope. Do not connect to, traverse, read from, write to, "
+            "or test access to the share from this lead."
+        ),
+        signal="direct SMB share evidence",
+        score=64,
+        lead_type="smb_disk_share_review",
+    )
+
+
+def _merged_smb_disk_share_lead(
+    observations: list[tuple[SMBShare, str, tuple[str, ...]]],
+) -> OperatorSummaryLead:
+    share_name = min(
+        (share_name for _share, share_name, _protocols in observations),
+        key=lambda value: (value.casefold(), value),
+    )
+    endpoints = sorted(
+        {
+            f"{share.host}:{share.port}/{protocol}"
+            for share, _share_name, protocols in observations
+            for protocol in protocols
+        }
+    )
+    evidence_ids = sorted(
+        {
+            evidence_id
+            for share, _share_name, _protocols in observations
+            for evidence_id in share.evidence_ids
+            if evidence_id
+        }
+    )
+    return OperatorSummaryLead(
+        title=f"SMB Disk share observed for review: {share_name}",
+        why=(
+            "Bounded SMB share enumeration directly observed a Disk share "
+            "outside the obvious built-in administrative-share patterns."
+        ),
+        endpoints=endpoints,
+        evidence_ids=evidence_ids,
+        next_action=(
+            "Review the retained share name and expected service purpose in "
+            "authorised scope. Do not connect to, traverse, read from, write to, "
+            "or test access to the share from this lead."
+        ),
+        signal="direct SMB share evidence",
+        score=64,
+        lead_type="smb_disk_share_review",
+    )
 
 
 def _non_http_service_leads(project_state: ProjectState) -> list[OperatorSummaryLead]:

@@ -16,6 +16,7 @@ from bugslyce.reports.human_triage import (
 from bugslyce.reports.markdown import render_markdown_report
 from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
+    _smb_disk_share_leads,
     build_operator_summary,
 )
 from bugslyce.triage.candidates import generate_candidates
@@ -199,18 +200,21 @@ def test_compact_presentation_preserves_canonical_rank_and_identity() -> None:
 def _smb_share(
     name: str,
     *,
+    host: str = "files.example.test",
+    port: int = 31337,
     share_type: str = "Disk",
     evidence_id: str = "EVID-SMB-CUSTOM",
+    trigger_evidence_id: str = "EVID-PORT-SMB",
 ) -> SMBShare:
     return SMBShare(
-        host="files.example.test",
-        port=31337,
+        host=host,
+        port=port,
         share_name=name,
         share_type=share_type,
         comment="",
-        source_file="smb-shares-files.example.test-31337-guest.txt",
+        source_file=f"smb-shares-{host}-{port}-guest.txt",
         trigger_service_names=["microsoft-ds"],
-        trigger_evidence_ids=["EVID-PORT-SMB"],
+        trigger_evidence_ids=[trigger_evidence_id],
         trigger_source_files=["nmap-services-all.txt"],
         evidence_ids=[evidence_id],
         tags=[],
@@ -221,27 +225,40 @@ def _state_with_smb_shares(
     shares: list[SMBShare],
 ):
     state = build_project_state(FIXTURE)
+    services_by_endpoint = {
+        (share.host, share.port, tuple(share.trigger_evidence_ids)): PortService(
+            host=share.host,
+            port=share.port,
+            protocol="tcp",
+            state="open",
+            service="microsoft-ds",
+            product=None,
+            version=None,
+            source_file="nmap-services-all.txt",
+            evidence_ids=list(share.trigger_evidence_ids),
+            tags=[],
+        )
+        for share in shares
+    }
     return replace(
         state,
         http_services=[],
         http_artifacts=[],
         discovered_paths=[],
-        port_services=[
-            PortService(
-                host="files.example.test",
-                port=31337,
-                protocol="tcp",
-                state="open",
-                service="microsoft-ds",
-                product=None,
-                version=None,
-                source_file="nmap-services-all.txt",
-                evidence_ids=["EVID-PORT-SMB"],
-                tags=[],
-            )
-        ],
+        port_services=list(services_by_endpoint.values()),
         smb_shares=shares,
     )
+
+
+def _smb_review_leads(shares: list[SMBShare]) -> list[OperatorSummaryLead]:
+    return [
+        lead
+        for lead in build_operator_summary(
+            _state_with_smb_shares(shares),
+            [],
+        ).ranked_leads
+        if lead.lead_type == "smb_disk_share_review"
+    ]
 
 
 def test_custom_smb_disk_share_becomes_canonical_review_lead() -> None:
@@ -380,3 +397,171 @@ def test_smb_share_lead_order_and_identity_are_input_stable() -> None:
     assert [lead.lead_id for lead in backwards_smb] == [
         lead.lead_id for lead in forwards_smb
     ]
+
+
+def test_standard_smb_transport_pair_consolidates_same_host_share_lead() -> None:
+    shares = [
+        _smb_share(
+            "BillySMB",
+            port=139,
+            evidence_id="EVID-SMB-BILLY-139",
+            trigger_evidence_id="EVID-PORT-SMB-139",
+        ),
+        _smb_share(
+            "BillySMB",
+            port=445,
+            evidence_id="EVID-SMB-BILLY-445",
+            trigger_evidence_id="EVID-PORT-SMB-445",
+        ),
+    ]
+
+    leads = _smb_review_leads(shares)
+
+    assert len(leads) == 1
+    assert leads[0].lead_type == "smb_disk_share_review"
+    assert leads[0].endpoints == [
+        "files.example.test:139/tcp",
+        "files.example.test:445/tcp",
+    ]
+    assert leads[0].evidence_ids == [
+        "EVID-SMB-BILLY-139",
+        "EVID-SMB-BILLY-445",
+    ]
+
+
+def test_standard_smb_transport_pair_consolidation_is_input_stable() -> None:
+    shares = [
+        _smb_share(
+            "print$",
+            port=139,
+            evidence_id="EVID-SMB-PRINT-139",
+            trigger_evidence_id="EVID-PORT-SMB-139",
+        ),
+        _smb_share(
+            "print$",
+            port=445,
+            evidence_id="EVID-SMB-PRINT-445",
+            trigger_evidence_id="EVID-PORT-SMB-445",
+        ),
+    ]
+
+    forwards = _smb_review_leads(shares)
+    backwards = _smb_review_leads(list(reversed(shares)))
+
+    assert len(forwards) == len(backwards) == 1
+    assert backwards == forwards
+    assert backwards[0].lead_id == forwards[0].lead_id
+    assert backwards[0].rank == forwards[0].rank
+
+
+def test_nonstandard_smb_port_is_not_consolidated_with_standard_transport() -> None:
+    shares = [
+        _smb_share(
+            "private$",
+            port=445,
+            evidence_id="EVID-SMB-PRIVATE-445",
+            trigger_evidence_id="EVID-PORT-SMB-445",
+        ),
+        _smb_share(
+            "private$",
+            port=31337,
+            evidence_id="EVID-SMB-PRIVATE-31337",
+            trigger_evidence_id="EVID-PORT-SMB-31337",
+        ),
+    ]
+
+    leads = _smb_review_leads(shares)
+
+    assert len(leads) == 2
+    assert {tuple(lead.endpoints) for lead in leads} == {
+        ("files.example.test:445/tcp",),
+        ("files.example.test:31337/tcp",),
+    }
+    assert {tuple(lead.evidence_ids) for lead in leads} == {
+        ("EVID-SMB-PRIVATE-445",),
+        ("EVID-SMB-PRIVATE-31337",),
+    }
+
+
+def test_single_port_smb_lead_preserves_observation_evidence_order() -> None:
+    share = replace(
+        _smb_share("ordered", port=31337),
+        evidence_ids=["EVID-SMB-Z", "EVID-SMB-A"],
+    )
+
+    leads = _smb_disk_share_leads(_state_with_smb_shares([share]))
+
+    assert len(leads) == 1
+    assert leads[0].evidence_ids == ["EVID-SMB-Z", "EVID-SMB-A"]
+
+
+def test_same_smb_share_name_on_different_hosts_remains_separate() -> None:
+    shares = [
+        _smb_share(
+            "shared",
+            host="files-a.example.test",
+            port=139,
+            evidence_id="EVID-SMB-SHARED-A",
+            trigger_evidence_id="EVID-PORT-SMB-A",
+        ),
+        _smb_share(
+            "shared",
+            host="files-b.example.test",
+            port=445,
+            evidence_id="EVID-SMB-SHARED-B",
+            trigger_evidence_id="EVID-PORT-SMB-B",
+        ),
+    ]
+
+    leads = _smb_review_leads(shares)
+
+    assert len(leads) == 2
+    assert {tuple(lead.endpoints) for lead in leads} == {
+        ("files-a.example.test:139/tcp",),
+        ("files-b.example.test:445/tcp",),
+    }
+    assert {tuple(lead.evidence_ids) for lead in leads} == {
+        ("EVID-SMB-SHARED-A",),
+        ("EVID-SMB-SHARED-B",),
+    }
+
+
+def test_standard_smb_pair_consolidates_without_absorbing_nonstandard_port() -> None:
+    shares = [
+        _smb_share(
+            "private$",
+            port=139,
+            evidence_id="EVID-SMB-PRIVATE-139",
+            trigger_evidence_id="EVID-PORT-SMB-139",
+        ),
+        _smb_share(
+            "private$",
+            port=445,
+            evidence_id="EVID-SMB-PRIVATE-445",
+            trigger_evidence_id="EVID-PORT-SMB-445",
+        ),
+        _smb_share(
+            "private$",
+            port=31337,
+            evidence_id="EVID-SMB-PRIVATE-31337",
+            trigger_evidence_id="EVID-PORT-SMB-31337",
+        ),
+    ]
+
+    leads = _smb_review_leads(shares)
+
+    assert len(leads) == 2
+    membership = {
+        tuple(lead.endpoints): tuple(lead.evidence_ids)
+        for lead in leads
+    }
+    assert membership == {
+        (
+            "files.example.test:139/tcp",
+            "files.example.test:445/tcp",
+        ): (
+            "EVID-SMB-PRIVATE-139",
+            "EVID-SMB-PRIVATE-445",
+        ),
+        ("files.example.test:31337/tcp",): ("EVID-SMB-PRIVATE-31337",),
+    }
