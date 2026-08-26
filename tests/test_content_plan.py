@@ -147,6 +147,7 @@ def test_content_plan_previews_fixed_gobuster_root_shape(tmp_path: Path) -> None
         "10",
         "--timeout",
         f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
+        "--no-color",
         "-o",
         str(output_dir.resolve() / "gobuster-10.10.10.10-80-root.txt"),
     ]

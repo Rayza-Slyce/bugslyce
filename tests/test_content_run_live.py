@@ -438,6 +438,7 @@ def test_generic_bounded_gobuster_command_has_validated_request_timeout(
 
     assert validation.valid is True
     assert _gobuster_request_timeout_seconds(command.argv) > 0
+    assert command.argv.count("--no-color") == 1
 
 
 def test_generic_bounded_gobuster_rejects_request_timeout_tampering(

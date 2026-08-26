@@ -407,3 +407,17 @@ def test_html_keyword_matching_respects_token_boundaries(tmp_path: Path) -> None
         for artifact in artifacts
         if artifact.artifact_type == "keyword_hit"
     ]
+
+def test_gobuster_parser_accepts_ansi_coloured_status_output(tmp_path: Path) -> None:
+    source = tmp_path / "gobuster-ansi.txt"
+    source.write_text(
+        "robots.txt          \x1b[32m (Status: 200)\x1b[0m [Size: 31]\n",
+        encoding="utf-8",
+    )
+
+    records = parse_gobuster(source, "http://127.0.0.1:8088/")
+
+    assert len(records) == 1
+    assert records[0].url == "http://127.0.0.1:8088/robots.txt"
+    assert records[0].status_code == 200
+    assert records[0].content_length == 31

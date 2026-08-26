@@ -10,6 +10,9 @@ import warnings
 from bugslyce.core.models import DiscoveredPath
 
 
+_ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 GOBUSTER_LINE = re.compile(
     r"^\s*(?P<path>\S+)\s+"
     r"\(Status:\s*(?P<status>\d{3})\)"
@@ -27,13 +30,14 @@ def parse_gobuster(path: Path, base_url: str | None = None) -> list[DiscoveredPa
 
     records: list[DiscoveredPath] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        stripped = line.strip()
+        clean_line = _ANSI_SGR_RE.sub("", line)
+        stripped = clean_line.strip()
         if not stripped or stripped.startswith(("#", "================================================")):
             continue
 
-        match = GOBUSTER_LINE.match(line)
+        match = GOBUSTER_LINE.match(clean_line)
         if not match:
-            if "(Status:" in line:
+            if "(Status:" in clean_line:
                 warnings.warn(
                     f"Skipping malformed gobuster line {line_number} in {path}",
                     RuntimeWarning,

@@ -1369,6 +1369,7 @@ def _parse_step(
         str(profile_definition.threads),
         "--timeout",
         f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
+        "--no-color",
         "-o",
         str(output_dir / expected_file),
     ]

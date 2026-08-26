@@ -91,11 +91,11 @@ def validate_live_content_discovery_command(
         profile = None
         errors.append(str(exc))
 
-    if len(argv) != 12 or profile is None:
+    if len(argv) != 13 or profile is None:
         errors.append("Gobuster command must match the approved content profile argv shape.")
     else:
         origin = argv[3]
-        output_file = argv[11]
+        output_file = argv[12]
         expected = _expected_argv(
             origin,
             profile,
@@ -197,6 +197,7 @@ def _expected_argv(
         str(profile.threads),
         "--timeout",
         f"{request_timeout_seconds}s",
+        "--no-color",
         "-o",
         str(output_file),
     ]

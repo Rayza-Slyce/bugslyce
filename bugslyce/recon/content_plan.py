@@ -346,6 +346,7 @@ def _build_step(
         str(profile.threads),
         "--timeout",
         f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
+        "--no-color",
         "-o",
         str(output_dir / filename),
     ]
@@ -388,6 +389,7 @@ def _validate_preview(
         str(profile.threads),
         "--timeout",
         f"{GOBUSTER_REQUEST_TIMEOUT_SECONDS}s",
+        "--no-color",
         "-o",
         str(output_file),
     ]
