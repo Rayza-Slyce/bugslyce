@@ -1436,6 +1436,108 @@ def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
     assert any("04:37" in message for message in forwarded)
 
 
+
+def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hiding_trusted_updates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    progress: list[str] = []
+
+    def content_run(*_args, gobuster_progress_callback=None, **_kwargs):
+        calls.append("content-run")
+        assert gobuster_progress_callback is not None
+        events = (
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=None,
+                total=None,
+                elapsed_seconds=0,
+                trusted=False,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=None,
+                total=None,
+                elapsed_seconds=1,
+                trusted=False,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=None,
+                total=None,
+                elapsed_seconds=2,
+                trusted=False,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=2,
+                total=25,
+                elapsed_seconds=3,
+                trusted=True,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=3,
+                total=25,
+                elapsed_seconds=4,
+                trusted=True,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=None,
+                total=None,
+                elapsed_seconds=5,
+                trusted=False,
+            ),
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=None,
+                total=None,
+                elapsed_seconds=6,
+                trusted=False,
+            ),
+        )
+        for event in events:
+            gobuster_progress_callback(event)
+
+        return SimpleNamespace(
+            profile="lab-root-light",
+            artifact_paths=[str(output_dir / "gobuster.txt")],
+            report_path=str(output_dir / "report.md"),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_discovery_workflow",
+        content_run,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+        progress_callback=progress.append,
+    )
+
+    assert result.final_status == "completed"
+
+    forwarded = [
+        message
+        for message in progress
+        if message.startswith("[8/13] bounded content discovery execution:")
+    ]
+    indeterminate = [
+        message for message in forwarded if "Content discovery [active]" in message
+    ]
+
+    assert len(indeterminate) == 2
+
+    assert sum("2/25" in message for message in forwarded) == 1
+    assert sum("3/25" in message for message in forwarded) == 1
+    assert all("\r" not in message for message in forwarded)
+
 def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
     tmp_path: Path,
     monkeypatch,

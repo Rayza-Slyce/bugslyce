@@ -60,6 +60,7 @@ _HTTP_RELATIONSHIP_CATEGORY = "http_route_relationship"
 _REDIRECT_CATEGORY = "redirect_auth_flow"
 _FORM_PARAMETER_CATEGORY = "form_or_parameter"
 _DEEP_INTERPRETATION_CATEGORY = "deep_interpretation"
+_TECHNICAL_INVESTIGATION_CATEGORY = "technical_investigation"
 _ROBOTS_CATEGORY = "robots"
 _ROUTE_CATEGORY = "route"
 _ACRONYMS = {
@@ -264,7 +265,7 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
         sections = [
             section for section in sections if section[0] not in legacy_primary_sections
         ]
-        if canonical_presentation.investigation_subjects:
+        if model.operator_brief.threads:
             sections.insert(
                 1,
                 (
@@ -272,6 +273,14 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
                     "Investigation priorities",
                     _investigation_priorities_section(model),
                 ),
+            )
+        if canonical_presentation.investigation_subjects:
+            sections.append(
+                (
+                    "technical-investigation-evidence",
+                    "Technical investigation evidence",
+                    _technical_investigation_evidence_section(model),
+                )
             )
     if model.relationship_clusters:
         sections.append(
@@ -322,15 +331,131 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
 
 
 def _investigation_priorities_section(model: HtmlReportModel) -> str:
-    presentation = model.operator_brief_presentation
-    if presentation is None:
-        raise ValueError("Investigation priorities require a canonical presentation.")
     return _section(
         "investigation-priorities",
         "Investigation priorities",
-        "".join(
-            _investigation_subject(item) for item in presentation.investigation_subjects
-        ),
+        "".join(_operator_brief_thread(thread) for thread in model.operator_brief.threads),
+    )
+
+
+def _operator_brief_thread(thread: object) -> str:
+    metadata = (
+        ("Signal", thread.signal),
+        ("Endpoints", ", ".join(thread.endpoints)),
+        ("Origins", ", ".join(thread.origins)),
+    )
+    fields = "".join(
+        f'<dt>{_h(label)}</dt><dd>{_h(value)}</dd>'
+        for label, value in metadata
+        if value
+    )
+    return (
+        '<article class="investigation-subject searchable">'
+        f'<h3>{_h(thread.title)}</h3>'
+        f'<p class="investigation-rank searchable">Rank {_h(thread.rank)}</p>'
+        f'<dl class="investigation-meta">{fields}</dl>'
+        f'<p class="searchable"><strong>Why review:</strong> {_h(thread.why_review)}</p>'
+        f'<p class="searchable"><strong>Next review step:</strong> '
+        f'{_h(thread.next_review_step)}</p>'
+        f'{_operator_brief_thread_facts(thread.facts)}'
+        f'{_operator_brief_thread_provenance(thread)}'
+        "</article>"
+    )
+
+
+def _operator_brief_thread_facts(facts: tuple[object, ...]) -> str:
+    if not facts:
+        return ""
+    rows = "".join(
+        f'<li class="searchable">{_h(fact.summary)}{_operator_brief_fact_context(fact)}</li>'
+        for fact in facts
+    )
+    return (
+        '<div class="direct-evidence"><p><strong>Direct facts</strong></p><ul>'
+        + rows
+        + "</ul></div>"
+    )
+
+
+def _operator_brief_fact_context(fact: object) -> str:
+    context = (
+        ("Endpoints", ", ".join(fact.endpoints)),
+        ("Origins", ", ".join(fact.origins)),
+        ("Route", fact.route),
+        ("Service", fact.service),
+        ("Share", fact.share_name),
+        ("Share type", fact.share_type),
+        ("Parameter", fact.parameter_name),
+        ("Form method", fact.form_method),
+        ("Form action", fact.form_action),
+        ("HTTP method", fact.http_method),
+        ("HTTP status", fact.http_status_code),
+    )
+    values = "; ".join(
+        f"{label}: {value}" for label, value in context if value not in ("", None)
+    )
+    return f'<span class="fact-context"> ({_h(values)})</span>' if values else ""
+
+
+def _operator_brief_thread_provenance(thread: object) -> str:
+    fact_rows = "".join(
+        "<li>"
+        f'<code>{_h(fact.fact_id)}</code>'
+        f'{_investigation_text_values("Evidence IDs", fact.evidence_ids)}'
+        f'{_investigation_text_values("Artefact references", fact.artefact_references)}'
+        f'{_investigation_text_values("Source references", tuple(reference.source_id for reference in fact.source_references))}'
+        f'{_investigation_text_values("Body SHA-256", (fact.body_sha256,) if fact.body_sha256 else ())}'
+        "</li>"
+        for fact in thread.facts
+    )
+    thread_values = (
+        _investigation_list_values("Thread ID", (thread.thread_id,)),
+        _investigation_list_values("Identity key", (thread.identity_key,)),
+        _investigation_list_values("Subject kind", (thread.subject_kind.value,)),
+        _investigation_list_values("Evidence IDs", thread.evidence_ids),
+        _investigation_list_values("Source lead IDs", thread.source_lead_ids),
+        _investigation_list_values("Source artefacts", thread.source_artefacts),
+    )
+    technical_context = (
+        _investigation_conflicts(thread.conflicts)
+        + _investigation_coverage(thread.coverage_limitations)
+    )
+    return (
+        '<details class="thread-provenance searchable"><summary>Technical provenance</summary>'
+        '<div class="provenance"><p><strong>Provenance</strong></p><ul>'
+        + "".join(thread_values)
+        + fact_rows
+        + "</ul></div>"
+        + technical_context
+        + "</details>"
+    )
+
+
+def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
+    presentation = model.operator_brief_presentation
+    if presentation is None:
+        raise ValueError("Technical investigation evidence requires canonical presentation.")
+    content = (
+        '<p class="section-note">Canonical technical subjects and provenance are retained '
+        "for supporting review. These disclosures are not a second priority ranking.</p>"
+        + "".join(
+            _technical_investigation_subject(item)
+            for item in presentation.investigation_subjects
+        )
+    )
+    return _section(
+        "technical-investigation-evidence",
+        "Technical investigation evidence",
+        content,
+    )
+
+
+def _technical_investigation_subject(item: object) -> str:
+    label = item.facts[0].label if item.facts else _human_label(item.subject_kind.value)
+    return (
+        '<details class="record searchable technical-investigation-subject" '
+        f'data-category="{_a(_TECHNICAL_INVESTIGATION_CATEGORY)}" data-status="">'
+        f'<summary>{_h(label)}</summary>{_investigation_subject(item)}</details>'
     )
 
 
@@ -1658,6 +1783,13 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
     }
     if model.operator_summary.ranked_leads:
         values.add(_OPERATOR_SUMMARY_CATEGORY)
+    if model.operator_brief.threads:
+        values.add(_OPERATOR_SUMMARY_CATEGORY)
+    if (
+        model.operator_brief_presentation is not None
+        and model.operator_brief_presentation.investigation_subjects
+    ):
+        values.add(_TECHNICAL_INVESTIGATION_CATEGORY)
     if model.operator_report_view.analysis_coverage.items:
         values.add(_ANALYSIS_COVERAGE_CATEGORY)
     if model.human_triage_brief.start_here or model.human_triage_brief.evidence_values:

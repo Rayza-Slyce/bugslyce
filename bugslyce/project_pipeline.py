@@ -591,8 +591,17 @@ def run_project_pipeline(
         if progress_callback is not None
         else None
     )
-    gobuster_progress_callback = (
-        lambda event: _emit(
+    gobuster_indeterminate_origins: set[str] = set()
+
+    def _forward_gobuster_progress(event) -> None:
+        if event.trusted:
+            gobuster_indeterminate_origins.discard(event.origin)
+        elif event.origin in gobuster_indeterminate_origins:
+            return
+        else:
+            gobuster_indeterminate_origins.add(event.origin)
+
+        _emit(
             progress_callback,
             (
                 f"[{content_step_position}/{total_steps}] {content_step_name}: "
@@ -605,6 +614,9 @@ def run_project_pipeline(
                 )
             ),
         )
+
+    gobuster_progress_callback = (
+        _forward_gobuster_progress
         if progress_callback is not None
         else None
     )
