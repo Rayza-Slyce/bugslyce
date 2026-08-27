@@ -7,12 +7,12 @@ release shaped by authorised Blog and Skynet lab acceptance. It remains a
 bounded reconnaissance and evidence-led triage tool; review leads are
 observations for human investigation, not confirmed vulnerabilities.
 
-Technical acceptance is complete. The exact same `1.3.0` wheel was accepted
-on Mint and Kali, with package metadata, runtime identity, console command and
-all four packaged wordlists verified. BugSlyce is approved to proceed through
-the remaining final release-integrity checks to tag and publication. The
-`v1.3.0` tag, GitHub release and PyPI publication are still pending in this
-repository state.
+Technical acceptance is complete. The final release-record checkout passed
+`4,271` tests, and a clean fixed-epoch rebuild reproduced the exact `1.3.0`
+wheel accepted on Mint and Kali. Package metadata, runtime identity, console
+command and all four packaged wordlists were verified. Pre-tag
+release-integrity checks are complete; the `v1.3.0` tag, GitHub release and
+PyPI publication are still pending in this repository state.
 
 ### Operator report usefulness
 

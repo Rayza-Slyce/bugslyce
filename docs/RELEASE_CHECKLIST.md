@@ -3,14 +3,19 @@
 This checklist records BugSlyce `1.3.0` technical release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Technical decision: **GO to tag and publish.** Release-integrity and rebuild
-verification below must still complete before the tag is created.
+Pre-tag release-integrity checks are complete. Technical decision: **GO to tag
+and publish.** The remaining release-finalisation steps below have not yet been
+performed.
 
 ### Accepted `1.3.0` source and package evidence
 
 Release-source commit:
 
 `0030865d5d2346d7da6092d6b2338eb5ea6f8f01`
+
+Release-record commit used for the pre-tag integrity build:
+
+`b6d41c3743b04b16da87fd2643fc7097cc0ad359`
 
 Accepted build epoch:
 
@@ -39,6 +44,13 @@ Accepted build epoch:
       status distinguished from the final publication source distribution.
 - [x] Isolated Mint exact-wheel acceptance completed.
 - [x] Exact-artifact Kali acceptance completed using the same wheel.
+- [x] Final release-record checkout validation passed: `4,271 passed`;
+      `compileall` and `git diff --check` also passed.
+- [x] A clean fixed-epoch rebuild from the release-record commit reproduced
+      the exact Mint/Kali-accepted wheel byte-for-byte.
+- [x] The fresh pre-tag integrity source distribution was built and inspected;
+      its SHA-256 was recorded as build evidence, not as the immutable final
+      publication source-distribution hash.
 
 Accepted wheel:
 
@@ -48,17 +60,27 @@ SHA-256 on Mint and Kali:
 
 `36e5f4e37a6530fa94090f9b19f490ed0f0b255f09b7e47b37f40a6fd0b129d1`
 
-Pre-final-record source distribution:
+Fixed-epoch rebuild verification:
+
+`dist/bugslyce-1.3.0-py3-none-any.whl: OK`
+
+The reproduced wheel retained package metadata `Name: bugslyce`,
+`Version: 1.3.0` and `Requires-Python: >=3.11`.
+
+Pre-tag integrity source distribution:
 
 `bugslyce-1.3.0.tar.gz`
 
 SHA-256:
 
-`2cce445c931b932335c6d9e766a16f351387208b5d43f65e5af4a2c886210a0f`
+`947b1bfd6d6e927a9d2800a4390822f630b2bf28b364341350ee15da9fa56610`
 
-This source distribution was built from the release-source commit before this
-final release-record amendment. It is accepted build evidence, but it is not
-the final publication source distribution.
+This hash records the pre-tag integrity build from the release-record commit.
+It is not the immutable final publication source-distribution hash because this
+documentation closure changes source-distribution members. Publication hashes
+will be frozen externally in `SHA256SUMS` and the GitHub/PyPI release record
+after building from the final tag-target checkout; no source distribution is
+required to contain its own final SHA-256.
 
 ### Exact-wheel cross-host acceptance
 
@@ -98,14 +120,14 @@ the final publication source distribution.
 
 ### Still required for `1.3.0`
 
-- [ ] Commit this final technical release record.
-- [ ] Confirm a fixed-epoch rebuild of that checkout reproduces the exact
-      accepted wheel SHA-256.
-- [ ] Build the fresh final source distribution from the final release-record
-      commit, then inspect it and record its SHA-256.
+- [ ] Commit and push this final pre-tag documentation closure.
+- [ ] Build and freeze publication artefacts from the final tag-target
+      checkout.
+- [ ] Create `SHA256SUMS` for those exact publication artefacts.
 - [ ] Create and push annotated tag `v1.3.0`.
 - [ ] Publish the GitHub `v1.3.0` release.
-- [ ] Publish to PyPI and verify the public `1.3.0` package.
+- [ ] Publish the exact artefacts to PyPI.
+- [ ] Verify the public PyPI and GitHub release identity and artefact hashes.
 
 ## Historical `1.2.1` release acceptance
 
