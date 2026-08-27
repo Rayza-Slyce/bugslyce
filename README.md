@@ -10,19 +10,32 @@ BugSlyce is not an exploitation framework, vulnerability scanner or automated
 pentesting platform. Its reports describe observed evidence and review leads;
 BugSlyce does not claim confirmed vulnerabilities.
 
+## Current release
+
+BugSlyce `1.3.0` improves authorised-lab reliability, evidence hand-off and
+operator-facing review without expanding the product into exploitation or
+active vulnerability testing. HTTP service identity is preserved across
+hostname/IP collection seams and through portable evidence packs. Gobuster now
+runs under supervised progress handling with parser-safe, no-colour output.
+Persisted human Operator Brief threads own the HTML Investigation priorities,
+while exhaustive machine-oriented technical evidence remains searchable as
+secondary provenance. Duplicate same-host, same-share SMB observations over
+the standard 139/445 transport pair are consolidated into one human review
+lead without merging the underlying evidence records.
+
 ## Production bug bounty preflight
 
-BugSlyce `1.2.1` is the current v1.2 strict bug-bounty runtime patch.
+BugSlyce `1.3.0` retains the strict bug-bounty runtime introduced in v1.2.
 Standard and Deep bug-bounty project execution uses policy-aware traffic
 controls and default-deny programme-scope enforcement.
 
-BugSlyce `1.2.1` hardens resolved-peer enforcement. Special-purpose or
-multicast resolved IPv4 peers require explicit IPv4/CIDR programme authority,
-and strict Gobuster pins the programme-approved IPv4 peer instead of resolving
-the logical hostname again during execution. The logical HTTP Host authority is
-preserved. For hostname-based HTTPS Gobuster, the pinned-IP transport does not
-preserve hostname SNI, so content discovery may be incomplete on services that
-require SNI.
+The historical `1.2.1` safety patch hardened resolved-peer enforcement.
+Special-purpose or multicast resolved IPv4 peers require explicit IPv4/CIDR
+programme authority, and strict Gobuster pins the programme-approved IPv4 peer
+instead of resolving the logical hostname again during execution. The logical
+HTTP Host authority is preserved. For hostname-based HTTPS Gobuster, the
+pinned-IP transport does not preserve hostname SNI, so content discovery may be
+incomplete on services that require SNI.
 
 Historical controlled testing of `1.1.1` against a local HTTP capture server
 found that Standard Recon peaked at **154 requests per second** and Deep Recon
@@ -59,7 +72,7 @@ authorised labs remain supported live-testing contexts. Standard and Deep
 bug-bounty project execution is supported only when the current programme
 policy, default-deny programme scope and strict preflight all permit it.
 
-Current package version: `1.2.1`.
+Current package version: `1.3.0`.
 
 The v1.2 runtime completed source-level, isolated-package, cross-host and
 packaged authorised-lab acceptance before `1.2.0` promotion. The `1.2.1`
@@ -235,7 +248,7 @@ project files.
 
 ## Development and Testing Status
 
-The package version is `1.2.1`. The deterministic test suite mocks live
+The package version is `1.3.0`. The deterministic test suite mocks live
 execution and should not contact targets. Local development checks include:
 
 ```bash

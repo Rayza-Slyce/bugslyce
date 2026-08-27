@@ -1,9 +1,44 @@
 # Release Checklist
 
-This checklist tracks BugSlyce `1.2.1` safety-patch release acceptance.
+This checklist tracks BugSlyce `1.3.0` release preparation.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **BugSlyce `1.2.1` release acceptance is complete.**
+Current decision: **Source and authorised-lab acceptance are complete; final
+package and publication acceptance remain pending.**
+
+### Completed `1.3.0` source/runtime acceptance
+
+- [x] Source acceptance completed for the bounded v1.3 runtime.
+- [x] Authorised Blog lab acceptance completed.
+- [x] Authorised Skynet lab acceptance completed.
+- [x] Full Mint regression suite passed: `4,270 passed`.
+- [x] Focused Kali owner verification passed: `128 passed`.
+- [x] Repository-wide Daybreak Blue read-only release assurance completed.
+- [x] `RELEASE-VERSION-01` was reproduced as the expected release-metadata
+      hardening blocker.
+- [x] `REPORT-SYMLINK-01` was recorded as a P2 non-blocking, post-v1.3 issue.
+- [x] Package, runtime and current release-facing metadata were aligned to
+      `1.3.0` in this release-hardening tranche.
+
+### Still required for `1.3.0`
+
+- [ ] Build the final `1.3.0` wheel and source distribution from reviewed
+      committed source.
+- [ ] Record final wheel and source-distribution SHA-256 values.
+- [ ] Complete isolated Mint package acceptance.
+- [ ] Complete exact-artifact Kali acceptance.
+- [ ] Record the final release-source commit, if a distinct release commit is
+      required.
+- [ ] Create and push annotated tag `v1.3.0`.
+- [ ] Publish the GitHub `v1.3.0` release.
+- [ ] Publish to PyPI and verify the public `1.3.0` package.
+
+## Historical `1.2.1` release acceptance
+
+The completed record below remains the historical BugSlyce `1.2.1`
+safety-patch release evidence.
+
+Historical decision: **BugSlyce `1.2.1` release acceptance is complete.**
 
 Accepted safety-fix commit:
 `6b3e0d3d34b2f19c0a7f088a0ba1658644011a05`.

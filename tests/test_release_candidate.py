@@ -27,7 +27,7 @@ from bugslyce.recon.modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FINAL_VERSION = "1.2.1"
+FINAL_VERSION = "1.3.0"
 RC2_VERSION = "1.0.0rc2"
 PREVIOUS_RC_VERSION = "1.0.0rc1"
 RC2_WHEEL_FILENAME = "bugslyce-1.0.0rc2-py3-none-any.whl"
@@ -102,6 +102,9 @@ def test_release_notes_have_current_final_v1_section() -> None:
     compact = " ".join(notes.split())
 
     assert f"## {FINAL_VERSION}" in notes
+    assert "authorised Blog and Skynet lab acceptance" in compact
+    assert "secondary searchable technical evidence" in compact
+    assert "standard SMB 139/445 TCP transport pair" in compact
     assert (
         "BugSlyce `1.1.0` adds a self-contained offline HTML evidence report "
         "and improves presentation of existing deterministic evidence and review models."
@@ -225,9 +228,9 @@ def test_final_package_filename_contract() -> None:
 
     assert distribution_name == "bugslyce"
     assert f"{distribution_name}-{FINAL_VERSION}-py3-none-any.whl" == (
-        "bugslyce-1.2.1-py3-none-any.whl"
+        "bugslyce-1.3.0-py3-none-any.whl"
     )
-    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.2.1.tar.gz"
+    assert f"{distribution_name}-{FINAL_VERSION}.tar.gz" == "bugslyce-1.3.0.tar.gz"
 
 
 def test_release_documents_distinguish_current_final_state_and_history() -> None:
@@ -237,6 +240,9 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
     assert "Historical rc1 acceptance" in checklist
     assert "Historical rc2 release-candidate acceptance" in checklist
     assert "Historical 1.0.0 final technical acceptance" in checklist
+    assert "Historical `1.2.1` release acceptance" in checklist
+    assert "Still required for `1.3.0`" in checklist
+    assert "annotated tag `v1.3.0`" in checklist
     assert "1.1.0 release record" in checklist
     assert "1.1.0 actions still pending" not in checklist
     assert "tagging and publication remain pending" not in " ".join(checklist.split())

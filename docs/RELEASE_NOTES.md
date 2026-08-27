@@ -1,5 +1,61 @@
 # Release Notes
 
+## 1.3.0
+
+BugSlyce `1.3.0` is a reliability, evidence-integrity and operator-reporting
+release shaped by authorised Blog and Skynet lab acceptance. It remains a
+bounded reconnaissance and evidence-led triage tool; review leads are
+observations for human investigation, not confirmed vulnerabilities.
+
+### Operator report usefulness
+
+- Persisted human Operator Brief threads now own the HTML Investigation
+  priorities, keeping the primary review surface small and meaningful.
+- Canonical machine subjects, technical identifiers and exhaustive provenance
+  remain available as secondary searchable technical evidence.
+- Report composition remains deterministic, offline and based on persisted
+  evidence rather than semantic replay during rendering.
+
+### Identity, persistence and portability
+
+- Nmap-reported hostname-to-peer relationships are retained as typed project
+  state so HTTP metadata, content planning and path follow-up preserve the
+  logical hostname while using evidence-backed service identity.
+- The relationship and Operator Brief composition are reconstructed from
+  retained evidence and remain portable through evidence-pack export and
+  validation, including compatible loading of older project state.
+
+### Content-discovery reliability
+
+- Generic Gobuster collection uses an explicit request timeout without a normal
+  whole-process deadline for finite authorised workloads.
+- Supervised PTY progress exposes trusted candidate progress when Gobuster's
+  reported total matches the approved wordlist, with safe indeterminate
+  fallback for unknown or regressing output.
+- No-colour command output and ANSI/control-sequence handling keep retained
+  Gobuster evidence parser-safe while preserving operator progress and safe
+  cancellation.
+
+### SMB operator attention
+
+- Same-host, same-share Disk observations over the standard SMB 139/445 TCP
+  transport pair now produce one human review lead containing both endpoints
+  and all direct evidence IDs.
+- Raw SMB share observations remain separate, and non-standard ports are not
+  folded into the 139/445 consolidation rule.
+
+### Acceptance and known limitations
+
+- Authorised Blog and Skynet lab acceptance exercised the corrected HTTP,
+  content-discovery, report and SMB review paths at a high level.
+- Related generic service-context cards for 139/tcp and 445/tcp may still
+  appear separately; this is accepted low-materiality operator-attention work.
+- Authenticated SMB access, share traversal and file reads remain outside the
+  v1 collection boundary.
+- Exploitation and active vulnerability testing remain outside v1.
+- Further cross-evidence operator-attention composition and ranking work is
+  deferred.
+
 ## 1.2.1
 
 BugSlyce `1.2.1` is a focused safety-hardening patch for the strict v1.2
