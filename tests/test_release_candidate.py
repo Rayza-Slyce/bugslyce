@@ -48,6 +48,11 @@ V11_WHEEL_FILENAME = "bugslyce-1.1.0-py3-none-any.whl"
 V11_WHEEL_SHA256 = "8765dcfeeb9fa9f43de154f54d13049c46d7fa7c241cb8e9b759da620a1c6a87"
 V11_SDIST_FILENAME = "bugslyce-1.1.0.tar.gz"
 V11_SDIST_SHA256 = "bec36c61f618f5ed2a85e1b38b01bc515965495efc5d91354eb3bbe04849c477"
+V13_RELEASE_SOURCE_COMMIT = "0030865d5d2346d7da6092d6b2338eb5ea6f8f01"
+V13_SOURCE_DATE_EPOCH = "SOURCE_DATE_EPOCH=1787825359"
+V13_WHEEL_FILENAME = "bugslyce-1.3.0-py3-none-any.whl"
+V13_WHEEL_SHA256 = "36e5f4e37a6530fa94090f9b19f490ed0f0b255f09b7e47b37f40a6fd0b129d1"
+V13_PREFINAL_SDIST_SHA256 = "2cce445c931b932335c6d9e766a16f351387208b5d43f65e5af4a2c886210a0f"
 
 
 def test_current_checkout_uses_final_v1_version() -> None:
@@ -247,6 +252,39 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
     assert "1.1.0 actions still pending" not in checklist
     assert "tagging and publication remain pending" not in " ".join(checklist.split())
     assert "completed public record below documents the earlier `1.0.0rc1` acceptance" in acceptance
+
+
+def test_v13_release_record_freezes_accepted_technical_evidence_and_pending_publication() -> None:
+    checklist = _read("docs/RELEASE_CHECKLIST.md").split(
+        "## Historical `1.2.1` release acceptance", 1
+    )[0]
+    notes = _read("docs/RELEASE_NOTES.md").split("## 1.2.1", 1)[0]
+    compact_checklist = " ".join(checklist.split())
+    compact_notes = " ".join(notes.split())
+
+    for accepted in (
+        V13_RELEASE_SOURCE_COMMIT,
+        V13_SOURCE_DATE_EPOCH,
+        V13_WHEEL_FILENAME,
+        V13_WHEEL_SHA256,
+        V13_PREFINAL_SDIST_SHA256,
+        "Full Mint regression suite passed: `4,270 passed`",
+        "Both hosts verified the exact wheel SHA-256 shown above byte-for-byte",
+        "Technical decision: **GO to tag and publish.**",
+    ):
+        assert accepted in checklist
+    assert "not the final publication source distribution" in compact_checklist
+    for pending in (
+        "Confirm a fixed-epoch rebuild of that checkout reproduces the exact accepted wheel SHA-256",
+        "Build the fresh final source distribution from the final release-record commit",
+        "Create and push annotated tag `v1.3.0`",
+        "Publish the GitHub `v1.3.0` release",
+        "Publish to PyPI and verify the public `1.3.0` package",
+    ):
+        assert f"- [ ] {pending}" in compact_checklist
+    assert "Technical acceptance is complete" in compact_notes
+    assert "exact same `1.3.0` wheel was accepted on Mint and Kali" in compact_notes
+    assert "`v1.3.0` tag, GitHub release and PyPI publication are still pending" in compact_notes
 
 
 def test_release_acceptance_documents_exact_wheel_pipx_contract() -> None:

@@ -1,34 +1,108 @@
 # Release Checklist
 
-This checklist tracks BugSlyce `1.3.0` release preparation.
+This checklist records BugSlyce `1.3.0` technical release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Current decision: **Source and authorised-lab acceptance are complete; final
-package and publication acceptance remain pending.**
+Technical decision: **GO to tag and publish.** Release-integrity and rebuild
+verification below must still complete before the tag is created.
 
-### Completed `1.3.0` source/runtime acceptance
+### Accepted `1.3.0` source and package evidence
+
+Release-source commit:
+
+`0030865d5d2346d7da6092d6b2338eb5ea6f8f01`
+
+Accepted build epoch:
+
+`SOURCE_DATE_EPOCH=1787825359`
 
 - [x] Source acceptance completed for the bounded v1.3 runtime.
 - [x] Authorised Blog lab acceptance completed.
 - [x] Authorised Skynet lab acceptance completed.
 - [x] Full Mint regression suite passed: `4,270 passed`.
+- [x] `compileall` and `git diff --check` passed.
+- [x] Focused Kali release, documentation and package gate passed: `37 passed`.
 - [x] Focused Kali owner verification passed: `128 passed`.
-- [x] Repository-wide Daybreak Blue read-only release assurance completed.
+- [x] Repository-wide Daybreak Blue read-only release assurance completed:
+      full suite `4,270 passed`; focused release-critical owners `613 passed`;
+      no new persistence, evidence-integrity, command-safety, HTTP, Gobuster,
+      ranking or collection blocker was found.
 - [x] `RELEASE-VERSION-01` was reproduced as the expected release-metadata
       hardening blocker.
 - [x] `REPORT-SYMLINK-01` was recorded as a P2 non-blocking, post-v1.3 issue.
 - [x] Package, runtime and current release-facing metadata were aligned to
       `1.3.0` in this release-hardening tranche.
+- [x] The final `1.3.0` wheel was built from the reviewed release-source
+      commit.
+- [x] Wheel SHA-256 was recorded.
+- [x] The pre-final-record source-distribution SHA-256 was recorded with its
+      status distinguished from the final publication source distribution.
+- [x] Isolated Mint exact-wheel acceptance completed.
+- [x] Exact-artifact Kali acceptance completed using the same wheel.
+
+Accepted wheel:
+
+`bugslyce-1.3.0-py3-none-any.whl`
+
+SHA-256 on Mint and Kali:
+
+`36e5f4e37a6530fa94090f9b19f490ed0f0b255f09b7e47b37f40a6fd0b129d1`
+
+Pre-final-record source distribution:
+
+`bugslyce-1.3.0.tar.gz`
+
+SHA-256:
+
+`2cce445c931b932335c6d9e766a16f351387208b5d43f65e5af4a2c886210a0f`
+
+This source distribution was built from the release-source commit before this
+final release-record amendment. It is accepted build evidence, but it is not
+the final publication source distribution.
+
+### Exact-wheel cross-host acceptance
+
+- Mint used Python `3.12.3` and an isolated temporary pipx installation.
+- Kali used Python `3.14.6` and an isolated temporary virtual environment with
+  `pip install --no-index --no-deps` outside the repository.
+- Both hosts verified the exact wheel SHA-256 shown above byte-for-byte.
+- Both hosts verified package name `bugslyce`, version `1.3.0`,
+  `Requires-Python: >=3.11`, the console command and all four packaged
+  wordlists: `lab-root-tiny.txt`, `standard-auth-core.txt`,
+  `standard-bounded-core.txt` and `deep-bounded-core.txt`.
+- Package metadata declared no active Python runtime dependencies.
+- The wheel and pre-final-record source distribution transferred to Kali both
+  matched the Mint SHA-256 record byte-for-byte.
+- Mint verified CLI and help surfaces, installed wordlist resolution and doctor
+  behaviour. Core readiness was yes; Recon readiness was no only because
+  Gobuster was absent.
+- Kali verified CLI and help surfaces, runtime/distribution versions, packaged
+  wordlists and doctor readiness for Manual Setup Only, Quick, Standard and
+  Deep Recon. Core, Recon and Overall readiness were yes.
+- Doctor did not execute BugSlyce or recon commands on either host, and no
+  network requests were made.
+- The first Kali pipx attempt failed before BugSlyce installation because
+  `PIP_NO_INDEX=1` prevented pipx from obtaining its own `pip>=23.1` shared
+  environment requirement. This was an acceptance-harness issue, not a
+  BugSlyce package defect; the isolated-venv acceptance above superseded it.
+
+### Accepted `1.3.0` non-blockers and boundaries
+
+- `REPORT-SYMLINK-01`: P2 local standalone report-output symlink handling;
+  post-v1.3.
+- `SERVICE-CONTEXT-ATTN-01`: low-materiality related 139/445 generic
+  service-context redundancy; post-v1.3.
+- Broader attention ranking and composition remain future work.
+- Authenticated SMB traversal and reads remain outside v1.
+- Exploitation and active vulnerability testing remain outside v1.
 
 ### Still required for `1.3.0`
 
-- [ ] Build the final `1.3.0` wheel and source distribution from reviewed
-      committed source.
-- [ ] Record final wheel and source-distribution SHA-256 values.
-- [ ] Complete isolated Mint package acceptance.
-- [ ] Complete exact-artifact Kali acceptance.
-- [ ] Record the final release-source commit, if a distinct release commit is
-      required.
+- [ ] Commit this final technical release record.
+- [ ] Confirm a fixed-epoch rebuild of that checkout reproduces the exact
+      accepted wheel SHA-256.
+- [ ] Build the fresh final source distribution from the final release-record
+      commit, then inspect it and record its SHA-256.
 - [ ] Create and push annotated tag `v1.3.0`.
 - [ ] Publish the GitHub `v1.3.0` release.
 - [ ] Publish to PyPI and verify the public `1.3.0` package.

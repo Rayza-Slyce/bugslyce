@@ -7,6 +7,13 @@ release shaped by authorised Blog and Skynet lab acceptance. It remains a
 bounded reconnaissance and evidence-led triage tool; review leads are
 observations for human investigation, not confirmed vulnerabilities.
 
+Technical acceptance is complete. The exact same `1.3.0` wheel was accepted
+on Mint and Kali, with package metadata, runtime identity, console command and
+all four packaged wordlists verified. BugSlyce is approved to proceed through
+the remaining final release-integrity checks to tag and publication. The
+`v1.3.0` tag, GitHub release and PyPI publication are still pending in this
+repository state.
+
 ### Operator report usefulness
 
 - Persisted human Operator Brief threads now own the HTML Investigation
