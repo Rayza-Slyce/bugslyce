@@ -54,6 +54,8 @@ V13_SOURCE_DATE_EPOCH = "SOURCE_DATE_EPOCH=1787825359"
 V13_WHEEL_FILENAME = "bugslyce-1.3.0-py3-none-any.whl"
 V13_WHEEL_SHA256 = "36e5f4e37a6530fa94090f9b19f490ed0f0b255f09b7e47b37f40a6fd0b129d1"
 V13_PRETAG_SDIST_SHA256 = "947b1bfd6d6e927a9d2800a4390822f630b2bf28b364341350ee15da9fa56610"
+V13_TAG_TARGET = "fc8f0febc809efd0540173b63af87945c500d028"
+V13_PUBLIC_SDIST_SHA256 = "928f6e2f82a1340c146156663f036f8a3b1e99d36b100682a696b0829f327f50"
 
 
 def test_current_checkout_uses_final_v1_version() -> None:
@@ -247,20 +249,23 @@ def test_release_documents_distinguish_current_final_state_and_history() -> None
     assert "Historical rc2 release-candidate acceptance" in checklist
     assert "Historical 1.0.0 final technical acceptance" in checklist
     assert "Historical `1.2.1` release acceptance" in checklist
-    assert "Still required for `1.3.0`" in checklist
-    assert "annotated tag `v1.3.0`" in checklist
+    assert "Completed `1.3.0` public release" in checklist
+    assert "Annotated tag `v1.3.0`" in checklist
     assert "1.1.0 release record" in checklist
     assert "1.1.0 actions still pending" not in checklist
     assert "tagging and publication remain pending" not in " ".join(checklist.split())
     assert "completed public record below documents the earlier `1.0.0rc1` acceptance" in acceptance
 
 
-def test_v13_release_record_freezes_accepted_technical_evidence_and_pending_publication() -> None:
+def test_v13_release_record_freezes_accepted_technical_and_public_evidence() -> None:
     checklist = _read("docs/RELEASE_CHECKLIST.md").split(
         "## Historical `1.2.1` release acceptance", 1
     )[0]
     notes = _read("docs/RELEASE_NOTES.md").split("## 1.2.1", 1)[0]
     compact_checklist = " ".join(checklist.split())
+    compact_public_release = " ".join(
+        checklist.split("### Completed `1.3.0` public release", 1)[1].split()
+    )
     compact_notes = " ".join(notes.split())
 
     for accepted in (
@@ -270,31 +275,40 @@ def test_v13_release_record_freezes_accepted_technical_evidence_and_pending_publ
         V13_WHEEL_FILENAME,
         V13_WHEEL_SHA256,
         V13_PRETAG_SDIST_SHA256,
+        V13_TAG_TARGET,
+        V13_PUBLIC_SDIST_SHA256,
         "Full Mint regression suite passed: `4,270 passed`",
         "Final release-record checkout validation passed: `4,271 passed`",
         "Both hosts verified the exact wheel SHA-256 shown above byte-for-byte",
         "reproduced the exact Mint/Kali-accepted wheel byte-for-byte",
-        "Technical decision: **GO to tag and publish.**",
     ):
         assert accepted in compact_checklist
     assert "dist/bugslyce-1.3.0-py3-none-any.whl: OK" in checklist
     assert "not the immutable final publication source-distribution hash" in compact_checklist
-    assert "Publication hashes will be frozen externally in `SHA256SUMS`" in compact_checklist
-    for pending in (
-        "Commit and push this final pre-tag documentation closure",
-        "Build and freeze publication artefacts from the final tag-target checkout",
-        "Create `SHA256SUMS` for those exact publication artefacts",
-        "Create and push annotated tag `v1.3.0`",
-        "Publish the GitHub `v1.3.0` release",
-        "Publish the exact artefacts to PyPI",
-        "Verify the public PyPI and GitHub release identity and artefact hashes",
+    for published in (
+        "Annotated tag `v1.3.0` was created, pushed and remotely verified",
+        "GitHub release **BugSlyce 1.3.0** was published",
+        "twine_upload_status=0",
+        "PYPI_ARTEFACT_VERIFICATION=PASS",
+        "clean Kali installation of `bugslyce==1.3.0`",
+        "Runtime and installed-distribution versions were both `1.3.0`",
+        "Core, Recon and Overall readiness all yes",
+        "lab-root-tiny.txt",
+        "standard-auth-core.txt",
+        "standard-bounded-core.txt",
+        "deep-bounded-core.txt",
+        "SDIST-ROUNDTRIP-01",
+        "PAYLOAD IDENTICAL / NOT A BUGSLYCE DEFECT / NON-BLOCKING",
+        "different Unix permission metadata",
+        "rebuilt wheel is not described as byte-for-byte identical",
     ):
-        assert f"- [ ] {pending}" in compact_checklist
+        assert published in compact_public_release
+    assert "Still required for `1.3.0`" not in checklist
     assert "Technical acceptance is complete" in compact_notes
     assert "final release-record checkout passed `4,271` tests" in compact_notes
-    assert "clean fixed-epoch rebuild reproduced the exact `1.3.0` wheel accepted on Mint and Kali" in compact_notes
-    assert "Pre-tag release-integrity checks are complete" in compact_notes
-    assert "`v1.3.0` tag, GitHub release and PyPI publication are still pending" in compact_notes
+    assert "`v1.3.0` tag, GitHub release and PyPI package are now published" in compact_notes
+    assert "exact public artefact hashes were verified" in compact_notes
+    assert "clean Kali installation from public PyPI passed" in compact_notes
 
 
 def test_release_acceptance_documents_exact_wheel_pipx_contract() -> None:

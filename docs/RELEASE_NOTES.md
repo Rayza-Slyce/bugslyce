@@ -9,10 +9,10 @@ observations for human investigation, not confirmed vulnerabilities.
 
 Technical acceptance is complete. The final release-record checkout passed
 `4,271` tests, and a clean fixed-epoch rebuild reproduced the exact `1.3.0`
-wheel accepted on Mint and Kali. Package metadata, runtime identity, console
-command and all four packaged wordlists were verified. Pre-tag
-release-integrity checks are complete; the `v1.3.0` tag, GitHub release and
-PyPI publication are still pending in this repository state.
+wheel accepted on Mint and Kali. The `v1.3.0` tag, GitHub release and PyPI
+package are now published, and the exact public artefact hashes were verified.
+A clean Kali installation from public PyPI passed with package/runtime
+identity and resources intact and all executable v1 recon modes ready.
 
 ### Operator report usefulness
 

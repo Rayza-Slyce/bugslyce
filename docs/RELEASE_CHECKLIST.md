@@ -3,9 +3,8 @@
 This checklist records BugSlyce `1.3.0` technical release acceptance.
 It does not create a Git tag, publish a package or upload artefacts.
 
-Pre-tag release-integrity checks are complete. Technical decision: **GO to tag
-and publish.** The remaining release-finalisation steps below have not yet been
-performed.
+Public release decision: **BugSlyce `1.3.0` release is complete.** The
+immutable annotated tag, GitHub release and PyPI artefacts have been verified.
 
 ### Accepted `1.3.0` source and package evidence
 
@@ -20,6 +19,10 @@ Release-record commit used for the pre-tag integrity build:
 Accepted build epoch:
 
 `SOURCE_DATE_EPOCH=1787825359`
+
+Immutable release tag and target:
+
+`v1.3.0` -> `fc8f0febc809efd0540173b63af87945c500d028`
 
 - [x] Source acceptance completed for the bounded v1.3 runtime.
 - [x] Authorised Blog lab acceptance completed.
@@ -76,11 +79,11 @@ SHA-256:
 `947b1bfd6d6e927a9d2800a4390822f630b2bf28b364341350ee15da9fa56610`
 
 This hash records the pre-tag integrity build from the release-record commit.
-It is not the immutable final publication source-distribution hash because this
-documentation closure changes source-distribution members. Publication hashes
-will be frozen externally in `SHA256SUMS` and the GitHub/PyPI release record
-after building from the final tag-target checkout; no source distribution is
-required to contain its own final SHA-256.
+It is not the immutable final publication source-distribution hash because the
+subsequent documentation closure changed source-distribution members. The
+publication hashes below are frozen externally in `SHA256SUMS` and the
+GitHub/PyPI release record; no source distribution contains its own final
+SHA-256.
 
 ### Exact-wheel cross-host acceptance
 
@@ -118,16 +121,57 @@ required to contain its own final SHA-256.
 - Authenticated SMB traversal and reads remain outside v1.
 - Exploitation and active vulnerability testing remain outside v1.
 
-### Still required for `1.3.0`
+### Completed `1.3.0` public release
 
-- [ ] Commit and push this final pre-tag documentation closure.
-- [ ] Build and freeze publication artefacts from the final tag-target
-      checkout.
-- [ ] Create `SHA256SUMS` for those exact publication artefacts.
-- [ ] Create and push annotated tag `v1.3.0`.
-- [ ] Publish the GitHub `v1.3.0` release.
-- [ ] Publish the exact artefacts to PyPI.
-- [ ] Verify the public PyPI and GitHub release identity and artefact hashes.
+- [x] Final pre-tag documentation closure was committed and pushed.
+- [x] Publication artefacts were built from the final tag-target checkout.
+- [x] `SHA256SUMS` was created for the exact publication artefacts.
+- [x] Annotated tag `v1.3.0` was created, pushed and remotely verified at
+      `fc8f0febc809efd0540173b63af87945c500d028`.
+- [x] GitHub release **BugSlyce 1.3.0** was published with the wheel, source
+      distribution and `SHA256SUMS`.
+- [x] GitHub assets were downloaded after publication and matched
+      `SHA256SUMS` byte-for-byte.
+- [x] Twine checks passed for the wheel and source distribution; production
+      upload completed with `twine_upload_status=0`.
+- [x] PyPI metadata hashes and independently downloaded artefact hashes matched
+      for both publication files: `PYPI_ARTEFACT_VERIFICATION=PASS`.
+- [x] A clean Kali installation of `bugslyce==1.3.0` from
+      `https://pypi.org/simple` completed successfully outside the repository.
+- [x] Public Kali doctor/readiness acceptance passed with Core, Recon and
+      Overall readiness all yes and every executable v1 recon mode ready.
+
+Final publication wheel:
+
+`bugslyce-1.3.0-py3-none-any.whl`
+
+SHA-256:
+
+`36e5f4e37a6530fa94090f9b19f490ed0f0b255f09b7e47b37f40a6fd0b129d1`
+
+Final publication source distribution:
+
+`bugslyce-1.3.0.tar.gz`
+
+SHA-256:
+
+`928f6e2f82a1340c146156663f036f8a3b1e99d36b100682a696b0829f327f50`
+
+Public Kali acceptance used Python `3.14.6`. Runtime and installed-distribution
+versions were both `1.3.0`; CLI, project and report help worked; and all four
+packaged wordlists were present: `lab-root-tiny.txt`, `standard-auth-core.txt`,
+`standard-bounded-core.txt` and `deep-bounded-core.txt`. Doctor reported the
+supported runtime, package import, command surface, Nmap, curl, Gobuster,
+Manual Setup Only, Quick, Standard and Deep Recon ready. It executed no
+commands, recon or network requests.
+
+`SDIST-ROUNDTRIP-01` is classified **REPRODUCED / ZIP FILE-MODE METADATA
+VARIATION / PAYLOAD IDENTICAL / NOT A BUGSLYCE DEFECT / NON-BLOCKING**. A wheel
+rebuilt from the extracted source distribution had a different whole-wheel
+SHA-256 because seven ZIP entries carried different Unix permission metadata.
+The wheel file lists, unpacked payloads, `METADATA`, `WHEEL`,
+`entry_points.txt`, `top_level.txt` and `RECORD` were identical; the rebuilt
+wheel is not described as byte-for-byte identical.
 
 ## Historical `1.2.1` release acceptance
 
