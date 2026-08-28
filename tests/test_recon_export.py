@@ -4643,6 +4643,71 @@ def test_failed_smb_stderr_is_retained_as_confidence_diagnostic(
     assert expected_diagnostic in validation.missing_declared_member_paths
 
 
+def test_failed_external_stderr_is_retained_as_portable_confidence_diagnostic(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    stderr_path = input_dir / "nmap-discovery.stderr.log"
+    stderr_path.write_text(
+        "route to authorised peer unavailable\n",
+        encoding="utf-8",
+    )
+    execution_path = input_dir / "recon_execution_nmap_discovery.json"
+    execution_path.write_text(
+        json.dumps(
+            {
+                "command_results": [
+                    {
+                        "command_id": "CMD-NMAP-DISCOVERY-APP-EXAMPLE-TEST",
+                        "tool": "nmap",
+                        "executed": True,
+                        "exit_code": 1,
+                        "error": "nmap exited with code 1.",
+                        "stderr_path": str(stderr_path),
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    output_path = tmp_path / "external-failed-diagnostic.zip"
+    export_recon_evidence_pack(input_dir, output_path)
+    extracted = tmp_path / "external-failed-diagnostic"
+
+    with zipfile.ZipFile(output_path) as archive:
+        members = set(archive.namelist())
+        closure = json.loads(archive.read(REFERENCE_CLOSURE_FILENAME))
+        packed_execution = json.loads(archive.read(execution_path.name))
+        archive.extractall(extracted)
+
+    expected_diagnostic = "raw/nmap-discovery.stderr.log"
+    assert expected_diagnostic in members
+    assert packed_execution["retained_diagnostic_artefacts"] == [
+        {
+            "command_id": "CMD-NMAP-DISCOVERY-APP-EXAMPLE-TEST",
+            "portable_path": expected_diagnostic,
+        }
+    ]
+    assert (
+        expected_diagnostic,
+        "collection_confidence_notice",
+        "CONFIDENCE-COMMAND-CMD-NMAP-DISCOVERY-APP-EXAMPLE-TEST",
+        (),
+    ) in _closure_owner_associations(closure)
+
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "complete"
+
+    (extracted / expected_diagnostic).unlink()
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "incomplete"
+    assert expected_diagnostic in validation.missing_declared_member_paths
+
+
 def test_export_includes_optional_operator_brief_as_top_level_closure_member(
     tmp_path: Path,
 ) -> None:

@@ -196,7 +196,11 @@ class BugBountyProjectRuntime:
                     timeout_seconds=command.timeout_seconds,
                 )
                 result = runtime._nmap_runtime.run(plan)
-                converted = _result(command, result)
+                converted = _result(
+                    command,
+                    result,
+                    Path(runtime.project.output_dir),
+                )
                 if converted.exit_code == 0 and not converted.error:
                     (
                         runtime._observed_open_ports,
@@ -236,7 +240,11 @@ class BugBountyProjectRuntime:
                     raise ValueError(
                         "Service/version target peer does not match strict discovery."
                     )
-                return _result(command, runtime._nmap_runtime.run(plan))
+                return _result(
+                    command,
+                    runtime._nmap_runtime.run(plan),
+                    Path(runtime.project.output_dir),
+                )
         return Runner()
 
     def curl_runner(self):
@@ -271,7 +279,11 @@ class BugBountyProjectRuntime:
                         raise ValueError(
                             "Strict curl temporary response headers could not be removed."
                         ) from None
-                return _result(command, result)
+                return _result(
+                    command,
+                    result,
+                    Path(runtime.project.output_dir),
+                )
         return Runner()
 
     def gobuster_runner(self):
@@ -292,7 +304,11 @@ class BugBountyProjectRuntime:
                 )
                 if plan.compatibility_status != COMPONENT_SUPPORTED:
                     raise ValueError(plan.reason)
-                return _result(command, runtime._http_runtime.run(plan))
+                return _result(
+                    command,
+                    runtime._http_runtime.run(plan),
+                    Path(runtime.project.output_dir),
+                )
         return Runner()
 
     def require_runner(self, runner: object, kind: str) -> None:
@@ -506,14 +522,23 @@ def require_project_runtime_binding(
     return project_runtime
 
 
-def _result(command: ReconCommand, result) -> ReconCommandResult:
+def _result(
+    command: ReconCommand,
+    result,
+    project_root: Path,
+) -> ReconCommandResult:
     now = utc_now()
+    stderr_path = _retain_failed_process_stderr(
+        command,
+        result,
+        project_root,
+    )
     return ReconCommandResult(
         command_id=command.id,
         tool=command.tool,
         exit_code=result.return_code,
         stdout_path=None,
-        stderr_path=None,
+        stderr_path=stderr_path,
         output_file=command.output_file,
         started_at=format_utc_iso(now),
         ended_at=format_utc_iso(now),
@@ -527,3 +552,39 @@ def _result(command: ReconCommand, result) -> ReconCommandResult:
             else None
         ),
     )
+
+
+def _retain_failed_process_stderr(
+    command: ReconCommand,
+    result,
+    project_root: Path,
+) -> str | None:
+    """Retain only already-safe stderr from a started failed process."""
+
+    if (
+        result.started is not True
+        or not result.stderr
+        or (result.return_code == 0 and not result.error)
+    ):
+        return None
+
+    try:
+        root = project_root.expanduser().resolve(strict=True)
+        output_candidate = Path(command.output_file).expanduser()
+        if not output_candidate.is_absolute():
+            output_candidate = root / output_candidate
+        if output_candidate.is_symlink():
+            return None
+        output_path = output_candidate.resolve(strict=False)
+        output_path.relative_to(root)
+        stderr_path = output_path.with_suffix(
+            output_path.suffix + ".stderr.log"
+        )
+        stderr_path.relative_to(root)
+        if stderr_path.is_symlink():
+            return None
+        with stderr_path.open("x", encoding="utf-8") as handle:
+            handle.write(result.stderr)
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return None
+    return str(stderr_path)

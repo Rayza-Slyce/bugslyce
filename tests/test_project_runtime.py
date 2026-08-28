@@ -9,13 +9,19 @@ import pytest
 from bugslyce.core.engagement_policy import (
     AUTOMATION_PERMITTED,
     CONFIRMED,
+    IDENTIFICATION_HEADERS,
     IDENTIFICATION_NONE,
     SERVICE_VERSION_NOT_PERMITTED,
     SERVICE_VERSION_PERMITTED,
     TCP_SKIP,
+    IdentificationHeader,
     build_bug_bounty_policy,
 )
-from bugslyce.core.models import HTTPArtifact, ReconCommand
+from bugslyce.core.models import (
+    HTTPArtifact,
+    ReconCommand,
+    ReconHTTPMetadataExecutionResult,
+)
 from bugslyce.core.programme_scope import (
     build_programme_scope_policy,
     build_programme_scope_rule,
@@ -26,9 +32,13 @@ from bugslyce.project_session import (
     save_project_engagement_policy,
     save_project_programme_scope_policy,
 )
-from bugslyce.recon.external_enforcement import assess_tool_capabilities
+from bugslyce.recon.external_enforcement import (
+    MAXIMUM_PROCESS_DIAGNOSTIC_CHARS,
+    assess_tool_capabilities,
+)
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
+from bugslyce.recon.http_metadata import write_http_metadata_execution_result
 from bugslyce.recon.modes import DEEP_RECON_PROFILE, STANDARD_RECON_PROFILE
 from bugslyce.recon.project_runtime import (
     build_bug_bounty_project_runtime,
@@ -62,6 +72,8 @@ Flags:
             Follow redirects
       --no-tls-validation
 """
+
+DIAGNOSTIC_SECRET = "external-private-header-runtime-4729"
 
 
 def test_project_runtime_gobuster_probe_uses_dir_help_surface(monkeypatch) -> None:
@@ -144,6 +156,8 @@ def _project(
     tcp_discovery_policy: str | None = None,
     http_rules: tuple[tuple[str, str, str], ...] = (),
     include_target_hostname: bool = True,
+    identification_requirement: str = IDENTIFICATION_NONE,
+    identification_headers: tuple[IdentificationHeader, ...] = (),
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     scope = tmp_path / "scope.md"
@@ -163,7 +177,8 @@ def _project(
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
-            identification_requirement=IDENTIFICATION_NONE,
+            identification_requirement=identification_requirement,
+            identification_headers=identification_headers,
             service_version_detection=service_version_detection,
             updated_at="2026-08-08T12:00:00Z",
             **policy_kwargs,
@@ -271,6 +286,14 @@ class _CurlArtefactProcess:
             encoding="utf-8",
         )
         return SimpleNamespace(returncode=0, stdout="200", stderr="")
+
+
+class _FailedCurlProcess:
+    def __init__(self, stderr: str) -> None:
+        self.stderr = stderr
+
+    def run(self, _argv, _timeout_seconds, _environment):
+        return SimpleNamespace(returncode=35, stdout="", stderr=self.stderr)
 
 
 @pytest.mark.parametrize("profile", [STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE])
@@ -696,6 +719,79 @@ def test_strict_curl_adapter_uses_shared_executor_and_removes_sidecar(
     assert "--resolve" in process.calls[0]
     assert "--noproxy" in process.calls[0]
     assert not Path(str(output) + ".strict-response-headers").exists()
+
+
+def test_failed_strict_curl_diagnostic_survives_safe_runtime_handoff_and_metadata(
+    tmp_path: Path,
+) -> None:
+    actionable = "TLS handshake failed: certificate verify failed\n"
+    process = _FailedCurlProcess(
+        actionable
+        + f"configured identity: {DIAGNOSTIC_SECRET}\n"
+        + ("bounded-tail-" * MAXIMUM_PROCESS_DIAGNOSTIC_CHARS)
+    )
+    project = _project(
+        tmp_path,
+        identification_requirement=IDENTIFICATION_HEADERS,
+        identification_headers=(
+            IdentificationHeader("X-Researcher-ID", DIAGNOSTIC_SECRET),
+        ),
+    )
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        STANDARD_RECON_PROFILE,
+        capabilities=_capabilities(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        process_runner=process,
+    )
+    runtime.bind_http_origins(("https://app.example.test/",))
+    output = tmp_path / "project" / "curl-headers.txt"
+
+    command_result = runtime.curl_runner().run(
+        _command(
+            "HTTP_METADATA",
+            output,
+            ["curl", "-I", "https://app.example.test/"],
+            tool="curl",
+        )
+    )
+
+    assert command_result.executed is True
+    assert command_result.exit_code == 35
+    assert command_result.error == "curl exited with code 35."
+    assert command_result.stderr_path is not None
+    stderr_path = Path(command_result.stderr_path)
+    assert stderr_path.parent == output.parent
+    diagnostic = stderr_path.read_text(encoding="utf-8")
+    assert actionable.strip() in diagnostic
+    assert DIAGNOSTIC_SECRET not in diagnostic
+    assert "configured value redacted" in diagnostic
+    assert len(diagnostic) <= MAXIMUM_PROCESS_DIAGNOSTIC_CHARS
+
+    execution_result = ReconHTTPMetadataExecutionResult(
+        mode="http-metadata",
+        target="app.example.test",
+        scope_file=str(tmp_path / "scope.md"),
+        input_dir=str(output.parent),
+        http_services=["https://app.example.test/"],
+        artifact_paths=[str(stderr_path)],
+        manifest_path=str(output.parent / "recon_manifest.json"),
+        report_path=str(output.parent / "report.md"),
+        project_state_path=str(output.parent / "project_state.json"),
+        execution_count=1,
+        command_results=[command_result],
+        warnings=[],
+    )
+    execution_json, _execution_markdown = write_http_metadata_execution_result(
+        execution_result,
+        output.parent,
+    )
+    persisted = json.loads(execution_json.read_text(encoding="utf-8"))
+
+    assert persisted["command_results"][0]["stderr_path"] == str(stderr_path)
+    assert Path(persisted["command_results"][0]["stderr_path"]).read_text(
+        encoding="utf-8"
+    ) == diagnostic
 
 
 def test_fabricated_or_cross_runtime_runner_cannot_bypass_workflow_guard(

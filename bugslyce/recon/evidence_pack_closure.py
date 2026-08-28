@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path, PurePosixPath
 
@@ -2117,22 +2117,41 @@ def _collection_confidence_references(
     if project_state is None:
         return ()
     notices = build_collection_confidence_notices_from_project(project_state, root)
-    references = list(evidence_pack_references_from_collection_confidence(notices))
     notice_ids = frozenset(
         notice.notice_id for notice in notices
     )
+    retained_diagnostics = _retained_command_diagnostic_references(
+        root,
+        notice_ids,
+    )
+    diagnostic_portable_paths = {
+        item.source_path: item.portable_path
+        for item in retained_diagnostics
+        if item.source_path is not None
+    }
+    references = []
+    for reference in evidence_pack_references_from_collection_confidence(
+        notices
+    ):
+        portable_path = diagnostic_portable_paths.get(
+            reference.portable_path
+        )
+        references.append(
+            replace(
+                reference,
+                portable_path=portable_path,
+                source_path=reference.portable_path,
+            )
+            if portable_path is not None
+            else reference
+        )
     references.extend(
         _retained_partial_body_references(
             root,
             notice_ids,
         )
     )
-    references.extend(
-        _retained_command_diagnostic_references(
-            root,
-            notice_ids,
-        )
-    )
+    references.extend(retained_diagnostics)
     return tuple(
         sorted(
             references,
@@ -2213,18 +2232,14 @@ def _retained_command_diagnostic_references(
                 continue
 
             command_id = result.get("command_id")
-            tool = result.get("tool")
             stderr_path = result.get("stderr_path")
             executed = result.get("executed")
             exit_code = result.get("exit_code")
             error = result.get("error")
 
             if (
-                tool != "smbclient"
-                or not isinstance(command_id, str)
-                or not command_id.startswith(
-                    "CMD-SMB-SHARES-"
-                )
+                not isinstance(command_id, str)
+                or not command_id.strip()
                 or executed is not True
                 or (
                     exit_code in {0, None}

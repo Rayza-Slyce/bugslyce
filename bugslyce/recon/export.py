@@ -779,12 +779,9 @@ def _portable_confidence_command_content(content: bytes, input_dir: Path) -> byt
         portable_results.append(portable_result)
 
         command_id = portable_result["command_id"]
-        tool = portable_result["tool"]
         stderr_path = result.get("stderr_path")
         if (
-            tool == "smbclient"
-            and command_id.startswith("CMD-SMB-SHARES-")
-            and executed is True
+            executed is True
             and (exit_code not in {0, None} or bool(error))
             and isinstance(stderr_path, str)
             and stderr_path.strip()
@@ -792,7 +789,7 @@ def _portable_confidence_command_content(content: bytes, input_dir: Path) -> byt
             _source, relative = _resolve_reference(
                 input_dir,
                 stderr_path,
-                f"SMB confidence diagnostic for {command_id}",
+                f"command confidence diagnostic for {command_id}",
             )
             retained_diagnostics.append(
                 {

@@ -32,6 +32,7 @@ PARTIAL_OR_DEGRADED = "partial_or_degraded"
 FAILED = "failed"
 SKIPPED_OR_UNAVAILABLE = "skipped_or_unavailable"
 UNKNOWN_LEGACY_STATE = "unknown_legacy_state"
+MAXIMUM_OPERATOR_DIAGNOSTIC_PREVIEW_CHARS = 1_024
 
 _CATEGORY_ORDER = {
     FAILED: 0,
@@ -171,6 +172,10 @@ def build_collection_confidence_notices_from_project(
         for raw_result in raw_results:
             if not isinstance(raw_result, dict):
                 continue
+            diagnostic = _load_project_diagnostic_preview(
+                root,
+                raw_result,
+            )
             command_results.append(
                 {
                     **raw_result,
@@ -179,6 +184,12 @@ def build_collection_confidence_notices_from_project(
                     "confidence_partial_body_retained": (
                         raw_result.get("output_file") in partial_paths
                         or raw_result.get("command_id") in retained_partial_commands
+                    ),
+                    "confidence_diagnostic_preview": (
+                        diagnostic[0] if diagnostic is not None else None
+                    ),
+                    "confidence_diagnostic_artifact": (
+                        diagnostic[1] if diagnostic is not None else None
                     ),
                 }
             )
@@ -634,6 +645,25 @@ def _command_result_notices(
             else f"exit code {exit_code}"
         )
         reason = reason.rstrip(".")
+        diagnostic_preview = _field(
+            result,
+            "confidence_diagnostic_preview",
+        )
+        diagnostic_artifact = _field(
+            result,
+            "confidence_diagnostic_artifact",
+        )
+        has_diagnostic = (
+            isinstance(diagnostic_preview, str)
+            and bool(diagnostic_preview)
+            and isinstance(diagnostic_artifact, str)
+            and bool(diagnostic_artifact)
+        )
+        direct_fact = (
+            f"The `{tool}` command `{command_id}` failed: {reason}."
+        )
+        if has_diagnostic:
+            direct_fact += f" Tool diagnostic: {diagnostic_preview}"
         notices.append(
             CollectionConfidenceNotice(
                 notice_id=collection_confidence_command_notice_id(
@@ -641,16 +671,17 @@ def _command_result_notices(
                 ),
                 category=FAILED,
                 title=f"Collection command failed: {command_id}",
-                direct_fact=(
-                    f"The `{tool}` command `{command_id}` failed: "
-                    f"{reason}."
-                ),
+                direct_fact=direct_fact,
                 operator_implication=(
                     "Expected evidence from this command may be absent; "
                     "do not infer a negative result."
                 ),
                 stage_or_tool=tool,
-                artefact_references=(artefact,),
+                artefact_references=(
+                    (artefact, diagnostic_artifact)
+                    if has_diagnostic
+                    else (artefact,)
+                ),
             )
         )
     return tuple(notices)
@@ -764,3 +795,52 @@ def _load_optional_object(path: Path) -> dict[str, object] | None:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _load_project_diagnostic_preview(
+    root: Path,
+    result: dict[str, object],
+) -> tuple[str, str] | None:
+    """Load one compact preview from a safe project-local failure artefact."""
+
+    exit_code = result.get("exit_code")
+    error = result.get("error")
+    stderr_value = result.get("stderr_path")
+    if (
+        result.get("executed") is not True
+        or (exit_code in {0, None} and not error)
+        or not isinstance(stderr_value, str)
+        or not stderr_value.strip()
+    ):
+        return None
+
+    candidate = Path(stderr_value)
+    if "\\" in stderr_value or ".." in candidate.parts:
+        return None
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(root)
+        if not relative.parts or not resolved.is_file():
+            return None
+        with resolved.open(
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            retained = handle.read(
+                MAXIMUM_OPERATOR_DIAGNOSTIC_PREVIEW_CHARS + 1
+            )
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    preview = retained[:MAXIMUM_OPERATOR_DIAGNOSTIC_PREVIEW_CHARS]
+    if len(retained) > MAXIMUM_OPERATOR_DIAGNOSTIC_PREVIEW_CHARS:
+        preview = preview[:-3] + "..."
+    preview = preview.strip()
+    if not preview:
+        return None
+    return preview, relative.as_posix()

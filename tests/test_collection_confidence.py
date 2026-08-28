@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from bugslyce.recon.collection_confidence import (
     CollectionConfidenceNotice,
     FAILED,
@@ -574,6 +576,138 @@ def test_project_loader_uses_structured_pipeline_and_execution_metadata(
     for reference in ("project_pipeline.json", "recon_execution_content_run.json"):
         assert reference in report
         assert reference in runbook
+
+
+def test_failed_external_diagnostic_is_visible_as_bounded_tool_context(
+    tmp_path: Path,
+) -> None:
+    leading_diagnostic = "TLS handshake failed: certificate verify failed\n"
+    late_diagnostic = "LATE-DIAGNOSTIC-CONTENT-MUST-NOT-BE-INLINED"
+    retained_diagnostic = (
+        leading_diagnostic
+        + ("additional bounded external diagnostic context\n" * 128)
+        + late_diagnostic
+        + "\n"
+    )
+    assert len(retained_diagnostic) > 1_024
+    diagnostic_path = tmp_path / "curl-http-metadata.stderr.log"
+    diagnostic_path.write_text(
+        retained_diagnostic,
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_execution.json").write_text(
+        json.dumps(
+            {
+                "command_results": [
+                    {
+                        "command_id": "CMD-HTTP-METADATA-001",
+                        "tool": "curl",
+                        "exit_code": 35,
+                        "error": "curl exited with code 35.",
+                        "executed": True,
+                        "stderr_path": str(diagnostic_path),
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    notices = build_collection_confidence_notices_from_project(
+        _state(),
+        tmp_path,
+    )
+
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.category == FAILED
+    diagnostic_label = "tool diagnostic"
+    direct_fact_lower = notice.direct_fact.lower()
+    assert diagnostic_label in direct_fact_lower
+    label_index = direct_fact_lower.index(diagnostic_label)
+    inline_preview = notice.direct_fact[
+        label_index + len(diagnostic_label) :
+    ].lstrip(" `:=-")
+    assert leading_diagnostic.strip() in inline_preview
+    assert len(inline_preview) <= 1_024
+    assert retained_diagnostic not in notice.direct_fact
+    assert late_diagnostic not in notice.direct_fact
+    assert notice.artefact_references == (
+        "recon_execution.json",
+        diagnostic_path.name,
+    )
+    assert diagnostic_path.read_text(encoding="utf-8") == retained_diagnostic
+
+    report = render_collection_confidence_markdown(notices)
+    runbook = render_collection_confidence_runbook(notices)
+    assert report is not None
+    assert runbook is not None
+    for rendered in (report, runbook):
+        assert leading_diagnostic.strip() in rendered
+        assert retained_diagnostic not in rendered
+        assert late_diagnostic not in rendered
+
+
+@pytest.mark.parametrize(
+    "reference_kind",
+    ("outside_file", "external_symlink"),
+)
+def test_failed_external_diagnostic_refuses_unsafe_persisted_path(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    outside_content = f"OUTSIDE-DIAGNOSTIC-MUST-NOT-BE-READ-{reference_kind}"
+    outside_path = tmp_path / f"{reference_kind}.stderr.log"
+    outside_path.write_text(outside_content + "\n", encoding="utf-8")
+    if reference_kind == "outside_file":
+        diagnostic_reference = outside_path
+    else:
+        diagnostic_reference = project_root / "curl-http-metadata.stderr.log"
+        diagnostic_reference.symlink_to(outside_path)
+
+    (project_root / "recon_execution.json").write_text(
+        json.dumps(
+            {
+                "command_results": [
+                    {
+                        "command_id": "CMD-HTTP-METADATA-001",
+                        "tool": "curl",
+                        "exit_code": 35,
+                        "error": "curl exited with code 35.",
+                        "executed": True,
+                        "stderr_path": str(diagnostic_reference),
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    notices = build_collection_confidence_notices_from_project(
+        _state(),
+        project_root,
+    )
+
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.category == FAILED
+    assert notice.direct_fact == (
+        "The `curl` command `CMD-HTTP-METADATA-001` failed: "
+        "curl exited with code 35."
+    )
+    assert outside_content not in notice.direct_fact
+    assert notice.artefact_references == ("recon_execution.json",)
+    report = render_collection_confidence_markdown(notices)
+    assert report is not None
+    assert outside_content not in report
 
 
 def test_project_loader_renders_recoverable_body_fetch_without_rewriting_json(
