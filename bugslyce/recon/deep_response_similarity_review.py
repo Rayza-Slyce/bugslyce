@@ -353,7 +353,8 @@ def _redirect_pattern_groups(
         fingerprints = tuple(
             fingerprints_by_id[observation.source_fingerprint_id]
             for observation in observations
-            if observation.source_fingerprint_id in fingerprints_by_id
+            if observation.source_fingerprint_id is not None
+            and observation.source_fingerprint_id in fingerprints_by_id
         )
         if len(fingerprints) < 2:
             continue

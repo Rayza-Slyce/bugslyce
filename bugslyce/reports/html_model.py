@@ -42,7 +42,10 @@ from bugslyce.recon.deep_metadata_collection_export import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.deep_redirect_auth_flow_review import (
+    REDIRECT_STATUS_CODES,
     DeepRedirectAuthFlowReview,
+    DeepRedirectSourceEvidence,
+    DeepRedirectSourceReference,
     build_deep_redirect_auth_flow_review,
 )
 from bugslyce.recon.deep_response_similarity_review import (
@@ -215,7 +218,10 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         metadata_collection,
         source_collection,
     )
-    redirects = build_deep_redirect_auth_flow_review(fingerprints)
+    redirects = build_deep_redirect_auth_flow_review(
+        fingerprints,
+        _project_state_redirect_sources(project_state),
+    )
     similarities = build_deep_response_similarity_review(fingerprints, redirects)
     successful_content = build_successful_deep_content_reviews(source_collection)
     deep_disclosures, deep_mode_enabled = _load_deep_disclosures(root)
@@ -330,6 +336,39 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         operator_brief_composition=operator_brief_composition,
         operator_brief_presentation=operator_brief_presentation,
     )
+
+
+def _project_state_redirect_sources(
+    project_state: ProjectState,
+) -> tuple[DeepRedirectSourceEvidence, ...]:
+    sources = []
+    for path in project_state.discovered_paths:
+        if path.status_code not in REDIRECT_STATUS_CODES:
+            continue
+        if not path.redirect_location or not path.redirect_location.strip():
+            continue
+        evidence_ids = tuple(sorted(set(path.evidence_ids)))
+        sources.append(
+            DeepRedirectSourceEvidence(
+                source_references=tuple(
+                    DeepRedirectSourceReference(
+                        source_kind="project_state_discovered_path",
+                        source_id=evidence_id,
+                    )
+                    for evidence_id in evidence_ids
+                ),
+                source_fingerprint_id=None,
+                collection_section="project_state_discovered_paths",
+                requested_url=path.url,
+                status_code=path.status_code,
+                redirect_location=path.redirect_location,
+                evidence_ids=evidence_ids,
+                set_cookie_present=None,
+                set_cookie_count=None,
+                cookie_names=(),
+            )
+        )
+    return tuple(sources)
 
 
 def _deep_report_inputs_available(

@@ -1,13 +1,13 @@
-"""Offline one-hop redirect/auth-path review for Deep HTTP fingerprints.
+"""Offline one-hop redirect/auth-path review for retained HTTP evidence.
 
-This module interprets already-collected Deep HTTP fingerprint evidence only.
+This module interprets already-retained redirect evidence only.
 It does not read files, write files, make network requests, follow redirects,
 attempt authentication, invoke collectors, or make Deep Recon available.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 from bugslyce.recon.deep_http_fingerprint_summary import (
@@ -33,7 +33,8 @@ STANDALONE_AUTH_PATH_TOKENS = frozenset(
     }
 )
 SAFETY_NOTES = (
-    "This is offline one-hop interpretation of existing HTTP fingerprint evidence.",
+    "This is offline one-hop interpretation of existing HTTP fingerprint evidence "
+    "and other retained HTTP redirect evidence.",
     "No redirects were followed.",
     "No network request was made.",
     "Origin comparison is based only on parsed source and Location evidence.",
@@ -45,11 +46,36 @@ SAFETY_NOTES = (
 
 
 @dataclass(frozen=True)
+class DeepRedirectSourceReference:
+    """Truthful identity for one retained redirect evidence source."""
+
+    source_kind: str
+    source_id: str
+
+
+@dataclass(frozen=True)
+class DeepRedirectSourceEvidence:
+    """Minimum observed facts accepted by the one-hop redirect analyser."""
+
+    source_references: tuple[DeepRedirectSourceReference, ...]
+    source_fingerprint_id: str | None
+    collection_section: str
+    requested_url: str
+    status_code: int
+    redirect_location: str | None
+    evidence_ids: tuple[str, ...]
+    set_cookie_present: bool | None
+    set_cookie_count: int | None
+    cookie_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DeepRedirectAuthFlowObservation:
     """One cautious one-hop redirect/auth-path observation."""
 
     observation_id: str
-    source_fingerprint_id: str
+    source_fingerprint_id: str | None
+    source_references: tuple[DeepRedirectSourceReference, ...]
     collection_section: str
     redirect_status_code: int
     safe_source_url: str
@@ -64,8 +90,8 @@ class DeepRedirectAuthFlowObservation:
     target_query_parameter_names: tuple[str, ...]
     fragment_present: bool
     userinfo_present_and_omitted: bool
-    set_cookie_present: bool
-    set_cookie_count: int
+    set_cookie_present: bool | None
+    set_cookie_count: int | None
     cookie_names: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     interpretation_note: str
@@ -92,7 +118,7 @@ class DeepRedirectAuthFlowSummaryCounts:
 
 @dataclass(frozen=True)
 class DeepRedirectAuthFlowReview:
-    """Offline redirect/auth-path review built from HTTP fingerprints."""
+    """Offline redirect/auth-path review built from retained HTTP evidence."""
 
     observations: tuple[DeepRedirectAuthFlowObservation, ...]
     summary_counts: DeepRedirectAuthFlowSummaryCounts
@@ -114,7 +140,8 @@ class _SafeUrl:
 
 @dataclass(frozen=True)
 class _PendingObservation:
-    source_fingerprint_id: str
+    source_fingerprint_id: str | None
+    source_references: tuple[DeepRedirectSourceReference, ...]
     collection_section: str
     redirect_status_code: int
     safe_source_url: str
@@ -129,28 +156,40 @@ class _PendingObservation:
     target_query_parameter_names: tuple[str, ...]
     fragment_present: bool
     userinfo_present_and_omitted: bool
-    set_cookie_present: bool
-    set_cookie_count: int
+    set_cookie_present: bool | None
+    set_cookie_count: int | None
     cookie_names: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     interpretation_note: str
+    requested_url: str
+    redirect_location: str | None
 
 
 def build_deep_redirect_auth_flow_review(
     http_summary: DeepHttpFingerprintSummary,
+    additional_sources: tuple[DeepRedirectSourceEvidence, ...] = (),
 ) -> DeepRedirectAuthFlowReview:
     """Build a deterministic one-hop redirect/auth-path review."""
 
-    pending = tuple(
-        _observation_from_fingerprint(fingerprint)
+    fingerprint_sources = tuple(
+        _source_from_fingerprint(fingerprint)
         for fingerprint in http_summary.fingerprints
         if fingerprint.status_code in REDIRECT_STATUS_CODES
+    )
+    pending = _merge_additional_sources(
+        tuple(_observation_from_source(source) for source in fingerprint_sources),
+        tuple(
+            _observation_from_source(source)
+            for source in additional_sources
+            if source.status_code in REDIRECT_STATUS_CODES
+        ),
     )
     ordered = tuple(sorted(pending, key=_observation_sort_key))
     observations = tuple(
         DeepRedirectAuthFlowObservation(
             observation_id=f"DEEP-REDIR-REV-{index:04d}",
             source_fingerprint_id=observation.source_fingerprint_id,
+            source_references=observation.source_references,
             collection_section=observation.collection_section,
             redirect_status_code=observation.redirect_status_code,
             safe_source_url=observation.safe_source_url,
@@ -193,11 +232,13 @@ def render_deep_redirect_auth_flow_review_markdown(
         "## Deep Redirect/Auth-Flow Review",
         "",
         "This is offline one-hop interpretation of existing HTTP fingerprint "
-        "evidence. No redirects were followed and no network request was made.",
+        "evidence and other retained HTTP redirect evidence. No redirects were "
+        "followed and no network request was made.",
         "",
         "### Summary",
         "",
-        f"- HTTP fingerprints considered: {counts.total_http_fingerprints_considered}",
+        f"- Deep HTTP fingerprints considered: "
+        f"{counts.total_http_fingerprints_considered}",
         f"- Redirect-status responses: {counts.redirect_status_responses}",
         f"- Redirects with Location evidence: {counts.redirects_with_location_evidence}",
         f"- Redirects without Location evidence: {counts.redirects_without_location_evidence}",
@@ -242,13 +283,39 @@ def render_deep_redirect_auth_flow_review_markdown(
     return "\n".join(lines).rstrip()
 
 
-def _observation_from_fingerprint(
+def _source_from_fingerprint(
     fingerprint: DeepHttpResponseFingerprint,
+) -> DeepRedirectSourceEvidence:
+    return DeepRedirectSourceEvidence(
+        source_references=(
+            DeepRedirectSourceReference(
+                source_kind="deep_http_fingerprint",
+                source_id=fingerprint.fingerprint_id,
+            ),
+        ),
+        source_fingerprint_id=fingerprint.fingerprint_id,
+        collection_section=fingerprint.collection_section,
+        requested_url=fingerprint.requested_url,
+        status_code=fingerprint.status_code,
+        redirect_location=fingerprint.redirect_location,
+        evidence_ids=fingerprint.evidence_ids,
+        set_cookie_present=fingerprint.set_cookie_present,
+        set_cookie_count=fingerprint.set_cookie_count,
+        cookie_names=fingerprint.cookie_names,
+    )
+
+
+def _observation_from_source(
+    source_evidence: DeepRedirectSourceEvidence,
 ) -> _PendingObservation:
-    source = _safe_url_from_url(fingerprint.requested_url)
-    location = fingerprint.redirect_location
+    source = _safe_url_from_url(source_evidence.requested_url)
+    location = source_evidence.redirect_location
     reference_form = _location_reference_form(location)
-    target = _safe_target_from_location(fingerprint.requested_url, location, reference_form)
+    target = _safe_target_from_location(
+        source_evidence.requested_url,
+        location,
+        reference_form,
+    )
     origin_relationship = _origin_relationship(source, target)
     source_auth = _path_is_auth_related(source.path)
     target_auth = _path_is_auth_related(target.path) if target else False
@@ -258,9 +325,10 @@ def _observation_from_fingerprint(
     fragment_present = source.fragment_present or bool(target and target.fragment_present)
     target_query_names = target.query_parameter_names if target else ()
     return _PendingObservation(
-        source_fingerprint_id=fingerprint.fingerprint_id,
-        collection_section=fingerprint.collection_section,
-        redirect_status_code=fingerprint.status_code,
+        source_fingerprint_id=source_evidence.source_fingerprint_id,
+        source_references=source_evidence.source_references,
+        collection_section=source_evidence.collection_section,
+        redirect_status_code=source_evidence.status_code,
         safe_source_url=source.display_url or "unresolved",
         location_present=location_present,
         location_reference_form=reference_form,
@@ -273,15 +341,78 @@ def _observation_from_fingerprint(
         target_query_parameter_names=target_query_names,
         fragment_present=fragment_present,
         userinfo_present_and_omitted=userinfo_present,
-        set_cookie_present=fingerprint.set_cookie_present,
-        set_cookie_count=fingerprint.set_cookie_count,
-        cookie_names=fingerprint.cookie_names,
-        evidence_ids=fingerprint.evidence_ids,
+        set_cookie_present=source_evidence.set_cookie_present,
+        set_cookie_count=source_evidence.set_cookie_count,
+        cookie_names=source_evidence.cookie_names,
+        evidence_ids=source_evidence.evidence_ids,
         interpretation_note=_interpretation_note(
             location_present=location_present,
             origin_relationship=origin_relationship,
             auth_path_transition=transition,
-            set_cookie_present=fingerprint.set_cookie_present,
+            set_cookie_present=source_evidence.set_cookie_present,
+        ),
+        requested_url=source_evidence.requested_url,
+        redirect_location=location,
+    )
+
+
+def _merge_additional_sources(
+    fingerprint_observations: tuple[_PendingObservation, ...],
+    additional_observations: tuple[_PendingObservation, ...],
+) -> tuple[_PendingObservation, ...]:
+    merged = list(fingerprint_observations)
+    for additional in additional_observations:
+        matching_fingerprints = [
+            index
+            for index, existing in enumerate(merged)
+            if existing.source_fingerprint_id is not None
+            and _redirect_evidence_key(existing) == _redirect_evidence_key(additional)
+        ]
+        if matching_fingerprints:
+            for index in matching_fingerprints:
+                merged[index] = _merge_observation_provenance(merged[index], additional)
+            continue
+        matching_retained = next(
+            (
+                index
+                for index, existing in enumerate(merged)
+                if existing.source_fingerprint_id is None
+                and _redirect_evidence_key(existing) == _redirect_evidence_key(additional)
+            ),
+            None,
+        )
+        if matching_retained is None:
+            merged.append(additional)
+        else:
+            merged[matching_retained] = _merge_observation_provenance(
+                merged[matching_retained],
+                additional,
+            )
+    return tuple(merged)
+
+
+def _redirect_evidence_key(observation: _PendingObservation) -> tuple[str, int, str]:
+    return (
+        observation.requested_url.strip(),
+        observation.redirect_status_code,
+        (observation.redirect_location or "").strip(),
+    )
+
+
+def _merge_observation_provenance(
+    primary: _PendingObservation,
+    corroborating: _PendingObservation,
+) -> _PendingObservation:
+    return replace(
+        primary,
+        source_references=tuple(
+            sorted(
+                set((*primary.source_references, *corroborating.source_references)),
+                key=lambda item: (item.source_kind, item.source_id),
+            )
+        ),
+        evidence_ids=tuple(
+            sorted(set((*primary.evidence_ids, *corroborating.evidence_ids)))
         ),
     )
 
@@ -496,7 +627,7 @@ def _interpretation_note(
     location_present: bool,
     origin_relationship: str,
     auth_path_transition: str,
-    set_cookie_present: bool,
+    set_cookie_present: bool | None,
 ) -> str:
     notes = []
     if not location_present:
@@ -561,7 +692,7 @@ def _observation_sort_key(observation: _PendingObservation) -> tuple:
         observation.safe_resolved_target_url or "",
         observation.origin_relationship,
         observation.auth_path_transition,
-        observation.source_fingerprint_id,
+        observation.source_fingerprint_id or "",
         observation.location_reference_form,
         tuple(sorted(observation.cookie_names)),
         tuple(sorted(observation.evidence_ids)),
@@ -572,13 +703,28 @@ def _render_observation(observation: DeepRedirectAuthFlowObservation) -> list[st
     lines = [
         f"#### {observation.observation_id} - Redirect evidence",
         "",
-        f"- Source fingerprint: `{observation.source_fingerprint_id}`",
-        f"- Collection section: `{observation.collection_section}`",
-        f"- Redirect status: `{observation.redirect_status_code}`",
-        f"- Safe source URL: `{_compact_single(observation.safe_source_url)}`",
-        f"- Location evidence observed: {'yes' if observation.location_present else 'no'}",
-        f"- Location reference form: `{observation.location_reference_form}`",
     ]
+    if observation.source_fingerprint_id is not None:
+        lines.append(f"- Source fingerprint: `{observation.source_fingerprint_id}`")
+    if observation.source_references:
+        lines.append(
+            "- Source references: "
+            + _format_compact_values(
+                tuple(
+                    f"{reference.source_kind}:{reference.source_id}"
+                    for reference in observation.source_references
+                )
+            )
+        )
+    lines.extend(
+        [
+            f"- Collection section: `{observation.collection_section}`",
+            f"- Redirect status: `{observation.redirect_status_code}`",
+            f"- Safe source URL: `{_compact_single(observation.safe_source_url)}`",
+            f"- Location evidence observed: {'yes' if observation.location_present else 'no'}",
+            f"- Location reference form: `{observation.location_reference_form}`",
+        ]
+    )
     if observation.safe_resolved_target_url:
         lines.append(
             f"- Safe resolved target: `{_compact_single(observation.safe_resolved_target_url)}`"
@@ -605,15 +751,17 @@ def _render_observation(observation: DeepRedirectAuthFlowObservation) -> list[st
         lines.append("- Fragment present: yes; fragment content omitted.")
     if observation.userinfo_present_and_omitted:
         lines.append("- URL userinfo present: yes; userinfo omitted.")
-    if observation.set_cookie_present:
+    if observation.set_cookie_present is True:
         lines.append(
             "- Set-Cookie on redirect: "
             f"yes ({observation.set_cookie_count} line(s))"
         )
         if observation.cookie_names:
             lines.append("- Cookie names: " + _format_compact_values(observation.cookie_names))
-    else:
+    elif observation.set_cookie_present is False:
         lines.append("- Set-Cookie on redirect: no")
+    else:
+        lines.append("- Set-Cookie state: not retained")
     if observation.evidence_ids:
         lines.append("- Evidence: " + _format_compact_values(observation.evidence_ids))
     lines.extend(

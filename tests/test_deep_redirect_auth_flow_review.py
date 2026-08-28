@@ -11,6 +11,8 @@ from bugslyce.recon.deep_http_fingerprint_summary import (
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.deep_redirect_auth_flow_review import (
     DeepRedirectAuthFlowSummaryCounts,
+    DeepRedirectSourceEvidence,
+    DeepRedirectSourceReference,
     build_deep_redirect_auth_flow_review,
     render_deep_redirect_auth_flow_review_markdown,
 )
@@ -56,6 +58,39 @@ def test_empty_http_summary_produces_safe_empty_review() -> None:
     assert "### Safety Notes" in rendered
     assert "No redirects were followed." in rendered
     assert "No authentication was attempted." in rendered
+
+
+def test_project_state_redirect_markdown_describes_retained_source_truthfully() -> None:
+    review = build_deep_redirect_auth_flow_review(
+        _http_summary(),
+        (
+            DeepRedirectSourceEvidence(
+                source_references=(
+                    DeepRedirectSourceReference(
+                        source_kind="project_state_discovered_path",
+                        source_id="EVID-PROJECT-REDIRECT",
+                    ),
+                ),
+                source_fingerprint_id=None,
+                collection_section="project_state_discovered_paths",
+                requested_url="https://portal.example.test/",
+                status_code=301,
+                redirect_location="/login",
+                evidence_ids=("EVID-PROJECT-REDIRECT",),
+                set_cookie_present=None,
+                set_cookie_count=None,
+                cookie_names=(),
+            ),
+        ),
+    )
+
+    rendered = render_deep_redirect_auth_flow_review_markdown(review)
+
+    assert review.summary_counts.total_http_fingerprints_considered == 0
+    assert review.summary_counts.redirect_status_responses == 1
+    assert "and other retained HTTP redirect evidence" in rendered
+    assert "- Deep HTTP fingerprints considered: 0" in rendered
+    assert "- Redirect-status responses: 1" in rendered
 
 
 def test_non_redirect_and_304_responses_do_not_create_observations() -> None:

@@ -1731,6 +1731,119 @@ def test_html_report_humanises_visible_identifier_fields_without_changing_raw_va
     assert "EVID-REDIRECT-LABEL" in html
 
 
+def test_html_model_hands_retained_project_state_redirect_to_offline_review(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "project-state-redirect")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["discovered_paths"] = [
+        {
+            "url": "https://portal.example.test/",
+            "status_code": 301,
+            "content_length": 0,
+            "redirect_location": "https://identity.example.test/login",
+            "source": "raw/root-headers.txt",
+            "evidence_ids": ["EVID-PROJECT-REDIRECT"],
+            "tags": [],
+        }
+    ]
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+
+    assert model.http_fingerprints.fingerprints == ()
+    assert len(model.redirect_review.observations) == 1
+    observation = model.redirect_review.observations[0]
+    assert observation.safe_source_url == "https://portal.example.test/"
+    assert observation.redirect_status_code == 301
+    assert (
+        observation.safe_resolved_target_url
+        == "https://identity.example.test/login"
+    )
+    assert observation.origin_relationship == "cross_origin"
+    assert observation.evidence_ids == ("EVID-PROJECT-REDIRECT",)
+    assert observation.set_cookie_present is None
+    assert observation.set_cookie_count is None
+    assert observation.cookie_names == ()
+    assert observation.source_fingerprint_id is None
+    assert tuple(
+        (reference.source_kind, reference.source_id)
+        for reference in observation.source_references
+    ) == (("project_state_discovered_path", "EVID-PROJECT-REDIRECT"),)
+    assert "No redirects were followed." in model.redirect_review.safety_notes
+    assert "No network request was made." in model.redirect_review.safety_notes
+
+
+def test_html_model_merges_matching_project_and_deep_redirect_provenance(
+    tmp_path: Path,
+) -> None:
+    pack = _write_current_pack(tmp_path / "corroborated-redirect")
+    state_path = pack / "project_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["project_state"]["discovered_paths"] = [
+        {
+            "url": "https://portal.example.test/old",
+            "status_code": 301,
+            "content_length": 0,
+            "redirect_location": "/login",
+            "source": "raw/root-headers.txt",
+            "evidence_ids": ["EVID-PROJECT-REDIRECT"],
+            "tags": [],
+        }
+    ]
+    state_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            _deep_item(
+                "https://portal.example.test/old",
+                301,
+                "a" * 64,
+                headers=(("Location", "/login"),),
+                evidence_ids=("EVID-DEEP-REDIRECT",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+    (pack / "deep_source_route_collection.json").write_text(
+        json.dumps(
+            deep_source_route_collection_result_to_dict(collection),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    model = build_html_report_model(pack)
+
+    assert len(model.http_fingerprints.fingerprints) == 1
+    assert len(model.redirect_review.observations) == 1
+    observation = model.redirect_review.observations[0]
+    assert (
+        observation.source_fingerprint_id
+        == model.http_fingerprints.fingerprints[0].fingerprint_id
+    )
+    assert set(observation.evidence_ids) == {
+        "EVID-DEEP-REDIRECT",
+        "EVID-PROJECT-REDIRECT",
+    }
+    assert {
+        (reference.source_kind, reference.source_id)
+        for reference in observation.source_references
+    } == {
+        ("deep_http_fingerprint", observation.source_fingerprint_id),
+        ("project_state_discovered_path", "EVID-PROJECT-REDIRECT"),
+    }
+
+
 def test_html_report_requires_structured_metadata_result_for_completed_delegation(
     tmp_path: Path,
 ) -> None:
