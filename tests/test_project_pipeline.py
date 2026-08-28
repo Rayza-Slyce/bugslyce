@@ -3161,7 +3161,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
                 final_url=request.url,
                 status_code=200,
                 headers=(("Content-Type", "application/javascript"),),
-                body=b'const shallow = "/app.js";',
+                body=b'const route = "/app.js";',
                 elapsed_seconds=0.01,
             )
         if request.url == "https://app.example.test/app.js":
@@ -3170,7 +3170,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
                 final_url=request.url,
                 status_code=200,
                 headers=(("Content-Type", "application/javascript"),),
-                body=b'const late = "/api/late-only?tenant=blue";',
+                body=b'const endpoint = "/api/late-only?tenant=blue";',
                 elapsed_seconds=0.01,
             )
         return DeepHTTPResponse(

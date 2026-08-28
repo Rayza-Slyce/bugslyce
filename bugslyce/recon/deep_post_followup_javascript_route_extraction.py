@@ -53,6 +53,7 @@ class DeepPostFollowupJavaScriptRouteSourceObservation:
     candidate_forms: tuple[str, ...]
     resolution_contexts: tuple[str, ...]
     occurrence_count: int
+    semantic_contexts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,10 @@ class DeepPostFollowupJavaScriptRouteCandidate:
     @property
     def resolution_contexts(self) -> tuple[str, ...]:
         return _observation_values(self.source_observations, "resolution_contexts")
+
+    @property
+    def semantic_contexts(self) -> tuple[str, ...]:
+        return _observation_values(self.source_observations, "semantic_contexts")
 
     @property
     def shallow_request_ids(self) -> tuple[str, ...]:
@@ -371,6 +376,7 @@ def _source_observations(
             candidate_forms=observation.candidate.candidate_forms,
             resolution_contexts=observation.candidate.resolution_contexts,
             occurrence_count=observation.candidate.occurrence_count,
+            semantic_contexts=observation.candidate.semantic_contexts,
         )
         for observation in observations
     }
@@ -445,6 +451,7 @@ def _source_observation_sort_key(
         observation.script_types,
         observation.candidate_forms,
         observation.resolution_contexts,
+        observation.semantic_contexts,
         observation.occurrence_count,
     )
 
@@ -506,6 +513,8 @@ def _render_source_observation(
         + _format_compact_values(observation.candidate_forms),
         "  - Resolution contexts: "
         + _format_compact_values(observation.resolution_contexts),
+        "  - Semantic contexts: "
+        + _format_compact_values(observation.semantic_contexts),
         f"  - Occurrences: `{observation.occurrence_count}`",
     ]
 

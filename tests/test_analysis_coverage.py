@@ -297,8 +297,8 @@ def test_parameter_coverage_source_identity_ignores_unrelated_inventory_renumber
         b'const route = "/api/items?tenant=blue";'
     )
     renumbered = _parameter_inventory_for_javascript(
-        b'const first = "/api/alpha?alpha=x"; '
-        b'const route = "/api/items?tenant=blue";'
+        b'{ const route = "/api/alpha?alpha=x"; } '
+        b'{ const route = "/api/items?tenant=blue"; }'
     )
 
     original_evidence = coverage_evidence_from_deep_parameter_inventory(original)

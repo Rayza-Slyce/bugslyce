@@ -240,7 +240,7 @@ def test_orchestration_surfaces_post_followup_javascript_routes_offline() -> Non
     shallow = _shallow_item(
         url="https://example.test/app.js",
         headers=(("Content-Type", "application/javascript"),),
-        body=b'const late = "/api/late-only?tenant=blue";',
+        body=b'const endpoint = "/api/late-only?tenant=blue";',
         evidence_ids=("EVID-LATE-JS",),
     )
 
@@ -376,13 +376,13 @@ def test_initial_javascript_and_shallow_candidate_ids_remain_unchanged() -> None
     source = _source_item(
         url="https://example.test/bootstrap.js",
         headers=(("Content-Type", "application/javascript"),),
-        body=b'const script = "/app.js";',
+        body=b'const route = "/app.js";',
     )
     shallow = _shallow_item(
         request_id="DEEP-SHALLOW-REQ-0001",
         url="https://example.test/app.js",
         headers=(("Content-Type", "application/javascript"),),
-        body=b'const late = "/api/late-only";',
+        body=b'const endpoint = "/api/late-only";',
         source_route_candidate_ids=("DEEP-JS-ROUTE-0001",),
     )
     shallow_result = _shallow_result(shallow)
@@ -710,7 +710,7 @@ def test_writer_indexes_post_followup_stage_without_structured_body_export(
     tmp_path: Path,
 ) -> None:
     preview_prefix = (
-        b'const late = "/api/late-only?tenant=blue"; '
+        b'const endpoint = "/api/late-only?tenant=blue"; '
         b'const preview = "VISIBLE_SHALLOW_PREVIEW_MARKER"; '
         + (b"x" * 460)
     )

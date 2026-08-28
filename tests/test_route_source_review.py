@@ -83,6 +83,85 @@ def test_extracts_and_buckets_route_references_from_local_source_text() -> None:
     assert "/assets/app.css" not in all_routes
 
 
+def test_inline_javascript_lexical_strings_do_not_bypass_semantic_classification() -> None:
+    source = _source(
+        (
+            "<html><script>"
+            'fetch("/api/real-endpoint");'
+            'const descriptiveText = "/graphql";'
+            'const mime = "/application/json";'
+            "</script></html>"
+        ),
+        source_id="EVID-MIXED-INLINE-JAVASCRIPT",
+    )
+
+    leads = build_route_source_review(_project_state(), (source,))
+    all_routes = {
+        route
+        for lead in leads
+        for route in lead.route_references
+    }
+
+    assert all_routes == {"/api/real-endpoint"}
+    assert any(lead.category == "api/graphql/webhook" for lead in leads)
+
+
+def test_inline_script_custom_attributes_do_not_masquerade_as_src_or_type() -> None:
+    source = _source(
+        (
+            "<html>"
+            '<script data-src="deferred">'
+            'fetch("/api/data-src");'
+            "</script>"
+            '<script data-type="template">'
+            'fetch("/api/data-type");'
+            "</script>"
+            "</html>"
+        ),
+        source_id="EVID-INLINE-CUSTOM-ATTRIBUTES",
+    )
+
+    leads = build_route_source_review(_project_state(), (source,))
+    all_routes = {
+        route
+        for lead in leads
+        for route in lead.route_references
+    }
+
+    assert all_routes == {
+        "/api/data-src",
+        "/api/data-type",
+    }
+
+
+def test_inline_script_dotted_custom_attributes_are_not_src_or_type() -> None:
+    source = _source(
+        (
+            "<html>"
+            '<script data.src="deferred">'
+            'fetch("/api/dotted-src");'
+            "</script>"
+            '<script data.type="template">'
+            'fetch("/api/dotted-type");'
+            "</script>"
+            "</html>"
+        ),
+        source_id="EVID-INLINE-DOTTED-CUSTOM-ATTRIBUTES",
+    )
+
+    leads = build_route_source_review(_project_state(), (source,))
+    all_routes = {
+        route
+        for lead in leads
+        for route in lead.route_references
+    }
+
+    assert all_routes == {
+        "/api/dotted-src",
+        "/api/dotted-type",
+    }
+
+
 def test_deduplicates_and_caps_routes_deterministically() -> None:
     routes = " ".join(f"/route-{index}" for index in range(40))
     repeated = f"/login /login {routes}"

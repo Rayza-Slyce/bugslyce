@@ -17,6 +17,12 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
 )
+from bugslyce.recon.javascript_semantic_context import (
+    ACCEPTED_ROUTE_CONTEXTS,
+    FRAMEWORK_SERIALISED_STATE,
+    ORDINARY_LEXICAL_STRING,
+    scan_javascript_semantic_literals,
+)
 
 
 JAVASCRIPT_MEDIA_TYPES = {
@@ -129,6 +135,7 @@ class DeepJavaScriptRouteCandidate:
     occurrence_count: int
     evidence_ids: tuple[str, ...]
     interpretation: str
+    semantic_contexts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -157,6 +164,8 @@ class DeepJavaScriptRouteExtractionSummaryCounts:
     dynamic_concatenation_strings_skipped: int
     duplicate_accepted_occurrences_aggregated: int
     html_responses_using_valid_base_url: int
+    ordinary_lexical_strings_skipped: int = 0
+    framework_serialised_state_strings_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -181,14 +190,6 @@ class _SourceScript:
 
 
 @dataclass(frozen=True)
-class _StringLiteral:
-    value: str
-    dynamic_template: bool = False
-    malformed: bool = False
-    dynamic_concatenation: bool = False
-
-
-@dataclass(frozen=True)
 class _AcceptedOccurrence:
     safe_candidate: str
     safe_resolved_url: str | None
@@ -196,6 +197,7 @@ class _AcceptedOccurrence:
     query_parameter_names: tuple[str, ...]
     candidate_form: str
     resolution_context: str
+    semantic_context: str
     source: _SourceScript
 
 
@@ -283,9 +285,11 @@ def build_deep_javascript_route_extraction(
     malformed_skips = 0
     dynamic_template_skips = 0
     concat_skips = 0
+    ordinary_lexical_skips = 0
+    framework_state_skips = 0
 
     for script in scripts:
-        for literal in _scan_javascript_strings(script.body_text):
+        for literal in scan_javascript_semantic_literals(script.body_text):
             if literal.dynamic_template:
                 dynamic_template_skips += 1
                 continue
@@ -310,7 +314,18 @@ def build_deep_javascript_route_extraction(
             if candidate_form == "not_route_like":
                 not_route_skips += 1
                 continue
-            occurrence = _accepted_occurrence(script, value, candidate_form)
+            if literal.semantic_context not in ACCEPTED_ROUTE_CONTEXTS:
+                if literal.semantic_context == FRAMEWORK_SERIALISED_STATE:
+                    framework_state_skips += 1
+                elif literal.semantic_context == ORDINARY_LEXICAL_STRING:
+                    ordinary_lexical_skips += 1
+                continue
+            occurrence = _accepted_occurrence(
+                script,
+                value,
+                candidate_form,
+                literal.semantic_context,
+            )
             if occurrence is None:
                 malformed_skips += 1
                 continue
@@ -338,6 +353,8 @@ def build_deep_javascript_route_extraction(
         malformed_strings_skipped=malformed_skips,
         dynamic_template_strings_skipped=dynamic_template_skips,
         dynamic_concatenation_strings_skipped=concat_skips,
+        ordinary_lexical_strings_skipped=ordinary_lexical_skips,
+        framework_serialised_state_strings_skipped=framework_state_skips,
         duplicate_accepted_occurrences_aggregated=max(0, len(accepted) - len(candidates)),
         html_responses_using_valid_base_url=selection_counts["html_base_used"],
     )
@@ -381,6 +398,9 @@ def render_deep_javascript_route_extraction_markdown(
         f"- Malformed strings skipped: {counts.malformed_strings_skipped}",
         f"- Dynamic template strings skipped: {counts.dynamic_template_strings_skipped}",
         f"- Dynamic concatenation strings skipped: {counts.dynamic_concatenation_strings_skipped}",
+        f"- Ordinary lexical strings skipped: {counts.ordinary_lexical_strings_skipped}",
+        "- Framework serialised-state strings skipped: "
+        f"{counts.framework_serialised_state_strings_skipped}",
         "- Duplicate accepted occurrences aggregated: "
         f"{counts.duplicate_accepted_occurrences_aggregated}",
         f"- HTML responses using a valid base URL: {counts.html_responses_using_valid_base_url}",
@@ -497,109 +517,11 @@ def _select_scripts(
     return tuple(scripts), counts
 
 
-def _scan_javascript_strings(source: str) -> tuple[_StringLiteral, ...]:
-    literals: list[_StringLiteral] = []
-    index = 0
-    length = len(source)
-    while index < length:
-        char = source[index]
-        next_char = source[index + 1] if index + 1 < length else ""
-        if char == "/" and next_char == "/":
-            index = _skip_line_comment(source, index + 2)
-            continue
-        if char == "/" and next_char == "*":
-            index = _skip_block_comment(source, index + 2)
-            continue
-        if char == "/" and _looks_like_regex_start(source, index):
-            index = _skip_regex_literal(source, index + 1)
-            continue
-        if char in {"'", '"', "`"}:
-            literal, index = _read_string_literal(source, index)
-            literals.append(literal)
-            continue
-        index += 1
-    return tuple(literals)
-
-
-def _read_string_literal(source: str, start: int) -> tuple[_StringLiteral, int]:
-    quote_char = source[start]
-    index = start + 1
-    chars: list[str] = []
-    dynamic_template = False
-    malformed = False
-    while index < len(source):
-        char = source[index]
-        if quote_char == "`" and char == "$" and index + 1 < len(source) and source[index + 1] == "{":
-            dynamic_template = True
-        if char == quote_char:
-            value = "".join(chars)
-            return (
-                _StringLiteral(
-                    value=value,
-                    dynamic_template=dynamic_template,
-                    malformed=malformed,
-                    dynamic_concatenation=_is_concatenated(source, start, index + 1),
-                ),
-                index + 1,
-            )
-        if char == "\\":
-            decoded, index, bad = _decode_escape(source, index)
-            malformed = malformed or bad
-            chars.append(decoded)
-            continue
-        if quote_char != "`" and char in {"\n", "\r"}:
-            return _StringLiteral(value="", malformed=True), index + 1
-        chars.append(char)
-        index += 1
-    return _StringLiteral(value="", malformed=True), len(source)
-
-
-def _decode_escape(source: str, index: int) -> tuple[str, int, bool]:
-    if index + 1 >= len(source):
-        return "", index + 1, True
-    char = source[index + 1]
-    if char in {"\n", "\r"}:
-        if char == "\r" and index + 2 < len(source) and source[index + 2] == "\n":
-            return "", index + 3, True
-        return "", index + 2, True
-    simple = {
-        "\\": "\\",
-        "/": "/",
-        "'": "'",
-        '"': '"',
-        "n": "\n",
-        "r": "\r",
-        "t": "\t",
-        "b": "\b",
-        "f": "\f",
-    }
-    if char in simple:
-        return simple[char], index + 2, False
-    if char == "x":
-        if index + 3 >= len(source):
-            return "", len(source), True
-        value = source[index + 2 : index + 4]
-        if _is_hex(value):
-            return chr(int(value, 16)), index + 4, False
-        return "", index + 4, True
-    if char == "u":
-        if index + 5 >= len(source):
-            return "", len(source), True
-        value = source[index + 2 : index + 6]
-        if _is_hex(value):
-            return chr(int(value, 16)), index + 6, False
-        return "", index + 6, True
-    return "", index + 2, True
-
-
-def _is_hex(value: str) -> bool:
-    return bool(value) and all(char in "0123456789abcdefABCDEF" for char in value)
-
-
 def _accepted_occurrence(
     script: _SourceScript,
     value: str,
     candidate_form: str,
+    semantic_context: str,
 ) -> _AcceptedOccurrence | None:
     safe_candidate = _safe_candidate(value)
     parsed_candidate = urlparse(safe_candidate)
@@ -617,6 +539,7 @@ def _accepted_occurrence(
         query_parameter_names=_query_names(parsed_safe.query or parsed_candidate.query),
         candidate_form=candidate_form,
         resolution_context=resolution_context,
+        semantic_context=semantic_context,
         source=script,
     )
 
@@ -647,6 +570,7 @@ def _build_candidates(
                 query_parameter_names=first.query_parameter_names,
                 candidate_forms=_sort_candidate_forms([item.candidate_form for item in values]),
                 resolution_contexts=_unique_sorted([item.resolution_context for item in values]),
+                semantic_contexts=_unique_sorted([item.semantic_context for item in values]),
                 source_kinds=_unique_sorted([item.source.source_kind for item in values]),
                 source_response_ids=_unique_sorted([item.source.source_response_id for item in values]),
                 source_request_urls=_unique_sorted([item.source.safe_source_url for item in values]),
@@ -675,6 +599,7 @@ def _build_candidates(
             query_parameter_names=candidate.query_parameter_names,
             candidate_forms=candidate.candidate_forms,
             resolution_contexts=candidate.resolution_contexts,
+            semantic_contexts=candidate.semantic_contexts,
             source_kinds=candidate.source_kinds,
             source_response_ids=candidate.source_response_ids,
             source_request_urls=candidate.source_request_urls,
@@ -703,6 +628,7 @@ def _render_candidate(candidate: DeepJavaScriptRouteCandidate) -> list[str]:
             "- Query parameter names: " + _format_compact_values(candidate.query_parameter_names),
             "- Candidate forms: " + _format_compact_values(candidate.candidate_forms),
             "- Resolution contexts: " + _format_compact_values(candidate.resolution_contexts),
+            "- Semantic contexts: " + _format_compact_values(candidate.semantic_contexts),
             "- Source kinds: " + _format_compact_values(candidate.source_kinds),
             "- Source responses: " + _format_compact_values(candidate.source_response_ids),
             "- Source request URLs: " + _format_compact_values(candidate.source_request_urls),
@@ -927,82 +853,6 @@ def _query_names(query: str) -> tuple[str, ...]:
 def _has_resource_suffix(value: str) -> bool:
     path = urlparse(value).path.lower()
     return path.endswith(RESOURCE_SUFFIXES)
-
-
-def _is_concatenated(source: str, start: int, end: int) -> bool:
-    before = start - 1
-    while before >= 0 and source[before].isspace():
-        before -= 1
-    after = end
-    while after < len(source) and source[after].isspace():
-        after += 1
-    return (before >= 0 and source[before] == "+") or (
-        after < len(source) and source[after] == "+"
-    )
-
-
-def _looks_like_regex_start(source: str, index: int) -> bool:
-    before = index - 1
-    while before >= 0 and source[before].isspace():
-        before -= 1
-    if before < 0:
-        return True
-    if source[before] in "([{=,:;!&|?":
-        return True
-    if source[before] == ">" and _previous_significant_char(source, before - 1) == "=":
-        return True
-    token = _previous_identifier(source, before)
-    return token in {"return", "throw", "case", "yield", "await"}
-
-
-def _previous_significant_char(source: str, index: int) -> str:
-    while index >= 0 and source[index].isspace():
-        index -= 1
-    return source[index] if index >= 0 else ""
-
-
-def _previous_identifier(source: str, end: int) -> str:
-    if end < 0 or not (source[end].isalnum() or source[end] in {"_", "$"}):
-        return ""
-    start = end
-    while start >= 0 and (source[start].isalnum() or source[start] in {"_", "$"}):
-        start -= 1
-    return source[start + 1 : end + 1]
-
-
-def _skip_line_comment(source: str, index: int) -> int:
-    while index < len(source) and source[index] not in "\r\n":
-        index += 1
-    return index
-
-
-def _skip_block_comment(source: str, index: int) -> int:
-    end = source.find("*/", index)
-    return len(source) if end == -1 else end + 2
-
-
-def _skip_regex_literal(source: str, index: int) -> int:
-    in_class = False
-    escaped = False
-    while index < len(source):
-        char = source[index]
-        if escaped:
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "[":
-            in_class = True
-        elif char == "]":
-            in_class = False
-        elif char == "/" and not in_class:
-            index += 1
-            while index < len(source) and source[index].isalpha():
-                index += 1
-            return index
-        elif char in "\r\n":
-            return index
-        index += 1
-    return index
 
 
 def _source_sort_key(item: DeepSourceRouteCollectedItem) -> tuple:

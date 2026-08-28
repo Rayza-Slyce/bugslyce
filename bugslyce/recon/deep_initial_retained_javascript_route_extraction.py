@@ -52,6 +52,7 @@ class DeepInitialRetainedJavaScriptRouteSourceObservation:
     candidate_forms: tuple[str, ...]
     resolution_contexts: tuple[str, ...]
     occurrence_count: int
+    semantic_contexts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,10 @@ class DeepInitialRetainedJavaScriptRouteCandidate:
         return _unique_sorted(
             tuple(item.source_id for item in self.source_observations)
         )
+
+    @property
+    def semantic_contexts(self) -> tuple[str, ...]:
+        return _observation_values(self.source_observations, "semantic_contexts")
 
 
 @dataclass(frozen=True)
@@ -453,6 +458,7 @@ def _candidate_from_observations(
                     candidate_forms=value.candidate.candidate_forms,
                     resolution_contexts=value.candidate.resolution_contexts,
                     occurrence_count=value.candidate.occurrence_count,
+                    semantic_contexts=value.candidate.semantic_contexts,
                 )
                 for value in ordered
             },
@@ -501,6 +507,7 @@ def _source_observation_sort_key(
         observation.script_types,
         observation.candidate_forms,
         observation.resolution_contexts,
+        observation.semantic_contexts,
         observation.occurrence_count,
     )
 
@@ -558,6 +565,8 @@ def _render_candidate(candidate: DeepInitialRetainedJavaScriptRouteCandidate) ->
                 f"  - Document URL: `{observation.safe_document_url}`",
                 f"  - Body SHA-256: `{observation.source_body_sha256}`",
                 "  - Evidence: " + _format_values(observation.evidence_ids),
+                "  - Semantic contexts: "
+                + _format_values(observation.semantic_contexts),
             ]
         )
     lines.extend([f"- Interpretation: {candidate.interpretation}", ""])

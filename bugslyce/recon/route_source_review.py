@@ -5,12 +5,17 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
 import re
 from urllib.parse import urlparse
 
 from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import ProjectState
 from bugslyce.recon.artefact_analysis import ArtefactSource
+from bugslyce.recon.javascript_semantic_context import (
+    ACCEPTED_ROUTE_CONTEXTS,
+    scan_javascript_semantic_literals,
+)
 from bugslyce.recon.route_provenance import route_evidence_provenance
 
 
@@ -34,6 +39,21 @@ ABSOLUTE_URL_RE = re.compile(r"https?://[^\s\"'<>)]{1,240}", re.IGNORECASE)
 ROUTE_RE = re.compile(
     r"(?<![:/<])/[A-Za-z0-9._~!$&()*+,;=:@/%-]{1,180}"
     r"(?:\?[A-Za-z0-9._~!$&()*+,;=:@/?%-]{1,120})?"
+)
+SCRIPT_BLOCK_RE = re.compile(
+    r"(?is)(?P<open><script\b(?P<attrs>[^>]*)>)(?P<body>.*?)(?P<close></script\s*>)"
+)
+JAVASCRIPT_SOURCE_KINDS = frozenset({"javascript", "javascript_response"})
+JAVASCRIPT_EXTENSIONS = (".js", ".mjs", ".cjs")
+JAVASCRIPT_SCRIPT_TYPES = frozenset(
+    {
+        "module",
+        "application/javascript",
+        "text/javascript",
+        "application/ecmascript",
+        "text/ecmascript",
+        "application/x-javascript",
+    }
 )
 CATEGORY_ORDER = {
     "authentication/account/session": 0,
@@ -110,6 +130,21 @@ class _RouteObservation:
     source_kind: str
     source_id: str | None
     source_order: int
+
+
+class _ScriptAttributeParser(HTMLParser):
+    """Read exact attribute names from one already-isolated script opening tag."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.attributes: dict[str, str | None] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "script":
+            return
+        for name, value in attrs:
+            if name:
+                self.attributes.setdefault(name.lower(), value)
 
 
 def build_route_source_review(
@@ -256,10 +291,33 @@ def _observations_from_source(
     allowed_hosts: set[str],
 ) -> list[_RouteObservation]:
     routes: list[str] = []
-    routes.extend(
-        _extract_absolute_url_routes(source.text, allowed_hosts, filter_source_noise=True)
-    )
-    routes.extend(_extract_relative_routes(source.text, filter_source_noise=True))
+    if source.source_kind == "html":
+        ordinary_text, javascript_bodies = _html_without_inline_javascript(source.text)
+        routes.extend(
+            _extract_absolute_url_routes(
+                ordinary_text,
+                allowed_hosts,
+                filter_source_noise=True,
+            )
+        )
+        routes.extend(
+            _extract_relative_routes(ordinary_text, filter_source_noise=True)
+        )
+        for body in javascript_bodies:
+            routes.extend(_semantic_javascript_routes(body, allowed_hosts))
+    elif _is_javascript_source(source):
+        routes.extend(_semantic_javascript_routes(source.text, allowed_hosts))
+    else:
+        routes.extend(
+            _extract_absolute_url_routes(
+                source.text,
+                allowed_hosts,
+                filter_source_noise=True,
+            )
+        )
+        routes.extend(
+            _extract_relative_routes(source.text, filter_source_noise=True)
+        )
     routes = _dedupe_preserve_order(routes)[:MAX_ROUTES_PER_SOURCE]
     return [
         _RouteObservation(
@@ -270,6 +328,58 @@ def _observations_from_source(
         )
         for route in routes
     ]
+
+
+def _html_without_inline_javascript(text: str) -> tuple[str, tuple[str, ...]]:
+    bodies = []
+
+    def replace_script(match: re.Match[str]) -> str:
+        attributes = _script_attributes(match.group("attrs"))
+        if "src" not in attributes and _script_type_is_javascript(
+            attributes.get("type")
+        ):
+            bodies.append(match.group("body"))
+        return match.group("open") + (" " * len(match.group("body"))) + match.group("close")
+
+    return SCRIPT_BLOCK_RE.sub(replace_script, text), tuple(bodies)
+
+
+def _script_attributes(attrs: str) -> dict[str, str | None]:
+    parser = _ScriptAttributeParser()
+    parser.feed(f"<script{attrs}></script>")
+    parser.close()
+    return parser.attributes
+
+
+def _script_type_is_javascript(value: str | None) -> bool:
+    if value is None:
+        return True
+    normalised = value.strip().lower().split(";", 1)[0].strip()
+    return normalised in JAVASCRIPT_SCRIPT_TYPES
+
+
+def _is_javascript_source(source: ArtefactSource) -> bool:
+    if source.source_kind in JAVASCRIPT_SOURCE_KINDS:
+        return True
+    if source.source_kind != "response_body":
+        return False
+    path = urlparse(source.url or "").path.lower()
+    return path.endswith(JAVASCRIPT_EXTENSIONS)
+
+
+def _semantic_javascript_routes(
+    source: str,
+    allowed_hosts: set[str],
+) -> list[str]:
+    routes = []
+    for literal in scan_javascript_semantic_literals(source):
+        if literal.semantic_context not in ACCEPTED_ROUTE_CONTEXTS:
+            continue
+        if literal.dynamic_template or literal.dynamic_concatenation or literal.malformed:
+            continue
+        routes.extend(_extract_absolute_url_routes(literal.value, allowed_hosts))
+        routes.extend(_extract_relative_routes(literal.value))
+    return routes
 
 
 def _observations_from_route(

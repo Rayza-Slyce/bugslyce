@@ -44,7 +44,7 @@ def test_retained_shallow_javascript_surfaces_late_only_route_with_provenance() 
 
 
 def test_full_retained_body_is_analysed_beyond_preview() -> None:
-    body = (b"const padding = '" + (b"x" * 700) + b"'; const late = '/api/beyond-preview';")
+    body = (b"const padding = '" + (b"x" * 700) + b"'; const route = '/api/beyond-preview';")
     item = _item(
         url="https://example.test/assets/full.js",
         body=body,
@@ -76,14 +76,14 @@ def test_reversed_shallow_input_is_fully_deterministic() -> None:
     first = _item(
         request_id="DEEP-SHALLOW-REQ-0002",
         url="https://example.test/b.js",
-        body=b'const a = "/shared"; const b = "/b";',
+        body=b'{ const route = "/shared"; } { const route = "/b"; }',
         source_route_candidate_ids=("DEEP-JS-ROUTE-0002",),
         evidence_ids=("EVID-B",),
     )
     second = _item(
         request_id="DEEP-SHALLOW-REQ-0001",
         url="https://example.test/a.js",
-        body=b'const a = "/shared"; const b = "/a";',
+        body=b'{ const route = "/shared"; } { const route = "/a"; }',
         source_route_candidate_ids=("DEEP-JS-ROUTE-0001",),
         evidence_ids=("EVID-A",),
     )

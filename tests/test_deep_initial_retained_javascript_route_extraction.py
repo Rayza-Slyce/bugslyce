@@ -63,15 +63,40 @@ def test_retained_initial_inline_script_produces_typed_route_with_provenance(
     assert candidate.source_observations[0].source_body_sha256
 
 
+def test_retained_next_flight_state_does_not_promote_routes_but_fetch_survives(
+    tmp_path: Path,
+) -> None:
+    state = _state(
+        tmp_path,
+        {
+            "homepage.html": (
+                "<html><script>"
+                'self.__next_f.push([1, "/framework-state-route", "/graphql"]);'
+                'fetch("/api/real-endpoint");'
+                "</script></html>"
+            ),
+        },
+    )
+
+    result = build_deep_initial_retained_javascript_route_extraction(state)
+
+    assert tuple(candidate.safe_candidate for candidate in result.candidates) == (
+        "/api/real-endpoint",
+    )
+    candidate = result.candidates[0]
+    assert candidate.safe_resolved_url == "https://example.test/api/real-endpoint"
+    assert candidate.source_observations[0].semantic_contexts == ("request_call",)
+
+
 def test_adapter_preserves_existing_static_fail_closed_semantics(tmp_path: Path) -> None:
     state = _state(
         tmp_path,
         {
             "homepage.html": (
                 "<html><script>"
-                "const good = '/api/items?tenant=blue';"
-                "const dynamic = '/api/' + identifier;"
-                "const static = '/assets/app.js';"
+                "const apiUrl = '/api/items?tenant=blue';"
+                "const endpoint = '/api/' + identifier;"
+                "const route = '/assets/app.js';"
                 "</script></html>"
             ),
             "ordinary.html": "<html><p>plain text only</p></html>",

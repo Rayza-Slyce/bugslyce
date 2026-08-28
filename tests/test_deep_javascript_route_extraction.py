@@ -101,9 +101,9 @@ def test_javascript_source_selection_by_media_type_and_extension_sniff() -> None
 def test_inline_script_selection_and_exclusions() -> None:
     html = b"""
     <html>
-      <script>const a = "/default";</script>
-      <script type="module">const b = "/module";</script>
-      <script type="application/javascript">const c = "/mime";</script>
+      <script>const route = "/default";</script>
+      <script type="module">const route = "/module";</script>
+      <script type="application/javascript">const route = "/mime";</script>
       <script type="application/json">{"/json": true}</script>
       <script type="application/ld+json">{"/ld": true}</script>
       <script type="importmap">{"/imports": {}}</script>
@@ -146,18 +146,18 @@ def test_inline_script_selection_and_exclusions() -> None:
 
 def test_lexical_scanner_literals_escapes_comments_regex_and_dynamic_skips() -> None:
     body = br'''
-    const a = '/single';
-    const b = "/double";
-    const c = `/static/app.js`;
-    const d = '\/admin\/login';
-    const e = "\x2fapi\x2fv1";
-    const f = "\u002fportal";
+    { const route = '/single'; }
+    { const route = "/double"; }
+    { const route = `/static/app.js`; }
+    { const route = '\/admin\/login'; }
+    { const route = "\x2fapi\x2fv1"; }
+    { const route = "\u002fportal"; }
     const skipTemplate = `/users/${userId}`;
     const skipConcatA = "/api/" + resource;
     const skipConcatB = basePath + "/users";
     // "/comment"
     /* '/block-comment' */
-    if (/"/.test(value)) { const g = "/after-regex"; }
+    if (/"/.test(value)) { const route = "/after-regex"; }
     const bad = "/unterminated
     const malformed = "\xZZ";
     '''
@@ -189,12 +189,12 @@ def test_mime_shaped_strings_are_not_route_like_but_route_controls_remain() -> N
     const mimeC = "text/html";
     const mimeD = "image/svg+xml";
     const mimeE = "application/json; charset=utf-8";
-    const routeA = "api/users";
-    const routeB = "application/users/list";
-    const routeC = "text/help/index.html";
-    const routeD = "/application/json";
-    const routeE = "./application/json";
-    const routeF = "../application/json";
+    { const route = "api/users"; }
+    { const route = "application/users/list"; }
+    { const route = "text/help/index.html"; }
+    { const route = "/application/json"; }
+    { const route = "./application/json"; }
+    { const route = "../application/json"; }
     """
 
     result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
@@ -220,7 +220,151 @@ def test_mime_shaped_strings_are_not_route_like_but_route_controls_remain() -> N
     assert "APPLICATION/JSON" not in public_text
     assert "image/svg+xml" not in public_text
     assert "application/json; charset=utf-8" not in public_text
+    assert result.summary_counts.ordinary_lexical_strings_skipped == 0
     assert result.summary_counts.not_route_like_strings_skipped == 5
+
+
+def test_route_candidates_require_explicit_request_or_configuration_context() -> None:
+    body = b"""
+    fetch("/api/users");
+    const request = new XMLHttpRequest();
+    request.open("GET", "/api/xhr-users");
+    const endpoint = "/service/status";
+    const apiUrl = "/api/items?tenant=blue";
+
+    const mime = "/application/json";
+    const descriptiveText = "/graphql";
+    const documentationFragment = "/api/not-an-endpoint";
+    const libraryModule = "@apollo/client/graphql";
+    const operationDocument = "query Viewer { viewer { id } }";
+    """
+
+    result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
+    by_candidate = {candidate.safe_candidate: candidate for candidate in result.candidates}
+
+    assert {
+        "/api/users",
+        "/api/xhr-users",
+        "/service/status",
+        "/api/items?tenant",
+    } <= set(by_candidate)
+    for contextless in (
+        "/application/json",
+        "/graphql",
+        "/api/not-an-endpoint",
+        "@apollo/client/graphql",
+    ):
+        assert contextless not in by_candidate
+    assert by_candidate["/api/users"].semantic_contexts == ("request_call",)
+    assert by_candidate["/api/xhr-users"].semantic_contexts == ("request_call",)
+    assert by_candidate["/service/status"].semantic_contexts == (
+        "route_configuration",
+    )
+    assert by_candidate["/api/items?tenant"].semantic_contexts == (
+        "route_configuration",
+    )
+
+
+def test_request_context_requires_recognised_request_primitive() -> None:
+    body = b"""
+    fetch("/api/global-fetch");
+    window.fetch("/api/window-fetch");
+
+    const request = new XMLHttpRequest();
+    request.open("GET", "/api/xhr");
+
+    cache.fetch("/cache/not-established-http");
+    dialog.open("GET", "/dialog/not-established-http");
+    """
+
+    result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
+    by_candidate = {
+        candidate.safe_candidate: candidate
+        for candidate in result.candidates
+    }
+
+    assert set(by_candidate) == {
+        "/api/global-fetch",
+        "/api/window-fetch",
+        "/api/xhr",
+    }
+    assert all(
+        candidate.semantic_contexts == ("request_call",)
+        for candidate in by_candidate.values()
+    )
+
+
+def test_comments_cannot_supply_or_override_semantic_context() -> None:
+    body = b"""
+    // fetch(
+    "/comment-fetch";
+
+    // request.open("GET",
+    "/comment-open";
+
+    // const endpoint =
+    "/comment-config";
+
+    wrapper(
+        // self.__next_f.push(
+        fetch("/api/real")
+    );
+
+    function demo() {
+        // const routes = {
+        const descriptiveText = "/graphql";
+    }
+    """
+
+    result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
+
+    assert tuple(candidate.safe_candidate for candidate in result.candidates) == (
+        "/api/real",
+    )
+    assert result.candidates[0].semantic_contexts == ("request_call",)
+
+
+def test_summary_counts_distinguish_route_shape_from_semantic_rejection() -> None:
+    body = b"""
+    const note = "hello";
+    const fragmentHint = "#section";
+    const schemeHint = "javascript:void(0)";
+    const descriptiveText = "/graphql";
+    """
+
+    result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
+    counts = result.summary_counts
+
+    assert result.candidates == ()
+    assert counts.not_route_like_strings_skipped == 1
+    assert counts.fragment_only_strings_skipped == 1
+    assert counts.unsupported_scheme_strings_skipped == 1
+    assert counts.ordinary_lexical_strings_skipped == 1
+
+
+def test_xhr_request_context_requires_current_lexical_receiver_proof() -> None:
+    body = b"""
+    const reassigned = new XMLHttpRequest();
+    reassigned = dialog;
+    reassigned.open("GET", "/api/reassigned-not-proven");
+
+    function initialise() {
+        const scoped = new XMLHttpRequest();
+    }
+    scoped.open("GET", "/api/out-of-scope-not-proven");
+
+    const live = new XMLHttpRequest();
+    live.open("GET", "/api/live-xhr");
+    """
+
+    result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
+    by_candidate = {
+        candidate.safe_candidate: candidate
+        for candidate in result.candidates
+    }
+
+    assert set(by_candidate) == {"/api/live-xhr"}
+    assert by_candidate["/api/live-xhr"].semantic_contexts == ("request_call",)
 
 
 def test_unknown_and_incomplete_escapes_are_malformed_and_not_emitted() -> None:
@@ -239,8 +383,8 @@ continued";
     const goodB = "\/";
     const goodC = "\'";
     const goodD = "\"";
-    const goodE = "\x2fapi\x2fgood";
-    const goodF = "\u002fportal";
+    { const route = "\x2fapi\x2fgood"; }
+    { const route = "\u002fportal"; }
     '''
 
     result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
@@ -268,7 +412,7 @@ def test_regex_literal_contexts_do_not_emit_route_like_quoted_text() -> None:
     const escapedSlash = /"\/escaped-regex"/;
     const ratio = total / count;
     const route = "/after-division";
-    const after = "/after-regexes";
+    const endpoint = "/after-regexes";
     '''
 
     result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
@@ -295,21 +439,21 @@ def test_regex_literal_contexts_do_not_emit_route_like_quoted_text() -> None:
 
 def test_candidate_classification_resolution_and_query_sanitisation() -> None:
     body = b"""
-    const abs = "https://alice:hunter2@[2001:db8::1]:8443/api?token=secret&state=value&=empty#frag-secret";
-    const scheme = "//cdn.example.test/app.js?ver=secret";
-    const root = "/api/v1/accounts?token=first";
-    const emptyQueryName = "/ignored?=secret";
-    const query = "?view=compact&debug=true";
-    const emptyQueryRelative = "?=secret";
-    const dot = "./local.js";
-    const parent = "../admin/login";
-    const path = "api/v2/list";
-    const suffix = "status.json";
-    const fragment = "#section";
-    const js = "javascript:void(0)";
-    const data = "data:text/plain,secret";
-    const hello = "hello";
-    const ui = "button-primary";
+    { const url = "https://alice:hunter2@[2001:db8::1]:8443/api?token=secret&state=value&=empty#frag-secret"; }
+    { const url = "//cdn.example.test/app.js?ver=secret"; }
+    { const route = "/api/v1/accounts?token=first"; }
+    { const route = "/ignored?=secret"; }
+    { const url = "?view=compact&debug=true"; }
+    { const url = "?=secret"; }
+    { const path = "./local.js"; }
+    { const path = "../admin/login"; }
+    { const path = "api/v2/list"; }
+    { const path = "status.json"; }
+    { const url = "#section"; }
+    { const url = "javascript:void(0)"; }
+    { const url = "data:text/plain,secret"; }
+    { const route = "hello"; }
+    { const route = "button-primary"; }
     """
 
     result = build_deep_javascript_route_extraction(_result(_js_item(url="http://example.test/assets/app.js", body=body)))
@@ -337,19 +481,19 @@ def test_candidate_classification_resolution_and_query_sanitisation() -> None:
 
 def test_inline_relative_resolution_and_base_href_rules() -> None:
     valid_base = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='/app/'><script>const r = 'api/users';</script>"))
+        _result(_html_item(body=b"<html><base href='/app/'><script>const route = 'api/users';</script>"))
     )
     cross_base = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='https://cdn.example.test/root/'><script>const r = './asset.js';</script>"))
+        _result(_html_item(body=b"<html><base href='https://cdn.example.test/root/'><script>const route = './asset.js';</script>"))
     )
     ignored_base = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='javascript:void(0)'><script>const r = 'local.js';</script>"))
+        _result(_html_item(body=b"<html><base href='javascript:void(0)'><script>const route = 'local.js';</script>"))
     )
     invalid_then_valid = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='javascript:void(0)'><base href='/valid/'><script>const r = 'x.js';</script>"))
+        _result(_html_item(body=b"<html><base href='javascript:void(0)'><base href='/valid/'><script>const route = 'x.js';</script>"))
     )
     malformed_then_valid = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='://malformed'><base href='https://cdn.example.test/assets/'><script>const r = 'x.js';</script>"))
+        _result(_html_item(body=b"<html><base href='://malformed'><base href='https://cdn.example.test/assets/'><script>const route = 'x.js';</script>"))
     )
     invalid_authority_then_valid = build_deep_javascript_route_extraction(
         _result(_html_item(body=b"<html><base href='//[invalid'><base href='https://cdn.example.test/assets/'><script>const route = 'app.js';</script>"))
@@ -358,7 +502,7 @@ def test_inline_relative_resolution_and_base_href_rules() -> None:
         _result(_html_item(body=b"<html><base href='http://[invalid'><script>const route = 'app.js';</script>"))
     )
     first_only = build_deep_javascript_route_extraction(
-        _result(_html_item(body=b"<html><base href='/first/'><base href='/second/'><script>const r = 'x.js';</script>"))
+        _result(_html_item(body=b"<html><base href='/first/'><base href='/second/'><script>const route = 'x.js';</script>"))
     )
 
     assert valid_base.candidates[0].safe_resolved_url == "http://example.test/app/api/users"
@@ -378,7 +522,7 @@ def test_inline_relative_resolution_and_base_href_rules() -> None:
 
 
 def test_protocol_relative_candidates_resolve_with_trusted_source_scheme() -> None:
-    body = b'const same = "//example.test/api"; const cross = "//external.test/api";'
+    body = b'{ const url = "//example.test/api"; } { const url = "//external.test/api"; }'
 
     result = build_deep_javascript_route_extraction(
         _result(_js_item(url="https://example.test/app.js", body=body))
@@ -392,8 +536,8 @@ def test_protocol_relative_candidates_resolve_with_trusted_source_scheme() -> No
 def test_aggregation_occurrence_counts_and_canonical_fields() -> None:
     result = build_deep_javascript_route_extraction(
         _result(
-            _js_item(url="http://example.test/a.js", body=b'const a="/account?token=first"; const b="/account?token=second";', evidence_ids=("EVID-B",)),
-            _js_item(url="http://example.test/b.js", body=b"const c='/account?token=third';", evidence_ids=("EVID-A",)),
+            _js_item(url="http://example.test/a.js", body=b'{ const endpoint="/account?token=first"; } { const endpoint="/account?token=second"; }', evidence_ids=("EVID-B",)),
+            _js_item(url="http://example.test/b.js", body=b"const endpoint='/account?token=third';", evidence_ids=("EVID-A",)),
         )
     )
 
@@ -408,8 +552,8 @@ def test_aggregation_occurrence_counts_and_canonical_fields() -> None:
 
 
 def test_candidate_ordering_ids_and_reversed_input_are_deterministic() -> None:
-    first = _js_item(url="http://example.test/b.js", body=b'const b="/b"; const a="/a";', evidence_ids=("EVID-B",))
-    second = _html_item(url="http://example.test/a", body=b"<html><script>const c='/c'; const a='/a';</script>", evidence_ids=("EVID-A",))
+    first = _js_item(url="http://example.test/b.js", body=b'{ const route="/b"; } { const route="/a"; }', evidence_ids=("EVID-B",))
+    second = _html_item(url="http://example.test/a", body=b"<html><script>{ const route='/c'; } { const route='/a'; }</script>", evidence_ids=("EVID-A",))
 
     normal = build_deep_javascript_route_extraction(_result(first, second))
     reversed_result = build_deep_javascript_route_extraction(_result(second, first))
@@ -451,8 +595,8 @@ def test_source_response_ids_are_deterministic_across_complete_sort_ties() -> No
 def test_summary_counts_are_correct() -> None:
     result = build_deep_javascript_route_extraction(
         _result(
-            _js_item(body=b'const a="/a"; const b="#frag"; const c="javascript:void(0)"; const d="hello"; const e=`/x/${id}`; const f="/p/"+id;'),
-            _html_item(body=b"<html><script>const g='/g';</script><script type='application/json'>{}</script>"),
+            _js_item(body=b'{ const route="/a"; } { const url="#frag"; } { const url="javascript:void(0)"; } { const route="hello"; } const route=`/x/${id}`; const endpoint="/p/"+id;'),
+            _html_item(body=b"<html><script>const route='/g';</script><script type='application/json'>{}</script>"),
             _item(url="http://example.test/plain", headers=(), body=b"plain"),
         )
     )
@@ -524,8 +668,8 @@ def test_renderer_sections_compaction_cautions_and_prohibited_wording() -> None:
 
 def test_sensitive_values_and_full_bodies_never_enter_public_output() -> None:
     body = b"""
-    const a = "https://alice:hunter2@example.test/api?token=secret#frag-secret";
-    const b = "/safe";
+    const url = "https://alice:hunter2@example.test/api?token=secret#frag-secret";
+    const route = "/safe";
     const notPublic = "FULL_JS_BODY_SECRET";
     """
     result = build_deep_javascript_route_extraction(_result(_js_item(body=body)))
