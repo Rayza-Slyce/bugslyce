@@ -835,6 +835,8 @@ def _canonical_programme_scope_policy(
                 action=rule.action,
                 kind=rule.kind,
                 value=rule.canonical_value,
+                scheme=rule.scheme,
+                port=rule.port,
                 private_note=rule.private_note,
                 private_source_wording=rule.private_source_wording,
             )

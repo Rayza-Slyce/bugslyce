@@ -29,6 +29,9 @@ from bugslyce.core.engagement_policy import (
 from bugslyce.core.programme_scope import (
     ACTION_EXCLUDE,
     ACTION_INCLUDE,
+    DESTINATION_HTTP_URL,
+    OUTCOME_ALLOWED,
+    OUTCOME_UNKNOWN,
     RULE_EXACT_HOSTNAME,
     RULE_EXACT_HTTP_URL,
     RULE_EXACT_IPV4,
@@ -38,6 +41,7 @@ from bugslyce.core.programme_scope import (
     ProgrammeScopePolicy,
     build_programme_scope_policy,
     build_programme_scope_rule,
+    evaluate_raw_scope_destination,
 )
 from bugslyce.project_session import (
     initialize_project,
@@ -745,6 +749,44 @@ def test_executor_stores_a_canonical_immutable_programme_scope_copy() -> None:
             programme_scope_policy=object(),  # type: ignore[arg-type]
             transport=_RecordingTransport(),
         )
+
+
+def test_executor_canonical_copy_preserves_qualified_scope_authority() -> None:
+    qualified_rule = build_programme_scope_rule(
+        rule_id="qualified-wildcard",
+        action=ACTION_INCLUDE,
+        kind=RULE_WILDCARD_SUBDOMAIN,
+        value="*.example.test",
+        scheme="https",
+        port=443,
+    )
+    policy = build_programme_scope_policy(
+        (qualified_rule,),
+        updated_at="2026-08-29T10:00:00Z",
+    )
+
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://app.example.test",)),
+        programme_scope_policy=policy,
+        transport=_RecordingPeerBoundTransport(),
+    )
+
+    stored = executor._programme_scope_policy
+    assert stored is not None
+    assert stored == policy
+    assert stored is not policy
+    assert stored.rules[0].scheme == "https"
+    assert stored.rules[0].port == 443
+    assert evaluate_raw_scope_destination(
+        stored,
+        DESTINATION_HTTP_URL,
+        "https://app.example.test/",
+    ).outcome == OUTCOME_ALLOWED
+    assert evaluate_raw_scope_destination(
+        stored,
+        DESTINATION_HTTP_URL,
+        "http://app.example.test/",
+    ).outcome == OUTCOME_UNKNOWN
 
 
 def test_executor_rejects_a_noncanonical_programme_scope_rule() -> None:
