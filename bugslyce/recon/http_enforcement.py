@@ -335,6 +335,79 @@ class SteadyRequestStartLimiter:
             return self._next_start
 
 
+class _SharedHTTPEnforcementState:
+    """Mutable policy enforcement shared by exact-origin executor handles."""
+
+    def __init__(
+        self,
+        configuration: HTTPEnforcementConfiguration | None,
+        *,
+        monotonic: Monotonic,
+        sleep: Sleeper,
+    ) -> None:
+        self.maximum_request_starts_per_second = (
+            configuration.maximum_request_starts_per_second
+            if configuration is not None
+            else None
+        )
+        self.maximum_concurrent_requests = (
+            configuration.maximum_concurrent_requests
+            if configuration is not None
+            else 0
+        )
+        self.limiter = (
+            SteadyRequestStartLimiter(
+                configuration.maximum_request_starts_per_second,
+                monotonic=monotonic,
+                sleep=sleep,
+                interruptible_wait=(
+                    _wait_for_terminal_event if sleep is system_sleep else None
+                ),
+            )
+            if configuration is not None
+            else None
+        )
+        self.concurrency = (
+            threading.BoundedSemaphore(configuration.maximum_concurrent_requests)
+            if configuration is not None
+            else None
+        )
+        self.concurrency_gate = threading.Lock()
+        self.exclusive_tool_lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.total_request_attempts = 0
+        self.last_request_start: Decimal | None = None
+        self.rate_rejection: HTTPRateRejected | None = None
+        self.terminal_event = threading.Event()
+        self._handle_wake_events: set[threading.Event] = set()
+
+    def register_handle(self, wake_event: threading.Event) -> None:
+        with self.state_lock:
+            self._handle_wake_events.add(wake_event)
+            terminal = self.rate_rejection is not None
+        if terminal:
+            wake_event.set()
+
+    def unregister_handle(self, wake_event: threading.Event) -> None:
+        with self.state_lock:
+            self._handle_wake_events.discard(wake_event)
+
+    def record_rate_rejection(
+        self,
+        rejection: HTTPRateRejected,
+    ) -> HTTPRateRejected:
+        with self.state_lock:
+            if self.rate_rejection is None:
+                self.rate_rejection = rejection
+            else:
+                rejection = self.rate_rejection
+            wake_events = tuple(self._handle_wake_events)
+        self.terminal_event.set()
+        for event in wake_events:
+            event.set()
+        return rejection
+
+
 class InternalHTTPExecutor:
     """Shared mutable runtime enforcing identity, pacing and concurrency."""
 
@@ -347,6 +420,7 @@ class InternalHTTPExecutor:
         ipv4_resolver: IPv4Resolver | None = None,
         monotonic: Monotonic = system_monotonic,
         sleep: Sleeper = system_sleep,
+        _shared_enforcement_state: _SharedHTTPEnforcementState | None = None,
     ) -> None:
         if configuration is not None and not isinstance(
             configuration, HTTPEnforcementConfiguration
@@ -382,51 +456,52 @@ class InternalHTTPExecutor:
                 direct_only=configuration is not None
             )
         self._monotonic = monotonic
-        self._limiter = (
-            SteadyRequestStartLimiter(
-                configuration.maximum_request_starts_per_second,
+        if _shared_enforcement_state is None:
+            shared_state = _SharedHTTPEnforcementState(
+                configuration,
                 monotonic=monotonic,
                 sleep=sleep,
-                interruptible_wait=(
-                    _wait_for_terminal_event if sleep is system_sleep else None
-                ),
             )
-            if configuration is not None
-            else None
-        )
-        self._concurrency = (
-            threading.BoundedSemaphore(configuration.maximum_concurrent_requests)
-            if configuration is not None
-            else None
-        )
-        self._concurrency_limit = (
-            configuration.maximum_concurrent_requests
-            if configuration is not None
-            else 0
-        )
-        self._concurrency_gate = threading.Lock()
-        self._exclusive_tool_lock = threading.Lock()
-        self._state_lock = threading.Lock()
-        self._total_request_attempts = 0
-        self._last_request_start: Decimal | None = None
+        else:
+            if not isinstance(_shared_enforcement_state, _SharedHTTPEnforcementState):
+                raise ValueError("Shared internal HTTP enforcement state is invalid.")
+            if configuration is None or (
+                _shared_enforcement_state.maximum_request_starts_per_second
+                != configuration.maximum_request_starts_per_second
+                or _shared_enforcement_state.maximum_concurrent_requests
+                != configuration.maximum_concurrent_requests
+            ):
+                raise ValueError("Shared internal HTTP enforcement policy is inconsistent.")
+            shared_state = _shared_enforcement_state
+        self._shared_enforcement_state = shared_state
+        self._limiter = shared_state.limiter
+        self._concurrency = shared_state.concurrency
+        self._concurrency_limit = shared_state.maximum_concurrent_requests
+        self._concurrency_gate = shared_state.concurrency_gate
+        self._exclusive_tool_lock = shared_state.exclusive_tool_lock
+        self._state_lock = shared_state.state_lock
+        self._handle_state_lock = threading.Lock()
         self._closed = False
-        self._rate_rejection: HTTPRateRejected | None = None
         self._terminal_event = threading.Event()
+        shared_state.register_handle(self._terminal_event)
 
     @property
     def total_request_attempts(self) -> int:
         with self._state_lock:
-            return self._total_request_attempts
+            return self._shared_enforcement_state.total_request_attempts
 
     @property
     def last_request_start(self) -> Decimal | None:
         with self._state_lock:
-            return self._last_request_start
+            return self._shared_enforcement_state.last_request_start
 
     def close(self) -> None:
-        with self._state_lock:
+        with self._handle_state_lock:
+            if self._closed:
+                return
             self._closed = True
         self._terminal_event.set()
+        self._shared_enforcement_state.unregister_handle(self._terminal_event)
 
     def request(
         self,
@@ -566,13 +641,7 @@ class InternalHTTPExecutor:
         """Set the shared terminal HTTP 429 state from an external exchange."""
 
         rejection = HTTPRateRejected(_safe_retry_after(response_headers))
-        with self._state_lock:
-            if self._rate_rejection is None:
-                self._rate_rejection = rejection
-            else:
-                rejection = self._rate_rejection
-        self._terminal_event.set()
-        return rejection
+        return self._shared_enforcement_state.record_rate_rejection(rejection)
 
     def _execute_exchange(
         self,
@@ -600,10 +669,9 @@ class InternalHTTPExecutor:
                 response = _validate_transport_response(raw_response)
                 if self.configuration is not None and response.status_code == 429:
                     rejection = HTTPRateRejected(_safe_retry_after(response.headers))
-                    with self._state_lock:
-                        self._rate_rejection = rejection
-                    self._terminal_event.set()
-                    raise rejection
+                    raise self._shared_enforcement_state.record_rate_rejection(
+                        rejection
+                    )
                 return response
             finally:
                 # An internal exchange can reach the target after its permit is
@@ -641,22 +709,27 @@ class InternalHTTPExecutor:
         return start
 
     def _check_available(self) -> None:
+        with self._handle_state_lock:
+            if self._closed:
+                raise HTTPExecutorClosed()
         with self._state_lock:
-            self._raise_if_unavailable_locked()
+            self._raise_if_aggregate_unavailable_locked()
 
     def _commit_request_attempt(self, start: Decimal) -> None:
         """Atomically check terminal state and commit one transport exchange."""
 
-        with self._state_lock:
-            self._raise_if_unavailable_locked()
-            self._total_request_attempts += 1
-            self._last_request_start = start
+        with self._handle_state_lock:
+            if self._closed:
+                raise HTTPExecutorClosed()
+            with self._state_lock:
+                self._raise_if_aggregate_unavailable_locked()
+                self._shared_enforcement_state.total_request_attempts += 1
+                self._shared_enforcement_state.last_request_start = start
 
-    def _raise_if_unavailable_locked(self) -> None:
-        if self._closed:
-            raise HTTPExecutorClosed()
-        if self._rate_rejection is not None:
-            raise HTTPRateRejected(self._rate_rejection.retry_after)
+    def _raise_if_aggregate_unavailable_locked(self) -> None:
+        rejection = self._shared_enforcement_state.rate_rejection
+        if rejection is not None:
+            raise HTTPRateRejected(rejection.retry_after)
 
     def _effective_headers(
         self,
@@ -1179,6 +1252,75 @@ def build_http_enforcement_configuration(
         user_agent_source=(
             "programme_custom" if canonical.custom_user_agent else "bugslyce_builtin"
         ),
+    )
+
+
+def build_internal_http_executor_view(
+    source_executor: InternalHTTPExecutor,
+    *,
+    approved_origins: tuple[str, ...],
+) -> InternalHTTPExecutor:
+    """Derive an exact-origin handle sharing one aggregate HTTP policy runtime."""
+
+    if not isinstance(source_executor, InternalHTTPExecutor):
+        raise ValueError("Internal HTTP executor view source is invalid.")
+    source_configuration = source_executor.configuration
+    if source_configuration is None:
+        raise ValueError("Internal HTTP executor view source is not configured.")
+    with source_executor._handle_state_lock:
+        if source_executor._closed:
+            raise HTTPExecutorClosed()
+    if (
+        source_executor._programme_scope_policy is not None
+        and not isinstance(source_executor.transport, PeerBoundHTTPTransport)
+    ):
+        raise ValueError(_PEER_BOUND_TRANSPORT_REQUIRED)
+    if not isinstance(approved_origins, tuple):
+        raise ValueError("Internal HTTP executor view origins are invalid.")
+    origins: list[HttpOrigin] = []
+    for value in approved_origins:
+        origin = http_origin_from_url(value)
+        if origin is None:
+            raise ValueError("Internal HTTP executor view origin is invalid.")
+        origins.append(origin)
+    canonical_origins = tuple(sorted(set(origins)))
+    if not canonical_origins:
+        raise ValueError("Internal HTTP executor view requires an approved origin.")
+
+    configuration = HTTPEnforcementConfiguration(
+        maximum_request_starts_per_second=(
+            source_configuration.maximum_request_starts_per_second
+        ),
+        maximum_concurrent_requests=(
+            source_configuration.maximum_concurrent_requests
+        ),
+        user_agent=source_configuration.user_agent,
+        identification_headers=source_configuration.identification_headers,
+        approved_origins=canonical_origins,
+        redirect_policy=source_configuration.redirect_policy,
+        maximum_redirect_hops=source_configuration.maximum_redirect_hops,
+        user_agent_source=source_configuration.user_agent_source,
+    )
+    return InternalHTTPExecutor(
+        configuration,
+        programme_scope_policy=source_executor._programme_scope_policy,
+        ipv4_resolver=source_executor._ipv4_resolver,
+        monotonic=source_executor._monotonic,
+        _shared_enforcement_state=source_executor._shared_enforcement_state,
+    )
+
+
+def internal_http_executors_share_enforcement_state(
+    source_executor: object,
+    candidate_executor: object,
+) -> bool:
+    """Return whether two handles share the same aggregate HTTP enforcement state."""
+
+    return (
+        isinstance(source_executor, InternalHTTPExecutor)
+        and isinstance(candidate_executor, InternalHTTPExecutor)
+        and source_executor._shared_enforcement_state
+        is candidate_executor._shared_enforcement_state
     )
 
 
