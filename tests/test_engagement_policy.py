@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from bugslyce import __version__
+import bugslyce.core.engagement_policy as engagement_policy_module
 from bugslyce.cli import main
 from bugslyce.core.engagement_context import (
     CTF_LAB_CONTEXT,
@@ -204,6 +205,41 @@ def test_programme_rate_and_higher_concurrency_require_confirmation() -> None:
     assert assessment.readiness_state == READINESS_INCOMPLETE
     assert any("HTTP rate" in reason for reason in assessment.not_ready_reasons)
     assert any("Concurrent automation" in reason for reason in assessment.not_ready_reasons)
+
+
+def test_operator_selected_http_rate_has_distinct_provenance() -> None:
+    operator_source = "operator_selected_limit"
+    policy = _complete_policy(
+        maximum_http_requests_per_second="3",
+        http_rate_source=operator_source,
+        programme_rate_confirmed=NOT_YET_CONFIRMED,
+        maximum_http_concurrency=1,
+    )
+
+    assessment = assess_engagement_policy(policy)
+    rendered = render_redacted_policy(policy)
+    programme_policy = _complete_policy(
+        maximum_http_requests_per_second="3",
+        http_rate_source=RATE_SOURCE_PROGRAMME,
+        programme_rate_confirmed=NOT_YET_CONFIRMED,
+    )
+    default_policy = _complete_policy()
+
+    assert engagement_policy_module.RATE_SOURCE_OPERATOR == operator_source
+    assert policy.http_rate_source == operator_source
+    assert policy_from_dict(policy.to_dict()) == policy
+    assert assessment.readiness_state == READINESS_FUTURE_ENFORCEMENT
+    assert assessment.not_ready_reasons == ()
+    assert "Rate source: operator selected limit" in rendered
+    assert "programme published" not in rendered.lower()
+    assert assess_engagement_policy(programme_policy).readiness_state == READINESS_INCOMPLETE
+    assert len(
+        {
+            default_policy.http_rate_source,
+            programme_policy.http_rate_source,
+            policy.http_rate_source,
+        }
+    ) == 3
 
 
 @pytest.mark.parametrize(

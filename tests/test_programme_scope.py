@@ -113,7 +113,7 @@ def test_policy_model_is_versioned_deterministic_immutable_and_allows_empty_defa
     assert policy.to_dict() == {
         "engagement_context": "bug_bounty",
         "rules": [],
-        "schema_version": "1.0",
+        "schema_version": PROGRAMME_SCOPE_SCHEMA_VERSION,
         "updated_at": FIXED_TIMESTAMP,
     }
     assert _decision(policy, DESTINATION_HOSTNAME, "example.test").outcome == OUTCOME_UNKNOWN
@@ -325,6 +325,81 @@ def test_wildcard_matches_proper_descendants_at_any_depth_but_not_apex_or_lookal
     assert _decision(policy, DESTINATION_HOSTNAME, "b.a.example.test").outcome == OUTCOME_ALLOWED
     assert _decision(policy, DESTINATION_HOSTNAME, "example.test").outcome == OUTCOME_UNKNOWN
     assert _decision(policy, DESTINATION_HOSTNAME, "badexample.test").outcome == OUTCOME_UNKNOWN
+
+
+def test_scheme_and_port_constrained_wildcard_http_scope_fails_closed() -> None:
+    qualified_wildcard = build_programme_scope_rule(
+        rule_id="qualified-wildcard",
+        action=ACTION_INCLUDE,
+        kind=RULE_WILDCARD_SUBDOMAIN,
+        value="*.Example.TEST",
+        scheme="https",
+        port=443,
+    )
+    qualified_exclusion = build_programme_scope_rule(
+        rule_id="qualified-exclusion",
+        action=ACTION_EXCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value="blocked.api.example.test",
+        scheme="https",
+        port=443,
+    )
+    policy = _policy(qualified_wildcard, qualified_exclusion)
+
+    assert qualified_wildcard.canonical_value == "*.example.test"
+    assert qualified_wildcard.scheme == "https"
+    assert qualified_wildcard.port == 443
+    assert qualified_wildcard.to_dict()["scheme"] == "https"
+    assert qualified_wildcard.to_dict()["port"] == 443
+    assert _decision(
+        policy, DESTINATION_HTTP_URL, "https://api.example.test/"
+    ).outcome == OUTCOME_ALLOWED
+    assert _decision(
+        policy, DESTINATION_HTTP_URL, "https://child.api.example.test/"
+    ).outcome == OUTCOME_ALLOWED
+    assert _decision(
+        policy, DESTINATION_HTTP_URL, "http://api.example.test/"
+    ).outcome == OUTCOME_UNKNOWN
+    assert _decision(
+        policy, DESTINATION_HTTP_URL, "https://api.example.test:8443/"
+    ).outcome == OUTCOME_UNKNOWN
+    assert _decision(
+        policy, DESTINATION_HTTP_URL, "https://example.test/"
+    ).outcome == OUTCOME_UNKNOWN
+    assert _decision(
+        policy, DESTINATION_HOSTNAME, "api.example.test"
+    ).outcome == OUTCOME_UNKNOWN
+    blocked = _decision(
+        policy,
+        DESTINATION_HTTP_URL,
+        "https://blocked.api.example.test/",
+    )
+    assert blocked.outcome == OUTCOME_BLOCKED
+    assert blocked.reason_code == REASON_EXPLICIT_EXCLUSION
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("exact_http_url", "https://example.test/"),
+        ("http_path_prefix", "https://example.test/api/"),
+        ("exact_ipv4", "192.0.2.10"),
+        ("ipv4_cidr", "192.0.2.0/24"),
+    ],
+)
+def test_http_qualifiers_are_rejected_for_non_hostname_scope_rules(
+    kind: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="qualifier|scheme|port"):
+        build_programme_scope_rule(
+            rule_id=f"invalid-{kind.replace('_', '-')}",
+            action=ACTION_INCLUDE,
+            kind=kind,
+            value=value,
+            scheme="https",
+            port=443,
+        )
 
 
 @pytest.mark.parametrize(

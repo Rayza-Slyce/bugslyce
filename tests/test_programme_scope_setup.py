@@ -5,12 +5,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 import json
 from pathlib import Path
+import socket
 
 import pytest
 
 from bugslyce.core.programme_scope import (
     ACTION_EXCLUDE,
     ACTION_INCLUDE,
+    DESTINATION_HTTP_URL,
+    OUTCOME_ALLOWED,
+    OUTCOME_UNKNOWN,
     RULE_EXACT_HOSTNAME,
     RULE_EXACT_HTTP_URL,
     RULE_EXACT_IPV4,
@@ -19,6 +23,7 @@ from bugslyce.core.programme_scope import (
     RULE_WILDCARD_SUBDOMAIN,
     build_programme_scope_policy,
     build_programme_scope_rule,
+    evaluate_raw_scope_destination,
 )
 from bugslyce.core.programme_scope_store import save_programme_scope_policy
 from bugslyce.programme_scope_setup import (
@@ -298,6 +303,103 @@ def test_creation_saves_once_and_uses_canonical_multi_rule_order(
     assert calls == 1
 
 
+def test_bulk_scope_review_requires_one_explicit_save(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_file = _project(tmp_path)
+    output: list[str] = []
+    real_save = scope_setup_module.save_project_programme_scope_policy
+    calls = 0
+
+    def counted_save(path, policy):
+        nonlocal calls
+        calls += 1
+        return real_save(path, policy)
+
+    monkeypatch.setattr(
+        scope_setup_module,
+        "save_project_programme_scope_policy",
+        counted_save,
+    )
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *_args, **_kwargs: pytest.fail("bulk scope setup must remain offline"),
+    )
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs(
+            "5",
+            "include hostname app.example.test",
+            "include wildcard *.example.test scheme=https port=443",
+            "exclude path https://example.test/internal/",
+            "END",
+            "2",
+            "3",
+            "YES",
+        ),
+        print_func=output.append,
+        error_func=lambda _line: None,
+        now_func=lambda: CHANGED_TIME,
+    )
+
+    policy = load_project_programme_scope_policy(load_project(project_file))
+    assert result == 0
+    assert policy is not None
+    assert len(policy.rules) == 3
+    assert calls == 1
+    rendered = "\n".join(output)
+    saved_at = rendered.index("Programme scope saved privately")
+    review = rendered[:saved_at]
+    assert all(rule.rule_id in review for rule in policy.rules)
+    assert "*.example.test" in review
+    assert "https" in review and "443" in review
+
+
+def test_bulk_scope_save_refusal_preserves_stored_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_file = _project(tmp_path)
+    save_project_programme_scope_policy(project_file, _policy())
+    project_before = project_file.read_bytes()
+    policy_path = project_file.parent / "programme_scope.json"
+    policy_before = policy_path.read_bytes()
+    output: list[str] = []
+    monkeypatch.setattr(
+        scope_setup_module,
+        "save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: pytest.fail("refused bulk draft must not save"),
+    )
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *_args, **_kwargs: pytest.fail("bulk scope setup must remain offline"),
+    )
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs(
+            "8",
+            "include hostname new.example.test",
+            "END",
+            "1",
+            "6",
+            "",
+        ),
+        print_func=output.append,
+        error_func=lambda _line: None,
+        now_func=lambda: pytest.fail("refused bulk draft must not request time"),
+    )
+
+    rendered = "\n".join(output)
+    assert result == 0
+    assert "new.example.test" in rendered
+    assert "Programme-scope save cancelled" in rendered
+    assert project_file.read_bytes() == project_before
+    assert policy_path.read_bytes() == policy_before
+
+
 def test_empty_creation_requires_exact_confirmation(tmp_path: Path) -> None:
     project_file = _project(tmp_path)
     calls = 0
@@ -411,6 +513,75 @@ def test_replacing_public_value_preserves_private_fields_without_private_prompts
     assert PRIVATE_SOURCE not in "\n".join(output)
     assert all("private note" not in prompt.lower() for prompt in prompts)
     assert all("private source" not in prompt.lower() for prompt in prompts)
+
+
+def test_replacing_qualified_rule_preserves_fail_closed_http_authority(
+    tmp_path: Path,
+) -> None:
+    project_file = _project(tmp_path)
+    current_rule = build_programme_scope_rule(
+        rule_id="qualified-wildcard",
+        action=ACTION_INCLUDE,
+        kind=RULE_WILDCARD_SUBDOMAIN,
+        value="*.example.test",
+        scheme="https",
+        port=443,
+    )
+    current_policy = build_programme_scope_policy(
+        (current_rule,),
+        updated_at=ORIGINAL_TIME,
+    )
+    before_http = evaluate_raw_scope_destination(
+        current_policy,
+        DESTINATION_HTTP_URL,
+        "http://api.example.test/",
+    )
+    save_project_programme_scope_policy(project_file, current_policy)
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs(
+            "3",
+            "qualified-wildcard",
+            "include",
+            "wildcard_subdomain",
+            "*.example.test",
+            "6",
+            "YES",
+        ),
+        print_func=lambda _line: None,
+        error_func=lambda _line: None,
+        now_func=lambda: CHANGED_TIME,
+    )
+
+    replacement_policy = load_project_programme_scope_policy(load_project(project_file))
+    assert replacement_policy is not None
+    replacement = replacement_policy.rules[0]
+    after_http = evaluate_raw_scope_destination(
+        replacement_policy,
+        DESTINATION_HTTP_URL,
+        "http://api.example.test/",
+    )
+    after_https = evaluate_raw_scope_destination(
+        replacement_policy,
+        DESTINATION_HTTP_URL,
+        "https://api.example.test/",
+    )
+    after_wrong_port = evaluate_raw_scope_destination(
+        replacement_policy,
+        DESTINATION_HTTP_URL,
+        "https://api.example.test:8443/",
+    )
+
+    assert result == 0
+    assert current_rule.scheme == "https"
+    assert current_rule.port == 443
+    assert before_http.outcome == OUTCOME_UNKNOWN
+    assert replacement.scheme == "https"
+    assert replacement.port == 443
+    assert after_http.outcome == OUTCOME_UNKNOWN
+    assert after_https.outcome == OUTCOME_ALLOWED
+    assert after_wrong_port.outcome == OUTCOME_UNKNOWN
 
 
 def test_canonically_unchanged_replacement_is_noop_and_preserves_private_fields(

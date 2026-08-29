@@ -21,7 +21,8 @@ from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.time_utils import Clock, format_utc_iso, utc_now_iso
 
 
-PROGRAMME_SCOPE_SCHEMA_VERSION = "1.0"
+PROGRAMME_SCOPE_SCHEMA_VERSION = "1.1"
+LEGACY_PROGRAMME_SCOPE_SCHEMA_VERSION = "1.0"
 
 ACTION_INCLUDE = "include"
 ACTION_EXCLUDE = "exclude"
@@ -88,6 +89,7 @@ MAX_URL_LENGTH = 8192
 MAX_PATH_LENGTH = 4096
 MAX_QUERY_LENGTH = 4096
 MAX_OPERATOR_SAFE_EXPLANATION_LENGTH = 4096
+SUPPORTED_HTTP_SCOPE_SCHEMES = frozenset({"http", "https"})
 
 _RULE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -173,6 +175,47 @@ def validate_private_scope_text(value: object, *, label: str) -> str | None:
     if _contains_unsafe_text(value):
         raise ValueError(f"{label} contains an unsafe control character.")
     return value
+
+
+def canonicalise_http_scope_scheme(value: object) -> str | None:
+    """Canonicalise an optional HTTP-only hostname-rule scheme qualifier."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or value != value.strip():
+        raise ValueError("HTTP scope scheme qualifier must be http or https.")
+    canonical = value.lower()
+    if canonical not in SUPPORTED_HTTP_SCOPE_SCHEMES:
+        raise ValueError("HTTP scope scheme qualifier must be http or https.")
+    return canonical
+
+
+def validate_http_scope_port(value: object) -> int | None:
+    """Validate an optional explicit HTTP hostname-rule port qualifier."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+        raise ValueError("HTTP scope port qualifier must be an integer within 1-65535.")
+    return value
+
+
+def _validate_rule_qualifiers(
+    kind: str,
+    scheme: object,
+    port: object,
+) -> tuple[str | None, int | None]:
+    canonical_scheme = canonicalise_http_scope_scheme(scheme)
+    canonical_port = validate_http_scope_port(port)
+    if (
+        (canonical_scheme is not None or canonical_port is not None)
+        and kind not in {RULE_EXACT_HOSTNAME, RULE_WILDCARD_SUBDOMAIN}
+    ):
+        raise ValueError(
+            "HTTP scheme and port qualifiers are supported only for hostname "
+            "and wildcard-subdomain scope rules."
+        )
+    return canonical_scheme, canonical_port
 
 
 def canonicalise_hostname(value: object) -> str:
@@ -590,6 +633,8 @@ class ProgrammeScopeRule:
     canonical_value: str
     private_note: str | None = field(default=None, repr=False)
     private_source_wording: str | None = field(default=None, repr=False)
+    scheme: str | None = None
+    port: int | None = None
 
     def __post_init__(self) -> None:
         validate_rule_id(self.rule_id)
@@ -599,6 +644,13 @@ class ProgrammeScopeRule:
             raise ValueError("Programme scope rule kind is unsupported.")
         if _canonical_rule_value(self.kind, self.canonical_value) != self.canonical_value:
             raise ValueError("Programme scope rule value is not canonical.")
+        canonical_scheme, canonical_port = _validate_rule_qualifiers(
+            self.kind,
+            self.scheme,
+            self.port,
+        )
+        if canonical_scheme != self.scheme or canonical_port != self.port:
+            raise ValueError("Programme scope rule qualifiers are not canonical.")
         validate_private_scope_text(self.private_note, label="Private scope note")
         validate_private_scope_text(
             self.private_source_wording,
@@ -612,6 +664,8 @@ class ProgrammeScopeRule:
             "kind": self.kind,
             "private_note": self.private_note,
             "private_source_wording": self.private_source_wording,
+            "scheme": self.scheme,
+            "port": self.port,
             "rule_id": self.rule_id,
         }
 
@@ -622,6 +676,8 @@ def build_programme_scope_rule(
     action: object,
     kind: object,
     value: object,
+    scheme: object = None,
+    port: object = None,
     private_note: object = None,
     private_source_wording: object = None,
 ) -> ProgrammeScopeRule:
@@ -632,11 +688,14 @@ def build_programme_scope_rule(
         raise ValueError("Programme scope rule action is unsupported.")
     if not isinstance(kind, str) or kind not in SUPPORTED_SCOPE_RULE_KINDS:
         raise ValueError("Programme scope rule kind is unsupported.")
+    canonical_scheme, canonical_port = _validate_rule_qualifiers(kind, scheme, port)
     return ProgrammeScopeRule(
         rule_id=validated_id,
         action=action,
         kind=kind,
         canonical_value=_canonical_rule_value(kind, value),
+        scheme=canonical_scheme,
+        port=canonical_port,
         private_note=validate_private_scope_text(
             private_note,
             label="Private scope note",
@@ -678,7 +737,10 @@ class ProgrammeScopePolicy:
     rules: tuple[ProgrammeScopeRule, ...]
 
     def __post_init__(self) -> None:
-        if self.schema_version != PROGRAMME_SCOPE_SCHEMA_VERSION:
+        if self.schema_version not in {
+            PROGRAMME_SCOPE_SCHEMA_VERSION,
+            LEGACY_PROGRAMME_SCOPE_SCHEMA_VERSION,
+        }:
             raise ValueError("Programme scope schema version is unsupported.")
         if self.engagement_context != BUG_BOUNTY_CONTEXT:
             raise ValueError("Programme scope context must be bug_bounty.")
@@ -687,6 +749,12 @@ class ProgrammeScopePolicy:
             not isinstance(rule, ProgrammeScopeRule) for rule in self.rules
         ):
             raise ValueError("Programme scope rules must be a tuple of canonical rules.")
+        if self.schema_version == LEGACY_PROGRAMME_SCOPE_SCHEMA_VERSION and any(
+            rule.scheme is not None or rule.port is not None for rule in self.rules
+        ):
+            raise ValueError(
+                "Programme scope schema 1.0 cannot represent HTTP qualifiers."
+            )
         canonical_order = tuple(sorted(self.rules, key=_rule_order_key))
         if self.rules != canonical_order:
             raise ValueError("Programme scope rules are not in deterministic order.")
@@ -697,7 +765,21 @@ class ProgrammeScopePolicy:
     def to_dict(self) -> dict[str, Any]:
         return {
             "engagement_context": self.engagement_context,
-            "rules": [rule.to_dict() for rule in self.rules],
+            "rules": [
+                (
+                    rule.to_dict()
+                    if self.schema_version == PROGRAMME_SCOPE_SCHEMA_VERSION
+                    else {
+                        "action": rule.action,
+                        "canonical_value": rule.canonical_value,
+                        "kind": rule.kind,
+                        "private_note": rule.private_note,
+                        "private_source_wording": rule.private_source_wording,
+                        "rule_id": rule.rule_id,
+                    }
+                )
+                for rule in self.rules
+            ],
             "schema_version": self.schema_version,
             "updated_at": self.updated_at,
         }
@@ -1115,12 +1197,28 @@ def _rule_matches(
                 destination.path,
             )
         if destination.origin.host_kind == DESTINATION_HOSTNAME:
-            return _hostname_rule_matches(rule, destination.origin.host)
+            return _hostname_rule_matches(
+                rule,
+                destination.origin.host,
+                origin=destination.origin,
+            )
         return _ipv4_rule_matches(rule, destination.origin.host)
     return False
 
 
-def _hostname_rule_matches(rule: ProgrammeScopeRule, hostname: str) -> bool:
+def _hostname_rule_matches(
+    rule: ProgrammeScopeRule,
+    hostname: str,
+    *,
+    origin: CanonicalHTTPOrigin | None = None,
+) -> bool:
+    if rule.scheme is not None or rule.port is not None:
+        if origin is None:
+            return False
+        if rule.scheme is not None and origin.scheme != rule.scheme:
+            return False
+        if rule.port is not None and origin.effective_port != rule.port:
+            return False
     if rule.kind == RULE_EXACT_HOSTNAME:
         return hostname == rule.canonical_value
     if rule.kind == RULE_WILDCARD_SUBDOMAIN:

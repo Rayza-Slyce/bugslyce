@@ -38,6 +38,7 @@ SERVICE_VERSION_NOT_PERMITTED = "not_permitted"
 
 RATE_SOURCE_CONSERVATIVE = "bugslyce_conservative_default"
 RATE_SOURCE_PROGRAMME = "programme_published_limit"
+RATE_SOURCE_OPERATOR = "operator_selected_limit"
 
 TCP_SKIP = "skip_tcp_discovery"
 TCP_CONSERVATIVE = "conservative_common_web_ports"
@@ -79,7 +80,11 @@ _SERVICE_VERSION_STATES = {
     SERVICE_VERSION_NOT_PERMITTED,
     NOT_YET_CONFIRMED,
 }
-_RATE_SOURCES = {RATE_SOURCE_CONSERVATIVE, RATE_SOURCE_PROGRAMME}
+_RATE_SOURCES = {
+    RATE_SOURCE_CONSERVATIVE,
+    RATE_SOURCE_PROGRAMME,
+    RATE_SOURCE_OPERATOR,
+}
 _TCP_POLICIES = {TCP_SKIP, TCP_CONSERVATIVE, TCP_CUSTOM, TCP_FULL}
 _IDENTIFICATION_STATES = {
     IDENTIFICATION_NONE,
@@ -680,7 +685,7 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
             "Maximum aggregate HTTP rate: "
             f"{policy.maximum_http_requests_per_second} requests per second"
         ),
-        f"Rate source: {_label(policy.http_rate_source)}",
+        f"Rate source: {_rate_source_label(policy.http_rate_source)}",
         f"Maximum HTTP concurrency: {policy.maximum_http_concurrency}",
         f"TCP discovery: {_label(policy.tcp_discovery_policy)}",
         f"Nmap service/version detection: {_label(policy.service_version_detection)}",
@@ -808,8 +813,11 @@ def _readiness_reasons(
         reasons.append("The programme does not permit automated reconnaissance.")
     elif automated_reconnaissance != AUTOMATION_PERMITTED:
         reasons.append("Automated reconnaissance permission is not yet confirmed.")
-    if rate > CONSERVATIVE_HTTP_RATE and http_rate_source != RATE_SOURCE_PROGRAMME:
-        reasons.append("A rate above the conservative default must be programme-defined.")
+    if rate > CONSERVATIVE_HTTP_RATE and http_rate_source == RATE_SOURCE_CONSERVATIVE:
+        reasons.append(
+            "A rate above the conservative default requires an explicit programme "
+            "or operator-selected source."
+        )
     if http_rate_source == RATE_SOURCE_PROGRAMME and programme_rate_confirmed != CONFIRMED:
         reasons.append("The programme-published HTTP rate has not been confirmed.")
     if concurrency > 1 and concurrent_automation_confirmed != CONFIRMED:
@@ -888,3 +896,9 @@ def _refuse_unsafe_policy_path(path: Path) -> None:
 
 def _label(value: str) -> str:
     return value.replace("_", " ").capitalize()
+
+
+def _rate_source_label(value: str) -> str:
+    if value == RATE_SOURCE_OPERATOR:
+        return "operator selected limit"
+    return _label(value)

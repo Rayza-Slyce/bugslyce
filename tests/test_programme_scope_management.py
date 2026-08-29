@@ -15,6 +15,7 @@ from bugslyce.core.programme_scope import (
     RULE_HTTP_PATH_PREFIX,
     RULE_IPV4_CIDR,
     RULE_WILDCARD_SUBDOMAIN,
+    PROGRAMME_SCOPE_SCHEMA_VERSION,
     build_programme_scope_policy,
     build_programme_scope_rule,
 )
@@ -227,7 +228,7 @@ def test_safe_summary_is_exact_deterministic_and_private() -> None:
             "Programme scope - private local operator view",
             "Project: scope-review",
             "Engagement context: bug_bounty",
-            "Schema version: 1.0",
+            f"Schema version: {PROGRAMME_SCOPE_SCHEMA_VERSION}",
             f"Updated at: {ORIGINAL_TIME}",
             "Rules: 6 total; 4 include; 2 exclude",
             "Rule counts by kind:",

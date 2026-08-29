@@ -12,6 +12,7 @@ from bugslyce.core.programme_scope import (
     RULE_HTTP_PATH_PREFIX,
     RULE_IPV4_CIDR,
     RULE_WILDCARD_SUBDOMAIN,
+    PROGRAMME_SCOPE_SCHEMA_VERSION,
     ProgrammeScopePolicy,
     ProgrammeScopeRule,
     build_programme_scope_policy,
@@ -90,6 +91,8 @@ def update_programme_scope_rule_private_fields(
         action=current.action,
         kind=current.kind,
         value=current.canonical_value,
+        scheme=current.scheme,
+        port=current.port,
         private_note=private_note,
         private_source_wording=private_source_wording,
     )
@@ -128,7 +131,7 @@ def build_changed_programme_scope_policy(
         )
     return build_programme_scope_policy(
         canonical,
-        schema_version=original_policy.schema_version,
+        schema_version=PROGRAMME_SCOPE_SCHEMA_VERSION,
         engagement_context=original_policy.engagement_context,
         updated_at=updated_at,
     )
@@ -167,10 +170,7 @@ def render_programme_scope_local_summary(
     lines.extend(f"- {kind}: {kind_counts[kind]}" for kind in PROGRAMME_SCOPE_RULE_KIND_ORDER)
     if policy.rules:
         lines.append("Canonical rules:")
-        lines.extend(
-            f"- {rule.rule_id} | {rule.action} | {rule.kind} | {rule.canonical_value}"
-            for rule in policy.rules
-        )
+        lines.extend(f"- {_safe_rule(rule)}" for rule in policy.rules)
     else:
         lines.append("Canonical rules: none")
     lines.extend(
@@ -214,3 +214,16 @@ def _require_rule(rule: ProgrammeScopeRule) -> None:
 def _require_policy(policy: ProgrammeScopePolicy) -> None:
     if not isinstance(policy, ProgrammeScopePolicy):
         raise ValueError("Programme scope management requires a canonical policy.")
+
+
+def _safe_rule(rule: ProgrammeScopeRule) -> str:
+    qualifiers = []
+    if rule.scheme is not None:
+        qualifiers.append(f"scheme={rule.scheme}")
+    if rule.port is not None:
+        qualifiers.append(f"port={rule.port}")
+    suffix = "" if not qualifiers else " | " + " | ".join(qualifiers)
+    return (
+        f"{rule.rule_id} | {rule.action} | {rule.kind} | "
+        f"{rule.canonical_value}{suffix}"
+    )

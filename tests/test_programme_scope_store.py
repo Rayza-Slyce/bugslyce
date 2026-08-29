@@ -150,6 +150,61 @@ def test_minimal_and_complete_policies_round_trip_as_immutable_models(
         assert loaded.rules == policy.rules
 
 
+def test_qualified_hostname_scope_round_trips_with_explicit_qualifiers(
+    tmp_path: Path,
+) -> None:
+    rule = build_programme_scope_rule(
+        rule_id="qualified-wildcard",
+        action=ACTION_INCLUDE,
+        kind=RULE_WILDCARD_SUBDOMAIN,
+        value="*.example.test",
+        scheme="https",
+        port=443,
+    )
+    policy = build_programme_scope_policy((rule,), updated_at=FIXED_TIMESTAMP)
+    path = _policy_path(tmp_path)
+
+    save_programme_scope_policy(path, policy)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    loaded = load_programme_scope_policy(path)
+
+    assert loaded == policy
+    assert loaded.rules[0].scheme == "https"
+    assert loaded.rules[0].port == 443
+    assert payload["rules"][0]["scheme"] == "https"
+    assert payload["rules"][0]["port"] == 443
+
+
+def test_schema_1_0_programme_scope_loads_without_qualifier_inference(
+    tmp_path: Path,
+) -> None:
+    path = _policy_path(tmp_path)
+    payload = {
+        "schema_version": "1.0",
+        "engagement_context": "bug_bounty",
+        "updated_at": FIXED_TIMESTAMP,
+        "rules": [
+            {
+                "rule_id": "legacy-wildcard",
+                "action": "include",
+                "kind": "wildcard_subdomain",
+                "canonical_value": "*.example.test",
+                "private_note": None,
+                "private_source_wording": None,
+            }
+        ],
+    }
+    _write_payload(path, payload)
+    before = path.read_bytes()
+
+    loaded = load_programme_scope_policy(path)
+
+    assert loaded.rules[0].canonical_value == "*.example.test"
+    assert loaded.rules[0].scheme is None
+    assert loaded.rules[0].port is None
+    assert path.read_bytes() == before
+
+
 def test_serialisation_is_canonical_utf8_ordered_and_byte_deterministic(
     tmp_path: Path,
 ) -> None:
@@ -194,6 +249,8 @@ def test_private_fields_use_one_exact_nullable_rule_schema(tmp_path: Path) -> No
             "kind",
             "private_note",
             "private_source_wording",
+            "scheme",
+            "port",
             "rule_id",
         }
         for rule in payload["rules"]

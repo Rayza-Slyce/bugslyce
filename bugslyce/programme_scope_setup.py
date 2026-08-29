@@ -16,6 +16,7 @@ from bugslyce.core.programme_scope import (
     build_programme_scope_rule,
     validate_rule_id,
 )
+from bugslyce.core.programme_scope_bulk import build_programme_scope_bulk_draft
 from bugslyce.programme_scope_management import (
     add_programme_scope_rule,
     build_changed_programme_scope_policy,
@@ -155,18 +156,28 @@ def _configure_loop(
     rules = () if stored is None else stored.rules
     while True:
         if stored is None:
-            print_func("1. Add rule\n2. Review rules\n3. Review and save\n4. Cancel")
+            print_func(
+                "1. Add rule\n2. Review rules\n3. Review and save\n4. Cancel\n"
+                "5. Add structured bulk rules"
+            )
             choice = _prompt(input_func, "Select an option: ")
-            actions = {"1": "add", "2": "review", "3": "save", "4": "cancel"}
+            actions = {
+                "1": "add",
+                "2": "review",
+                "3": "save",
+                "4": "cancel",
+                "5": "bulk",
+            }
         else:
             print_func(
                 "1. List/review rules\n2. Add rule\n3. Replace rule\n"
-                "4. Remove rule\n5. Change private fields\n6. Review and save\n7. Cancel"
+                "4. Remove rule\n5. Change private fields\n6. Review and save\n"
+                "7. Cancel\n8. Add structured bulk rules"
             )
             choice = _prompt(input_func, "Select an option: ")
             actions = {
                 "1": "review", "2": "add", "3": "replace", "4": "remove",
-                "5": "private", "6": "save", "7": "cancel",
+                "5": "private", "6": "save", "7": "cancel", "8": "bulk",
             }
         action = actions.get(choice)
         if action is None:
@@ -189,6 +200,17 @@ def _configure_loop(
                 new_rule = _collect_rule(input_func)
                 rules = add_programme_scope_rule(rules, new_rule)
                 print_func(f"Rule added: {_safe_rule(new_rule)}")
+            elif action == "bulk":
+                bulk_draft = _collect_bulk_draft(input_func, print_func)
+                changed = rules
+                for rule in bulk_draft.rules:
+                    changed = add_programme_scope_rule(changed, rule)
+                rules = changed
+                print_func(
+                    f"Bulk rules added: {len(bulk_draft.rules)}; exact duplicates "
+                    f"collapsed: {bulk_draft.duplicate_count}."
+                )
+                print_func(_render_draft(project, stored, rules))
             elif action == "replace":
                 rules = _replace_rule(rules, input_func, print_func)
             elif action == "remove":
@@ -273,6 +295,22 @@ def _render_rule_entry_guidance(print_func: PrintFunc) -> None:
     print_func("- ipv4_cidr: an IPv4 network/range, e.g. 192.0.2.0/24")
 
 
+def _collect_bulk_draft(input_func: InputFunc, print_func: PrintFunc):
+    print_func("Enter one structured scope rule per line.")
+    print_func(
+        "Grammar: include|exclude hostname|wildcard|url|path|ipv4|cidr value "
+        "[scheme=http|https] [port=1-65535]"
+    )
+    print_func("Type END on its own line to finish the in-memory bulk draft.")
+    lines: list[str] = []
+    while True:
+        line = _prompt(input_func, "Bulk scope rule (END finishes): ")
+        if line == "END":
+            break
+        lines.append(line)
+    return build_programme_scope_bulk_draft("\n".join(lines))
+
+
 def _collect_public_replacement(
     input_func: InputFunc,
     current: ProgrammeScopeRule,
@@ -289,6 +327,8 @@ def _collect_public_replacement(
         action=action,
         kind=kind,
         value=value,
+        scheme=current.scheme,
+        port=current.port,
         private_note=current.private_note,
         private_source_wording=current.private_source_wording,
     )
@@ -420,7 +460,16 @@ def _find_rule(
 
 
 def _safe_rule(rule: ProgrammeScopeRule) -> str:
-    return f"{rule.rule_id} | {rule.action} | {rule.kind} | {rule.canonical_value}"
+    qualifiers = []
+    if rule.scheme is not None:
+        qualifiers.append(f"scheme={rule.scheme}")
+    if rule.port is not None:
+        qualifiers.append(f"port={rule.port}")
+    suffix = "" if not qualifiers else " | " + " | ".join(qualifiers)
+    return (
+        f"{rule.rule_id} | {rule.action} | {rule.kind} | "
+        f"{rule.canonical_value}{suffix}"
+    )
 
 
 def _prompt(input_func: InputFunc, prompt: str) -> str:

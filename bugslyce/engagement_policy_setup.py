@@ -20,6 +20,7 @@ from bugslyce.core.engagement_policy import (
     NOT_CONFIRMED,
     NOT_YET_CONFIRMED,
     RATE_SOURCE_CONSERVATIVE,
+    RATE_SOURCE_OPERATOR,
     RATE_SOURCE_PROGRAMME,
     SERVICE_VERSION_NOT_PERMITTED,
     SERVICE_VERSION_PERMITTED,
@@ -143,9 +144,10 @@ def configure_project_policy_interactively(
         input_func,
         (
             "HTTP rate [1 BugSlyce conservative default: 2 requests/second, "
-            "2 exact programme-published maximum]: "
+            "2 exact programme-published maximum, "
+            "3 operator-selected local maximum]: "
         ),
-        {"1", "2"},
+        {"1", "2", "3"},
     )
     rate: object = "2"
     rate_source = RATE_SOURCE_CONSERVATIVE
@@ -162,6 +164,14 @@ def configure_project_policy_interactively(
             input_func,
             "Type YES to confirm this exact rate came from the current programme rules: ",
         )
+    elif rate_choice == "3":
+        rate = _validated_prompt(
+            input_func,
+            print_func,
+            "Operator-selected maximum requests per second: ",
+            validate_http_rate,
+        )
+        rate_source = RATE_SOURCE_OPERATOR
 
     concurrency = _validated_prompt(
         input_func,

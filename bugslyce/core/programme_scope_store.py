@@ -11,6 +11,8 @@ import tempfile
 from typing import Any
 
 from bugslyce.core.programme_scope import (
+    LEGACY_PROGRAMME_SCOPE_SCHEMA_VERSION,
+    PROGRAMME_SCOPE_SCHEMA_VERSION,
     ProgrammeScopePolicy,
     ProgrammeScopeRule,
     build_programme_scope_policy,
@@ -24,7 +26,7 @@ MAX_PROGRAMME_SCOPE_FILE_BYTES = 1024 * 1024
 _POLICY_FIELDS = frozenset(
     {"schema_version", "engagement_context", "updated_at", "rules"}
 )
-_RULE_FIELDS = frozenset(
+_LEGACY_RULE_FIELDS = frozenset(
     {
         "rule_id",
         "action",
@@ -34,6 +36,7 @@ _RULE_FIELDS = frozenset(
         "private_source_wording",
     }
 )
+_RULE_FIELDS = _LEGACY_RULE_FIELDS | {"scheme", "port"}
 
 
 class _DuplicateJSONKeyError(ValueError):
@@ -198,15 +201,33 @@ def _policy_from_payload(payload: object) -> ProgrammeScopePolicy:
     if not isinstance(rules_payload, list):
         raise ValueError("Programme scope policy rules must be a JSON list.")
 
+    schema_version = payload.get("schema_version")
+    if schema_version == PROGRAMME_SCOPE_SCHEMA_VERSION:
+        rule_fields = _RULE_FIELDS
+    elif schema_version == LEGACY_PROGRAMME_SCOPE_SCHEMA_VERSION:
+        rule_fields = _LEGACY_RULE_FIELDS
+    else:
+        raise ValueError("Programme scope schema version is unsupported.")
+
     rules: list[ProgrammeScopeRule] = []
     for rule_payload in rules_payload:
-        if not isinstance(rule_payload, dict) or set(rule_payload) != _RULE_FIELDS:
+        if not isinstance(rule_payload, dict) or set(rule_payload) != rule_fields:
             raise ValueError("Programme scope policy rule schema is invalid.")
         rule = build_programme_scope_rule(
             rule_id=rule_payload["rule_id"],
             action=rule_payload["action"],
             kind=rule_payload["kind"],
             value=rule_payload["canonical_value"],
+            scheme=(
+                rule_payload["scheme"]
+                if schema_version == PROGRAMME_SCOPE_SCHEMA_VERSION
+                else None
+            ),
+            port=(
+                rule_payload["port"]
+                if schema_version == PROGRAMME_SCOPE_SCHEMA_VERSION
+                else None
+            ),
             private_note=rule_payload["private_note"],
             private_source_wording=rule_payload["private_source_wording"],
         )
@@ -218,7 +239,7 @@ def _policy_from_payload(payload: object) -> ProgrammeScopePolicy:
 
     policy = build_programme_scope_policy(
         rules,
-        schema_version=payload["schema_version"],
+        schema_version=schema_version,
         engagement_context=payload["engagement_context"],
         updated_at=payload["updated_at"],
     )
