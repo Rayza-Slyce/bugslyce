@@ -103,6 +103,8 @@ from bugslyce.recon.deep_source_route_collection_export import (
     write_deep_source_route_collection_artifacts,
 )
 from bugslyce.recon.deep_source_route_collector import (
+    MAX_BODY_PREVIEW_CHARS,
+    DeepSourceRouteCollectedItem,
     DeepSourceRouteCollectionResult,
     collect_deep_source_routes_from_plan,
 )
@@ -141,6 +143,25 @@ from bugslyce.recon.path_followup import (
     PathFollowupNoWork,
     run_path_followup_workflow,
     write_path_followup_execution_result,
+)
+from bugslyce.recon.native_content_discovery import (
+    NativeContentDiscoveryLimits,
+    NativeContentDiscoveryPlan,
+    NativeContentDiscoveryResult,
+    build_native_content_discovery_plan,
+    run_native_content_discovery,
+)
+from bugslyce.recon.programme_orchestration import (
+    ProgrammeOrchestrationPlan,
+    build_programme_orchestration_plan,
+)
+from bugslyce.recon.recursive_evidence_feedback import (
+    RecursiveEvidenceFeedbackCollectedResponse,
+    RecursiveEvidenceFeedbackLimits,
+    RecursiveEvidenceFeedbackPlan,
+    RecursiveEvidenceFeedbackResult,
+    build_recursive_evidence_feedback_plan,
+    run_recursive_evidence_feedback,
 )
 from bugslyce.recon.smb_collection import (
     SMBEnumerationNoWork,
@@ -288,6 +309,8 @@ class DeepPipelineOutputs:
     source_collection: DeepSourceRouteCollectionResult | None = None
     metadata_collection: DeepMetadataCollectionResult | None = None
     shallow_followups: DeepShallowRouteFollowupResult | None = None
+    recursive_feedback_plan: RecursiveEvidenceFeedbackPlan | None = None
+    recursive_feedback_result: RecursiveEvidenceFeedbackResult | None = None
     orchestration: DeepReconOrchestrationResult | None = None
     deep_artifact_paths: tuple[Path, ...] = ()
 
@@ -1292,7 +1315,10 @@ def _assess_resume_state(
         ),
         "PIPELINE-STEP-006": plan_complete,
         "PIPELINE-STEP-007": any(
-            name.startswith("gobuster-tiny-") for name in artifact_names
+            name.startswith(
+                ("gobuster-tiny-", "content-discovery-internal-")
+            )
+            for name in artifact_names
         ),
         "PIPELINE-STEP-008": any(
             name.startswith("curl-headers-content-followup-")
@@ -1726,6 +1752,36 @@ def _content_discovery_profile_for_pipeline(profile: str) -> str:
     return CONTENT_DISCOVERY_TINY_PROFILE
 
 
+_NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT = 4096
+_NATIVE_PER_ORIGIN_LIMIT_BY_CONTENT_PROFILE = {
+    CONTENT_DISCOVERY_TINY_PROFILE: 25,
+    STANDARD_BOUNDED_CORE_PROFILE: 220,
+    DEEP_BOUNDED_CORE_PROFILE: 1753,
+}
+
+
+def _native_content_discovery_limits_for_pipeline(
+    profile: str,
+) -> NativeContentDiscoveryLimits:
+    content_profile = _content_discovery_profile_for_pipeline(profile)
+    try:
+        per_origin = _NATIVE_PER_ORIGIN_LIMIT_BY_CONTENT_PROFILE[content_profile]
+    except KeyError as exc:
+        raise ValueError("Pipeline content profile has no native request limit.") from exc
+    return NativeContentDiscoveryLimits(
+        maximum_total_candidate_requests=_NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT,
+        maximum_candidate_requests_per_origin=per_origin,
+    )
+
+
+def _recursive_evidence_feedback_limits() -> RecursiveEvidenceFeedbackLimits:
+    return RecursiveEvidenceFeedbackLimits(
+        maximum_total_candidate_requests=800,
+        maximum_candidate_requests_per_origin=100,
+        maximum_depth=1,
+    )
+
+
 def _content_plan_suffix(content_profile: str) -> str:
     if content_profile == CONTENT_DISCOVERY_TINY_PROFILE:
         return "tiny"
@@ -1985,30 +2041,71 @@ def _step_runners(
         )
 
     def content_run():
-        result = (
-            run_content_discovery_workflow(
-                plan_path,
-                scope_file,
-                comparator_progress_callback=comparator_progress_callback,
-                gobuster_progress_callback=gobuster_progress_callback,
-                runner=project_runtime.gobuster_runner(),
-                http_executor=project_runtime.http_executor,
-                project_runtime=project_runtime,
+        def legacy_content_run():
+            result = (
+                run_content_discovery_workflow(
+                    plan_path,
+                    scope_file,
+                    comparator_progress_callback=comparator_progress_callback,
+                    gobuster_progress_callback=gobuster_progress_callback,
+                    runner=project_runtime.gobuster_runner(),
+                    http_executor=project_runtime.http_executor,
+                    project_runtime=project_runtime,
+                )
+                if project_runtime is not None
+                else run_content_discovery_workflow(
+                    plan_path,
+                    scope_file,
+                    comparator_progress_callback=comparator_progress_callback,
+                    gobuster_progress_callback=gobuster_progress_callback,
+                )
             )
-            if project_runtime
-            else run_content_discovery_workflow(
-                plan_path,
-                scope_file,
-                comparator_progress_callback=comparator_progress_callback,
-                gobuster_progress_callback=gobuster_progress_callback,
+            metadata = write_content_discovery_execution_result(result, plan_dir)
+            result_profile = getattr(
+                result,
+                "profile",
+                _content_discovery_profile_for_pipeline(profile),
             )
+            return (
+                f"Approved {result_profile} content discovery completed.",
+                [*result.artifact_paths, *(str(path) for path in metadata)],
+                {"report_path": result.report_path},
+            )
+
+        if project_runtime is None:
+            return legacy_content_run()
+        project_state = build_project_state(output_dir)
+        if not isinstance(project_state, ProjectState):
+            return legacy_content_run()
+        programme_orchestration = build_programme_orchestration_plan(
+            project_runtime,
+            project_state,
         )
-        metadata = write_content_discovery_execution_result(result, plan_dir)
-        result_profile = getattr(result, "profile", _content_discovery_profile_for_pipeline(profile))
+        root_plan = build_native_content_discovery_plan(
+            project_runtime,
+            project_state,
+            programme_orchestration,
+            profile=_content_discovery_profile_for_pipeline(profile),
+            limits=_native_content_discovery_limits_for_pipeline(profile),
+        )
+        native_result = run_native_content_discovery(
+            project_runtime,
+            project_state,
+            programme_orchestration,
+            root_plan,
+            output_dir=output_dir,
+        )
+        artifact_paths = _register_native_content_discovery_artifacts(
+            output_dir,
+            native_result,
+        )
+        context["wp4_root_plan"] = root_plan
+        context["wp4_root_result"] = native_result
+        context["wp4_programme_orchestration"] = programme_orchestration
         return (
-            f"Approved {result_profile} content discovery completed.",
-            [*result.artifact_paths, *(str(path) for path in metadata)],
-            {"report_path": result.report_path},
+            f"BugSlyce-native {root_plan.profile} content discovery completed.",
+            [str(path) for path in artifact_paths],
+            {},
         )
 
     def content_followup():
@@ -2070,13 +2167,9 @@ def _step_runners(
             if project_runtime
             else build_deep_http_fetcher()
         )
-        source_collection = collect_deep_source_routes_from_plan(
+        initial_source_collection = collect_deep_source_routes_from_plan(
             plan,
             fetcher=fetcher,
-        )
-        source_paths = write_deep_source_route_collection_artifacts(
-            source_collection,
-            output_dir,
         )
         metadata_plan = _deep_plan_for_source(plan, "metadata_coverage")
         metadata_collection = collect_deep_metadata_from_plan(
@@ -2087,8 +2180,10 @@ def _step_runners(
             metadata_collection,
             output_dir,
         )
-        html_routes = build_deep_html_route_extraction(source_collection)
-        javascript_routes = build_deep_javascript_route_extraction(source_collection)
+        html_routes = build_deep_html_route_extraction(initial_source_collection)
+        javascript_routes = build_deep_javascript_route_extraction(
+            initial_source_collection
+        )
         followup_plan = (
             build_deep_shallow_route_followup_plan(
                 html_routes,
@@ -2102,12 +2197,61 @@ def _step_runners(
             followup_plan,
             fetcher=fetcher,
         )
+        source_collection = initial_source_collection
+        recursive_plan = None
+        recursive_result = None
+        if project_runtime is not None:
+            root_plan = context.get("wp4_root_plan")
+            programme_orchestration = context.get("wp4_programme_orchestration")
+            if root_plan is not None or programme_orchestration is not None:
+                if not isinstance(root_plan, NativeContentDiscoveryPlan):
+                    raise ValueError(
+                        "Deep recursive feedback requires the exact native root plan."
+                    )
+                if not isinstance(
+                    programme_orchestration,
+                    ProgrammeOrchestrationPlan,
+                ):
+                    raise ValueError(
+                        "Deep recursive feedback requires programme orchestration."
+                    )
+                recursive_plan = build_recursive_evidence_feedback_plan(
+                    project_runtime,
+                    project_state,
+                    programme_orchestration,
+                    root_plan=root_plan,
+                    metadata_collection=metadata_collection,
+                    html_extraction=html_routes,
+                    javascript_extraction=javascript_routes,
+                    source_depth=0,
+                    limits=_recursive_evidence_feedback_limits(),
+                )
+                recursive_result = run_recursive_evidence_feedback(
+                    project_runtime,
+                    project_state,
+                    programme_orchestration,
+                    recursive_plan,
+                    root_plan=root_plan,
+                    metadata_collection=metadata_collection,
+                    html_extraction=html_routes,
+                    javascript_extraction=javascript_routes,
+                )
+                source_collection = _merge_recursive_source_collection(
+                    initial_source_collection,
+                    recursive_result,
+                )
+        source_paths = write_deep_source_route_collection_artifacts(
+            source_collection,
+            output_dir,
+        )
         current = _deep_outputs_from_context(context)
         context["deep_outputs"] = replace(
             current,
             source_collection=source_collection,
             metadata_collection=metadata_collection,
             shallow_followups=shallow_followups,
+            recursive_feedback_plan=recursive_plan,
+            recursive_feedback_result=recursive_result,
             deep_artifact_paths=_dedupe_paths((*source_paths, *metadata_paths)),
         )
         return (
@@ -2289,6 +2433,95 @@ def _body_fetch_warning_message(
         "Selective body fetch completed with warnings: "
         f"{failed_transfers} {transfer_noun} failed; "
         f"{partial_bodies_retained} partial {body_noun} retained."
+    )
+
+
+def _register_native_content_discovery_artifacts(
+    output_dir: Path,
+    result: NativeContentDiscoveryResult,
+) -> tuple[Path, ...]:
+    manifest_path = output_dir / "recon_manifest.json"
+    manifest = _load_json_object(manifest_path, "recon manifest")
+    existing = manifest.get("artifacts")
+    if not isinstance(existing, list):
+        raise ValueError("Recon manifest artefacts must be a list.")
+
+    artifacts = list(existing)
+    registered_paths: list[Path] = []
+    output_root = output_dir.resolve()
+    for artifact in result.artifacts:
+        artifact_path = artifact.path.resolve(strict=True)
+        try:
+            artifact_path.relative_to(output_root)
+        except ValueError as exc:
+            raise ValueError(
+                "Native content discovery artefact escapes the project output directory."
+            ) from exc
+        if not artifact_path.is_file() or artifact_path.is_symlink():
+            raise ValueError("Native content discovery artefact is not a regular file.")
+        artifacts.append(
+            {
+                "type": artifact.artifact_type,
+                "file": artifact_path.name,
+                "base_url": artifact.canonical_origin,
+                "description": "BugSlyce-native bounded root content discovery",
+                "tags": [artifact.selection_reason, "wp4a_native"],
+            }
+        )
+        registered_paths.append(artifact_path)
+
+    if registered_paths:
+        payload = dict(manifest)
+        payload["artifacts"] = artifacts
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return tuple(registered_paths)
+
+
+def _recursive_response_to_deep_source_item(
+    response: RecursiveEvidenceFeedbackCollectedResponse,
+) -> DeepSourceRouteCollectedItem:
+    return DeepSourceRouteCollectedItem(
+        url=response.request.url,
+        method="GET",
+        status_code=response.status_code,
+        final_url=response.final_url,
+        headers=response.headers,
+        body_preview=response.body.decode("utf-8", errors="replace")[
+            :MAX_BODY_PREVIEW_CHARS
+        ],
+        body_sha256=response.body_sha256,
+        body_bytes=response.body_bytes,
+        elapsed_seconds=response.elapsed_seconds,
+        source="recursive_evidence_feedback",
+        reason="bounded_second_pass",
+        evidence_ids=response.evidence_ids,
+        body=response.body,
+    )
+
+
+def _merge_recursive_source_collection(
+    initial: DeepSourceRouteCollectionResult,
+    recursive_result: RecursiveEvidenceFeedbackResult,
+) -> DeepSourceRouteCollectionResult:
+    collected = list(initial.collected)
+    seen = {(item.method.upper(), item.url) for item in collected}
+    for response in recursive_result.collected:
+        item = _recursive_response_to_deep_source_item(response)
+        key = (item.method.upper(), item.url)
+        if key in seen:
+            continue
+        seen.add(key)
+        collected.append(item)
+    added = len(collected) - len(initial.collected)
+    return DeepSourceRouteCollectionResult(
+        collected=tuple(collected),
+        skipped=initial.skipped,
+        total_considered=initial.total_considered + added,
+        total_collected=initial.total_collected + added,
+        total_skipped=initial.total_skipped,
     )
 
 

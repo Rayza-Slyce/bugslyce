@@ -4069,6 +4069,62 @@ def test_resume_records_followup_noops_and_continues(
     assert statuses["PIPELINE-STEP-012"] == "completed"
 
 
+def test_resume_recognises_current_native_step_seven_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_resume_evidence(
+        output_dir,
+        [
+            "nmap-allports.txt",
+            "nmap-services-all.txt",
+            "curl-headers-10.10.10.10-80.txt",
+            "curl-headers-followup-10.10.10.10-80-manual.txt",
+            "content-discovery-internal-https-10.10.10.10-443-root.txt",
+            "curl-headers-content-followup-10.10.10.10-80-admin.txt",
+            "body-fetch-10.10.10.10-80-admin.html",
+        ],
+    )
+    manifest_path = output_dir / "recon_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for artifact in manifest["artifacts"]:
+        if artifact["file"] == "content-discovery-internal-https-10.10.10.10-443-root.txt":
+            artifact["type"] = "content_discovery_internal"
+    manifest_path.write_text(
+        json.dumps(manifest) + "\n",
+        encoding="utf-8",
+    )
+    plan_path = _write_plan_file(output_dir)
+    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    result = run_project_pipeline(
+        project_file,
+        PIPELINE_PROFILE,
+        resume=True,
+        clock=lambda: FIXED_TIME,
+    )
+
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert all(
+        statuses[step_id] == "skipped_existing"
+        for step_id in (
+            "PIPELINE-STEP-002",
+            "PIPELINE-STEP-003",
+            "PIPELINE-STEP-003S",
+            "PIPELINE-STEP-004",
+            "PIPELINE-STEP-005",
+            "PIPELINE-STEP-006",
+            "PIPELINE-STEP-007",
+            "PIPELINE-STEP-008",
+            "PIPELINE-STEP-009",
+        )
+    )
+    assert "content-run" not in calls
+
+
 def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
