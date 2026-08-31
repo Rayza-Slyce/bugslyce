@@ -1,7 +1,7 @@
 # BugSlyce PRE-WP5 Simplification Closure Source
 
-**Date:** 2026-08-31  
-**Package:** PRE-WP5-SIMPLIFY-01  
+**Date:** 2026-08-31
+**Package:** PRE-WP5-SIMPLIFY-01
 **Status:** ACCEPTED / CLOSED
 
 ## Repository baseline
