@@ -17,7 +17,7 @@ from bugslyce.interactive import (
     run_interactive_launcher,
 )
 from bugslyce.project_pipeline import (
-    PIPELINE_PROFILE,
+    NORMAL_PIPELINE_PROFILE,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
 )
@@ -50,19 +50,21 @@ def test_no_args_interactive_calls_launcher(monkeypatch) -> None:
 def test_recon_mode_menu_uses_user_facing_names() -> None:
     menu = render_recon_mode_menu()
 
-    assert QUICK_RECON_LABEL in menu
+    assert "Run Reconnaissance" in menu
     assert "Manual Setup Only" in menu
-    assert "Standard Recon" in menu
-    assert "Deep Recon" in menu
+    assert QUICK_RECON_LABEL not in menu
+    assert "Standard Recon" not in menu
+    assert "Deep Recon" not in menu
     assert "Quick Safe Recon" not in menu
     assert "Standard Safe Recon" not in menu
     assert "lab-safe-tiny" not in menu
-    assert "Manual Review Leads" in menu
-    assert "without increasing scan volume" in menu
-    assert map_user_recon_mode_to_internal_profile("1") == PIPELINE_PROFILE
+    assert "full bounded reconnaissance workflow" in menu
+    assert map_user_recon_mode_to_internal_profile("1") == NORMAL_PIPELINE_PROFILE
     assert map_user_recon_mode_to_internal_profile("2") is None
-    assert map_user_recon_mode_to_internal_profile("3") == STANDARD_PIPELINE_PROFILE
-    assert map_user_recon_mode_to_internal_profile("4") == "deep-bounded"
+    with pytest.raises(ValueError, match="Unknown recon mode"):
+        map_user_recon_mode_to_internal_profile("3")
+    with pytest.raises(ValueError, match="Unknown recon mode"):
+        map_user_recon_mode_to_internal_profile("4")
 
 
 def test_launcher_auth_abort_creates_nothing(monkeypatch, tmp_path: Path) -> None:
@@ -237,7 +239,7 @@ def test_launcher_rejects_unsafe_url_targets(
     assert "No project was created." in output
 
 
-def test_deep_recon_selection_runs_deep_bounded_profile(
+def test_reconnaissance_selection_runs_deep_bounded_profile(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -256,7 +258,7 @@ def test_deep_recon_selection_runs_deep_bounded_profile(
         lambda result: "DEEP PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "4", "YES", "YES"])
+    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -497,7 +499,7 @@ def test_start_new_project_invalid_engagement_context_reprompts(
     assert "* Engagement context: CTF / learning lab" in rendered
 
 
-def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:
+def test_reconnaissance_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
     received: dict[str, object] = {}
     monkeypatch.setattr(
@@ -525,51 +527,13 @@ def test_quick_recon_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> None
 
     assert exit_code == 0
     assert received["project_file"] == project_file
-    assert received["profile"] == PIPELINE_PROFILE
+    assert received["profile"] == NORMAL_PIPELINE_PROFILE
     assert received["resume"] is False
     assert callable(received["progress_callback"])
     assert "PIPELINE SUMMARY" in output
 
 
-def test_standard_recon_run_now_calls_standard_pipeline(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
-    received: dict[str, object] = {}
-    monkeypatch.setattr(
-        "bugslyce.interactive.scaffold_project",
-        lambda **kwargs: _scaffold_result(project_file),
-    )
-
-    def fake_pipeline(**kwargs):
-        received.update(kwargs)
-        return SimpleNamespace()
-
-    monkeypatch.setattr("bugslyce.interactive.run_project_pipeline", fake_pipeline)
-    monkeypatch.setattr(
-        "bugslyce.interactive.render_project_pipeline_summary",
-        lambda result: "STANDARD PIPELINE SUMMARY",
-    )
-    output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "3", "YES", "YES"])
-
-    exit_code = run_interactive_launcher(
-        input_func=lambda prompt: next(inputs),
-        print_func=output.append,
-        cwd=tmp_path,
-    )
-
-    rendered = "\n".join(output)
-    assert exit_code == 0
-    assert received["project_file"] == project_file
-    assert received["profile"] == STANDARD_PIPELINE_PROFILE
-    assert received["resume"] is False
-    assert "* Recon mode: Standard Recon" in rendered
-    assert "STANDARD PIPELINE SUMMARY" in output
-
-
-def test_quick_recon_run_now_uses_resolved_home_project_file(
+def test_reconnaissance_run_now_uses_resolved_home_project_file(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -604,7 +568,7 @@ def test_quick_recon_run_now_uses_resolved_home_project_file(
     assert exit_code == 0
     assert received["project_file"] == project_file
     assert f"* Project directory: {project_file.parent}" in rendered
-    assert "* Recon mode: Quick Recon" in rendered
+    assert "* Recon mode: Reconnaissance" in rendered
 
 
 def test_interactive_pipeline_handles_finalisation_failure_without_failed_ordinary_step(
@@ -628,7 +592,7 @@ def test_interactive_pipeline_handles_finalisation_failure_without_failed_ordina
     exit_code = _run_pipeline(
         tmp_path / "bugslyce_project.json",
         output.append,
-        profile=PIPELINE_PROFILE,
+        profile=NORMAL_PIPELINE_PROFILE,
         resume=False,
     )
 
@@ -665,7 +629,7 @@ def test_interactive_pipeline_shows_ordinary_failure_cleanup_note(
     exit_code = _run_pipeline(
         tmp_path / "bugslyce_project.json",
         output.append,
-        profile=PIPELINE_PROFILE,
+        profile=NORMAL_PIPELINE_PROFILE,
         resume=False,
     )
 
@@ -676,7 +640,7 @@ def test_interactive_pipeline_shows_ordinary_failure_cleanup_note(
     assert "No later steps were executed." in rendered
 
 
-def test_quick_recon_no_run_shows_command_preview(
+def test_reconnaissance_no_run_shows_command_preview(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -687,7 +651,7 @@ def test_quick_recon_no_run_shows_command_preview(
     )
     monkeypatch.setattr(
         "bugslyce.interactive.build_project_next",
-        lambda path: pytest.fail("quick no-run should not need low-level next preview"),
+        lambda path: pytest.fail("no-run should not need low-level next preview"),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.run_project_pipeline",
@@ -704,42 +668,13 @@ def test_quick_recon_no_run_shows_command_preview(
 
     assert exit_code == 0
     rendered = "\n".join(output)
-    assert any("--profile lab-safe-tiny --confirm" in line for line in output)
-    assert "Quick Recon was not started." in output
+    assert any("bugslyce project run" in line and "--confirm" in line for line in output)
+    assert all("--profile" not in line for line in output)
+    assert "Reconnaissance was not started." in output
     assert "Suggested command preview:" not in rendered
     assert rendered.count("No commands were executed.") == 1
     assert rendered.count("No network requests were made.") == 1
     assert "Project created." in output
-
-
-def test_standard_recon_no_run_shows_standard_command_preview(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
-    monkeypatch.setattr(
-        "bugslyce.interactive.scaffold_project",
-        lambda **kwargs: _scaffold_result(project_file),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.run_project_pipeline",
-        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
-    )
-    output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "3", "YES", ""])
-
-    exit_code = run_interactive_launcher(
-        input_func=lambda prompt: next(inputs),
-        print_func=output.append,
-        cwd=tmp_path,
-    )
-
-    rendered = "\n".join(output)
-    assert exit_code == 0
-    assert "Standard Recon was not started." in output
-    assert "To run Standard Recon later:" in rendered
-    assert f"--profile {STANDARD_PIPELINE_PROFILE} --confirm" in rendered
-    assert "No recon was run." in output
 
 
 def test_resume_yes_calls_pipeline_with_resume(monkeypatch, tmp_path: Path) -> None:
@@ -782,13 +717,13 @@ def test_resume_yes_calls_pipeline_with_resume(monkeypatch, tmp_path: Path) -> N
 
     assert exit_code == 0
     assert received["project_file"] == project_file
-    assert received["profile"] == PIPELINE_PROFILE
+    assert received["profile"] == NORMAL_PIPELINE_PROFILE
     assert received["resume"] is True
     assert "PROJECT SHOW" in output
     assert "PROJECT STATUS" in output
 
 
-def test_resume_uses_prior_standard_pipeline_profile(
+def test_resume_refuses_prior_standard_pipeline_profile(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -839,13 +774,12 @@ def test_resume_uses_prior_standard_pipeline_profile(
         cwd=tmp_path,
     )
 
-    assert exit_code == 0
-    assert received["project_file"] == project_file
-    assert received["profile"] == STANDARD_PIPELINE_PROFILE
-    assert received["resume"] is True
+    assert exit_code == 2
+    assert received == {}
+    assert any("Historical Quick/Standard project pipelines cannot be resumed" in line for line in output)
 
 
-def test_resume_uses_prior_quick_pipeline_profile(
+def test_resume_uses_prior_deep_pipeline_profile(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -853,7 +787,7 @@ def test_resume_uses_prior_quick_pipeline_profile(
     output_dir = tmp_path / "project-output"
     output_dir.mkdir()
     (output_dir / "project_pipeline.json").write_text(
-        json.dumps({"profile": PIPELINE_PROFILE}) + "\n",
+        json.dumps({"profile": NORMAL_PIPELINE_PROFILE}) + "\n",
         encoding="utf-8",
     )
     received: dict[str, object] = {}
@@ -898,7 +832,7 @@ def test_resume_uses_prior_quick_pipeline_profile(
 
     assert exit_code == 0
     assert received["project_file"] == project_file
-    assert received["profile"] == PIPELINE_PROFILE
+    assert received["profile"] == NORMAL_PIPELINE_PROFILE
     assert received["resume"] is True
 
 
@@ -1229,18 +1163,9 @@ def _completed_deep_project(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
         [project_dir / name for name in canonical_names] + [export_path]
     )
 
-@pytest.mark.parametrize(
-    ("mode_choice", "mode_label"),
-    (
-        ("3", "Standard Recon"),
-        ("4", "Deep Recon"),
-    ),
-)
-def test_ready_bug_bounty_standard_and_deep_continue_from_policy_to_scope(
+def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
     monkeypatch,
     tmp_path: Path,
-    mode_choice: str,
-    mode_label: str,
 ) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
     stages: list[str] = []
@@ -1290,7 +1215,7 @@ def test_ready_bug_bounty_standard_and_deep_continue_from_policy_to_scope(
             "10.10.10.10",
             "projects",
             "3",
-            mode_choice,
+            "1",
             "YES",
             "",
         ]
@@ -1308,8 +1233,8 @@ def test_ready_bug_bounty_standard_and_deep_continue_from_policy_to_scope(
 
     assert exit_code == 0
     assert stages == ["policy", "scope"]
-    assert any(f"Run {mode_label} now?" in prompt for prompt in prompts)
-    assert f"{mode_label} was not started." in output
+    assert any("Run Reconnaissance now?" in prompt for prompt in prompts)
+    assert "Reconnaissance was not started." in output
 
 
 def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
@@ -1355,61 +1280,6 @@ def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
             "10.10.10.10",
             "projects",
             "3",
-            "3",
-            "YES",
-        ]
-    )
-
-    exit_code = run_interactive_launcher(
-        input_func=lambda _prompt: next(answers),
-        print_func=output.append,
-        cwd=tmp_path,
-    )
-
-    assert exit_code == 0
-    assert "Standard Recon was selected but not started. Programme scope was not saved." in output
-    assert "No network requests were made." in output
-
-
-def test_ready_bug_bounty_quick_stays_fail_closed_before_scope(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
-    output: list[str] = []
-
-    monkeypatch.setattr(
-        "bugslyce.interactive.scaffold_project",
-        lambda **kwargs: _scaffold_result(project_file),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_policy_interactively",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            saved=True,
-            cancelled=False,
-            policy=object(),
-        ),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.assess_engagement_policy",
-        lambda _policy: SimpleNamespace(not_ready_reasons=()),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_programme_scope",
-        lambda *args, **kwargs: pytest.fail("scope must not run for Quick"),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.run_project_pipeline",
-        lambda *args, **kwargs: pytest.fail("pipeline must not run for Quick"),
-    )
-
-    answers = iter(
-        [
-            "1",
-            "demo",
-            "10.10.10.10",
-            "projects",
-            "3",
             "1",
             "YES",
         ]
@@ -1422,9 +1292,5 @@ def test_ready_bug_bounty_quick_stays_fail_closed_before_scope(
     )
 
     assert exit_code == 0
-    assert any(
-        "Strict bug-bounty project execution supports Standard and Deep Recon."
-        in line
-        for line in output
-    )
+    assert "Reconnaissance was selected but not started. Programme scope was not saved." in output
     assert "No network requests were made." in output

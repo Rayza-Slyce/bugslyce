@@ -204,12 +204,17 @@ def test_collector_integration_with_urllib_fetcher_uses_fake_opener_only(monkeyp
     assert calls[0][0].full_url == "http://example.test/robots.txt"
 
 
-def test_mode_enablement_remains_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_single_operator_recon_mode_invariant() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_policy_aware_adapter_preserves_followed_redirect_evidence() -> None:

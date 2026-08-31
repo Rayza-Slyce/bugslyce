@@ -131,7 +131,7 @@ def test_cli_help_exits_successfully(capsys) -> None:
     )
 
 
-def test_cli_project_run_help_lists_all_executable_profiles(capsys) -> None:
+def test_cli_project_run_help_exposes_single_reconnaissance_workflow(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["project", "run", "--help"])
 
@@ -139,13 +139,14 @@ def test_cli_project_run_help_lists_all_executable_profiles(capsys) -> None:
 
     assert exc_info.value.code == 0
     assert "usage: bugslyce project run" in captured.out
-    for profile in (QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE):
-        assert profile in captured.out
-    stale_help = (
-        "Approved project pipeline profile: "
-        "lab-safe-tiny or standard-bounded."
+    assert "--project" in captured.out
+    assert "--confirm" in captured.out
+    assert "bounded live project pipeline execution" in " ".join(
+        captured.out.split()
     )
-    assert stale_help not in captured.out
+    assert "--profile" not in captured.out
+    for profile in (QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE, DEEP_RECON_PROFILE):
+        assert profile not in captured.out
     assert "unsafe partial Deep state is refused" in captured.out
 
 
@@ -1008,12 +1009,17 @@ def test_cli_recon_deep_source_route_coverage_file_input_returns_nonzero(
     assert not (tmp_path / "deep-source-route-coverage.json").exists()
 
 
-def test_cli_recon_deep_source_route_coverage_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_source_route_coverage_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_cli_recon_deep_preview_help_exits_successfully(capsys) -> None:
@@ -1155,12 +1161,17 @@ def test_cli_recon_deep_preview_file_input_returns_nonzero(
     assert not (tmp_path / "deep_preview_bundle.json").exists()
 
 
-def test_cli_recon_deep_preview_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_preview_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_cli_recon_deep_metadata_collect_help_exits_successfully(capsys) -> None:
@@ -1460,12 +1471,17 @@ def test_cli_recon_deep_metadata_collect_file_input_with_write_returns_nonzero(
     assert not (tmp_path / "deep_metadata_collection.json").exists()
 
 
-def test_cli_recon_deep_metadata_collect_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_metadata_collect_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_cli_recon_deep_source_route_collect_help_exits_successfully(capsys) -> None:
@@ -1798,12 +1814,17 @@ def test_cli_recon_deep_source_route_collect_write_error_returns_nonzero(
     assert before == after
 
 
-def test_cli_recon_deep_source_route_collect_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_source_route_collect_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_cli_recon_deep_metadata_collection_review_help_exits_successfully(
@@ -1968,12 +1989,17 @@ def test_cli_recon_deep_metadata_collection_review_invalid_json_returns_nonzero(
     ]
 
 
-def test_cli_recon_deep_metadata_collection_review_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_metadata_collection_review_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def test_cli_recon_deep_source_route_collection_review_help_exits_successfully(
@@ -2474,12 +2500,17 @@ def test_cli_recon_deep_collection_review_bundle_invalid_source_schema_fails(
     assert "## Deep Collection Review Bundle" not in captured.out
 
 
-def test_cli_recon_deep_collection_review_bundle_keeps_modes_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_cli_recon_deep_collection_review_bundle_keeps_single_operator_mode() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def _write_collection_payloads(

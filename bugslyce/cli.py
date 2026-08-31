@@ -51,9 +51,8 @@ from bugslyce.programme_scope_setup import (
     show_project_programme_scope,
 )
 from bugslyce.project_pipeline import (
-    PIPELINE_PROFILE,
+    NORMAL_PIPELINE_PROFILE,
     ProjectPipelineFailed,
-    SUPPORTED_PIPELINE_PROFILES,
     format_exception_diagnostic,
     render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
@@ -398,7 +397,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     project_run_parser = project_subparsers.add_parser(
         "run",
-        help="Run a confirmed approved project pipeline profile.",
+        help="Run the confirmed Reconnaissance project pipeline.",
     )
     project_run_parser.add_argument(
         "--project",
@@ -406,14 +405,6 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Path to bugslyce_project.json.",
-    )
-    project_run_parser.add_argument(
-        "--profile",
-        required=True,
-        help=(
-            "Approved project pipeline profiles: "
-            f"{', '.join(SUPPORTED_PIPELINE_PROFILES)}."
-        ),
     )
     project_policy_parser = project_subparsers.add_parser(
         "policy",
@@ -1359,7 +1350,7 @@ def _project(args: argparse.Namespace) -> int:
         try:
             result = run_project_pipeline(
                 project_file=args.project_file,
-                profile=args.profile,
+                profile=NORMAL_PIPELINE_PROFILE,
                 resume=args.resume,
                 progress_callback=print,
             )

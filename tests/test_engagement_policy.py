@@ -636,7 +636,7 @@ def test_built_in_user_agent_uses_current_version_and_not_stale_identity() -> No
     )
 
 
-def test_bug_bounty_quick_profile_remains_blocked_before_doctor_or_runner(
+def test_obsolete_quick_profile_is_unsupported_before_doctor_or_runner(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -651,15 +651,14 @@ def test_bug_bounty_quick_profile_remains_blocked_before_doctor_or_runner(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
 
-    with pytest.raises(ValueError, match="Standard and Deep"):
+    with pytest.raises(ValueError, match="Unsupported project pipeline profile"):
         run_project_pipeline(project_file, PIPELINE_PROFILE)
 
     assert called is False
 
 
-@pytest.mark.parametrize("profile", [STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE])
 def test_bug_bounty_pipeline_requires_programme_scope_before_doctor(
-    tmp_path: Path, monkeypatch, profile: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
     save_project_engagement_policy(project_file, _complete_policy())
@@ -669,7 +668,7 @@ def test_bug_bounty_pipeline_requires_programme_scope_before_doctor(
     )
 
     with pytest.raises(ValueError, match="Programme scope policy is missing"):
-        run_project_pipeline(project_file, profile)
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
 
 
 def test_old_bug_bounty_project_without_policy_is_blocked_before_live_work(
@@ -689,7 +688,7 @@ def test_old_bug_bounty_project_without_policy_is_blocked_before_live_work(
 
     monkeypatch.setattr("bugslyce.project_pipeline.build_doctor_report", fail_doctor)
     with pytest.raises(ValueError, match="Engagement policy is missing"):
-        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE)
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
     assert called is False
 
 
@@ -705,23 +704,19 @@ def test_direct_cli_run_reports_non_bypassable_bug_bounty_refusal(
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
             "--confirm",
         ]
     )
     captured = capsys.readouterr()
 
     assert exit_code == 2
-    assert "policy-aware Standard and Deep project pipeline" in captured.err
+    assert "Engagement policy is missing" in captured.err
     assert "No pipeline phase was executed" in captured.err
 
 
-@pytest.mark.parametrize("mode_choice", ["1", "3", "4"])
-def test_interactive_bug_bounty_quick_standard_and_deep_are_save_only(
+def test_interactive_bug_bounty_reconnaissance_is_save_only(
     tmp_path: Path,
     monkeypatch,
-    mode_choice: str,
 ) -> None:
     monkeypatch.setattr(
         "bugslyce.interactive._run_pipeline",
@@ -736,7 +731,7 @@ def test_interactive_bug_bounty_quick_standard_and_deep_are_save_only(
             "10.10.10.10",
             "projects",
             "3",
-            mode_choice,
+            "1",
             "YES",
             "2",
             "YES",
@@ -1194,7 +1189,7 @@ def test_bug_bounty_existing_artefacts_keep_safe_offline_actions_only(
         assert forbidden not in runbook
 
 
-def test_ready_bug_bounty_project_next_recommends_strict_standard_pipeline(
+def test_ready_bug_bounty_project_next_recommends_reconnaissance_pipeline(
     tmp_path: Path,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
@@ -1216,8 +1211,8 @@ def test_ready_bug_bounty_project_next_recommends_strict_standard_pipeline(
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
-    assert "--profile standard-bounded" in result.recommended_action.command_preview
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
+    assert "--profile" not in result.recommended_action.command_preview
     assert "--confirm" in result.recommended_action.command_preview
     assert "explicit programme exclusions override inclusions" in result.status_summary
 
@@ -1230,7 +1225,7 @@ def test_bug_bounty_project_status_points_to_strict_pipeline_guidance(
     result = inspect_project_status(project_file, write_status=False)
 
     assert "bugslyce project next" in result.next_action
-    assert "strict Standard/Deep" in result.next_action
+    assert "strict Reconnaissance" in result.next_action
     assert "nmap-discover" not in result.next_action
 
 

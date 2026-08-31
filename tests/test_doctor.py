@@ -72,9 +72,10 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
     assert "dirbuster small: found" in rendered
     assert "Project/CLI command surface: ready" in rendered
     assert "Manual Setup Only: ready" in rendered
-    assert "Quick Recon: ready" in rendered
-    assert "Standard Recon: ready" in rendered
-    assert "Deep Recon: ready" in rendered
+    assert "Reconnaissance: ready" in rendered
+    assert "Quick Recon:" not in rendered
+    assert "Standard Recon:" not in rendered
+    assert "Deep Recon:" not in rendered
 
 
 def test_build_doctor_report_produces_complete_structured_readiness() -> None:
@@ -86,8 +87,7 @@ def test_build_doctor_report_produces_complete_structured_readiness() -> None:
         "standard-bounded-core",
         "deep-bounded-core",
     )
-    for mode in ("quick", "standard", "deep"):
-        assert mode_readiness_failures(report, mode) == ()
+    assert mode_readiness_failures(report, "deep") == ()
     assert doctor_exit_code(report) == 0
 
 
@@ -112,9 +112,7 @@ def test_missing_required_tools_block_recon_but_not_manual_setup() -> None:
     assert "nmap: blocked (not found)" in rendered
     assert "gobuster: blocked (not found)" in rendered
     assert "Manual Setup Only: ready" in rendered
-    assert "Quick Recon: blocked" in rendered
-    assert "Standard Recon: blocked" in rendered
-    assert "Deep Recon: blocked" in rendered
+    assert "Reconnaissance: blocked" in rendered
     assert "Install `nmap`" in rendered
     assert "Install `gobuster`" in rendered
     assert any("optional legacy lab-root-light" in warning for warning in report.warnings)
@@ -197,46 +195,30 @@ def test_mode_readiness_resource_blockers_are_profile_specific() -> None:
     standard_missing = _ready_report_with_missing_resources({STANDARD_BOUNDED_CORE_WORDLIST})
     deep_missing = _ready_report_with_missing_resources({DEEP_BOUNDED_CORE_WORDLIST})
 
-    assert mode_readiness_failures(tiny_missing, "quick") == (
-        "Quick Recon is blocked: required bundled resource `lab-root-tiny` is unavailable: resource file is missing.",
-    )
-    assert mode_readiness_failures(tiny_missing, "standard") == ()
     assert mode_readiness_failures(tiny_missing, "deep") == ()
-    assert mode_readiness_failures(standard_missing, "quick") == ()
-    assert mode_readiness_failures(standard_missing, "standard") == (
-        "Standard Recon is blocked: required bundled resource `standard-bounded-core` is unavailable: resource file is missing.",
-    )
     assert mode_readiness_failures(standard_missing, "deep") == ()
-    assert mode_readiness_failures(deep_missing, "quick") == ()
-    assert mode_readiness_failures(deep_missing, "standard") == ()
     assert mode_readiness_failures(deep_missing, "deep") == (
-        "Deep Recon is blocked: required bundled resource `deep-bounded-core` is unavailable: resource file is missing.",
+        "Reconnaissance is blocked: required bundled resource `deep-bounded-core` is unavailable: resource file is missing.",
     )
-    assert tiny_missing.recon_ready is False
-    assert standard_missing.recon_ready is False
+    assert tiny_missing.recon_ready is True
+    assert standard_missing.recon_ready is True
     assert deep_missing.recon_ready is False
-    assert doctor_exit_code(tiny_missing) == 2
-    assert doctor_exit_code(standard_missing) == 2
+    assert doctor_exit_code(tiny_missing) == 0
+    assert doctor_exit_code(standard_missing) == 0
     assert doctor_exit_code(deep_missing) == 2
     modes = {mode.mode: mode.status for mode in standard_missing.modes}
     assert modes["manual_setup"] == "ready"
-    assert modes["quick"] == "ready"
-    assert modes["standard"] == "blocked"
     assert modes["deep"] == "ready"
+    assert set(modes) == {"manual_setup", "deep"}
 
 
 @pytest.mark.parametrize("tool", ("nmap", "curl", "gobuster"))
 def test_mode_readiness_shared_tools_block_all_executable_modes(tool: str) -> None:
     report = _ready_report_with_missing_tool(tool)
 
-    for mode, label in (
-        ("quick", "Quick Recon"),
-        ("standard", "Standard Recon"),
-        ("deep", "Deep Recon"),
-    ):
-        assert mode_readiness_failures(report, mode) == (
-            f"{label} is blocked: required pipeline tool `{tool}` is unavailable: not found on PATH.",
-        )
+    assert mode_readiness_failures(report, "deep") == (
+        f"Reconnaissance is blocked: required pipeline tool `{tool}` is unavailable: not found on PATH.",
+    )
 
 
 def test_mode_readiness_can_omit_only_policy_skipped_nmap() -> None:
@@ -244,17 +226,17 @@ def test_mode_readiness_can_omit_only_policy_skipped_nmap() -> None:
 
     assert mode_readiness_failures(
         report,
-        "standard",
+        "deep",
         nmap_required=False,
     ) == ()
-    assert mode_readiness_failures(report, "standard") == (
-        "Standard Recon is blocked: required pipeline tool `nmap` is unavailable: "
+    assert mode_readiness_failures(report, "deep") == (
+        "Reconnaissance is blocked: required pipeline tool `nmap` is unavailable: "
         "not found on PATH.",
     )
     with pytest.raises(ValueError, match="Nmap requirement must be boolean"):
         mode_readiness_failures(
             report,
-            "standard",
+            "deep",
             nmap_required="no",
         )
 
@@ -262,14 +244,8 @@ def test_mode_readiness_can_omit_only_policy_skipped_nmap() -> None:
 def test_mode_readiness_core_failure_blocks_all_modes_and_unknown_fails_closed() -> None:
     report = _ready_report(python_version_info=(3, 10, 9))
 
-    assert mode_readiness_failures(report, "quick") == (
-        "Quick Recon is blocked: supported Python runtime is unavailable.",
-    )
-    assert mode_readiness_failures(report, "standard") == (
-        "Standard Recon is blocked: supported Python runtime is unavailable.",
-    )
     assert mode_readiness_failures(report, "deep") == (
-        "Deep Recon is blocked: supported Python runtime is unavailable.",
+        "Reconnaissance is blocked: supported Python runtime is unavailable.",
     )
     with pytest.raises(ValueError, match="Unknown doctor mode"):
         mode_readiness_failures(report, "manual_setup")
@@ -287,11 +263,11 @@ def test_mode_readiness_failure_ordering_is_deterministic() -> None:
         bundled_wordlist_probe=lambda: (False, None),
     )
 
-    assert mode_readiness_failures(report, "quick") == (
-        "Quick Recon is blocked: required pipeline tool `nmap` is unavailable: not found on PATH.",
-        "Quick Recon is blocked: required pipeline tool `curl` is unavailable: not found on PATH.",
-        "Quick Recon is blocked: required pipeline tool `gobuster` is unavailable: not found on PATH.",
-        "Quick Recon is blocked: required bundled resource `lab-root-tiny` is unavailable: resource file is missing.",
+    assert mode_readiness_failures(report, "deep") == (
+        "Reconnaissance is blocked: required pipeline tool `nmap` is unavailable: not found on PATH.",
+        "Reconnaissance is blocked: required pipeline tool `curl` is unavailable: not found on PATH.",
+        "Reconnaissance is blocked: required pipeline tool `gobuster` is unavailable: not found on PATH.",
+        "Reconnaissance is blocked: required bundled resource `deep-bounded-core` is unavailable: resource file is missing.",
     )
 
 
@@ -303,14 +279,9 @@ def test_mode_readiness_missing_tool_record_blocks_all_modes(missing_tool: str) 
         tools=tuple(tool for tool in report.tools if tool.name != missing_tool),
     )
 
-    for mode, label in (
-        ("quick", "Quick Recon"),
-        ("standard", "Standard Recon"),
-        ("deep", "Deep Recon"),
-    ):
-        assert mode_readiness_failures(report, mode) == (
-            f"{label} is blocked: required readiness record for pipeline tool `{missing_tool}` is missing.",
-        )
+    assert mode_readiness_failures(report, "deep") == (
+        f"Reconnaissance is blocked: required readiness record for pipeline tool `{missing_tool}` is missing.",
+    )
     assert doctor_exit_code(report) == 2
 
 
@@ -325,20 +296,20 @@ def test_mode_readiness_duplicate_and_inconsistent_tool_records_fail_closed() ->
     )
     workflow_missing = replace(
         report,
-        tools=(replace(nmap, blocked_workflows=("standard", "deep")), *report.tools[1:]),
+        tools=(replace(nmap, blocked_workflows=("quick", "standard")), *report.tools[1:]),
     )
 
-    assert mode_readiness_failures(duplicate, "quick") == (
-        "Quick Recon is blocked: duplicate readiness records exist for pipeline tool `nmap`.",
+    assert mode_readiness_failures(duplicate, "deep") == (
+        "Reconnaissance is blocked: duplicate readiness records exist for pipeline tool `nmap`.",
     )
-    assert mode_readiness_failures(found_false, "quick") == (
-        "Quick Recon is blocked: readiness record for `nmap` is internally inconsistent.",
+    assert mode_readiness_failures(found_false, "deep") == (
+        "Reconnaissance is blocked: readiness record for `nmap` is internally inconsistent.",
     )
-    assert mode_readiness_failures(executable_false, "quick") == (
-        "Quick Recon is blocked: readiness record for `nmap` is internally inconsistent.",
+    assert mode_readiness_failures(executable_false, "deep") == (
+        "Reconnaissance is blocked: readiness record for `nmap` is internally inconsistent.",
     )
-    assert mode_readiness_failures(workflow_missing, "quick") == (
-        "Quick Recon is blocked: readiness record for pipeline tool `nmap` does not declare `quick`.",
+    assert mode_readiness_failures(workflow_missing, "deep") == (
+        "Reconnaissance is blocked: readiness record for pipeline tool `nmap` does not declare `deep`.",
     )
     assert doctor_exit_code(duplicate) == 2
 
@@ -368,23 +339,13 @@ def test_mode_readiness_missing_resource_records_are_profile_specific() -> None:
         ),
     )
 
-    assert mode_readiness_failures(tiny_missing, "quick") == (
-        "Quick Recon is blocked: required readiness record for bundled resource `lab-root-tiny` is missing.",
-    )
-    assert mode_readiness_failures(tiny_missing, "standard") == ()
     assert mode_readiness_failures(tiny_missing, "deep") == ()
-    assert mode_readiness_failures(standard_missing, "quick") == ()
-    assert mode_readiness_failures(standard_missing, "standard") == (
-        "Standard Recon is blocked: required readiness record for bundled resource `standard-bounded-core` is missing.",
-    )
     assert mode_readiness_failures(standard_missing, "deep") == ()
-    assert mode_readiness_failures(deep_missing, "quick") == ()
-    assert mode_readiness_failures(deep_missing, "standard") == ()
     assert mode_readiness_failures(deep_missing, "deep") == (
-        "Deep Recon is blocked: required readiness record for bundled resource `deep-bounded-core` is missing.",
+        "Reconnaissance is blocked: required readiness record for bundled resource `deep-bounded-core` is missing.",
     )
-    assert doctor_exit_code(tiny_missing) == 2
-    assert doctor_exit_code(standard_missing) == 2
+    assert doctor_exit_code(tiny_missing) == 0
+    assert doctor_exit_code(standard_missing) == 0
     assert doctor_exit_code(deep_missing) == 2
 
 
@@ -403,36 +364,50 @@ def test_mode_readiness_inconsistent_resource_record_fails_closed(
     value: bool,
 ) -> None:
     report = _ready_report()
-    tiny = next(resource for resource in report.resources if resource.name == "lab-root-tiny")
-    updated = replace(report, resources=(replace(tiny, ready=True, **{field: value}), *report.resources[1:]))
+    deep = next(resource for resource in report.resources if resource.name == "deep-bounded-core")
+    updated = replace(
+        report,
+        resources=tuple(
+            replace(resource, ready=True, **{field: value})
+            if resource.name == "deep-bounded-core"
+            else resource
+            for resource in report.resources
+        ),
+    )
 
-    assert mode_readiness_failures(updated, "quick") == (
-        "Quick Recon is blocked: readiness record for bundled resource `lab-root-tiny` is internally inconsistent.",
+    assert deep.name == "deep-bounded-core"
+    assert mode_readiness_failures(updated, "deep") == (
+        "Reconnaissance is blocked: readiness record for bundled resource `deep-bounded-core` is internally inconsistent.",
     )
 
 
 def test_mode_readiness_duplicate_and_workflow_missing_resource_records_fail_closed() -> None:
     report = _ready_report()
-    tiny = next(resource for resource in report.resources if resource.name == "lab-root-tiny")
-    duplicate = replace(report, resources=(tiny, *report.resources))
+    deep = next(resource for resource in report.resources if resource.name == "deep-bounded-core")
+    duplicate = replace(report, resources=(*report.resources, deep))
     workflow_missing = replace(
         report,
-        resources=(replace(tiny, blocked_workflows=("standard", "deep")), *report.resources[1:]),
+        resources=tuple(
+            replace(resource, blocked_workflows=("quick", "standard"))
+            if resource.name == "deep-bounded-core"
+            else resource
+            for resource in report.resources
+        ),
     )
 
-    assert mode_readiness_failures(duplicate, "quick") == (
-        "Quick Recon is blocked: duplicate readiness records exist for bundled resource `lab-root-tiny`.",
+    assert mode_readiness_failures(duplicate, "deep") == (
+        "Reconnaissance is blocked: duplicate readiness records exist for bundled resource `deep-bounded-core`.",
     )
-    assert mode_readiness_failures(workflow_missing, "quick") == (
-        "Quick Recon is blocked: readiness record for bundled resource `lab-root-tiny` does not declare `quick`.",
+    assert mode_readiness_failures(workflow_missing, "deep") == (
+        "Reconnaissance is blocked: readiness record for bundled resource `deep-bounded-core` does not declare `deep`.",
     )
 
 
 def test_mode_readiness_contradictory_core_fields_fail_closed() -> None:
     report = replace(_ready_report(), core_ready=True, python_supported=False)
 
-    assert mode_readiness_failures(report, "quick") == (
-        "Quick Recon is blocked: core readiness fields are internally inconsistent.",
+    assert mode_readiness_failures(report, "deep") == (
+        "Reconnaissance is blocked: core readiness fields are internally inconsistent.",
     )
     assert doctor_exit_code(report) == 2
 

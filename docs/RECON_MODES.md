@@ -1,99 +1,57 @@
-# Recon Modes
+# Reconnaissance Workflow
 
-BugSlyce has four operator-facing modes. Mode names describe evidence depth;
-they do not grant permission to run recon.
+BugSlyce has one normal operator reconnaissance workflow plus a manual setup
+choice. The workflow name describes collection behaviour; it does not grant
+permission to contact a target.
 
-## Current Modes
+## Current Choices
 
-| Mode | Profile | Status | Purpose |
-| --- | --- | --- | --- |
-| Manual Setup Only | none | available | Create project metadata and `scope.md` without recon. |
-| Quick Recon | `lab-safe-tiny` | available | Fast first-pass bounded collection. |
-| Standard Recon | `standard-bounded` | available | Bounded collection plus offline interpretation. |
-| Deep Recon | `deep-bounded` | available | Bounded same-origin Deep collection plus offline review orchestration. |
+| Choice | Internal profile | Purpose |
+| --- | --- | --- |
+| Manual Setup Only | none | Create project metadata and `scope.md` without recon. |
+| Reconnaissance | `deep-bounded` | Run the complete bounded native discovery, recursive evidence feedback and offline analysis workflow. |
 
-## Global Safety Boundaries
+`deep-bounded` remains the internal and persisted execution identity. Existing
+Deep model classes, artefact names and pipeline step IDs remain unchanged.
+
+## Safety Boundaries
 
 BugSlyce project workflows are for authorised targets only. The generated
 `scope.md` template is not authorisation.
 
-Project workflows remain bounded and non-exploitative:
+Reconnaissance remains bounded and non-exploitative:
 
-- no UDP pipeline phase;
-- no NSE scripts;
-- no brute force;
-- no exploitation;
-- no password spraying;
-- no credential stuffing;
-- no authentication testing;
-- no form submission;
-- no browser automation;
-- no JavaScript execution;
-- no parameter replay, guessing or mutation;
+- central programme-scope, pacing, concurrency, redirect and HTTP 429 enforcement;
+- exact materialised-origin authority;
+- bounded native root content discovery;
+- one bounded depth-one evidence-feedback pass;
 - no unrestricted or recursive crawling;
+- no UDP pipeline phase or NSE scripts;
+- no brute force, exploitation, password spraying or credential stuffing;
+- no authentication testing or form submission;
+- no browser automation or JavaScript execution;
+- no query-bearing recursive requests, parameter replay, guessing or mutation;
 - no vulnerability confirmation.
 
-BugSlyce reports static evidence for manual review. A review lead is not proof
-of vulnerability, exploitability or impact.
+Static evidence and review leads remain evidence for manual analysis; they are not proof of vulnerability, exploitability or impact.
+Query names and query-bearing references may still be retained and analysed as
+offline evidence; they are not promoted to recursive collection requests.
 
-## Quick Recon
+## Workflow Contents
 
-Quick Recon uses `lab-safe-tiny`. It is the fastest executable collection mode
-and uses the bundled `lab-root-tiny` resource. It is suitable for initial lab
-or CTF triage where the operator wants a compact local evidence pack quickly.
+Reconnaissance uses the package-owned `deep-bounded-core` resource. It retains
+the current full pipeline topology, including native content discovery,
+PIPELINE-STEP-010D, PIPELINE-STEP-011D and depth-one recursive evidence
+feedback.
 
-Quick readiness requires:
+The workflow includes bounded service and HTTP collection, source/route
+collection, metadata review, static HTML and semantic JavaScript extraction,
+shallow same-origin follow-up, form and parameter-name inventory, offline
+orchestration, deterministic reports, status, runbooks and evidence-pack
+export. Redirect destinations and evidence references do not acquire collection
+authority.
 
-- Python and core BugSlyce readiness;
-- `nmap`;
-- `curl`;
-- `gobuster`;
-- bundled `lab-root-tiny`.
-
-## Standard Recon
-
-Standard Recon uses `standard-bounded`. It runs the bounded collection workflow
-and adds offline interpretation of already collected artefacts. Standard uses
-the bundled `standard-bounded-core` resource.
-
-Standard interpretation may include human triage context, manual review leads,
-investigation threads, route/source review and readable evidence cards. It does
-not increase collection merely because interpretation is deeper.
-
-Standard readiness requires:
-
-- Python and core BugSlyce readiness;
-- `nmap`;
-- `curl`;
-- `gobuster`;
-- bundled `standard-bounded-core`.
-
-## Deep Recon
-
-Deep Recon uses `deep-bounded`. It is available through the canonical project
-pipeline. It runs existing bounded collection stages, then performs bounded
-same-origin Deep source/route collection, shallow same-origin follow-up and
-offline orchestration of Deep review stages.
-
-Deep includes:
-
-- source/route collection;
-- HTTP fingerprint review;
-- redirect and authentication-flow review;
-- response-similarity review;
-- static HTML route extraction;
-- static JavaScript route extraction without JavaScript execution;
-- shallow same-origin route follow-up;
-- HTML form inventory without submitting forms;
-- parameter-name inventory without values;
-- compact Deep runbook guidance;
-- explicit Deep evidence artefacts.
-
-Deep external references may be retained as offline reference evidence where a
-model supports that distinction, but they must not become executable requests.
-Executable Deep planning is same-origin and scope-conscious.
-
-Deep readiness requires:
+Readiness requires:
 
 - Python and core BugSlyce readiness;
 - `nmap`;
@@ -101,47 +59,31 @@ Deep readiness requires:
 - `gobuster`;
 - bundled `deep-bounded-core`.
 
+Gobuster remains a required installed tool for runtime-less legacy paths, but
+the normal project pipeline's critical content-discovery workload is owned by
+BugSlyce native HTTP enforcement.
+
+## Running
+
+The normal command has no profile selector:
+
+```bash
+bugslyce project run --project /path/to/bugslyce_project.json --confirm
+```
+
+Use `--resume` only for a compatible recorded `deep-bounded` run. Historical
+`lab-safe-tiny` and `standard-bounded` metadata may still be shown in read-only
+status/report views, but those profiles cannot start or resume a new normal project execution.
+
 ## Bundled Discovery Resources
 
-BugSlyce's executable project workflows use package-local, deterministic
-content-discovery resources:
-
-| Resource | Current entries | Used by | Assembly approach |
-| --- | ---: | --- | --- |
-| `lab-root-tiny` | 25 | Quick Recon | Minimal smoke-oriented root candidates. |
-| `standard-bounded-core` | 220 | Standard Recon | Curated first-pass categories for common application, metadata, API, status, configuration and authentication routes. |
-| `deep-bounded-core` | 1,753 | Deep Recon | Strict superset of Standard with broader category-driven coverage for administration, APIs, backups, configuration, version-control artefacts, CMS/framework routes, CGI/legacy paths, metadata and bounded extension variants. |
-
-The Standard and Deep lists are maintained as BugSlyce package data. They were
-assembled from general route categories rather than copied from a third-party
-directory list. Do not replace them with an external list without checking
-licence compatibility, attribution requirements and the resulting request
-budget.
-
-## Resume Contract
-
-Completed Quick, Standard and Deep projects may reuse verified existing
-outputs. A completed Deep resume is a no-op apart from local validation and
-preserves canonical artefacts.
-
-Interrupted Deep network stages fail closed. Full response bodies and the
-shallow-follow-up result are deliberately not persisted in a form that can
-reproduce every offline Deep analysis. BugSlyce therefore refuses ambiguous
-partial Deep resume rather than silently repeating bounded network collection.
-Use a clean project for an explicit Deep rerun.
+`deep-bounded-core` is the required normal-workflow resource. The older
+`lab-root-tiny` and `standard-bounded-core` package resources may remain for
+specialist or historical compatibility, but their absence does not block
+Reconnaissance.
 
 ## Evidence and Reports
 
 Reports, status files, runbooks, pipeline metadata and evidence packs are local
-artefacts. They may contain target evidence. Handle them according to the
-engagement rules.
-
-BugSlyce does not claim:
-
-- confirmed vulnerabilities;
-- attack paths;
-- exploitability;
-- credential validity;
-- absence of risk.
-
-Manual validation remains required. Reported context is not proof of vulnerability.
+artefacts and may contain target evidence. Store and share them according to
+the engagement rules. Manual validation remains required.

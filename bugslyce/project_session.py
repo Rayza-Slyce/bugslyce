@@ -653,7 +653,7 @@ def inspect_project_status(
     if not manifest_path.is_file():
         next_action = (
             "No recon pack exists yet. Use `bugslyce project next` to review the "
-            "strict Standard/Deep engagement-policy and programme-scope preflight."
+            "strict Reconnaissance engagement-policy and programme-scope preflight."
             if project.engagement_context == BUG_BOUNTY_CONTEXT
             else (
                 "No recon pack exists yet. Recommended first safe action: create a "
@@ -683,7 +683,7 @@ def inspect_project_status(
         status_json_path=str(json_path) if json_path is not None else None,
         status_markdown_path=str(markdown_path) if markdown_path is not None else None,
         next_action=(
-            "Use `bugslyce project next` for strict Standard/Deep pipeline or offline "
+            "Use `bugslyce project next` for strict Reconnaissance pipeline or offline "
             "review guidance; direct modular bug-bounty live commands remain blocked."
             if project.engagement_context == BUG_BOUNTY_CONTEXT
             else status.next_actions[0]
@@ -787,9 +787,9 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
             ]
         else:
             recommended = GuidedProjectAction(
-                id="run-standard-project-pipeline",
+                id="run-reconnaissance-project-pipeline",
                 title=(
-                    "Run Standard through strict policy, scope, target and local-tool "
+                    "Run Reconnaissance through strict policy, scope, target and local-tool "
                     "preflight."
                 ),
                 command_preview=_format_command(
@@ -799,8 +799,6 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                         "run",
                         "--project",
                         str(project_file),
-                        "--profile",
-                        "standard-bounded",
                         "--confirm",
                     ]
                 ),
@@ -816,7 +814,7 @@ def build_project_next(project_file: Path) -> ProjectNextResult:
                     "its existing local outputs."
                     if completed_profile is not None
                     else (
-                        "Standard and Deep require strict target and local-tool "
+                        "Reconnaissance requires strict target and local-tool "
                         "preflight before live execution; explicit programme "
                         "exclusions override inclusions."
                     )

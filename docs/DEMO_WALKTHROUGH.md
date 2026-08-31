@@ -22,16 +22,10 @@ In a development checkout, run this after activating the virtual environment
 and installing the package with `python -m pip install -e .`. Direct
 `.venv/bin/bugslyce` usage still works for local development.
 
-The launcher presents:
-
-- **Quick Recon**: maps to the current `lab-safe-tiny` pipeline for a
-  fast, bounded first pass with the tiny bundled wordlist.
-- **Manual Setup Only**: creates the project and scope template, then prints
-  the next safe command preview without running recon.
-- **Standard Recon**: maps to `standard-bounded` and adds offline
-  interpretation to the bounded collection workflow.
-- **Deep Recon**: maps to `deep-bounded` and adds bounded same-origin Deep
-  collection plus offline review orchestration.
+The launcher presents **Run Reconnaissance** and **Manual Setup Only**.
+Reconnaissance uses the internal `deep-bounded` identity and runs the complete
+bounded native-discovery, depth-one feedback and offline-analysis workflow.
+Manual Setup Only creates the project and scope template without running recon.
 
 The launcher still requires exact `YES` confirmation before creating a
 project or running live recon. Recon mode names do not make activity
@@ -56,9 +50,7 @@ Doctor checks local prerequisites using Python imports, filesystem access, and
 - Supported Python version.
 - Virtual environment status.
 - `nmap`, `curl`, and `gobuster` availability.
-- Bundled `lab-root-tiny` wordlist access for Quick Recon.
-- Bundled `standard-bounded-core` wordlist access for Standard Recon.
-- Bundled `deep-bounded-core` wordlist access for Deep Recon.
+- Bundled `deep-bounded-core` wordlist access for Reconnaissance.
 - Optional dirbuster small wordlist availability for older manual planning
   contexts.
 
@@ -105,18 +97,17 @@ For a fresh project, the preview should recommend the approved starting
 discovery action. Suggested commands are previews only. `project next` does
 not execute recon or make network requests.
 
-## 4. Run The Safe MVP Pipeline
+## 4. Run Reconnaissance
 
-After reviewing scope, run the fixed MVP pipeline with explicit confirmation:
+After reviewing scope, run Reconnaissance with explicit confirmation:
 
 ```bash
 bugslyce project run \
   --project bugslyce-output/example-lab/bugslyce_project.json \
-  --profile lab-safe-tiny \
   --confirm
 ```
 
-`lab-safe-tiny` runs the approved bounded chain:
+The internal `deep-bounded` profile runs the approved complete bounded chain:
 
 1. Local readiness, project, target, and scope validation.
 2. Full TCP discovery using the fixed `lab-tcp-full` profile.
@@ -193,13 +184,12 @@ If an authorised lab or VPN session is interrupted, run the same project with
 ```bash
 bugslyce project run \
   --project bugslyce-output/example-lab/bugslyce_project.json \
-  --profile lab-safe-tiny \
   --confirm \
   --resume
 ```
 
 Resume revalidates the target, scope, local readiness, manifest artefact
-paths, and tiny content-plan provenance. It reuses only clearly completed
+paths, and Deep content-plan provenance. It reuses only clearly completed
 phases in a coherent order.
 
 Ambiguous, mixed-target, missing-artefact, or path-escape state is refused

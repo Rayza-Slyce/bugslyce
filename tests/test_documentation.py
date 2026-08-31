@@ -81,11 +81,7 @@ def test_modes_profiles_tools_and_resources_are_documented() -> None:
 
     for expected in (
         "Manual Setup Only",
-        "Quick Recon",
-        "Standard Recon",
-        "Deep Recon",
-        QUICK_RECON_PROFILE,
-        STANDARD_RECON_PROFILE,
+        "Reconnaissance",
         DEEP_RECON_PROFILE,
         "lab-root-tiny",
         STANDARD_BOUNDED_CORE_PROFILE,
@@ -104,11 +100,13 @@ def test_resume_and_evidence_handling_are_documented() -> None:
     operator = (ROOT / "docs" / "OPERATOR_GUIDE.md").read_text(encoding="utf-8")
     troubleshooting = (ROOT / "docs" / "TROUBLESHOOTING.md").read_text(encoding="utf-8")
     combined = operator + "\n" + troubleshooting
+    compact = " ".join(combined.split())
 
     assert "bugslyce_project.json" in combined
     assert "not just the project directory" in combined
     assert "Partial Deep state fails closed" in combined
-    assert "completed Deep resume is a verified no-op" in combined
+    assert "completed resume is a verified no-op" in combined
+    assert "Historical Quick/Standard execution metadata is not resumed" in compact
     assert "evidence ZIP" in combined
     assert "not encrypted and is not redacted" in combined
 

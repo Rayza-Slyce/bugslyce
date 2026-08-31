@@ -27,16 +27,16 @@ DIRBUSTER_SMALL_WORDLIST = Path(
 )
 SUPPORTED_PYTHON = (3, 11)
 REQUIRED_EXTERNAL_TOOLS = (
-    ("nmap", "TCP discovery and service/version detection", ("quick", "standard", "deep")),
-    ("curl", "bounded HTTP metadata, follow-up, and body-fetch requests", ("quick", "standard", "deep")),
-    ("gobuster", "bounded content discovery with approved wordlists", ("quick", "standard", "deep")),
+    ("nmap", "TCP discovery and service/version detection", ("deep",)),
+    ("curl", "bounded HTTP metadata, follow-up, and body-fetch requests", ("deep",)),
+    ("gobuster", "bounded content discovery with approved wordlists", ("deep",)),
 )
 MANUAL_MODE_ID = "manual_setup"
 MODE_LABELS = {
     MANUAL_MODE_ID: "Manual Setup Only",
     "quick": "Quick Recon",
     "standard": "Standard Recon",
-    "deep": "Deep Recon",
+    "deep": "Reconnaissance",
 }
 
 
@@ -337,7 +337,7 @@ def doctor_exit_code(report: DoctorReport) -> int:
     try:
         mode_failures = tuple(
             mode_readiness_failures(report, mode)
-            for mode in ("quick", "standard", "deep")
+            for mode in ("deep",)
         )
     except ValueError:
         return 2
@@ -355,7 +355,7 @@ def recon_readiness_failures(report: DoctorReport) -> tuple[str, ...]:
     """Return deterministic failures that block executable recon pipelines."""
 
     failures: list[str] = []
-    for mode in ("quick", "standard", "deep"):
+    for mode in ("deep",):
         failures.extend(mode_readiness_failures(report, mode))
     return tuple(dict.fromkeys(failures))
 
@@ -603,7 +603,7 @@ def _build_mode_readiness(
             blockers=core_blockers,
         )
     )
-    for mode in ("quick", "standard", "deep"):
+    for mode in ("deep",):
         blockers = list(core_blockers)
         blockers.extend(f"tool:{tool.name}" for tool in tools if mode in tool.blocked_workflows and not tool.ready)
         blockers.extend(f"resource:{resource.name}" for resource in resources if mode in resource.blocked_workflows and not resource.ready)

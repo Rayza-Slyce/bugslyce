@@ -24,19 +24,18 @@ from bugslyce.engagement_policy_setup import (
 from bugslyce.programme_scope_setup import configure_project_programme_scope
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
-    PIPELINE_PROFILE,
+    NORMAL_PIPELINE_PROFILE,
     PIPELINE_JSON_FILENAME,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
-    SUPPORTED_PIPELINE_PROFILES,
     render_project_pipeline_failure_guidance,
     render_project_pipeline_summary,
     run_project_pipeline,
 )
 from bugslyce.recon.modes import (
     DEEP_MODE_ID,
-    QUICK_MODE_ID,
-    STANDARD_MODE_ID,
+    QUICK_RECON_PROFILE,
+    STANDARD_RECON_PROFILE,
     get_recon_mode,
     resolve_executable_profile,
 )
@@ -57,9 +56,9 @@ from bugslyce.project_session import (
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
 
-QUICK_RECON_LABEL = get_recon_mode(QUICK_MODE_ID).display_name
+QUICK_RECON_LABEL = "Quick Recon"
 MANUAL_SETUP_LABEL = "Manual Setup Only"
-STANDARD_RECON_LABEL = get_recon_mode(STANDARD_MODE_ID).display_name
+STANDARD_RECON_LABEL = "Standard Recon"
 DEEP_RECON_LABEL = get_recon_mode(DEEP_MODE_ID).display_name
 DEFAULT_PROJECTS_DIR_NAME = "bugslyce-output"
 
@@ -100,25 +99,15 @@ def run_interactive_launcher(
 def render_recon_mode_menu() -> str:
     """Render user-facing recon mode names."""
 
-    quick = get_recon_mode(QUICK_MODE_ID)
-    standard = get_recon_mode(STANDARD_MODE_ID)
     deep = get_recon_mode(DEEP_MODE_ID)
     return "\n".join(
         [
             "Recon mode:",
-            f"1. {quick.display_name}",
-            "   Fast first-pass recon using the bounded MVP pipeline.",
-            "   Good for initial lab/CTF triage and quickly finding review leads.",
+            f"1. Run {deep.display_name}",
+            "   Run the full bounded reconnaissance workflow.",
             f"2. {MANUAL_SETUP_LABEL}",
             "   Create the project and scope template, then show the next safe "
             "command without running recon.",
-            f"3. {standard.display_name}",
-            "   Reuses the bounded MVP pipeline and adds offline interpretation "
-            "of already-collected evidence.",
-            "   Adds Manual Review Leads to the report without increasing scan volume.",
-            f"4. {deep.display_name}",
-            f"   {deep.purpose.capitalize()}.",
-            "   Bounded same-origin Deep workflow for manual review evidence.",
         ]
     )
 
@@ -127,13 +116,9 @@ def map_user_recon_mode_to_internal_profile(choice: str) -> str | None:
     """Map launcher recon mode choices to internal profile IDs."""
 
     if choice == "1":
-        return resolve_executable_profile(QUICK_MODE_ID)
+        return resolve_executable_profile(DEEP_MODE_ID)
     if choice == "2":
         return None
-    if choice == "3":
-        return resolve_executable_profile(STANDARD_MODE_ID)
-    if choice == "4":
-        return resolve_executable_profile(DEEP_MODE_ID)
     raise ValueError("Unknown recon mode.")
 
 
@@ -246,14 +231,6 @@ def _start_new_project(
             print_func("No network requests were made.")
             return 0
 
-        if profile == PIPELINE_PROFILE:
-            print_func(
-                "Quick Recon was selected but not started. "
-                "Strict bug-bounty project execution supports Standard and Deep Recon."
-            )
-            print_func("No network requests were made.")
-            return 0
-
         scope_exit_code = configure_project_programme_scope(
             project_file,
             input_func=input_func,
@@ -357,7 +334,7 @@ def _resume_existing_project(
                 print_func("No commands were executed.")
                 print_func("No network requests were made.")
                 return 2
-        print_func("Resume was not started. Standard and Deep require strict project preflight.")
+        print_func("Resume was not started. Reconnaissance requires strict project preflight.")
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 0
@@ -372,7 +349,7 @@ def _resume_existing_project(
         print_func("Run it later with:")
         print_func(
             "bugslyce project run "
-            f"--project {project_file} --profile {resume_profile} --confirm --resume"
+            f"--project {project_file} --confirm --resume"
         )
         print_func("No commands were executed.")
         print_func("No network requests were made.")
@@ -407,12 +384,12 @@ def _prompt_available_recon_mode(
     print_func: PrintFunc,
 ) -> str | None:
     while True:
-        mode_choice = _prompt_choice(input_func, "Choose recon mode", {"1", "2", "3", "4"})
+        mode_choice = _prompt_choice(input_func, "Choose recon mode", {"1", "2"})
         try:
             return map_user_recon_mode_to_internal_profile(mode_choice)
         except ValueError:
             print_func("This recon mode is not available yet.")
-            print_func("Choose Quick Recon, Standard Recon, or Manual Setup Only.")
+            print_func("Choose Run Reconnaissance or Manual Setup Only.")
 
 
 def _run_pipeline(
@@ -457,7 +434,7 @@ def _print_interactive_next_steps(
     *,
     profile: str | None,
 ) -> None:
-    run_profile = profile or PIPELINE_PROFILE
+    run_profile = profile or NORMAL_PIPELINE_PROFILE
     mode_label = _profile_display_name(run_profile)
     print_func("")
     print_func("Project created.")
@@ -469,7 +446,7 @@ def _print_interactive_next_steps(
     print_func(f"2. To run {mode_label} later:")
     print_func(
         "   bugslyce project run "
-        f"--project {scaffold.project_file} --profile {run_profile} --confirm"
+        f"--project {scaffold.project_file} --confirm"
     )
     print_func("")
     print_func("3. To preview next safe action:")
@@ -559,14 +536,21 @@ def _profile_display_name(profile: str | None) -> str:
 def _resume_profile_for_project(project) -> str:
     output_dir = getattr(project, "output_dir", None)
     if not isinstance(output_dir, str) or not output_dir.strip():
-        return PIPELINE_PROFILE
+        return NORMAL_PIPELINE_PROFILE
     metadata_path = Path(output_dir).expanduser() / PIPELINE_JSON_FILENAME
     try:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return PIPELINE_PROFILE
+        return NORMAL_PIPELINE_PROFILE
     profile = payload.get("profile")
-    return profile if profile in SUPPORTED_PIPELINE_PROFILES else PIPELINE_PROFILE
+    if profile in {QUICK_RECON_PROFILE, STANDARD_RECON_PROFILE}:
+        raise ValueError(
+            "Historical Quick/Standard project pipelines cannot be resumed as "
+            "Reconnaissance. Start a fresh Reconnaissance run."
+        )
+    if profile != NORMAL_PIPELINE_PROFILE:
+        raise ValueError("Prior project pipeline metadata uses an unsupported profile.")
+    return NORMAL_PIPELINE_PROFILE
 
 
 def _prompt_target_with_retries(

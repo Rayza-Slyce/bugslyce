@@ -1032,7 +1032,7 @@ def test_future_pipeline_stage010_composition_failure_uses_existing_failed_step_
     monkeypatch.setattr(project_pipeline, "_step_runners", controlled_runners)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
 
     assert exc_info.value.result.failed_step == "PIPELINE-STEP-010"
     failed = next(

@@ -300,6 +300,14 @@ def test_collection_retains_raw_leads_beside_derived_occurrence_groups() -> None
     ) == collection.review_leads
 
 
-def test_standard_available_and_deep_available() -> None:
-    assert get_recon_mode("standard").is_available
-    assert get_recon_mode("deep").is_available
+def test_single_operator_recon_mode_invariant() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
+    assert surviving.is_available is True
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")

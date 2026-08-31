@@ -37,12 +37,12 @@ Read these sections in the doctor output:
 - Mode readiness;
 - Recommended fixes.
 
-Manual Setup Only may still be ready when Quick, Standard or Deep Recon is
-blocked.
+Manual Setup Only may still be ready when Reconnaissance is blocked.
 
 ## `gobuster` Missing
 
-`gobuster` is required by Quick, Standard and Deep Recon.
+`gobuster` is currently required by Reconnaissance readiness because retained
+runtime-less legacy paths still use it.
 
 On Debian-derived systems:
 
@@ -95,7 +95,7 @@ The resume command expects the project JSON file, not just the directory.
 Incorrect:
 
 ```bash
-bugslyce project run --project bugslyce-output/example-lab --profile lab-safe-tiny --confirm --resume
+bugslyce project run --project bugslyce-output/example-lab --confirm --resume
 ```
 
 Correct:
@@ -103,7 +103,6 @@ Correct:
 ```bash
 bugslyce project run \
   --project bugslyce-output/example-lab/bugslyce_project.json \
-  --profile lab-safe-tiny \
   --confirm \
   --resume
 ```

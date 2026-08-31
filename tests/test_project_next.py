@@ -91,14 +91,17 @@ def test_project_next_without_recon_pack_suggests_scoped_nmap_discovery(
     assert not Path(f"{output_dir}-content-plan-tiny").exists()
 
 
-def test_ready_fresh_bug_bounty_project_still_recommends_standard(
+def test_ready_fresh_bug_bounty_project_recommends_reconnaissance(
     tmp_path: Path,
 ) -> None:
     project_file, _output_dir = _ready_bug_bounty_project(tmp_path)
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
+    assert "bugslyce project run" in result.recommended_action.command_preview
+    assert "--confirm" in result.recommended_action.command_preview
+    assert "--profile" not in result.recommended_action.command_preview
 
 
 @pytest.mark.parametrize("profile", ("standard-bounded", "deep-bounded"))
@@ -132,7 +135,7 @@ def test_completed_bug_bounty_pipeline_prefers_existing_html_report(
         for action in (result.recommended_action, *result.optional_actions)
     )
     assert all(
-        action.id != "run-standard-project-pipeline"
+        action.id != "run-reconnaissance-project-pipeline"
         for action in (result.recommended_action, *result.optional_actions)
     )
 
@@ -194,7 +197,7 @@ def test_incomplete_bug_bounty_pipeline_is_not_treated_as_completed(
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
 
 
 def test_truncated_standard_bug_bounty_pipeline_is_not_treated_as_completed(
@@ -213,7 +216,7 @@ def test_truncated_standard_bug_bounty_pipeline_is_not_treated_as_completed(
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
 
 
 def test_truncated_deep_bug_bounty_pipeline_is_not_treated_as_completed(
@@ -232,7 +235,7 @@ def test_truncated_deep_bug_bounty_pipeline_is_not_treated_as_completed(
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
 
 
 @pytest.mark.parametrize(
@@ -255,7 +258,7 @@ def test_malformed_bug_bounty_pipeline_step_identity_fails_closed(
 
     result = build_project_next(project_file)
 
-    assert result.recommended_action.id == "run-standard-project-pipeline"
+    assert result.recommended_action.id == "run-reconnaissance-project-pipeline"
 
 
 def test_project_next_discovery_only_suggests_nmap_services(tmp_path: Path) -> None:

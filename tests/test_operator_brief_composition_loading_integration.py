@@ -285,7 +285,7 @@ def test_source_control_current_and_legacy_stage010_declarations_are_distinct(
 
 
 @pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE))
-def test_source_control_legacy_quick_and_standard_resume_remain_compatible(
+def test_source_control_legacy_quick_and_standard_resume_are_refused_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     profile: str,
@@ -297,9 +297,9 @@ def test_source_control_legacy_quick_and_standard_resume_remain_compatible(
     )
     _guard_semantic_replay(monkeypatch)
 
-    assessment = _assess_resume_state(**arguments)
+    with pytest.raises(ValueError, match="unsupported project profile"):
+        _assess_resume_state(**arguments)
 
-    assert "PIPELINE-STEP-012" in assessment.skipped_step_ids
     assert not (output_dir / _CANONICAL_PATH).exists()
 
 
@@ -384,19 +384,14 @@ def test_source_control_fresh_stage010_does_not_load_just_written_snapshot(
 # Future resume contract.
 
 
-@pytest.mark.parametrize(
-    "profile",
-    (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE),
-)
 def test_future_current_resume_rejects_declared_missing_canonical_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    profile: str,
 ) -> None:
     arguments, output_dir, _project_file = _completed_resume_fixture(
         tmp_path,
         monkeypatch,
-        profile,
+        DEEP_PIPELINE_PROFILE,
     )
     _declare_canonical_output(output_dir)
 
@@ -404,19 +399,14 @@ def test_future_current_resume_rejects_declared_missing_canonical_snapshot(
         _assess_resume_state(**arguments)
 
 
-@pytest.mark.parametrize(
-    "profile",
-    (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE),
-)
 def test_future_current_resume_rejects_declared_corrupt_canonical_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    profile: str,
 ) -> None:
     arguments, output_dir, _project_file = _completed_resume_fixture(
         tmp_path,
         monkeypatch,
-        profile,
+        DEEP_PIPELINE_PROFILE,
     )
     _declare_canonical_output(output_dir)
     (output_dir / _CANONICAL_PATH).write_text("{broken\n", encoding="utf-8")
@@ -428,19 +418,14 @@ def test_future_current_resume_rejects_declared_corrupt_canonical_snapshot(
     assert calls == [output_dir.resolve()]
 
 
-@pytest.mark.parametrize(
-    "profile",
-    (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE),
-)
 def test_future_current_completed_resume_loads_once_reuses_tail_and_never_rebuilds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    profile: str,
 ) -> None:
     arguments, output_dir, _project_file = _completed_resume_fixture(
         tmp_path,
         monkeypatch,
-        profile,
+        DEEP_PIPELINE_PROFILE,
     )
     composition = _representative_composition(output_dir)
     write_operator_brief_composition_artifact(output_dir, composition)
@@ -454,10 +439,9 @@ def test_future_current_completed_resume_loads_once_reuses_tail_and_never_rebuil
     assert {"PIPELINE-STEP-010", "PIPELINE-STEP-011"}.issubset(
         assessment.skipped_step_ids
     )
-    if profile == DEEP_PIPELINE_PROFILE:
-        assert {"PIPELINE-STEP-010D", "PIPELINE-STEP-011D"}.issubset(
-            assessment.skipped_step_ids
-        )
+    assert {"PIPELINE-STEP-010D", "PIPELINE-STEP-011D"}.issubset(
+        assessment.skipped_step_ids
+    )
 
 
 def test_future_resume_rejects_undeclared_present_canonical_snapshot(
@@ -467,7 +451,7 @@ def test_future_resume_rejects_undeclared_present_canonical_snapshot(
     arguments, output_dir, _project_file = _completed_resume_fixture(
         tmp_path,
         monkeypatch,
-        STANDARD_PIPELINE_PROFILE,
+        DEEP_PIPELINE_PROFILE,
     )
     composition = _representative_composition(output_dir)
     write_operator_brief_composition_artifact(output_dir, composition)
@@ -483,7 +467,7 @@ def test_future_resume_rejects_noncanonical_stage010_declaration_path(
     arguments, output_dir, _project_file = _completed_resume_fixture(
         tmp_path,
         monkeypatch,
-        STANDARD_PIPELINE_PROFILE,
+        DEEP_PIPELINE_PROFILE,
     )
     other = tmp_path / "other" / _CANONICAL_PATH
     other.parent.mkdir()

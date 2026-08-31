@@ -21,9 +21,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "[![Tests]" in readme
     assert "actions/workflows/tests.yml" in readme
     assert "## What BugSlyce Provides" in readme
-    assert "## Operator Modes" in readme
-    assert "lab-safe-tiny" in readme
-    assert "standard-bounded" in readme
+    assert "## Operator Workflow" in readme
     assert "deep-bounded" in readme
 
     assert "python3 -m venv .venv" in readme
@@ -32,9 +30,7 @@ def test_readme_documents_mvp_workflow_outputs_and_safety() -> None:
     assert "## License" not in readme
 
     for term in (
-        "quick recon",
-        "standard recon",
-        "deep recon",
+        "reconnaissance",
         "manual setup only",
         "evidence pack",
         "mit licence",
@@ -68,8 +64,7 @@ def test_readme_has_release_checkpoint_and_honest_limitations() -> None:
     assert "validated on Kali Linux and Linux Mint" in readme
     assert "not currently part of the directly validated host set" in compact
     assert "validated on Debian-derived systems such as Kali, Ubuntu and Linux Mint" not in readme
-    assert "Standard Recon | `standard-bounded`" in readme
-    assert "Deep Recon | `deep-bounded`" in readme
+    assert "Reconnaissance | `deep-bounded`" in readme
     assert "interactive resume preview is read-only" in readme.lower()
     assert "not proof that a vulnerability exists" in compact
 
@@ -112,10 +107,8 @@ def test_demo_walkthrough_documents_authorised_mvp_flow() -> None:
         "bugslyce doctor",
         "bugslyce project scaffold",
         "bugslyce project run",
-        "lab-safe-tiny",
-        "Quick Recon",
-        "Standard Recon",
-        "Deep Recon",
+        "Reconnaissance",
+        "deep-bounded",
         "Manual Setup Only",
         "--resume",
         "report.md",

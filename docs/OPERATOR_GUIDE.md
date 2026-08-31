@@ -90,7 +90,7 @@ For a new project, the launcher prompts for:
 The launcher prints command previews for direct CLI use. It does not treat a
 mode choice as authorisation.
 
-## 3. Operator Modes
+## 3. Operator Workflow
 
 ### Manual Setup Only
 
@@ -98,42 +98,24 @@ Manual Setup Only creates local project metadata and `scope.md`. It performs no
 recon and remains usable when live-recon dependencies are missing, provided core
 application readiness passes.
 
-Use it when you want to review scope before any collection.
+### Reconnaissance
 
-### Quick Recon
+Reconnaissance runs the complete bounded workflow under the internal persisted
+profile `deep-bounded`. Operators do not select a normal project profile. The
+workflow uses `deep-bounded-core` and retains the existing Deep model,
+artefact and step identities.
 
-Quick Recon uses profile `lab-safe-tiny`. It performs bounded first-pass
-collection and uses the bundled `lab-root-tiny` content resource. It is useful
-for initial lab or CTF triage where the operator wants local evidence and
-review leads quickly.
+Reconnaissance:
 
-### Standard Recon
+- keeps executable requests within programme and materialised-origin authority;
+- uses central pacing, concurrency, redirect, peer and HTTP 429 enforcement;
+- performs native root discovery and one bounded depth-one feedback pass;
+- retains external and query-bearing references as offline evidence where supported
+  rather than turning them into recursive requests;
+- does not submit forms, execute JavaScript, or replay, guess or mutate parameters;
+- does not perform unrestricted crawling or exploitation.
 
-Standard Recon uses profile `standard-bounded`. It runs the bounded collection
-workflow and adds offline interpretation of already collected evidence,
-including manual review leads and investigation guidance. It uses the bundled
-`standard-bounded-core` resource.
-
-Standard interpretation does not turn leads into confirmed findings.
-
-### Deep Recon
-
-Deep Recon uses profile `deep-bounded`. It adds bounded same-origin Deep
-collection, shallow follow-up and offline orchestration over existing Deep
-review stages. It uses the bundled `deep-bounded-core` resource and remains
-manual-review oriented.
-
-Deep Recon:
-
-- keeps executable requests same-origin and scope-conscious;
-- retains external absolute references as offline evidence where supported
-  rather than fetching them;
-- does not submit forms;
-- does not execute JavaScript;
-- does not replay, guess or mutate parameter values;
-- does not perform recursive or unrestricted crawling.
-
-Deep projects retain these fixed Deep artefacts:
+The existing fixed Deep artefacts remain:
 
 ```text
 deep_source_route_collection.md
@@ -143,17 +125,16 @@ deep_recon_runbook.md
 deep_recon_orchestration.json
 ```
 
-## 4. Choosing a Mode
+## 4. Choosing a Workflow
 
-| Mode | Best use | Collection scope | Interpretation depth | Bundled resource | Resume implication |
-| --- | --- | --- | --- | --- | --- |
-| Manual Setup Only | Scope review before recon | none | none | none | no live phase to resume |
-| Quick Recon | Fast first pass | bounded base workflow | core report/status/runbook | `lab-root-tiny` | completed runs can be reused |
-| Standard Recon | Evidence review after bounded collection | bounded base workflow | Standard offline interpretation | `standard-bounded-core` | completed runs can be reused |
-| Deep Recon | Same-origin detailed manual review | bounded base plus Deep collection | Deep offline orchestration | `deep-bounded-core` | completed runs reuse safely; partial Deep state fails closed |
+| Choice | Collection | Interpretation | Bundled resource | Resume implication |
+| --- | --- | --- | --- | --- |
+| Manual Setup Only | none | none | none | no live phase to resume |
+| Reconnaissance | complete bounded project workflow | native discovery, depth-one feedback and Deep offline orchestration | `deep-bounded-core` | compatible completed `deep-bounded` runs reuse safely; ambiguous partial state fails closed |
 
-Deep is not always the right choice. Use the narrowest mode that fits the
-engagement and the question you need to answer.
+Historical `lab-safe-tiny` and `standard-bounded` metadata may remain visible
+in read-only status/report output, but those profiles cannot start or resume a
+normal project execution.
 
 ## 5. Creating a Project
 
@@ -209,20 +190,11 @@ Then run a confirmed project pipeline:
 ```bash
 bugslyce project run \
   --project bugslyce-output/example-lab/bugslyce_project.json \
-  --profile lab-safe-tiny \
   --confirm
 ```
 
-Supported project profiles:
-
-```text
-lab-safe-tiny
-standard-bounded
-deep-bounded
-```
-
-The pipeline validates readiness, target and scope before live collection. If a
-required tool or bundled resource is missing for the selected profile, it fails
+The pipeline uses the internal `deep-bounded` profile and validates readiness,
+target and scope before live collection. If a required tool or bundled resource is missing, it fails
 before live phases start.
 
 ## 8. Progress and Completion
@@ -253,20 +225,20 @@ CLI resume pattern:
 ```bash
 bugslyce project run \
   --project bugslyce-output/example-lab/bugslyce_project.json \
-  --profile deep-bounded \
   --confirm \
   --resume
 ```
 
-Completed Quick, Standard and Deep runs may safely reuse verified existing
-evidence. A completed Deep resume is a verified no-op apart from local
+Compatible completed `deep-bounded` runs may safely reuse verified existing
+evidence. A completed resume is a verified no-op apart from local
 validation; it preserves canonical report, status, runbook, pipeline metadata
 and evidence-pack files.
 
-Partial Deep state fails closed. The full in-memory response bodies and
+Partial Deep state fails closed. Historical Quick/Standard execution metadata
+is not resumed. The full in-memory response bodies and
 shallow-follow-up result required for complete offline Deep analysis are not
 persisted, so BugSlyce will not silently repeat Deep network stages during
-resume. Start a clean Deep project for an explicit rerun after an unsafe
+resume. Start a clean project and run Reconnaissance for an explicit rerun after an unsafe
 partial state.
 
 Interactive resume preview is read-only. If you decline the resume prompt, no

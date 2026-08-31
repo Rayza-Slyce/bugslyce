@@ -324,12 +324,17 @@ def test_renderer_includes_bounds_decisions_and_safety_wording() -> None:
         assert forbidden not in lowered
 
 
-def test_mode_enablement_remains_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_single_operator_recon_mode_invariant() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert STANDARD_BOUNDED_CORE_PROFILE == "standard-bounded-core"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")
 
 
 def _blocked_reason(url: str) -> str:

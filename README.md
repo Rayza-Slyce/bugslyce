@@ -98,20 +98,21 @@ claimed.
 
 - Local project scaffolding and scope templates.
 - Passive doctor/readiness checks.
-- Bounded Quick, Standard and Deep Recon project workflows.
+- One complete bounded `Reconnaissance` project workflow.
 - Deterministic reports, runbooks, status files and pipeline metadata.
 - Local evidence-pack ZIP export.
 - Conservative resume behaviour for completed or clearly reusable work.
 - Offline interpretation that keeps raw evidence separate from conclusions.
 
-## Operator Modes
+## Operator Workflow
 
 | Mode | Profile | Purpose |
 | --- | --- | --- |
 | Manual Setup Only | none | Create project metadata and `scope.md` without running recon. |
-| Quick Recon | `lab-safe-tiny` | Fast first-pass bounded collection using the bundled `lab-root-tiny` wordlist. |
-| Standard Recon | `standard-bounded` | Bounded collection plus offline interpretation using `standard-bounded-core`. |
-| Deep Recon | `deep-bounded` | Bounded same-origin Deep collection and offline review orchestration using `deep-bounded-core`. |
+| Reconnaissance | `deep-bounded` | Complete bounded native discovery, depth-one evidence feedback and offline review using `deep-bounded-core`. |
+
+`deep-bounded` remains the internal and persisted profile identity; operators
+do not choose a profile for normal project execution.
 
 ## Install from PyPI
 
@@ -169,8 +170,8 @@ Most operators should start with the guided launcher:
 bugslyce
 ```
 
-The launcher can create a project, ask for engagement context, choose a mode,
-show the exact command that will run and require an exact `YES` confirmation
+The launcher can create a project, ask for engagement context, choose
+Reconnaissance or Manual Setup Only, show the exact command that will run and require an exact `YES` confirmation
 before live recon starts.
 
 ![BugSlyce interactive launcher](https://raw.githubusercontent.com/Rayza-Slyce/bugslyce/main/docs/images/bugslyce-interactive-menu.png)
@@ -188,7 +189,7 @@ A completed project commonly contains:
 - `project_pipeline.md` and `project_pipeline.json`: pipeline step history.
 - an adjacent evidence-pack ZIP.
 
-Deep Recon additionally retains:
+Reconnaissance additionally retains the existing Deep artefacts:
 
 - `deep_source_route_collection.md`
 - `deep_source_route_collection.json`

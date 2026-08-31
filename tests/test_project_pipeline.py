@@ -41,6 +41,8 @@ from bugslyce.doctor import DoctorReport, ResourceReadiness, ToolReadiness
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     DeepPipelineOutputs,
+    LEGACY_QUICK_PIPELINE_PROFILE,
+    NORMAL_PIPELINE_PROFILE,
     PIPELINE_JSON_FILENAME,
     PIPELINE_MARKDOWN_FILENAME,
     PARTIAL_DEEP_RESUME_MESSAGE,
@@ -106,9 +108,15 @@ from bugslyce.reports.operator_brief_project import (
 FIXED_TIME = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
 
+def test_normal_pipeline_profile_does_not_alias_historical_quick_identity() -> None:
+    assert PIPELINE_PROFILE == "lab-safe-tiny"
+    assert LEGACY_QUICK_PIPELINE_PROFILE == PIPELINE_PROFILE
+    assert NORMAL_PIPELINE_PROFILE == DEEP_PIPELINE_PROFILE == "deep-bounded"
+
+
 @pytest.mark.parametrize(
     "profile",
-    (STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE),
+    (DEEP_PIPELINE_PROFILE,),
 )
 def test_pipeline_records_tcp_skip_nmap_stages_as_noops(
     tmp_path: Path,
@@ -176,13 +184,13 @@ def test_tcp_skip_pipeline_readiness_does_not_require_nmap_but_keeps_http_tools(
 
     _validate_readiness(
         _structured_doctor(missing_tool="nmap"),
-        STANDARD_PIPELINE_PROFILE,
+        DEEP_PIPELINE_PROFILE,
         project_runtime=runtime,
     )
     with pytest.raises(ValueError, match="curl"):
         _validate_readiness(
             _structured_doctor(missing_tool="curl"),
-            STANDARD_PIPELINE_PROFILE,
+            DEEP_PIPELINE_PROFILE,
             project_runtime=runtime,
         )
 
@@ -210,7 +218,7 @@ def test_fresh_tcp_skip_pipeline_runs_real_strict_http_metadata_without_nmap(
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(
             project_file,
-            STANDARD_PIPELINE_PROFILE,
+            DEEP_PIPELINE_PROFILE,
             clock=lambda: FIXED_TIME,
         )
 
@@ -279,7 +287,7 @@ def test_project_run_help_exists(capsys) -> None:
     assert exc_info.value.code == 0
     assert "usage: bugslyce project run" in captured.out
     assert "--project" in captured.out
-    assert "--profile" in captured.out
+    assert "--profile" not in captured.out
     assert "--confirm" in captured.out
     assert "--resume" in captured.out
 
@@ -297,8 +305,6 @@ def test_cli_project_run_requires_confirm(tmp_path: Path, monkeypatch, capsys) -
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
         ]
     )
     captured = capsys.readouterr()
@@ -321,7 +327,7 @@ def test_cli_project_run_forwards_resume(
         return SimpleNamespace(
             project_name="pipeline-test",
             target="10.10.10.10",
-            profile=PIPELINE_PROFILE,
+            profile=NORMAL_PIPELINE_PROFILE,
             project_file=str(project_file),
             output_dir=str(output_dir),
             resume_requested=True,
@@ -348,8 +354,6 @@ def test_cli_project_run_forwards_resume(
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
             "--confirm",
             "--resume",
         ]
@@ -403,7 +407,7 @@ def test_cli_project_run_prints_compact_structured_run_summary(
         lambda **kwargs: SimpleNamespace(
             project_name="pipeline-test",
             target="portal.example.test",
-            profile=STANDARD_PIPELINE_PROFILE,
+            profile=DEEP_PIPELINE_PROFILE,
             project_file=str(project_file),
             output_dir=str(output_dir),
             resume_requested=False,
@@ -434,8 +438,6 @@ def test_cli_project_run_prints_compact_structured_run_summary(
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            STANDARD_PIPELINE_PROFILE,
             "--confirm",
         ]
     )
@@ -636,87 +638,6 @@ def test_in_memory_completion_summary_is_not_persisted_in_pipeline_metadata(
     assert "BugSlyce Run Summary" not in markdown_path.read_text(encoding="utf-8")
 
 
-def test_fresh_quick_pipeline_builds_compact_summary_without_rerendering_report(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    state = _quick_completion_state(output_dir)
-    candidates = []
-    report_path = output_dir / "report.md"
-    report_path.write_text(
-        render_markdown_report(state, candidates),
-        encoding="utf-8",
-    )
-    report_before = report_path.read_bytes()
-    expected_summary = build_operator_summary(state, candidates)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_project_state",
-        lambda path: state,
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.write_project_outputs",
-        lambda *args, **kwargs: pytest.fail("Quick completion must not rerender report.md"),
-    )
-
-    result = run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
-    rendered = render_project_pipeline_summary(result)
-
-    assert rendered.count("BugSlyce Run Summary") == 1
-    assert "Collection confidence:" in rendered
-    assert "Intentionally bounded content discovery" in rendered
-    assert "Review first:" in rendered
-    assert result.completion_summary is not None
-    assert result.completion_summary.operator_summary.review_first == expected_summary.review_first
-    normalised = " ".join(rendered.split())
-    for lead in expected_summary.review_first:
-        assert f"{lead.title}: {lead.why}" in normalised
-    assert "Final outputs:" in rendered
-    assert "No NSE scripts" in rendered
-    assert report_path.read_bytes() == report_before
-    pipeline_payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
-    assert "completion_summary" not in pipeline_payload
-
-
-def test_quick_pipeline_noop_body_fetch_still_builds_compact_summary(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    state = _quick_completion_state(output_dir)
-    report_path = output_dir / "report.md"
-    report_path.write_text(render_markdown_report(state, []), encoding="utf-8")
-    report_before = report_path.read_bytes()
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_body_fetch_workflow",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            BodyFetchNoWork("No eligible response bodies were available.")
-        ),
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_project_state",
-        lambda path: state,
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.write_project_outputs",
-        lambda *args, **kwargs: pytest.fail("Quick completion must not rerender report.md"),
-    )
-
-    result = run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
-    rendered = render_project_pipeline_summary(result)
-
-    assert result.no_op_steps == 1
-    assert "* No-op: 1" in rendered
-    assert rendered.count("BugSlyce Run Summary") == 1
-    assert "Intentionally bounded content discovery" in rendered
-    assert "exhaustive coverage" not in rendered.lower()
-    assert report_path.read_bytes() == report_before
-
-
 def _summary_result(
     *,
     output_dir: str = "/tmp/bugslyce-summary-output",
@@ -879,8 +800,6 @@ def test_cli_project_run_handles_finalisation_failure_without_failed_ordinary_st
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
             "--confirm",
         ]
     )
@@ -921,8 +840,6 @@ def test_cli_project_run_retains_ordinary_failed_step_wording(
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
             "--confirm",
         ]
     )
@@ -983,8 +900,6 @@ def test_cli_project_run_preserves_export_cleanup_note(
             "run",
             "--project",
             str(project_file),
-            "--profile",
-            PIPELINE_PROFILE,
             "--confirm",
         ]
     )
@@ -1021,12 +936,12 @@ def test_pipeline_rejects_unsupported_profile_and_invalid_project(
         run_project_pipeline(project_file, "other-profile")
 
     with pytest.raises(ValueError, match="Project file does not exist"):
-        run_project_pipeline(tmp_path / "missing.json", PIPELINE_PROFILE)
+        run_project_pipeline(tmp_path / "missing.json", NORMAL_PIPELINE_PROFILE)
 
     malformed = tmp_path / "malformed.json"
     malformed.write_text("{bad", encoding="utf-8")
     with pytest.raises(ValueError, match="Could not parse project file"):
-        run_project_pipeline(malformed, PIPELINE_PROFILE)
+        run_project_pipeline(malformed, NORMAL_PIPELINE_PROFILE)
 
 
 def test_pipeline_rejects_scope_readiness_and_existing_outputs_before_live_phases(
@@ -1049,7 +964,7 @@ def test_pipeline_rejects_scope_readiness_and_existing_outputs_before_live_phase
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="not explicitly listed"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
 
     scope.write_text(
         "# Scope\n\n## In Scope\n\n* 10.10.10.10\n",
@@ -1057,13 +972,13 @@ def test_pipeline_rejects_scope_readiness_and_existing_outputs_before_live_phase
     )
     (output_dir / "recon_manifest.json").write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Existing recon pack detected"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
     (output_dir / "recon_manifest.json").unlink()
 
     export_path = Path(f"{output_dir}-evidence-pack.zip")
     export_path.write_bytes(b"existing")
     with pytest.raises(ValueError, match="Evidence pack output already exists"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
     assert export_path.read_bytes() == b"existing"
 
 
@@ -1084,23 +999,23 @@ def test_pipeline_rejects_missing_scope_and_existing_plan_directory(
     scope = output_dir / "scope.md"
     scope.unlink()
     with pytest.raises(ValueError, match="scope file does not exist"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
 
     scope.write_text(
         "# Scope\n\n## In Scope\n\n* 10.10.10.10\n",
         encoding="utf-8",
     )
-    plan_dir = Path(f"{output_dir}-content-plan-tiny")
+    plan_dir = Path(f"{output_dir}-content-plan-deep-bounded-core")
     plan_dir.mkdir()
     with pytest.raises(ValueError, match="Content plan directory already exists"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
 
 
 @pytest.mark.parametrize(
     ("doctor_kwargs", "message"),
     [
-        ({"gobuster": None}, "Quick Recon is blocked.*gobuster"),
-        ({"bundled": False}, "Quick Recon is blocked.*lab-root-tiny"),
+        ({"gobuster": None}, "Reconnaissance is blocked.*gobuster"),
+        ({"bundled": False}, "Reconnaissance is blocked.*deep-bounded-core"),
     ],
 )
 def test_pipeline_stops_on_missing_required_readiness(
@@ -1120,22 +1035,16 @@ def test_pipeline_stops_on_missing_required_readiness(
     )
 
     with pytest.raises(ValueError, match=message):
-        run_project_pipeline(project_file, PIPELINE_PROFILE)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE)
 
 
 @pytest.mark.parametrize(
     ("profile", "missing_resource", "message"),
     (
-        (PIPELINE_PROFILE, "lab-root-tiny", "Quick Recon is blocked.*lab-root-tiny"),
-        (
-            STANDARD_PIPELINE_PROFILE,
-            "standard-bounded-core",
-            "Standard Recon is blocked.*standard-bounded-core",
-        ),
         (
             DEEP_PIPELINE_PROFILE,
             "deep-bounded-core",
-            "Deep Recon is blocked.*deep-bounded-core",
+            "Reconnaissance is blocked.*deep-bounded-core",
         ),
     ),
 )
@@ -1162,10 +1071,6 @@ def test_pipeline_blocks_only_profile_required_missing_resource(
 @pytest.mark.parametrize(
     ("profile", "irrelevant_missing_resource"),
     (
-        (PIPELINE_PROFILE, "standard-bounded-core"),
-        (PIPELINE_PROFILE, "deep-bounded-core"),
-        (STANDARD_PIPELINE_PROFILE, "lab-root-tiny"),
-        (STANDARD_PIPELINE_PROFILE, "deep-bounded-core"),
         (DEEP_PIPELINE_PROFILE, "lab-root-tiny"),
         (DEEP_PIPELINE_PROFILE, "standard-bounded-core"),
     ),
@@ -1191,7 +1096,7 @@ def test_pipeline_ignores_irrelevant_missing_resource_for_selected_profile(
 
 
 @pytest.mark.parametrize("missing_tool", ("nmap", "curl", "gobuster"))
-@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE))
+@pytest.mark.parametrize("profile", (DEEP_PIPELINE_PROFILE,))
 def test_pipeline_missing_shared_tool_blocks_every_executable_profile(
     tmp_path: Path,
     monkeypatch,
@@ -1228,117 +1133,10 @@ def test_pipeline_malformed_readiness_blocks_before_any_step_or_metadata(
     )
 
     with pytest.raises(ValueError, match="gobuster.*missing"):
-        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE)
+        run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
 
     assert not (output_dir / PIPELINE_JSON_FILENAME).exists()
     assert not (output_dir / PIPELINE_MARKDOWN_FILENAME).exists()
-
-
-def test_fresh_pipeline_runs_all_steps_in_order_and_writes_metadata(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    progress: list[str] = []
-    runbook_sections: list[str | None] = []
-
-    def fake_build_project_runbook(
-        project_file_arg,
-        clock=None,
-        standard_investigation_workflow_markdown=None,
-    ):
-        calls.append("runbook")
-        runbook_sections.append(standard_investigation_workflow_markdown)
-        return SimpleNamespace(
-            runbook_path=str(output_dir / "runbook.md"),
-            content=standard_investigation_workflow_markdown or "",
-        )
-
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_project_runbook",
-        fake_build_project_runbook,
-    )
-
-    result = run_project_pipeline(
-        project_file,
-        PIPELINE_PROFILE,
-        clock=lambda: FIXED_TIME,
-        progress_callback=progress.append,
-    )
-
-    assert calls == [
-        "nmap-discover",
-        "nmap-discover-write",
-        "nmap-services",
-        "nmap-services-write",
-        "smb-shares",
-        "smb-shares-write",
-        "http-metadata",
-        "http-metadata-write",
-        "path-followup",
-        "path-followup-write",
-        "content-plan",
-        "content-plan-write",
-        "content-run",
-        "content-run-write",
-        "content-followup",
-        "content-followup-write",
-        "body-fetch",
-        "body-fetch-write",
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-        "export",
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-        "export",
-    ]
-    assert result.final_status == "completed"
-    assert [step.status for step in result.steps] == ["completed"] * 13
-    assert result.report_path == str(output_dir / "report.md")
-    assert result.runbook_path == str(output_dir / "runbook.md")
-    assert result.export_path == f"{output_dir}-evidence-pack.zip"
-    assert runbook_sections == [None, None]
-    assert "[1/13] environment and project validation starting..." in progress
-    assert "[13/13] evidence pack export complete" in progress
-
-    json_path = output_dir / PIPELINE_JSON_FILENAME
-    markdown_path = output_dir / PIPELINE_MARKDOWN_FILENAME
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert markdown_path.is_file()
-    assert payload["profile"] == PIPELINE_PROFILE
-    assert payload["target"] == "10.10.10.10"
-    assert payload["final_status"] == "completed"
-    assert payload["no_unapproved_actions"] is True
-    assert len(payload["steps"]) == 13
-    html_path = output_dir / "report.html"
-    assert html_path.read_text(encoding="utf-8") == "<!doctype html><title>Fixture report</title>\n"
-    rendered_summary = render_project_pipeline_summary(result)
-    assert f"* HTML report: {html_path}" in rendered_summary
-    assert f"* Markdown report: {output_dir / 'report.md'}" in rendered_summary
-    assert "* Open the HTML Operator Report:" in rendered_summary
-    assert f"  xdg-open {html_path}" in rendered_summary
-    assert "Text fallback:" in rendered_summary
-    assert f"  less {output_dir / 'report.md'}" in rendered_summary
-    assert rendered_summary.index("HTML report") < rendered_summary.index(
-        "Markdown report"
-    )
-    markdown = markdown_path.read_text(encoding="utf-8")
-    assert "## Summary" in markdown
-    assert "- Completed steps: `13`" in markdown
-    assert "- Skipped existing steps: `0`" in markdown
-    assert "## Final Outputs" in markdown
-    assert f"- Recon status: `{output_dir / 'recon_status.md'}`" in markdown
-    assert f"- Pipeline metadata JSON: `{json_path}`" in markdown
-    assert f"- Pipeline metadata Markdown: `{markdown_path}`" in markdown
-    assert "## Suggested Review Commands" in markdown
-    assert f"less {output_dir / 'report.md'}" in markdown
-    assert "No NSE scripts, UDP scans, brute force" in markdown
 
 
 def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
@@ -1370,18 +1168,18 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
         progress_callback=progress.append,
     )
 
     assert result.final_status == "completed"
-    assert "[8/13] bounded content discovery execution starting..." in progress
+    assert "[8/15] bounded content discovery execution starting..." in progress
     assert (
-        "[8/13] bounded content discovery execution: 250/1753 candidates checked; "
+        "[8/15] bounded content discovery execution: 250/1753 candidates checked; "
         "7 retained; 243 baseline-equivalent; elapsed 24s"
     ) in progress
-    assert "[8/13] bounded content discovery execution complete" in progress
+    assert "[8/15] bounded content discovery execution complete" in progress
     assert all("\r" not in message for message in progress)
 
 
@@ -1419,7 +1217,7 @@ def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
         progress_callback=progress.append,
     )
@@ -1428,7 +1226,7 @@ def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
     forwarded = [
         message
         for message in progress
-        if message.startswith("[8/13] bounded content discovery execution:")
+        if message.startswith("[8/15] bounded content discovery execution:")
     ]
     assert any("Content discovery" in message for message in forwarded)
     assert any("1052/1753" in message for message in forwarded)
@@ -1516,7 +1314,7 @@ def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hi
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
         progress_callback=progress.append,
     )
@@ -1526,7 +1324,7 @@ def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hi
     forwarded = [
         message
         for message in progress
-        if message.startswith("[8/13] bounded content discovery execution:")
+        if message.startswith("[8/15] bounded content discovery execution:")
     ]
     indeterminate = [
         message for message in forwarded if "Content discovery [active]" in message
@@ -1547,24 +1345,28 @@ def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     report_path = output_dir / "report.md"
     report_path.write_text("# Canonical Markdown report\n", encoding="utf-8")
-    report_before = report_path.read_bytes()
+    report_at_failure: list[bytes] = []
+
+    def fail_html_rendering(_input_dir: Path) -> Path:
+        report_at_failure.append(report_path.read_bytes())
+        raise ValueError("fixture HTML rendering failure")
+
     monkeypatch.setattr(
         "bugslyce.project_pipeline.write_project_html_report",
-        lambda _input_dir: (_ for _ in ()).throw(
-            ValueError("fixture HTML rendering failure")
-        ),
+        fail_html_rendering,
     )
 
     with pytest.raises(ProjectPipelineFailed, match="fixture HTML rendering failure") as exc_info:
         run_project_pipeline(
             project_file,
-            PIPELINE_PROFILE,
+            NORMAL_PIPELINE_PROFILE,
             clock=lambda: FIXED_TIME,
         )
 
     assert exc_info.value.result.final_status == "failed"
     assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
-    assert report_path.read_bytes() == report_before
+    assert len(report_at_failure) == 1
+    assert report_path.read_bytes() == report_at_failure[0]
     assert not (output_dir / "report.html").exists()
     assert not Path(f"{output_dir}-evidence-pack.zip").exists()
     guidance = "\n".join(render_project_pipeline_failure_guidance(exc_info.value.result))
@@ -1609,7 +1411,7 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
     )
 
@@ -1617,189 +1419,6 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
     assert ordering == ["html", "export", "export"]
     with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
         assert archive.namelist() == ["report.html"]
-
-
-def test_standard_pipeline_reuses_bounded_steps_and_writes_manual_review_report(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
-
-    project_state = SimpleNamespace(project_name="pipeline-test")
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_project_state",
-        lambda path: project_state,
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.generate_candidates",
-        lambda state: [],
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
-        lambda state: SimpleNamespace(
-            manual_review_leads_markdown="\n".join(
-                [
-                    "## Manual Review Leads",
-                    "",
-                    (
-                        "These leads are derived from collected evidence and "
-                        "should be treated as manual review prompts, not proof "
-                        "of vulnerability."
-                    ),
-                    "",
-                    "### LEAD-0001: Possible hash candidate detected.",
-                ]
-            ),
-            review_leads=(),
-        ),
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_investigation_threads",
-        lambda state, candidates, review_leads, **kwargs: (),
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.render_investigation_threads_markdown",
-        lambda threads, **kwargs: "",
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
-        lambda threads, **kwargs: "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_route_source_review",
-        lambda state, sources: (),
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.render_route_source_review_markdown",
-        lambda leads, **kwargs: "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n",
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_human_triage_brief",
-        lambda state, candidates, **kwargs: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-        lambda brief, **kwargs: "## Human Triage Brief\n\nNo high-confidence manual triage leads were identified from the collected evidence.\n",
-    )
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
-        lambda brief: "## Readable Evidence Cards\n\nNo high-value evidence cards were generated from the collected evidence.\n",
-    )
-    runbook_sections: list[str | None] = []
-    route_sections: list[str | None] = []
-
-    def fake_build_project_runbook(
-        project_file_arg,
-        clock=None,
-        standard_investigation_workflow_markdown=None,
-    ):
-        calls.append("runbook")
-        runbook_sections.append(standard_investigation_workflow_markdown)
-        return SimpleNamespace(
-            runbook_path=str(output_dir / "runbook.md"),
-            content=standard_investigation_workflow_markdown or "",
-        )
-
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_project_runbook",
-        fake_build_project_runbook,
-    )
-
-    def fake_write_project_outputs(
-        state,
-        candidates,
-        output_path,
-        *,
-        human_triage_brief_markdown=None,
-        manual_review_leads_markdown=None,
-        investigation_threads_markdown=None,
-        route_source_review_markdown=None,
-        readable_evidence_cards_markdown=None,
-    ):
-        calls.append("standard-report-write")
-        route_sections.append(route_source_review_markdown)
-        report_path = output_path / "report.md"
-        json_path = output_path / "project_state.json"
-        report_path.write_text(
-            "# Report\n\n"
-            "## Operator Summary\n\n"
-            f"{human_triage_brief_markdown}\n\n"
-            f"{manual_review_leads_markdown}\n\n"
-            f"{route_source_review_markdown}\n\n"
-            f"{readable_evidence_cards_markdown}\n\n"
-            "## Scope Summary\n",
-            encoding="utf-8",
-        )
-        json_path.write_text("{}\n", encoding="utf-8")
-        return report_path, json_path
-
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.write_project_outputs",
-        fake_write_project_outputs,
-    )
-
-    result = run_project_pipeline(
-        project_file,
-        STANDARD_PIPELINE_PROFILE,
-        clock=lambda: FIXED_TIME,
-    )
-
-    assert (output_dir / "report.html").is_file()
-    assert calls == [
-        "nmap-discover",
-        "nmap-discover-write",
-        "nmap-services",
-        "nmap-services-write",
-        "smb-shares",
-        "smb-shares-write",
-        "http-metadata",
-        "http-metadata-write",
-        "path-followup",
-        "path-followup-write",
-        "content-plan",
-        "content-plan-write",
-        "content-run",
-        "content-run-write",
-        "content-followup",
-        "content-followup-write",
-        "body-fetch",
-        "body-fetch-write",
-        "standard-report-write",
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-        "export",
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-        "export",
-    ]
-    assert result.profile == STANDARD_PIPELINE_PROFILE
-    assert result.report_path == str(output_dir / "report.md")
-    assert [step.status for step in result.steps] == ["completed"] * 13
-    report = (output_dir / "report.md").read_text(encoding="utf-8")
-    assert "## Human Triage Brief" in report
-    assert "## Manual Review Leads" in report
-    assert "## Readable Evidence Cards" in report
-    assert report.index("## Operator Summary") < report.index("## Human Triage Brief")
-    assert report.index("## Human Triage Brief") < report.index("## Manual Review Leads")
-    assert report.index("## Operator Summary") < report.index("## Manual Review Leads")
-    assert report.index("## Manual Review Leads") < report.index("## Scope Summary")
-    assert "not proof of vulnerability" in report
-    assert runbook_sections == [
-        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
-        "## Standard Investigation Workflow\n\n### THREAD-0001: High-port HTTP application review\n",
-    ]
-    assert route_sections == [
-        "## Offline Route/Source Review\n\nNo offline route/source review leads were generated from the collected evidence.\n"
-    ]
-    payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
-    assert payload["profile"] == STANDARD_PIPELINE_PROFILE
 
 
 def test_failure_after_status_refreshes_pipeline_status_artifacts(
@@ -1840,7 +1459,7 @@ def test_failure_after_status_refreshes_pipeline_status_artifacts(
     )
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert exc_info.value.result.final_status == "failed"
     status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
@@ -1848,95 +1467,6 @@ def test_failure_after_status_refreshes_pipeline_status_artifacts(
     assert "Pipeline Final Status: failed" in (output_dir / "recon_status.md").read_text(
         encoding="utf-8"
     )
-
-
-def test_project_pipeline_selects_standard_bounded_core_content_profile(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    quick_project, quick_output = _fresh_project(tmp_path / "quick")
-    standard_project, standard_output = _fresh_project(tmp_path / "standard")
-    observed: list[tuple[str, str]] = []
-
-    def fake_build_content_plan(*, input_dir, scope_file, profile, output_dir):
-        observed.append((Path(input_dir).name, profile))
-        return SimpleNamespace(profile=profile)
-
-    for project_file, output_dir, profile in (
-        (quick_project, quick_output, PIPELINE_PROFILE),
-        (standard_project, standard_output, STANDARD_PIPELINE_PROFILE),
-    ):
-        calls: list[str] = []
-        _patch_successful_pipeline(monkeypatch, output_dir, calls)
-        monkeypatch.setattr(
-            "bugslyce.project_pipeline.build_content_discovery_plan",
-            fake_build_content_plan,
-        )
-        if profile == STANDARD_PIPELINE_PROFILE:
-            _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.build_project_state",
-                lambda path: SimpleNamespace(project_name="pipeline-test"),
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.generate_candidates",
-                lambda state: [],
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.assemble_standard_interpretation_from_project_state",
-                lambda state: SimpleNamespace(
-                    manual_review_leads_markdown="## Manual Review Leads\n",
-                    review_leads=(),
-                    sources=(),
-                ),
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.build_investigation_threads",
-                lambda state, candidates, review_leads, **kwargs: (),
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.render_investigation_threads_markdown",
-                lambda threads, **kwargs: "",
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.build_route_source_review",
-                lambda state, sources: (),
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.render_route_source_review_markdown",
-                lambda leads, **kwargs: "",
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.build_human_triage_brief",
-                lambda state, candidates, **kwargs: SimpleNamespace(),
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.render_human_triage_brief_markdown",
-                lambda brief, **kwargs: "",
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.render_readable_evidence_cards_markdown",
-                lambda brief: "",
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.render_standard_investigation_workflow_runbook_section",
-                lambda threads, **kwargs: "",
-            )
-            monkeypatch.setattr(
-                "bugslyce.project_pipeline.write_project_outputs",
-                lambda state, candidates, output_path, **kwargs: (
-                    output_path / "report.md",
-                    output_path / "project_state.json",
-                ),
-            )
-
-        run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
-
-    assert observed == [
-        (quick_output.name, CONTENT_DISCOVERY_TINY_PROFILE),
-        (standard_output.name, STANDARD_BOUNDED_CORE_PROFILE),
-    ]
-    assert STANDARD_PIPELINE_PROFILE == "standard-bounded"
 
 
 def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
@@ -2505,7 +2035,7 @@ def test_nonrecoverable_body_fetch_failure_still_fails_pipeline_step_009(
     )
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     body_step = next(
         step for step in exc_info.value.result.steps if step.step_id == "PIPELINE-STEP-009"
@@ -2716,7 +2246,7 @@ def test_finalisation_owned_pack_cleanup_failure_does_not_mask_original_error(
     monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert str(exc_info.value) == "final export refresh failed"
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
@@ -2752,7 +2282,7 @@ def test_finalisation_cleanup_refuses_symlink_export_without_unlinking_target(
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_symlink_then_fail)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
     assert export_path.is_symlink()
@@ -2812,7 +2342,7 @@ def test_ordinary_export_failure_refreshes_existing_status_and_runbook(
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fail_export)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, STANDARD_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert "ordinary export failed" in str(exc_info.value)
     assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
@@ -2854,7 +2384,7 @@ def test_status_generation_failure_is_not_retried_during_failure_reconciliation(
     )
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert status_calls == 1
     assert "status generation failed" in str(exc_info.value)
@@ -2917,7 +2447,7 @@ def test_failure_reconciliation_warning_does_not_mask_original_export_error(
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", fail_export)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
-        run_project_pipeline(project_file, PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert str(exc_info.value) == "ordinary export failed"
     assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
@@ -2930,7 +2460,7 @@ def test_failure_reconciliation_warning_does_not_mask_original_export_error(
     assert not Path(f"{output_dir}-evidence-pack.zip").exists()
 
 
-def test_deep_pipeline_selects_standard_bounded_core_content_profile(
+def test_reconnaissance_pipeline_selects_deep_bounded_core_content_profile(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3073,27 +2603,6 @@ def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
     assert "DeepMetadataCollectionResult" in str(hints["metadata_collection"])
     assert "DeepShallowRouteFollowupResult" in str(hints["shallow_followups"])
     assert "DeepReconOrchestrationResult" in str(hints["orchestration"])
-
-
-@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE))
-def test_initial_retained_javascript_adapter_is_never_called_outside_deep(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    profile: str,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_deep_initial_retained_javascript_route_extraction",
-        lambda *_args, **_kwargs: pytest.fail(
-            "initial-retained JavaScript analysis is Deep-only"
-        ),
-    )
-
-    run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
-
-    assert "deep-orchestrate" not in calls
 
 
 def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
@@ -3866,7 +3375,7 @@ def test_pipeline_records_noop_followups_and_continues(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
     )
 
@@ -3899,7 +3408,7 @@ def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
         progress_callback=progress.append,
     )
@@ -3911,7 +3420,7 @@ def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
     assert "path-followup-write" not in calls
     assert "content-plan" in calls
     assert calls.index("content-plan") < calls.index("content-run")
-    assert "[6/13] discovered-path follow-up no-op" in progress
+    assert "[6/15] discovered-path follow-up no-op" in progress
     assert "export" in calls
 
 
@@ -3938,7 +3447,7 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
         progress_callback=progress.append,
@@ -3962,27 +3471,27 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert result.no_op_steps == 1
     assert "Resume: true" in progress[0]
     assert (
-        "[2/13] nmap full TCP discovery skipped.\n"
+        "[2/15] nmap full TCP discovery skipped.\n"
         "Existing nmap discovery evidence detected; phase skipped during resume."
         in progress
     )
     assert (
-        "[3/13] nmap service/version scan skipped.\n"
+        "[3/15] nmap service/version scan skipped.\n"
         "Existing service/version evidence detected; phase skipped during resume."
         in progress
     )
     assert (
-        "[4/13] bounded anonymous SMB share enumeration skipped.\n"
+        "[4/15] bounded anonymous SMB share enumeration skipped.\n"
         "Legacy pipeline metadata predates SMB share enumeration; SMB phase "
         "skipped during resume to avoid introducing new live network traffic."
         in progress
     )
     assert (
-        "[5/13] HTTP metadata collection skipped.\n"
+        "[5/15] HTTP metadata collection skipped.\n"
         "Existing HTTP metadata evidence detected; phase skipped during resume."
         in progress
     )
-    assert "[6/13] discovered-path follow-up no-op" in progress
+    assert "[6/15] discovered-path follow-up no-op" in progress
     payload = json.loads(
         (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
     )
@@ -3994,7 +3503,7 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     ).read_text(encoding="utf-8")
 
 
-def test_resume_uses_valid_tiny_plan_and_skips_content_plan(
+def test_resume_uses_valid_deep_plan_and_skips_content_plan(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4008,14 +3517,20 @@ def test_resume_uses_valid_tiny_plan_and_skips_content_plan(
             "curl-headers-followup-10.10.10.10-80-manual.txt",
         ],
     )
-    plan_path = _write_plan_file(output_dir)
-    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    plan_path = _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE)
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        plan_path,
+        DEEP_BOUNDED_CORE_PROFILE,
+    )
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
     )
@@ -4037,11 +3552,17 @@ def test_resume_records_followup_noops_and_continues(
             "nmap-services-all.txt",
             "curl-headers-10.10.10.10-80.txt",
             "curl-headers-followup-10.10.10.10-80-manual.txt",
-            "gobuster-tiny-10.10.10.10-80-root.txt",
+            "content-discovery-internal-http-10.10.10.10-80-root.txt",
         ],
     )
-    plan_path = _write_plan_file(output_dir)
-    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    plan_path = _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE)
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        plan_path,
+        DEEP_BOUNDED_CORE_PROFILE,
+    )
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     monkeypatch.setattr(
@@ -4055,7 +3576,7 @@ def test_resume_records_followup_noops_and_continues(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
     )
@@ -4095,14 +3616,20 @@ def test_resume_recognises_current_native_step_seven_artifact(
         json.dumps(manifest) + "\n",
         encoding="utf-8",
     )
-    plan_path = _write_plan_file(output_dir)
-    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
+    plan_path = _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE)
+    _patch_plan_loader_for_profile(
+        monkeypatch,
+        project_file,
+        output_dir,
+        plan_path,
+        DEEP_BOUNDED_CORE_PROFILE,
+    )
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
     )
@@ -4125,7 +3652,37 @@ def test_resume_recognises_current_native_step_seven_artifact(
     assert "content-run" not in calls
 
 
-def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
+def test_resume_refuses_prior_standard_profile_without_live_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    _write_prior_pipeline(
+        project_file,
+        output_dir,
+        Path(f"{output_dir}-evidence-pack.zip"),
+        profile=STANDARD_PIPELINE_PROFILE,
+        final_status="failed",
+        step_statuses={"PIPELINE-STEP-002": "noop"},
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Prior pipeline metadata uses an unsupported project profile",
+    ):
+        run_project_pipeline(
+            project_file,
+            NORMAL_PIPELINE_PROFILE,
+            resume=True,
+            clock=lambda: FIXED_TIME,
+        )
+
+
+def test_deep_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4148,7 +3705,7 @@ def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
         project_file,
         output_dir,
         Path(f"{output_dir}-evidence-pack.zip"),
-        profile=STANDARD_PIPELINE_PROFILE,
+        profile=DEEP_PIPELINE_PROFILE,
         final_status="failed",
         step_statuses={
             "PIPELINE-STEP-002": "noop",
@@ -4168,12 +3725,15 @@ def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
                 "PIPELINE-STEP-001",
                 "PIPELINE-STEP-002",
                 "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
                 "PIPELINE-STEP-004",
                 "PIPELINE-STEP-005",
                 "PIPELINE-STEP-006",
                 "PIPELINE-STEP-007",
                 "PIPELINE-STEP-008",
                 "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
                 "PIPELINE-STEP-010",
                 "PIPELINE-STEP-011",
                 "PIPELINE-STEP-012",
@@ -4187,7 +3747,7 @@ def test_resume_accepts_prior_tcp_policy_noops_without_nmap_artefacts(
 
     result = run_project_pipeline(
         project_file,
-        STANDARD_PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         resume=True,
         clock=lambda: FIXED_TIME,
     )
@@ -4216,7 +3776,7 @@ def test_resume_refuses_target_and_content_plan_mismatches(
         lambda: _doctor(),
     )
     with pytest.raises(ValueError, match="does not match the existing recon manifest"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, resume=True)
 
     _write_resume_evidence(
         output_dir,
@@ -4227,43 +3787,20 @@ def test_resume_refuses_target_and_content_plan_mismatches(
             "curl-headers-followup-10.10.10.10-80-manual.txt",
         ],
     )
-    plan_path = _write_plan_file(output_dir)
+    plan_path = _write_plan_file(output_dir, profile=DEEP_BOUNDED_CORE_PROFILE)
     project = json.loads(project_file.read_text(encoding="utf-8"))
     monkeypatch.setattr(
         "bugslyce.project_pipeline.load_content_discovery_plan",
         lambda path: SimpleNamespace(
             target="192.0.2.10",
-            profile="lab-root-tiny",
+            profile=DEEP_BOUNDED_CORE_PROFILE,
             input_dir=str(output_dir),
             output_dir=str(plan_path.parent),
             scope_file=project["scope_file"],
         ),
     )
     with pytest.raises(ValueError, match="Existing content plan does not match"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
-
-
-def test_resume_refuses_prior_pipeline_profile_mismatch(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    export_path = Path(f"{output_dir}-evidence-pack.zip")
-    _write_prior_pipeline(project_file, output_dir, export_path)
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_doctor_report",
-        lambda: _doctor(),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="Prior pipeline metadata profile does not match this run",
-    ):
-        run_project_pipeline(
-            project_file,
-            STANDARD_PIPELINE_PROFILE,
-            resume=True,
-        )
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, resume=True)
 
 
 def test_resume_refuses_incoherent_or_missing_manifest_artifacts(
@@ -4277,7 +3814,7 @@ def test_resume_refuses_incoherent_or_missing_manifest_artifacts(
     )
     _write_resume_evidence(output_dir, ["nmap-services-all.txt"])
     with pytest.raises(ValueError, match="not a coherent pipeline prefix"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, resume=True)
 
     manifest = {
         "schema_version": "1.0",
@@ -4289,7 +3826,7 @@ def test_resume_refuses_incoherent_or_missing_manifest_artifacts(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="references missing artifact"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, resume=True)
 
 
 def test_resume_rejects_manifest_artifact_path_escape(
@@ -4315,85 +3852,7 @@ def test_resume_rejects_manifest_artifact_path_escape(
     )
 
     with pytest.raises(ValueError, match="escapes the project output directory"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
-
-
-def test_resume_export_requires_verified_completion_and_can_be_skipped(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    export_path = Path(f"{output_dir}-evidence-pack.zip")
-    export_path.write_bytes(b"existing")
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.build_doctor_report",
-        lambda: _doctor(),
-    )
-    with pytest.raises(ValueError, match="completed prior pipeline cannot be verified"):
-        run_project_pipeline(project_file, PIPELINE_PROFILE, resume=True)
-
-    artifact_names = [
-        "nmap-allports.txt",
-        "nmap-services-all.txt",
-        "curl-headers-10.10.10.10-80.txt",
-        "curl-headers-followup-10.10.10.10-80-manual.txt",
-        "gobuster-tiny-10.10.10.10-80-root.txt",
-        "curl-headers-content-followup-10.10.10.10-80-admin.txt",
-        "body-fetch-10.10.10.10-80-admin.html",
-    ]
-    _write_resume_evidence(output_dir, artifact_names)
-    plan_path = _write_plan_file(output_dir)
-    _patch_plan_loader(monkeypatch, project_file, output_dir, plan_path)
-    _write_prior_pipeline(project_file, output_dir, export_path)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    progress: list[str] = []
-
-    result = run_project_pipeline(
-        project_file,
-        PIPELINE_PROFILE,
-        resume=True,
-        clock=lambda: FIXED_TIME,
-        progress_callback=progress.append,
-    )
-
-    assert calls == [
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-        "status",
-        "status-write",
-        "runbook",
-        "runbook-write",
-    ]
-    steps = {step.step_id: step for step in result.steps}
-    assert steps["PIPELINE-STEP-012"].status == "skipped_existing"
-    assert steps["PIPELINE-STEP-012"].message == (
-        "Existing completed evidence pack detected; export skipped during resume."
-    )
-    assert result.export_path == str(export_path)
-    assert result.final_status == "completed"
-    assert (
-        "[13/13] evidence pack export skipped.\n"
-        "Existing completed evidence pack detected; export skipped during resume."
-        in progress
-    )
-    assert steps["PIPELINE-STEP-005"].message.startswith(
-        "Existing evidence-derived path follow-up artefacts"
-    )
-    assert steps["PIPELINE-STEP-006"].message.startswith(
-        "Existing bounded content plan"
-    )
-    assert steps["PIPELINE-STEP-007"].message.startswith(
-        "Existing bounded content discovery output"
-    )
-    assert steps["PIPELINE-STEP-008"].message.startswith(
-        "Existing content-result follow-up artefacts"
-    )
-    assert steps["PIPELINE-STEP-009"].message.startswith(
-        "Existing selective body-fetch artefacts"
-    )
+        run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, resume=True)
 
 
 def test_resumed_required_failure_stops_later_steps(
@@ -4417,7 +3876,7 @@ def test_resumed_required_failure_stops_later_steps(
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(
             project_file,
-            PIPELINE_PROFILE,
+            NORMAL_PIPELINE_PROFILE,
             resume=True,
             clock=lambda: FIXED_TIME,
         )
@@ -4450,7 +3909,7 @@ def test_pipeline_stops_on_required_failure_and_records_pending_later_steps(
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(
             project_file,
-            PIPELINE_PROFILE,
+            NORMAL_PIPELINE_PROFILE,
             clock=lambda: FIXED_TIME,
         )
 
@@ -4789,37 +4248,6 @@ def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(
     assert "bugslyce recon content-plan" in next_result.recommended_action.command_preview
 
 
-@pytest.mark.parametrize("profile", (PIPELINE_PROFILE, STANDARD_PIPELINE_PROFILE))
-def test_non_deep_content_failure_remains_fail_fast(
-    tmp_path: Path,
-    monkeypatch,
-    profile: str,
-) -> None:
-    project_file, _output_dir = _fresh_project(tmp_path)
-    calls: list[str] = []
-    _patch_controlled_failure_runners(
-        monkeypatch,
-        calls,
-        failures={"PIPELINE-STEP-007": "controlled content failure"},
-    )
-
-    with pytest.raises(
-        ProjectPipelineFailed,
-        match="controlled content failure",
-    ) as exc_info:
-        run_project_pipeline(project_file, profile, clock=lambda: FIXED_TIME)
-
-    result = exc_info.value.result
-    assert result.final_status == "failed"
-    assert calls[-1] == "PIPELINE-STEP-007"
-    assert all(
-        step.status == "pending"
-        for step in result.steps
-        if step.step_id
-        in {"PIPELINE-STEP-008", "PIPELINE-STEP-009", "PIPELINE-STEP-010"}
-    )
-
-
 @pytest.mark.parametrize(
     ("failed_step_id", "diagnostic"),
     (
@@ -5078,7 +4506,7 @@ def _tcp_skip_project_runtime(
     }
     runtime = build_bug_bounty_project_runtime(
         project,
-        STANDARD_PIPELINE_PROFILE,
+        DEEP_PIPELINE_PROFILE,
         capabilities=capabilities,
         ipv4_resolver=lambda _host, _port: ("192.0.2.10",),
         process_runner=process,
@@ -5238,11 +4666,11 @@ def _structured_doctor(
 
 
 def _content_plan_suffix_for_test(profile: str) -> str:
-    if profile == PIPELINE_PROFILE:
-        return "tiny"
     if profile == DEEP_PIPELINE_PROFILE:
         return "deep-bounded-core"
-    return "standard-bounded-core"
+    if profile == STANDARD_PIPELINE_PROFILE:
+        return "standard-bounded-core"
+    return "tiny"
 
 
 def _patch_successful_pipeline(
@@ -5445,6 +4873,8 @@ def _write_resume_evidence(
         artifact_type = "nmap" if name.startswith("nmap-") else "http_headers"
         if name.startswith("gobuster"):
             artifact_type = "gobuster"
+        elif name.startswith("content-discovery-internal-"):
+            artifact_type = "content_discovery_internal"
         elif name.startswith("body-fetch-"):
             artifact_type = "html"
         artifacts.append({"type": artifact_type, "file": name})
@@ -5520,7 +4950,7 @@ def _write_prior_pipeline(
     output_dir: Path,
     export_path: Path,
     *,
-    profile: str = PIPELINE_PROFILE,
+    profile: str = NORMAL_PIPELINE_PROFILE,
     final_status: str = "completed",
     step_statuses: dict[str, str] | None = None,
 ) -> None:
@@ -5783,7 +5213,7 @@ def test_fresh_lab_pipeline_inserts_smb_share_step_after_service_enrichment(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
     )
 
@@ -5839,7 +5269,7 @@ def test_smb_pipeline_no_evidence_is_noop_and_http_collection_continues(
 
     result = run_project_pipeline(
         project_file,
-        PIPELINE_PROFILE,
+        NORMAL_PIPELINE_PROFILE,
         clock=lambda: FIXED_TIME,
     )
 
@@ -5947,7 +5377,7 @@ def test_pipeline_http_metadata_preserves_hostname_for_parenthesized_nmap_peer(
         "published_export_path": None,
         "target": "blog.thm",
         "resume": True,
-        "profile": PIPELINE_PROFILE,
+        "profile": NORMAL_PIPELINE_PROFILE,
         "deep_outputs": DeepPipelineOutputs(),
         "project_runtime": None,
     }
@@ -5963,86 +5393,6 @@ def test_pipeline_http_metadata_preserves_hostname_for_parenthesized_nmap_peer(
         "http://blog.thm/robots.txt",
         "http://blog.thm/",
     ]
-
-
-def test_legacy_resume_does_not_acquire_new_smb_network_step(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import bugslyce.project_pipeline as pipeline_module
-
-    project_file, output_dir = _fresh_project(tmp_path)
-    export_path = Path(f"{output_dir}-evidence-pack.zip")
-
-    _write_resume_evidence(
-        output_dir,
-        [
-            "nmap-allports.txt",
-            "nmap-services-all.txt",
-            "curl-headers-10.10.10.10-80.txt",
-            "curl-headers-followup-10.10.10.10-80-manual.txt",
-            "gobuster-tiny-10.10.10.10-80-root.txt",
-            "curl-headers-content-followup-10.10.10.10-80-admin.txt",
-            "body-fetch-10.10.10.10-80-admin.html",
-        ],
-    )
-    plan_path = _write_plan_file(output_dir)
-    _patch_plan_loader(
-        monkeypatch,
-        project_file,
-        output_dir,
-        plan_path,
-    )
-
-    export_path.write_bytes(b"legacy completed evidence pack")
-
-    _write_prior_pipeline(
-        project_file,
-        output_dir,
-        export_path,
-        final_status="completed",
-        step_statuses={
-            "PIPELINE-STEP-002": "completed",
-            "PIPELINE-STEP-003": "completed",
-            "PIPELINE-STEP-004": "completed",
-            "PIPELINE-STEP-005": "completed",
-            "PIPELINE-STEP-006": "completed",
-            "PIPELINE-STEP-007": "completed",
-            "PIPELINE-STEP-008": "completed",
-            "PIPELINE-STEP-009": "completed",
-            "PIPELINE-STEP-010": "completed",
-            "PIPELINE-STEP-011": "completed",
-            "PIPELINE-STEP-012": "completed",
-        },
-    )
-
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-
-    def forbidden_smb(*_args, **_kwargs):
-        raise AssertionError(
-            "Legacy resume attempted newly introduced SMB traffic."
-        )
-
-    monkeypatch.setattr(
-        pipeline_module,
-        "collect_smb_share_evidence",
-        forbidden_smb,
-        raising=False,
-    )
-
-    result = run_project_pipeline(
-        project_file,
-        PIPELINE_PROFILE,
-        resume=True,
-        clock=lambda: FIXED_TIME,
-    )
-
-    steps = {step.step_id: step for step in result.steps}
-
-    assert steps["PIPELINE-STEP-003S"].status == "skipped_existing"
-    assert "SMB" in steps["PIPELINE-STEP-003S"].message
-    assert "resume" in steps["PIPELINE-STEP-003S"].message.lower()
 
 
 def test_bug_bounty_pipeline_does_not_gain_smb_live_authority(
@@ -6086,7 +5436,7 @@ def test_bug_bounty_pipeline_does_not_gain_smb_live_authority(
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(
             project_file,
-            STANDARD_PIPELINE_PROFILE,
+            DEEP_PIPELINE_PROFILE,
             clock=lambda: FIXED_TIME,
         )
 

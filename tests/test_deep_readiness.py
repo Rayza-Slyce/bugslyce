@@ -287,9 +287,14 @@ def test_deep_bounded_remains_unsupported_by_static_recon_planner(
         build_recon_plan("10.10.10.10", scope_file, tmp_path / "output", "deep-bounded")
 
 
-def test_deep_is_available_and_quick_standard_mappings_are_unchanged() -> None:
-    assert get_recon_mode("quick").internal_profile == QUICK_RECON_PROFILE
-    assert get_recon_mode("standard").internal_profile == STANDARD_RECON_PROFILE
-    assert get_recon_mode("deep").internal_profile == "deep-bounded"
+def test_single_operator_recon_mode_invariant() -> None:
+    surviving = get_recon_mode("deep")
+    assert surviving.display_name == "Reconnaissance"
+    assert surviving.internal_profile == "deep-bounded"
     assert is_recon_mode_available("deep") is True
-    assert resolve_executable_profile("deep") == "deep-bounded"
+    for obsolete_mode_id in ("quick", "standard"):
+        try:
+            get_recon_mode(obsolete_mode_id)
+        except ValueError:
+            continue
+        raise AssertionError(f"obsolete mode resolved: {obsolete_mode_id}")

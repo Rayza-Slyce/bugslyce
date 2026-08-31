@@ -130,25 +130,8 @@ DEEP_RECON_PROFILE_CONTRACT = DeepReconProfileContract(
 
 RECON_MODES: tuple[ReconMode, ...] = (
     ReconMode(
-        mode_id=QUICK_MODE_ID,
-        display_name="Quick Recon",
-        internal_profile=QUICK_RECON_PROFILE,
-        status="implemented",
-        purpose="fast first-pass signal finding",
-    ),
-    ReconMode(
-        mode_id=STANDARD_MODE_ID,
-        display_name="Standard Recon",
-        internal_profile=STANDARD_RECON_PROFILE,
-        status="implemented",
-        purpose=(
-            "bounded evidence collection with offline interpretation of "
-            "already-collected artefacts"
-        ),
-    ),
-    ReconMode(
         mode_id=DEEP_MODE_ID,
-        display_name="Deep Recon",
+        display_name="Reconnaissance",
         internal_profile=DEEP_RECON_PROFILE,
         status="implemented",
         purpose=(

@@ -29,12 +29,10 @@ Executable recon readiness also requires:
 
 | Requirement | Blocks |
 | --- | --- |
-| `nmap` | Quick, Standard and Deep Recon |
-| `curl` | Quick, Standard and Deep Recon |
-| `gobuster` | Quick, Standard and Deep Recon |
-| bundled `lab-root-tiny` wordlist | Quick Recon |
-| bundled `standard-bounded-core` wordlist | Standard Recon |
-| bundled `deep-bounded-core` wordlist | Deep Recon |
+| `nmap` | Reconnaissance |
+| `curl` | Reconnaissance |
+| `gobuster` | Reconnaissance and retained runtime-less legacy paths |
+| bundled `deep-bounded-core` wordlist | Reconnaissance |
 
 Manual Setup Only is governed by core readiness. It can create project metadata
 and `scope.md` even when live-recon tools are missing.
@@ -129,14 +127,14 @@ Readiness terms:
 | Term | Meaning |
 | --- | --- |
 | Core ready | Local BugSlyce project and inspection features are usable. |
-| Recon ready | All executable v1 recon modes have their required tools and bundled resources. |
+| Recon ready | The Reconnaissance workflow has its required tools and bundled resources. |
 | Overall ready | Core readiness and recon readiness are both ready. |
 
 Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | All executable v1 recon modes are ready. |
+| `0` | Reconnaissance is ready. |
 | `2` | One or more executable recon requirements are blocked. |
 
 Exit code `2` is not a crash. Read the External tools, Bundled resources and

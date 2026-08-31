@@ -217,13 +217,11 @@ from bugslyce.triage.workflow_leads import build_grouped_workflow_leads
 
 
 PIPELINE_PROFILE = QUICK_RECON_PROFILE
+LEGACY_QUICK_PIPELINE_PROFILE = PIPELINE_PROFILE
 STANDARD_PIPELINE_PROFILE = STANDARD_RECON_PROFILE
 DEEP_PIPELINE_PROFILE = DEEP_RECON_PROFILE
-SUPPORTED_PIPELINE_PROFILES = (
-    PIPELINE_PROFILE,
-    STANDARD_PIPELINE_PROFILE,
-    DEEP_PIPELINE_PROFILE,
-)
+NORMAL_PIPELINE_PROFILE = DEEP_PIPELINE_PROFILE
+SUPPORTED_PIPELINE_PROFILES = (NORMAL_PIPELINE_PROFILE,)
 PIPELINE_JSON_FILENAME = "project_pipeline.json"
 PIPELINE_MARKDOWN_FILENAME = "project_pipeline.md"
 PARTIAL_DEEP_RESUME_MESSAGE = (
@@ -479,10 +477,10 @@ def enforce_project_execution_policy(
 
     if getattr(project, "engagement_context", None) != BUG_BOUNTY_CONTEXT:
         return None
-    if profile not in {STANDARD_PIPELINE_PROFILE, DEEP_PIPELINE_PROFILE}:
+    if profile != NORMAL_PIPELINE_PROFILE:
         raise ValueError(
             "Bug-bounty live execution is supported only through the policy-aware "
-            "Standard and Deep project pipeline."
+            "Reconnaissance project pipeline."
         )
     return build_bug_bounty_project_runtime(project, profile)
 
@@ -1181,7 +1179,7 @@ def _validate_readiness(
 
 
 def _doctor_mode_for_pipeline_profile(profile: str) -> str:
-    if profile == PIPELINE_PROFILE:
+    if profile == LEGACY_QUICK_PIPELINE_PROFILE:
         return "quick"
     if profile == STANDARD_PIPELINE_PROFILE:
         return "standard"
