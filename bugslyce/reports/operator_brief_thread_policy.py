@@ -33,6 +33,7 @@ class OperatorBriefThreadSpecificity(str, Enum):
 
 class OperatorBriefThreadEvidenceBasis(str, Enum):
     DIRECT = "direct"
+    DOCUMENTED = "documented"
     DERIVED = "derived"
     LEGACY = "legacy"
 
@@ -40,6 +41,8 @@ class OperatorBriefThreadEvidenceBasis(str, Enum):
 class OperatorBriefAttentionSignal(str, Enum):
     SPECIFIC_DIRECT = "specific_direct"
     GENERAL_DIRECT = "general_direct"
+    SPECIFIC_DOCUMENTED = "specific_documented"
+    GENERAL_DOCUMENTED = "general_documented"
     SPECIFIC_LEGACY = "specific_legacy"
     GENERAL_LEGACY = "general_legacy"
     SPECIFIC_DERIVED = "specific_derived"
@@ -55,6 +58,7 @@ class OperatorBriefThreadPolicyReason(str, Enum):
     SPECIFIC_EVIDENCE = "specific_evidence"
     GENERAL_EVIDENCE = "general_evidence"
     DIRECT_EVIDENCE = "direct_evidence"
+    DOCUMENTED_EVIDENCE = "documented_evidence"
     DERIVED_CONTEXT = "derived_context"
     LEGACY_MATERIAL = "legacy_material"
     NORMALIZED_REPLACEMENT = "normalized_replacement"
@@ -305,7 +309,8 @@ def _rank_key(
     }[subject.specificity]
     basis = {
         OperatorBriefThreadEvidenceBasis.DIRECT: 0,
-        OperatorBriefThreadEvidenceBasis.LEGACY: 1,
+        OperatorBriefThreadEvidenceBasis.DOCUMENTED: 1,
+        OperatorBriefThreadEvidenceBasis.LEGACY: 2,
     }[subject.evidence_basis]
     assert subject.semantic_subject_key is not None
     return (
@@ -333,6 +338,9 @@ def _base_reasons(
             ),
             OperatorBriefThreadEvidenceBasis.DERIVED: (
                 OperatorBriefThreadPolicyReason.DERIVED_CONTEXT
+            ),
+            OperatorBriefThreadEvidenceBasis.DOCUMENTED: (
+                OperatorBriefThreadPolicyReason.DOCUMENTED_EVIDENCE
             ),
             OperatorBriefThreadEvidenceBasis.LEGACY: (
                 OperatorBriefThreadPolicyReason.LEGACY_MATERIAL

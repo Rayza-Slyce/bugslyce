@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.reports.operator_brief import (
     OperatorBriefConflict,
     OperatorBriefCoverageLimitation,
@@ -13,6 +14,10 @@ from bugslyce.reports.operator_brief import (
     OperatorBriefSubjectKind,
 )
 from bugslyce.reports.operator_brief_assembly import OperatorBriefComposition
+from bugslyce.reports.operator_brief_application_service import (
+    OperatorBriefApplicationServiceSubject,
+    compose_operator_brief_application_service,
+)
 from bugslyce.reports.operator_brief_http import OperatorBriefHttpSubject
 from bugslyce.reports.operator_brief_network import OperatorBriefNetworkSubject
 from bugslyce.reports.operator_brief_source_native import (
@@ -49,6 +54,7 @@ class OperatorBriefInvestigationSubject:
     """One canonical policy subject prepared for a later HTML renderer."""
 
     policy_key: str
+    display_title: str
     semantic_subject_key: str | None
     subject_kind: OperatorBriefSubjectKind
     materiality: OperatorBriefThreadMateriality
@@ -85,18 +91,20 @@ _OperatorBriefOwner = (
     | OperatorBriefNetworkSubject
     | OperatorBriefWebContextSubject
     | OperatorBriefSourceNativeSubject
+    | OperatorBriefApplicationServiceSubject
 )
 
 
 def _decision_by_policy_key(
-    composition: OperatorBriefComposition,
+    policy_subjects: tuple[OperatorBriefThreadPolicySubject, ...],
+    decisions_input: tuple[OperatorBriefThreadPolicyDecision, ...],
 ) -> dict[str, OperatorBriefThreadPolicyDecision]:
     decisions: dict[str, OperatorBriefThreadPolicyDecision] = {}
-    for decision in composition.thread_policy_result.decisions:
+    for decision in decisions_input:
         if decision.policy_key in decisions:
             raise ValueError("Operator Brief presentation contains duplicate decisions.")
         decisions[decision.policy_key] = decision
-    subject_keys = {subject.policy_key for subject in composition.policy_subjects}
+    subject_keys = {subject.policy_key for subject in policy_subjects}
     if set(decisions) != subject_keys:
         raise ValueError("Operator Brief presentation decisions are incomplete.")
     return decisions
@@ -104,12 +112,25 @@ def _decision_by_policy_key(
 
 def _owner_by_policy_key(
     composition: OperatorBriefComposition,
+    application_subjects: tuple[OperatorBriefApplicationServiceSubject, ...] = (),
 ) -> dict[str, tuple[str, _OperatorBriefOwner]]:
     """Resolve every policy subject to one owner through canonical identities."""
 
     policy_subjects_by_semantic_key: dict[str, OperatorBriefThreadPolicySubject] = {}
     policy_subjects_by_key: dict[str, OperatorBriefThreadPolicySubject] = {}
     for subject in composition.policy_subjects:
+        if subject.policy_key in policy_subjects_by_key:
+            raise ValueError("Operator Brief presentation contains duplicate policy subjects.")
+        policy_subjects_by_key[subject.policy_key] = subject
+        if subject.semantic_subject_key is not None:
+            if subject.semantic_subject_key in policy_subjects_by_semantic_key:
+                raise ValueError(
+                    "Operator Brief presentation contains duplicate semantic subjects."
+                )
+            policy_subjects_by_semantic_key[subject.semantic_subject_key] = subject
+
+    for owner in application_subjects:
+        subject = owner.policy_subject
         if subject.policy_key in policy_subjects_by_key:
             raise ValueError("Operator Brief presentation contains duplicate policy subjects.")
         policy_subjects_by_key[subject.policy_key] = subject
@@ -149,6 +170,12 @@ def _owner_by_policy_key(
             raise ValueError("Operator Brief presentation source-native owner is missing.")
         _add_owner(resolved, subject.policy_key, "source_native", owner)
 
+    for owner in application_subjects:
+        subject = policy_subjects_by_key.get(owner.policy_subject.policy_key)
+        if subject != owner.policy_subject:
+            raise ValueError("Operator Brief application/service owner is missing.")
+        _add_owner(resolved, subject.policy_key, "application_service", owner)
+
     if set(resolved) != set(policy_subjects_by_key):
         raise ValueError("Operator Brief presentation subjects do not all have owners.")
     return resolved
@@ -181,16 +208,30 @@ def _source_native_detail(
 
 def build_operator_brief_html_presentation(
     composition: OperatorBriefComposition,
+    *,
+    application_service_model: ApplicationServiceModel | None = None,
 ) -> OperatorBriefHtmlPresentation:
     """Project one authoritative composition without replaying semantic assembly."""
 
-    decisions = _decision_by_policy_key(composition)
-    owners = _owner_by_policy_key(composition)
+    if application_service_model is None:
+        application_subjects: tuple[OperatorBriefApplicationServiceSubject, ...] = ()
+        policy_subjects = composition.policy_subjects
+        policy_decisions = composition.thread_policy_result.decisions
+    else:
+        application_adaptation = compose_operator_brief_application_service(
+            application_service_model,
+            operator_brief_composition=composition,
+        )
+        application_subjects = application_adaptation.subjects
+        policy_subjects = application_adaptation.thread_policy_result.subjects
+        policy_decisions = application_adaptation.thread_policy_result.decisions
+    decisions = _decision_by_policy_key(policy_subjects, policy_decisions)
+    owners = _owner_by_policy_key(composition, application_subjects)
     ranked_subjects = tuple(
         sorted(
             (
                 subject
-                for subject in composition.policy_subjects
+                for subject in policy_subjects
                 if decisions[subject.policy_key].rank is not None
             ),
             key=lambda subject: decisions[subject.policy_key].rank,
@@ -198,7 +239,7 @@ def build_operator_brief_html_presentation(
     )
     unranked_subjects = tuple(
         subject
-        for subject in composition.policy_subjects
+        for subject in policy_subjects
         if decisions[subject.policy_key].rank is None
     )
 
@@ -218,6 +259,11 @@ def _presentation_subject(
     family, owner = owner_data
     return OperatorBriefInvestigationSubject(
         policy_key=subject.policy_key,
+        display_title=(
+            owner.title
+            if isinstance(owner, OperatorBriefApplicationServiceSubject)
+            else (subject.facts[0].label if subject.facts else subject.subject_kind.value)
+        ),
         semantic_subject_key=subject.semantic_subject_key,
         subject_kind=subject.subject_kind,
         materiality=subject.materiality,

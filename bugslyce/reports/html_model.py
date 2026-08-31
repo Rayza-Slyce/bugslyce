@@ -28,6 +28,7 @@ from bugslyce.recon.collection_confidence import (
     CollectionConfidenceNotice,
     build_collection_confidence_notices_from_project,
 )
+from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.deep_http_fingerprint_summary import (
     DeepHttpFingerprintSummary,
     build_deep_http_fingerprint_summary,
@@ -189,9 +190,14 @@ class HtmlReportModel:
     ) = None
     operator_brief_composition: OperatorBriefComposition | None = None
     operator_brief_presentation: OperatorBriefHtmlPresentation | None = None
+    application_service_model: ApplicationServiceModel | None = None
 
 
-def build_html_report_model(input_dir: Path) -> HtmlReportModel:
+def build_html_report_model(
+    input_dir: Path,
+    *,
+    application_service_model: ApplicationServiceModel | None = None,
+) -> HtmlReportModel:
     """Load current local artefacts and reconstruct existing deterministic models."""
 
     root = input_dir.expanduser()
@@ -200,13 +206,23 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
     if not root.is_dir():
         raise ValueError(f"input path is not a directory: {root}")
     root = root.resolve()
+    if application_service_model is not None and not isinstance(
+        application_service_model, ApplicationServiceModel
+    ):
+        raise TypeError("HTML report requires a typed application/service model")
 
     operator_brief_composition = load_operator_brief_composition_artifact(root)
-    operator_brief_presentation = (
-        build_operator_brief_html_presentation(operator_brief_composition)
-        if operator_brief_composition is not None
-        else None
-    )
+    operator_brief_presentation = None
+    if operator_brief_composition is not None:
+        if application_service_model is None:
+            operator_brief_presentation = build_operator_brief_html_presentation(
+                operator_brief_composition
+            )
+        else:
+            operator_brief_presentation = build_operator_brief_html_presentation(
+                operator_brief_composition,
+                application_service_model=application_service_model,
+            )
     payload = _read_json_object(root, "project_state.json", required=True)
     project_state, candidates = _project_state_from_payload(payload, root)
     _validate_optional_structured_objects(root)
@@ -335,6 +351,7 @@ def build_html_report_model(input_dir: Path) -> HtmlReportModel:
         initial_retained_javascript_routes=initial_retained_routes,
         operator_brief_composition=operator_brief_composition,
         operator_brief_presentation=operator_brief_presentation,
+        application_service_model=application_service_model,
     )
 
 

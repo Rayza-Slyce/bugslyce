@@ -255,7 +255,7 @@ def test_top_level_operator_brief_remains_a_packed_closure_member(
     root = _project(tmp_path)
     packed, closure, members = _export(root, _brief(), tmp_path / "pack.zip")
 
-    assert packed["schema_version"] == 2
+    assert packed["schema_version"] == 3
     assert OPERATOR_BRIEF_FILENAME in members
     assert (
         "operator_brief",

@@ -85,7 +85,11 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     html = written.read_text(encoding="utf-8")
     assert written == output
     assert "BugSlyce Evidence Report" in html
-    assert "Reconnaissance review leads are observations, not confirmed vulnerabilities." in html
+    assert (
+        "This report distinguishes direct observations, documentation statements, "
+        "and deterministic relationships; none is a confirmed vulnerability."
+        in html
+    )
     assert "Operator summary" in html
     assert "Manual review leads" in html
     assert "Routes and provenance" in html

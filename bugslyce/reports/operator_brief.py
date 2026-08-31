@@ -18,8 +18,27 @@ from bugslyce.reports.analysis_coverage import (
 
 
 OPERATOR_BRIEF_FILENAME = "operator_brief.json"
-_OPERATOR_BRIEF_SCHEMA_VERSION = 2
+_OPERATOR_BRIEF_SCHEMA_VERSION = 3
 _OPERATOR_BRIEF_GENERATED_BY = "bugslyce.operator_brief"
+
+_SCHEMA_3_ONLY_SUBJECT_KINDS = frozenset(
+    {
+        "documented_application_service",
+        "documented_realtime_service",
+        "documentation_context",
+    }
+)
+_SCHEMA_3_ONLY_FACT_KINDS = frozenset(
+    {
+        "documented_service",
+        "documented_realtime_endpoint",
+        "documented_http_operation",
+        "documented_requirement",
+        "service_origin_correspondence",
+    }
+)
+_SCHEMA_3_ONLY_SEMANTIC_CLASSES = frozenset({"documented"})
+_SCHEMA_3_ONLY_FACT_ROLES = frozenset({"documentation_evidence"})
 
 PRIMARY_THREAD = "primary_thread"
 SUPPORTING_CONTEXT = "supporting_context"
@@ -38,11 +57,13 @@ _VALID_DISPOSITIONS = frozenset(
 
 class OperatorBriefSemanticClass(str, Enum):
     OBSERVED = "observed"
+    DOCUMENTED = "documented"
     DERIVED = "derived"
 
 
 class OperatorBriefFactRole(str, Enum):
     DIRECT_EVIDENCE = "direct_evidence"
+    DOCUMENTATION_EVIDENCE = "documentation_evidence"
     RELATIONSHIP_CONTEXT = "relationship_context"
 
 
@@ -58,6 +79,11 @@ class OperatorBriefFactKind(str, Enum):
     SOURCE_ROBOTS_CLUE = "source_robots_clue"
     SMB_SHARE = "smb_share"
     SERVICE = "service"
+    DOCUMENTED_SERVICE = "documented_service"
+    DOCUMENTED_REALTIME_ENDPOINT = "documented_realtime_endpoint"
+    DOCUMENTED_HTTP_OPERATION = "documented_http_operation"
+    DOCUMENTED_REQUIREMENT = "documented_requirement"
+    SERVICE_ORIGIN_CORRESPONDENCE = "service_origin_correspondence"
 
 
 class OperatorBriefSubjectKind(str, Enum):
@@ -66,6 +92,9 @@ class OperatorBriefSubjectKind(str, Enum):
     CONTENT_SURFACE = "content_surface"
     SMB_SURFACE = "smb_surface"
     SERVICE_SURFACE = "service_surface"
+    DOCUMENTED_APPLICATION_SERVICE = "documented_application_service"
+    DOCUMENTED_REALTIME_SERVICE = "documented_realtime_service"
+    DOCUMENTATION_CONTEXT = "documentation_context"
     LEGACY_CANONICAL_LEAD = "legacy_canonical_lead"
 
 
@@ -151,6 +180,39 @@ class OperatorBriefFact:
             and self.semantic_class is not OperatorBriefSemanticClass.OBSERVED
         ):
             raise ValueError("Operator Brief direct evidence requires observed semantics.")
+        if (
+            self.role is OperatorBriefFactRole.DOCUMENTATION_EVIDENCE
+            and self.semantic_class is not OperatorBriefSemanticClass.DOCUMENTED
+        ):
+            raise ValueError(
+                "Operator Brief documentation evidence requires documented semantics."
+            )
+        if (
+            self.semantic_class is OperatorBriefSemanticClass.DOCUMENTED
+            and self.role is not OperatorBriefFactRole.DOCUMENTATION_EVIDENCE
+        ):
+            raise ValueError(
+                "Operator Brief documented semantics require documentation evidence."
+            )
+        if self.kind in {
+            OperatorBriefFactKind.DOCUMENTED_SERVICE,
+            OperatorBriefFactKind.DOCUMENTED_REALTIME_ENDPOINT,
+            OperatorBriefFactKind.DOCUMENTED_HTTP_OPERATION,
+            OperatorBriefFactKind.DOCUMENTED_REQUIREMENT,
+        } and (
+            self.semantic_class is not OperatorBriefSemanticClass.DOCUMENTED
+            or self.role is not OperatorBriefFactRole.DOCUMENTATION_EVIDENCE
+        ):
+            raise ValueError(
+                "Operator Brief documented facts require documented evidence semantics."
+            )
+        if self.kind is OperatorBriefFactKind.SERVICE_ORIGIN_CORRESPONDENCE and (
+            self.semantic_class is not OperatorBriefSemanticClass.DERIVED
+            or self.role is not OperatorBriefFactRole.RELATIONSHIP_CONTEXT
+        ):
+            raise ValueError(
+                "Operator Brief service-origin correspondence requires derived context."
+            )
         if self.kind is OperatorBriefFactKind.RESPONSE_EQUIVALENCE and (
             self.semantic_class is not OperatorBriefSemanticClass.DERIVED
             or self.role is not OperatorBriefFactRole.RELATIONSHIP_CONTEXT
@@ -806,7 +868,7 @@ def load_operator_brief_artifact(
         )
 
     schema_version = payload.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {1, 2}:
+    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
         raise ValueError(
             f"{OPERATOR_BRIEF_FILENAME} has an unsupported schema_version"
         )
@@ -818,10 +880,14 @@ def load_operator_brief_artifact(
 
     if schema_version == 1:
         return _load_schema_v1(payload)
-    return _load_schema_v2(payload)
+    return _load_schema_v2(payload, schema_version=schema_version)
 
 
-def _load_schema_v2(payload: dict[str, object]) -> OperatorBriefView:
+def _load_schema_v2(
+    payload: dict[str, object],
+    *,
+    schema_version: int,
+) -> OperatorBriefView:
     raw_threads = payload.get("threads")
     if not isinstance(raw_threads, list):
         raise ValueError(
@@ -835,7 +901,7 @@ def _load_schema_v2(payload: dict[str, object]) -> OperatorBriefView:
         )
 
     threads = tuple(
-        _thread_v2_from_dict(value, index)
+        _thread_v2_from_dict(value, index, schema_version=schema_version)
         for index, value in enumerate(raw_threads)
     )
     dispositions = tuple(
@@ -1018,6 +1084,8 @@ def _source_ranking_to_dict(
 def _thread_v2_from_dict(
     value: object,
     index: int,
+    *,
+    schema_version: int,
 ) -> OperatorBriefThread:
     label = f"{OPERATOR_BRIEF_FILENAME} threads[{index}]"
     if not isinstance(value, dict):
@@ -1027,8 +1095,10 @@ def _thread_v2_from_dict(
         return OperatorBriefThread(
             thread_id=_text_field(value, "thread_id", label),
             identity_key=_text_field(value, "identity_key", label),
-            subject_kind=_enum_field(
-                value, "subject_kind", label, OperatorBriefSubjectKind
+            subject_kind=_subject_kind_from_dict(
+                value,
+                label,
+                schema_version=schema_version,
             ),
             title=_text_field(value, "title", label),
             rank=_int_field(value, "rank", label),
@@ -1052,7 +1122,11 @@ def _thread_v2_from_dict(
                 label,
             ),
             facts=tuple(
-                _fact_from_dict(item, f"{label}.facts[{item_index}]")
+                _fact_from_dict(
+                    item,
+                    f"{label}.facts[{item_index}]",
+                    schema_version=schema_version,
+                )
                 for item_index, item in enumerate(
                     _list_field(value, "facts", label)
                 )
@@ -1200,9 +1274,61 @@ def _disposition_v1_from_dict(
         raise ValueError(f"{label} is invalid: {exc}") from exc
 
 
-def _fact_from_dict(value: object, label: str) -> OperatorBriefFact:
+def _subject_kind_from_dict(
+    value: dict[str, object],
+    label: str,
+    *,
+    schema_version: int,
+) -> OperatorBriefSubjectKind:
+    subject_kind = _text_field(value, "subject_kind", label)
+    _reject_schema_3_value(
+        schema_version,
+        subject_kind,
+        _SCHEMA_3_ONLY_SUBJECT_KINDS,
+        f"{label}.subject_kind",
+    )
+    return _enum_field(value, "subject_kind", label, OperatorBriefSubjectKind)
+
+
+def _reject_schema_3_value(
+    schema_version: int,
+    value: str,
+    schema_3_values: frozenset[str],
+    label: str,
+) -> None:
+    if schema_version < 3 and value in schema_3_values:
+        raise ValueError(f"{label} requires operator_brief.json schema 3")
+
+
+def _fact_from_dict(
+    value: object,
+    label: str,
+    *,
+    schema_version: int,
+) -> OperatorBriefFact:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
+    kind = _text_field(value, "kind", label)
+    semantic_class = _text_field(value, "semantic_class", label)
+    role = _text_field(value, "role", label)
+    _reject_schema_3_value(
+        schema_version,
+        kind,
+        _SCHEMA_3_ONLY_FACT_KINDS,
+        f"{label}.kind",
+    )
+    _reject_schema_3_value(
+        schema_version,
+        semantic_class,
+        _SCHEMA_3_ONLY_SEMANTIC_CLASSES,
+        f"{label}.semantic_class",
+    )
+    _reject_schema_3_value(
+        schema_version,
+        role,
+        _SCHEMA_3_ONLY_FACT_ROLES,
+        f"{label}.role",
+    )
     return OperatorBriefFact(
         fact_id=_text_field(value, "fact_id", label),
         kind=_enum_field(value, "kind", label, OperatorBriefFactKind),

@@ -448,6 +448,7 @@ def test_policy_signal_vocabulary_is_not_severity_or_probability() -> None:
     assert values == {
         "specific_direct", "general_direct", "specific_legacy",
         "general_legacy", "specific_derived", "general_derived",
+        "specific_documented", "general_documented",
         "evidence_only",
     }
     assert not values & forbidden

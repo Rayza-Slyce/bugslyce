@@ -14,6 +14,7 @@ from typing import get_type_hints
 
 import pytest
 
+from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.reports import html_model
 from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageOutcome,
@@ -463,9 +464,13 @@ def test_future_projection_public_api_is_small_pure_composition_boundary() -> No
     api = _presentation_api()
     function = api.build_operator_brief_html_presentation
 
-    assert tuple(signature(function).parameters) == ("composition",)
+    assert tuple(signature(function).parameters) == (
+        "composition",
+        "application_service_model",
+    )
     assert get_type_hints(function) == {
         "composition": OperatorBriefComposition,
+        "application_service_model": ApplicationServiceModel | None,
         "return": api.OperatorBriefHtmlPresentation,
     }
     assert tuple(api.OperatorBriefHtmlPresentation.__dataclass_fields__) == (

@@ -642,7 +642,7 @@ def test_schema_v2_serialization_is_byte_deterministic(tmp_path: Path) -> None:
     second = api["write_operator_brief_artifact"](tmp_path / "second", brief)
 
     assert first.read_bytes() == second.read_bytes()
-    assert json.loads(first.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(first.read_text(encoding="utf-8"))["schema_version"] == 3
 
 
 def test_schema_v2_write_load_round_trip(tmp_path: Path) -> None:
@@ -660,7 +660,7 @@ def test_persisted_empty_schema_v2_brief_is_authoritative_empty(tmp_path: Path) 
 
     path = api["write_operator_brief_artifact"](tmp_path, brief)
 
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 3
     assert api["load_operator_brief_artifact"](tmp_path) == brief
     assert api["load_operator_brief_artifact"](tmp_path) is not None
 
@@ -1077,6 +1077,32 @@ def test_pre_http_field_schema_v2_non_http_fact_remains_loadable(
 
     assert brief is not None
     assert brief.threads[0].facts[0].kind is api["OperatorBriefFactKind"].SMB_SHARE
+
+
+@pytest.mark.parametrize(
+    "field_path,schema_3_value",
+    (
+        (("threads", 0, "subject_kind"), "documentation_context"),
+        (("threads", 0, "facts", 0, "kind"), "documented_service"),
+        (("threads", 0, "facts", 0, "semantic_class"), "documented"),
+        (("threads", 0, "facts", 0, "role"), "documentation_evidence"),
+    ),
+)
+def test_schema_v2_rejects_schema_3_only_persisted_vocabulary(
+    tmp_path: Path,
+    field_path: tuple[object, ...],
+    schema_3_value: str,
+) -> None:
+    api = _api()
+    payload = _schema_2_non_http_fact_payload()
+    target = payload
+    for part in field_path[:-1]:
+        target = target[part]
+    target[field_path[-1]] = schema_3_value
+    _write_payload(tmp_path, payload)
+
+    with pytest.raises(ValueError, match="schema 3"):
+        api["load_operator_brief_artifact"](tmp_path)
 
 
 def test_pre_http_field_schema_v2_empty_brief_remains_loadable(

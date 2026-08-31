@@ -13,6 +13,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
+from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.deep_source_route_collector import (
     render_deep_source_route_skip_reason,
 )
@@ -118,10 +119,10 @@ def render_html_report(model: HtmlReportModel) -> str:
         '<p class="eyebrow">Offline evidence review</p>'
         '<h1>BugSlyce Evidence Report</h1>'
         f'<p class="project-name">{_h(project.project_name)}</p>'
-        '<p class="disclaimer"><strong>Reconnaissance review leads are observations, '
-        "not confirmed vulnerabilities.</strong> This report presents existing "
-        "BugSlyce evidence and deterministic review models; it does not prove "
-        "exhaustive coverage.</p>"
+        '<p class="disclaimer"><strong>This report distinguishes direct observations, '
+        "documentation statements, and deterministic relationships; none is a "
+        "confirmed vulnerability.</strong> It presents existing BugSlyce evidence "
+        "and review models and does not prove exhaustive coverage.</p>"
         "</header>"
         '<section class="controls" aria-label="Report controls">'
         '<label>Search displayed records<input id="report-search" type="search" '
@@ -141,7 +142,12 @@ def render_html_report(model: HtmlReportModel) -> str:
     )
 
 
-def write_html_report(input_dir: Path, output: Path) -> Path:
+def write_html_report(
+    input_dir: Path,
+    output: Path,
+    *,
+    application_service_model: ApplicationServiceModel | None = None,
+) -> Path:
     """Write only the requested HTML output from an existing local directory."""
 
     output = output.expanduser()
@@ -155,7 +161,14 @@ def write_html_report(input_dir: Path, output: Path) -> Path:
         raise ValueError(f"output parent directory does not exist: {output.parent}")
     if not output.parent.is_dir():
         raise ValueError(f"output parent path is not a directory: {output.parent}")
-    model = build_html_report_model(input_dir)
+    model = (
+        build_html_report_model(input_dir)
+        if application_service_model is None
+        else build_html_report_model(
+            input_dir,
+            application_service_model=application_service_model,
+        )
+    )
     output.write_text(render_html_report(model), encoding="utf-8")
     return output
 
@@ -163,6 +176,8 @@ def write_html_report(input_dir: Path, output: Path) -> Path:
 def write_project_html_report(
     input_dir: Path,
     output: Path | None = None,
+    *,
+    application_service_model: ApplicationServiceModel | None = None,
 ) -> Path:
     """Atomically write the canonical project-local offline HTML report."""
 
@@ -188,7 +203,14 @@ def write_project_html_report(
                 "existing project HTML report output is not recognised as BugSlyce-owned"
             )
 
-    model = build_html_report_model(input_root)
+    model = (
+        build_html_report_model(input_root)
+        if application_service_model is None
+        else build_html_report_model(
+            input_root,
+            application_service_model=application_service_model,
+        )
+    )
     if PROJECT_HTML_REPORT_FILENAME in getattr(model, "available_artefacts", ()):
         model = replace(
             model,
@@ -274,7 +296,26 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
                     _investigation_priorities_section(model),
                 ),
             )
-        if canonical_presentation.investigation_subjects:
+        application_context = tuple(
+            item
+            for item in canonical_presentation.investigation_subjects
+            if item.source_family == "application_service"
+            and item.disposition != "supporting_context"
+        )
+        if application_context:
+            sections.append(
+                (
+                    "documented-application-service-context",
+                    "Documented application and service context",
+                    _documented_application_service_context_section(
+                        application_context
+                    ),
+                )
+            )
+        if any(
+            item.source_family != "application_service"
+            for item in canonical_presentation.investigation_subjects
+        ):
             sections.append(
                 (
                     "technical-investigation-evidence",
@@ -331,14 +372,41 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
 
 
 def _investigation_priorities_section(model: HtmlReportModel) -> str:
+    supporting_by_thread = _application_service_contexts_by_thread(model)
     return _section(
         "investigation-priorities",
         "Investigation priorities",
-        "".join(_operator_brief_thread(thread) for thread in model.operator_brief.threads),
+        "".join(
+            _operator_brief_thread(
+                thread,
+                supporting_by_thread.get(thread.thread_id, ()),
+            )
+            for thread in model.operator_brief.threads
+        ),
     )
 
 
-def _operator_brief_thread(thread: object) -> str:
+def _application_service_contexts_by_thread(
+    model: HtmlReportModel,
+) -> dict[str, tuple[object, ...]]:
+    presentation = model.operator_brief_presentation
+    if presentation is None:
+        return {}
+    grouped: dict[str, list[object]] = {}
+    for item in presentation.investigation_subjects:
+        if (
+            item.source_family == "application_service"
+            and item.disposition == "supporting_context"
+            and item.thread_id
+        ):
+            grouped.setdefault(item.thread_id, []).append(item)
+    return {
+        thread_id: tuple(sorted(values, key=lambda value: value.policy_key))
+        for thread_id, values in grouped.items()
+    }
+
+
+def _operator_brief_thread(thread: object, supporting: tuple[object, ...] = ()) -> str:
     metadata = (
         ("Signal", thread.signal),
         ("Endpoints", ", ".join(thread.endpoints)),
@@ -358,6 +426,7 @@ def _operator_brief_thread(thread: object) -> str:
         f'<p class="searchable"><strong>Next review step:</strong> '
         f'{_h(thread.next_review_step)}</p>'
         f'{_operator_brief_thread_facts(thread.facts)}'
+        f'{_application_service_supporting_context(supporting)}'
         f'{_operator_brief_thread_provenance(thread)}'
         "</article>"
     )
@@ -367,13 +436,34 @@ def _operator_brief_thread_facts(facts: tuple[object, ...]) -> str:
     if not facts:
         return ""
     rows = "".join(
-        f'<li class="searchable">{_h(fact.summary)}{_operator_brief_fact_context(fact)}</li>'
+        f'<li class="searchable">{_truth_badge(fact.semantic_class.value)}'
+        f'{_h(fact.summary)}{_operator_brief_fact_context(fact)}</li>'
         for fact in facts
     )
     return (
-        '<div class="direct-evidence"><p><strong>Direct facts</strong></p><ul>'
+        '<div class="direct-evidence"><p><strong>Evidence and relationship context</strong></p><ul>'
         + rows
         + "</ul></div>"
+    )
+
+
+def _truth_badge(value: str) -> str:
+    label = {
+        "observed": "Observed",
+        "documented": "Documented",
+        "derived": "Derived",
+    }.get(value, _human_label(value))
+    return f'<span class="truth-badge truth-{_a(value)}">{_h(label)}</span>'
+
+
+def _application_service_supporting_context(items: tuple[object, ...]) -> str:
+    if not items:
+        return ""
+    return (
+        '<div class="application-service-context"><p><strong>'
+        'Application/service context</strong></p>'
+        + "".join(_investigation_subject(item) for item in items)
+        + "</div>"
     )
 
 
@@ -403,7 +493,7 @@ def _operator_brief_thread_provenance(thread: object) -> str:
         f'<code>{_h(fact.fact_id)}</code>'
         f'{_investigation_text_values("Evidence IDs", fact.evidence_ids)}'
         f'{_investigation_text_values("Artefact references", fact.artefact_references)}'
-        f'{_investigation_text_values("Source references", tuple(reference.source_id for reference in fact.source_references))}'
+        f'{_investigation_text_values("Source references", tuple(f"{reference.source_kind}:{reference.source_id}" for reference in fact.source_references))}'
         f'{_investigation_text_values("Body SHA-256", (fact.body_sha256,) if fact.body_sha256 else ())}'
         "</li>"
         for fact in thread.facts
@@ -441,6 +531,7 @@ def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
         + "".join(
             _technical_investigation_subject(item)
             for item in presentation.investigation_subjects
+            if item.source_family != "application_service"
         )
     )
     return _section(
@@ -450,8 +541,19 @@ def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
     )
 
 
+def _documented_application_service_context_section(
+    items: tuple[object, ...],
+) -> str:
+    return (
+        '<p class="section-note">Documentation statements and deterministic '
+        "relationships are retained as context. They are not runtime observations "
+        "or confirmed vulnerabilities.</p>"
+        + "".join(_technical_investigation_subject(item) for item in items)
+    )
+
+
 def _technical_investigation_subject(item: object) -> str:
-    label = item.facts[0].label if item.facts else _human_label(item.subject_kind.value)
+    label = item.display_title
     return (
         '<details class="record searchable technical-investigation-subject" '
         f'data-category="{_a(_TECHNICAL_INVESTIGATION_CATEGORY)}" data-status="">'
@@ -460,7 +562,6 @@ def _technical_investigation_subject(item: object) -> str:
 
 
 def _investigation_subject(item: object) -> str:
-    identity = item.semantic_subject_key or item.subject_kind.value
     metadata = (
         ("Disposition", _human_label(item.disposition)),
         ("Subject kind", item.subject_kind.value),
@@ -477,7 +578,7 @@ def _investigation_subject(item: object) -> str:
     return (
         f'<article class="investigation-subject searchable" '
         f'data-policy-key="{_a(item.policy_key)}">'
-        f'<h3>{_h(identity)}</h3>{rank}<dl class="investigation-meta">{fields}</dl>'
+        f'<h3>{_h(item.display_title)}</h3>{rank}<dl class="investigation-meta">{fields}</dl>'
         f'{_investigation_facts(item.facts)}'
         f'{_investigation_conflicts(item.conflicts)}'
         f'{_investigation_coverage(item.coverage_limitations)}'
@@ -492,13 +593,13 @@ def _investigation_facts(facts: tuple[object, ...]) -> str:
         return ""
     rows = "".join(
         "<li>"
-        f'<code>{_h(fact.fact_id)}</code>: {_h(fact.summary)}'
+        f'{_truth_badge(fact.semantic_class.value)}{_h(fact.summary)}'
         f'{_investigation_text_values("Evidence IDs", fact.evidence_ids)}'
         f'{_investigation_text_values("Artefact references", fact.artefact_references)}'
         "</li>"
         for fact in facts
     )
-    return '<div class="direct-evidence"><p><strong>Direct facts</strong></p><ul>' + rows + "</ul></div>"
+    return '<div class="direct-evidence"><p><strong>Evidence and relationship context</strong></p><ul>' + rows + "</ul></div>"
 
 
 def _investigation_conflicts(conflicts: tuple[object, ...]) -> str:
@@ -569,13 +670,28 @@ def _investigation_source_native_detail(detail: object | None) -> str:
 
 def _investigation_provenance(item: object) -> str:
     values = (
+        _investigation_list_values("Policy key", (item.policy_key,)),
+        _investigation_list_values(
+            "Semantic subject key",
+            (item.semantic_subject_key,) if item.semantic_subject_key else (),
+        ),
         _investigation_list_values("Evidence IDs", item.evidence_ids),
         _investigation_list_values("Artefact references", item.artefact_references),
         _investigation_list_values("Source lead IDs", item.source_lead_ids),
     )
-    if not any(values):
-        return ""
-    return '<div class="provenance"><p><strong>Provenance</strong></p><ul>' + "".join(values) + "</ul></div>"
+    fact_rows = "".join(
+        "<li>Fact ID: "
+        f'<code>{_h(fact.fact_id)}</code>'
+        f'{_investigation_text_values("Source references", tuple(f"{reference.source_kind}:{reference.source_id}" for reference in fact.source_references))}'
+        "</li>"
+        for fact in item.facts
+    )
+    return (
+        '<div class="provenance"><p><strong>Provenance</strong></p><ul>'
+        + "".join(values)
+        + fact_rows
+        + "</ul></div>"
+    )
 
 
 def _investigation_list_values(label: str, values: tuple[object, ...]) -> str:
@@ -1953,6 +2069,9 @@ h3 { font-size: 17px; margin: 18px 0 10px; }.section-note, .scope { color: var(-
 .investigation-subject > h3 { margin-top: 0; }.investigation-rank { margin: 0 0 8px; color: var(--accent); font-weight: 700; }
 .investigation-meta { margin: 0; }.direct-evidence, .conflicting-observations, .coverage-limitation, .source-native-detail, .investigation-subject .provenance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .direct-evidence > p, .conflicting-observations > p, .coverage-limitation > p, .source-native-detail > p, .investigation-subject .provenance > p { margin: 0 0 6px; }
+.truth-badge { display: inline-block; margin-right: 7px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: .78rem; font-weight: 700; }
+.truth-observed { color: var(--good); }.truth-documented { color: var(--accent); }.truth-derived { color: var(--muted); }
+.application-service-context { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .conflicting-observations { border-left: 3px solid var(--warning); padding-left: 10px; }.coverage-limitation { color: var(--muted); }
 details { background: var(--panel); border: 1px solid var(--line); margin: 8px 0; } summary { cursor: pointer; font-weight: 700; padding: 11px 13px; }
 details > dl, details > ul { margin: 0; padding: 3px 18px 15px; } dl { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 6px 14px; }
