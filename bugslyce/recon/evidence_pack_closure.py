@@ -20,6 +20,10 @@ from bugslyce.recon.collection_confidence import (
     build_collection_confidence_notices_from_project,
     collection_confidence_command_notice_id,
 )
+from bugslyce.recon.application_service_model_persistence import (
+    APPLICATION_SERVICE_MODEL_FILENAME,
+    load_application_service_model_artifact,
+)
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
     DEEP_RECON_REVIEW_MARKDOWN,
@@ -108,6 +112,9 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "operator_brief_composition_web_context_route",
         "operator_brief_composition_web_context_relationship",
         "operator_brief_composition_source_native_subject",
+        "application_service_model",
+        "application_service_model_a1_relation_support",
+        "application_service_model_a2_assertion_support",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -294,6 +301,14 @@ def discover_evidence_pack_references(
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     references.extend(
+        _application_service_model_references(
+            root,
+            tuple(references),
+            evidence_by_source=evidence_by_source,
+            references_are_portable=False,
+        )
+    )
+    references.extend(
         _operator_brief_composition_references(
             root,
             tuple(references),
@@ -376,6 +391,14 @@ def discover_expected_pack_references(
     references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
+    references.extend(
+        _application_service_model_references(
+            root,
+            tuple(references),
+            evidence_by_source=evidence_by_source,
+            references_are_portable=True,
+        )
+    )
     references.extend(
         _operator_brief_composition_references(
             root,
@@ -1620,6 +1643,121 @@ def _packed_project_evidence_by_source(root: Path) -> dict[str, tuple[str, ...]]
         portable_path: tuple(sorted(evidence_ids))
         for portable_path, evidence_ids in sorted(grouped.items())
     }
+
+
+def _application_service_model_references(
+    root: Path,
+    existing_references: tuple[EvidencePackReference, ...],
+    *,
+    evidence_by_source: dict[str, tuple[str, ...]],
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    model = load_application_service_model_artifact(root)
+    if model is None:
+        return ()
+
+    preferred_paths = _composition_preferred_reference_paths_by_source(
+        root,
+        existing_references,
+    )
+    evidence_sources: dict[str, list[str]] = {}
+    for source_path, evidence_ids in evidence_by_source.items():
+        for evidence_id in evidence_ids:
+            evidence_sources.setdefault(evidence_id, []).append(source_path)
+
+    references: list[EvidencePackReference] = [
+        EvidencePackReference(
+            portable_path=APPLICATION_SERVICE_MODEL_FILENAME,
+            owner_kind="application_service_model",
+            owner_id=APPLICATION_SERVICE_MODEL_FILENAME,
+        )
+    ]
+
+    def add_evidence_references(
+        *,
+        owner_kind: str,
+        owner_id: str,
+        evidence_ids: tuple[str, ...],
+    ) -> None:
+        grouped: dict[str, list[str]] = {}
+        for evidence_id in evidence_ids:
+            sources = evidence_sources.get(evidence_id, [])
+            if len(sources) != 1:
+                raise ValueError(
+                    "application/service model evidence ID does not resolve "
+                    "to exactly one pack-owned source"
+                )
+            grouped.setdefault(sources[0], []).append(evidence_id)
+        for source_path, source_evidence_ids in sorted(grouped.items()):
+            portable_path = (
+                source_path
+                if references_are_portable
+                else preferred_paths.get(
+                    source_path,
+                    _archive_path_for_project_source(source_path),
+                )
+            )
+            references.append(
+                EvidencePackReference(
+                    portable_path=portable_path,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    evidence_ids=tuple(sorted(source_evidence_ids)),
+                    source_path=(
+                        None
+                        if references_are_portable or source_path == portable_path
+                        else source_path
+                    ),
+                )
+            )
+
+    for relation in model.application_composition.relations:
+        for support in relation.supports:
+            owner_id = (
+                f"{relation.relation_id}:"
+                f"{support.source_reference.owner_kind.value}:"
+                f"{support.source_reference.source_id}"
+            )
+            add_evidence_references(
+                owner_kind="application_service_model_a1_relation_support",
+                owner_id=owner_id,
+                evidence_ids=support.evidence_ids,
+            )
+            for artefact_reference in support.artefact_references:
+                source_path = _project_relative_source(root, artefact_reference)
+                portable_path = preferred_paths.get(
+                    source_path,
+                    _archive_path_for_project_source(source_path),
+                )
+                references.append(
+                    EvidencePackReference(
+                        portable_path=portable_path,
+                        owner_kind="application_service_model_a1_relation_support",
+                        owner_id=owner_id,
+                        evidence_ids=support.evidence_ids,
+                        source_path=(
+                            None
+                            if references_are_portable or source_path == portable_path
+                            else source_path
+                        ),
+                    )
+                )
+
+    for assertion in model.documentation_assertions.assertions:
+        for support in assertion.supports:
+            add_evidence_references(
+                owner_kind="application_service_model_a2_assertion_support",
+                owner_id=f"{assertion.assertion_id}:{support.source_reference.source_id}",
+                evidence_ids=support.source_reference.evidence_ids,
+            )
+    for skipped in model.documentation_assertions.skipped_sources:
+        if skipped.evidence_ids:
+            add_evidence_references(
+                owner_kind="application_service_model_a2_assertion_support",
+                owner_id=f"skipped:{skipped.source_id}",
+                evidence_ids=skipped.evidence_ids,
+            )
+    return tuple(references)
 
 
 def _analysis_coverage_references(
