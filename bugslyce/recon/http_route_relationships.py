@@ -97,7 +97,10 @@ def build_http_route_relationship_clusters(
         if canonical:
             reviews_by_url[canonical].append(review)
 
-    redirect_edges = _redirect_edges(project_state, source_collection)
+    redirect_edges = build_http_redirect_relationship_edges(
+        project_state,
+        source_collection=source_collection,
+    )
     redirect_nodes = {
         url
         for edge in redirect_edges
@@ -392,10 +395,13 @@ def _source_reference_edges(
     return tuple(sorted(edges, key=_edge_sort_key))
 
 
-def _redirect_edges(
+def build_http_redirect_relationship_edges(
     project_state: ProjectState,
+    *,
     source_collection: DeepSourceRouteCollectionResult | None,
 ) -> tuple[HttpRouteRelationshipEdge, ...]:
+    """Return canonical direct redirect edges without cluster filtering."""
+
     accumulators: dict[tuple[str, str, str, int | None], _EdgeAccumulator] = {}
     for path in project_state.discovered_paths:
         _add_redirect(

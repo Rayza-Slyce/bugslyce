@@ -49,6 +49,13 @@ from bugslyce.reports.analysis_coverage import (
 )
 from bugslyce.reports.operator_report_view import build_operator_report_view
 from bugslyce.recon.collection_confidence import render_collection_confidence_markdown
+from bugslyce.recon.application_service_composition import (
+    build_application_service_composition,
+)
+from bugslyce.recon.application_service_model import build_application_service_model
+from bugslyce.recon.documentation_assertions import (
+    DocumentationAssertionExtractionResult,
+)
 from bugslyce.recon.deep_source_route_collection_export import (
     deep_source_route_collection_result_to_dict,
 )
@@ -74,6 +81,18 @@ from bugslyce.triage.candidates import generate_candidates
 
 
 FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "examples" / "demo_recon"
+
+
+def _empty_application_service_model():
+    return build_application_service_model(
+        application_composition=build_application_service_composition(),
+        documentation_assertions=DocumentationAssertionExtractionResult(
+            assertions=(),
+            skipped_sources=(),
+            sources_considered=0,
+            sources_eligible=0,
+        ),
+    )
 
 
 def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> None:
@@ -290,6 +309,58 @@ def test_html_model_rejects_malformed_present_analysis_coverage_artifact(
         match="could not parse analysis_coverage.json",
     ):
         build_html_report_model(pack)
+
+
+def test_html_model_loads_optional_persisted_application_service_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = _write_current_pack(tmp_path / "application-service-model")
+    application_service_model = _empty_application_service_model()
+    loaded: list[Path] = []
+    monkeypatch.setattr(
+        "bugslyce.reports.html_model.load_application_service_model_artifact",
+        lambda root: loaded.append(root) or application_service_model,
+    )
+
+    model = build_html_report_model(pack)
+
+    assert loaded == [pack.resolve()]
+    assert model.application_service_model is application_service_model
+
+
+def test_html_model_keeps_old_project_absence_and_rejects_malformed_present_application_model(
+    tmp_path: Path,
+) -> None:
+    absent_pack = _write_current_pack(tmp_path / "application-service-absent")
+    assert build_html_report_model(absent_pack).application_service_model is None
+
+    malformed_pack = _write_current_pack(tmp_path / "application-service-malformed")
+    (malformed_pack / "application_service_model.json").write_text(
+        "{\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="application_service_model.json"):
+        build_html_report_model(malformed_pack)
+
+
+def test_injected_application_service_model_bypasses_offline_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack = _write_current_pack(tmp_path / "application-service-injected")
+    application_service_model = _empty_application_service_model()
+    monkeypatch.setattr(
+        "bugslyce.reports.html_model.load_application_service_model_artifact",
+        lambda _root: pytest.fail("injected model must bypass disk loading"),
+    )
+
+    model = build_html_report_model(
+        pack,
+        application_service_model=application_service_model,
+    )
+
+    assert model.application_service_model is application_service_model
 
 
 def test_html_model_rejects_unsupported_analysis_coverage_schema(

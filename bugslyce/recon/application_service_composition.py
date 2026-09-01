@@ -571,6 +571,8 @@ def _add_metadata_item(
 ) -> None:
     if not isinstance(item, DeepMetadataCollectedItem):
         raise TypeError("metadata collection contains an invalid collected item")
+    if not item.sitemap_route_references:
+        return
     source = builder.add_source_set((item.url,))
     support = _support(
         basis=ApplicationServiceSupportBasis.DETERMINISTIC_DERIVATION,

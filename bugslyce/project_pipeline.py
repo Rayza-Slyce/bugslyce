@@ -64,6 +64,17 @@ from bugslyce.recon.deep_collection_request_plan import (
     DeepCollectionRequestPlan,
     build_deep_collection_request_plan_from_project_state,
 )
+from bugslyce.recon.application_service_composition import (
+    build_application_service_composition,
+)
+from bugslyce.recon.application_service_model import (
+    ApplicationServiceModel,
+    build_application_service_model,
+)
+from bugslyce.recon.application_service_model_persistence import (
+    APPLICATION_SERVICE_MODEL_FILENAME,
+    write_application_service_model_artifact,
+)
 from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_javascript_route_extraction import (
@@ -108,6 +119,7 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectionResult,
     collect_deep_source_routes_from_plan,
 )
+from bugslyce.recon.documentation_assertions import build_documentation_assertions
 from bugslyce.recon.evidence_pack_closure import (
     EvidencePackReference,
     evidence_pack_references_from_deep_models,
@@ -119,6 +131,7 @@ from bugslyce.recon.http_metadata import (
 )
 from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
+    build_http_redirect_relationship_edges,
     build_http_route_relationship_clusters,
     render_http_route_relationship_clusters_markdown,
     render_http_route_relationship_clusters_runbook,
@@ -236,7 +249,7 @@ LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES = (
     DEEP_RECON_RUNBOOK_MARKDOWN,
     DEEP_RECON_ORCHESTRATION_JSON,
 )
-DEEP_FIXED_ARTEFACT_FILENAMES = (
+PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES = (
     DEEP_SOURCE_ROUTE_COLLECTION_MARKDOWN,
     DEEP_SOURCE_ROUTE_COLLECTION_JSON,
     DEEP_METADATA_COLLECTION_MARKDOWN,
@@ -244,6 +257,10 @@ DEEP_FIXED_ARTEFACT_FILENAMES = (
     DEEP_RECON_REVIEW_MARKDOWN,
     DEEP_RECON_RUNBOOK_MARKDOWN,
     DEEP_RECON_ORCHESTRATION_JSON,
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES,
+    APPLICATION_SERVICE_MODEL_FILENAME,
 )
 SKIPPED_STEP_MESSAGES = {
     "PIPELINE-STEP-002": (
@@ -310,6 +327,7 @@ class DeepPipelineOutputs:
     recursive_feedback_plan: RecursiveEvidenceFeedbackPlan | None = None
     recursive_feedback_result: RecursiveEvidenceFeedbackResult | None = None
     orchestration: DeepReconOrchestrationResult | None = None
+    application_service_model: ApplicationServiceModel | None = None
     deep_artifact_paths: tuple[Path, ...] = ()
 
 
@@ -1488,7 +1506,13 @@ def _deep_completed_resume_verified(
         for name in (
             DEEP_METADATA_COLLECTION_MARKDOWN,
             DEEP_METADATA_COLLECTION_JSON,
+            APPLICATION_SERVICE_MODEL_FILENAME,
         )
+    ):
+        return False
+    if (
+        required_deep_names == PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES
+        and (output_dir / APPLICATION_SERVICE_MODEL_FILENAME).exists()
     ):
         return False
     required = (
@@ -1517,11 +1541,13 @@ def _completed_deep_artefact_names(
         recorded_names = {
             Path(path).name for path in output_paths if isinstance(path, str)
         }
+        if APPLICATION_SERVICE_MODEL_FILENAME in recorded_names:
+            return DEEP_FIXED_ARTEFACT_FILENAMES
         if {
             DEEP_METADATA_COLLECTION_MARKDOWN,
             DEEP_METADATA_COLLECTION_JSON,
         } & recorded_names:
-            return DEEP_FIXED_ARTEFACT_FILENAMES
+            return PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES
         return LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES
     return LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES
 
@@ -2242,6 +2268,25 @@ def _step_runners(
             source_collection,
             output_dir,
         )
+        redirect_edges = build_http_redirect_relationship_edges(
+            project_state,
+            source_collection=source_collection,
+        )
+        application_composition = build_application_service_composition(
+            redirect_edges=redirect_edges,
+            metadata_collection=metadata_collection,
+            html_extraction=html_routes,
+            javascript_extraction=javascript_routes,
+        )
+        documentation_assertions = build_documentation_assertions(source_collection)
+        application_service_model = build_application_service_model(
+            application_composition=application_composition,
+            documentation_assertions=documentation_assertions,
+        )
+        application_service_model_path = write_application_service_model_artifact(
+            output_dir,
+            application_service_model,
+        )
         current = _deep_outputs_from_context(context)
         context["deep_outputs"] = replace(
             current,
@@ -2250,11 +2295,17 @@ def _step_runners(
             shallow_followups=shallow_followups,
             recursive_feedback_plan=recursive_plan,
             recursive_feedback_result=recursive_result,
-            deep_artifact_paths=_dedupe_paths((*source_paths, *metadata_paths)),
+            application_service_model=application_service_model,
+            deep_artifact_paths=_dedupe_paths(
+                (*source_paths, *metadata_paths, application_service_model_path),
+            ),
         )
         return (
             "Deep bounded source-route and metadata collection, with shallow same-origin follow-up, completed.",
-            [str(path) for path in (*source_paths, *metadata_paths)],
+            [
+                str(path)
+                for path in (*source_paths, *metadata_paths, application_service_model_path)
+            ],
             {},
         )
 
@@ -2287,11 +2338,25 @@ def _step_runners(
             output_dir,
             force=resume,
         )
+        application_service_paths = tuple(
+            path
+            for path in current.deep_artifact_paths
+            if path.name == APPLICATION_SERVICE_MODEL_FILENAME
+        )
+        non_application_service_paths = tuple(
+            path
+            for path in current.deep_artifact_paths
+            if path.name != APPLICATION_SERVICE_MODEL_FILENAME
+        )
         context["deep_outputs"] = replace(
             current,
             orchestration=orchestration,
             deep_artifact_paths=_dedupe_paths(
-                (*current.deep_artifact_paths, *artifact_paths),
+                (
+                    *non_application_service_paths,
+                    *artifact_paths,
+                    *application_service_paths,
+                ),
             ),
         )
         return (
@@ -2379,7 +2444,20 @@ def _step_runners(
             output_dir,
             context,
         )
-        write_project_html_report(output_dir)
+        if profile == DEEP_PIPELINE_PROFILE:
+            application_service_model = _deep_outputs_from_context(
+                context
+            ).application_service_model
+            if application_service_model is None:
+                raise ValueError(
+                    "Deep application/service model is required before HTML export."
+                )
+            write_project_html_report(
+                output_dir,
+                application_service_model=application_service_model,
+            )
+        else:
+            write_project_html_report(output_dir)
         if deep_evidence_paths is None:
             result = export_recon_evidence_pack(
                 output_dir,

@@ -1347,7 +1347,7 @@ def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
     report_path.write_text("# Canonical Markdown report\n", encoding="utf-8")
     report_at_failure: list[bytes] = []
 
-    def fail_html_rendering(_input_dir: Path) -> Path:
+    def fail_html_rendering(_input_dir: Path, **_kwargs) -> Path:
         report_at_failure.append(report_path.read_bytes())
         raise ValueError("fixture HTML rendering failure")
 
@@ -1384,7 +1384,7 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     ordering: list[str] = []
 
-    def write_html(input_dir: Path) -> Path:
+    def write_html(input_dir: Path, **_kwargs) -> Path:
         ordering.append("html")
         output = input_dir / "report.html"
         output.write_text(
@@ -1982,6 +1982,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_dir / "deep_recon_review.md",
         output_dir / "deep_recon_runbook.md",
         output_dir / "deep_recon_orchestration.json",
+        output_dir / "application_service_model.json",
     )
     assert captured_evidence_paths == [expected_deep_paths, expected_deep_paths]
     assert len(captured_reference_requirements) == 2
@@ -2603,6 +2604,7 @@ def test_deep_pipeline_outputs_uses_concrete_result_types() -> None:
     assert "DeepMetadataCollectionResult" in str(hints["metadata_collection"])
     assert "DeepShallowRouteFollowupResult" in str(hints["shallow_followups"])
     assert "DeepReconOrchestrationResult" in str(hints["orchestration"])
+    assert "ApplicationServiceModel" in str(hints["application_service_model"])
 
 
 def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
@@ -2699,6 +2701,32 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
         "bugslyce.project_pipeline.build_deep_http_fetcher",
         lambda: fetcher,
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_http_redirect_relationship_edges",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_application_service_composition",
+        lambda **_kwargs: SimpleNamespace(kind="application-composition"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_documentation_assertions",
+        lambda _source_collection: SimpleNamespace(kind="documentation-assertions"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_application_service_model",
+        lambda **_kwargs: SimpleNamespace(kind="application-service-model"),
+    )
+
+    def write_application_service_model(root, _model):
+        path = root / "application_service_model.json"
+        path.write_text("{}\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_application_service_model_artifact",
+        write_application_service_model,
+    )
     context: dict[str, object] = {
         "output_dir": output_dir,
         "scope_file": tmp_path / "scope.md",
@@ -2732,6 +2760,7 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
         "deep_source_route_collection.json",
         "deep_metadata_collection.md",
         "deep_metadata_collection.json",
+        "application_service_model.json",
     }
     outputs = context["deep_outputs"]
     assert isinstance(outputs, DeepPipelineOutputs)
@@ -2821,6 +2850,7 @@ def test_deep_partial_resume_rejects_before_live_calls(
         "deep_recon_review.md",
         "deep_recon_runbook.md",
         "deep_recon_orchestration.json",
+        "application_service_model.json",
     ),
 )
 def test_deep_resume_rejects_existing_deep_artefact_without_completed_metadata(
@@ -3059,6 +3089,7 @@ def test_deep_completed_resume_rejects_mismatched_recorded_export_path(
         "deep_recon_review.md",
         "deep_recon_runbook.md",
         "deep_recon_orchestration.json",
+        "application_service_model.json",
     ),
 )
 def test_deep_fresh_run_rejects_existing_fixed_artefact_before_live_calls(
@@ -3304,6 +3335,45 @@ def test_deep_source_writer_oserror_records_collection_step_failure(
     )
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    result = exc_info.value.result
+    assert result.failed_step == "PIPELINE-STEP-010D"
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-010D"] == "failed"
+    assert statuses["PIPELINE-STEP-011D"] == "pending"
+    assert statuses["PIPELINE-STEP-012"] == "pending"
+
+
+def test_application_service_model_writer_failure_records_collection_step_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    _patch_minimal_deep_collection(monkeypatch, calls)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_source_route_collection_artifacts",
+        lambda result, output_path: _write_named_files(
+            output_path,
+            ("deep_source_route_collection.md", "deep_source_route_collection.json"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_application_service_model_artifact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("model disk full")),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.export_recon_evidence_pack",
+        lambda *args, **kwargs: pytest.fail("export must not run after Deep failure"),
+    )
+
+    with pytest.raises(ProjectPipelineFailed, match="model disk full") as exc_info:
         run_project_pipeline(
             project_file,
             DEEP_PIPELINE_PROFILE,
@@ -4847,7 +4917,7 @@ def _patch_successful_pipeline(
         phase("export", output_path=f"{output_dir}-evidence-pack.zip"),
     )
 
-    def write_html(input_dir: Path) -> Path:
+    def write_html(input_dir: Path, **_kwargs) -> Path:
         output = input_dir / "report.html"
         output.write_text(
             "<!doctype html><title>Fixture report</title>\n",
@@ -4858,6 +4928,32 @@ def _patch_successful_pipeline(
     monkeypatch.setattr(
         "bugslyce.project_pipeline.write_project_html_report",
         write_html,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_http_redirect_relationship_edges",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_application_service_composition",
+        lambda **_kwargs: SimpleNamespace(kind="application-composition"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_documentation_assertions",
+        lambda _source_collection: SimpleNamespace(kind="documentation-assertions"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_application_service_model",
+        lambda **_kwargs: SimpleNamespace(kind="application-service-model"),
+    )
+
+    def write_application_service_model(_root, _model):
+        path = output_dir / "application_service_model.json"
+        path.write_text("{}\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_application_service_model_artifact",
+        write_application_service_model,
     )
 
 

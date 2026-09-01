@@ -221,6 +221,30 @@ def test_sitemap_declares_route_as_deterministic_derivation_only() -> None:
     )
 
 
+def test_metadata_without_sitemap_declarations_does_not_build_unused_support() -> None:
+    api = _api()
+
+    composition = api.build_application_service_composition(
+        metadata_collection=_metadata_collection(
+            _metadata_item(routes=(), evidence_ids=()),
+        ),
+    )
+
+    assert composition.source_sets == ()
+    assert composition.routes == ()
+    assert composition.relations == ()
+
+    with pytest.raises(ValueError, match="evidence"):
+        api.build_application_service_composition(
+            metadata_collection=_metadata_collection(
+                _metadata_item(
+                    routes=("https://app.example.test/declared",),
+                    evidence_ids=(),
+                ),
+            ),
+        )
+
+
 def test_javascript_request_call_references_route_with_exact_semantics() -> None:
     api = _api()
     extraction = build_deep_javascript_route_extraction(
