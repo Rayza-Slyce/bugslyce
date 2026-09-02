@@ -621,3 +621,48 @@ def test_refused_baseline_raises_with_retained_typed_failure_provenance(
     assert expected_reason in reasons
     assert len(transport.requests) == expected_transport_count
     assert all(".bugslyce-negative-" in request.url for request in transport.requests)
+
+
+def test_native_executor_default_system_resolver_is_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce.recon.modes import STANDARD_RECON_PROFILE
+    from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
+
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+
+    seeded_runtime = _runtime(tmp_path / "seed")
+    runtime = build_bug_bounty_project_runtime(
+        seeded_runtime.project,
+        STANDARD_RECON_PROFILE,
+        capabilities=seeded_runtime.capabilities,
+    )
+    runtime.bind_http_origins(seeded_runtime.approved_http_origins)
+
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+
+    executor = module.build_native_content_discovery_http_executor(
+        runtime,
+        state,
+        orchestration,
+    )
+    expected_origins = tuple(
+        item.canonical_origin for item in orchestration.http_work_items
+    )
+
+    try:
+        assert runtime.ipv4_resolver is None
+        assert (
+            executor._ipv4_resolver
+            is runtime.http_executor._ipv4_resolver
+        )
+        module._require_compatible_executor(
+            runtime,
+            executor,
+            expected_origins,
+        )
+    finally:
+        executor.close()

@@ -632,7 +632,11 @@ def _require_compatible_executor(
         raise ValueError("Native content discovery HTTP executor is not canonical.")
     if getattr(executor, "_programme_scope_policy", None) != runtime.programme_scope_policy:
         raise ValueError("Native content discovery HTTP programme scope is not canonical.")
-    if getattr(executor, "_ipv4_resolver", None) is not runtime.ipv4_resolver:
+    if getattr(executor, "_ipv4_resolver", None) is not getattr(
+        runtime.http_executor,
+        "_ipv4_resolver",
+        None,
+    ):
         raise ValueError("Native content discovery HTTP peer resolver is not canonical.")
     if not isinstance(executor.transport, PeerBoundHTTPTransport):
         raise ValueError("Native content discovery requires peer-bound HTTP transport.")
