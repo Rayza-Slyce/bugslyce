@@ -153,6 +153,10 @@ def test_programme_scope_classifies_html_and_javascript_before_shallow_admission
             _js_candidate(candidate_id="J-CROSS", safe_resolved_url="http://other.test/api"),
         ),
         programme_scope_policy=policy,
+        materialised_origins=(
+            "http://example.test",
+            "http://other.test",
+        ),
     )
 
     assert {request.request_url for request in plan.requests} == {
@@ -173,6 +177,215 @@ def test_programme_scope_classifies_html_and_javascript_before_shallow_admission
     )
     assert calls == [request.request_url for request in plan.requests]
     assert result.summary_counts.responses_collected == 3
+
+
+def test_no_materialisation_context_cross_origin_is_suppressed() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test", "include-other"),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(
+                route_id="H-CROSS",
+                url="http://other.test/public",
+                origin="cross_origin",
+            ),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+    )
+
+    assert plan.requests == ()
+    assert tuple((item.source_id, item.reason) for item in plan.skipped) == (
+        ("H-CROSS", "unmaterialised_origin"),
+    )
+
+
+def test_explicit_context_unmaterialised_origin_is_suppressed() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test", "include-other"),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(
+                route_id="H-CROSS",
+                url="http://other.test/public",
+                origin="cross_origin",
+            ),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+        materialised_origins=("http://example.test",),
+    )
+
+    assert plan.requests == ()
+    assert tuple((item.source_id, item.reason) for item in plan.skipped) == (
+        ("H-CROSS", "unmaterialised_origin"),
+    )
+
+
+def test_materialised_programme_origin_reaches_bounded_fetcher() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test", "include-other"),
+    )
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(
+                route_id="H-CROSS",
+                url="http://other.test/public",
+                origin="cross_origin",
+            ),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+        materialised_origins=(
+            "http://example.test",
+            "http://other.test",
+        ),
+    )
+    calls: list[str] = []
+
+    result = collect_deep_shallow_route_followups(
+        plan,
+        fetcher=lambda request, bounds: (
+            calls.append(request.url) or _ok_fetcher(request, bounds)
+        ),
+    )
+
+    assert calls == ["http://other.test/public"]
+    assert result.summary_counts.responses_collected == 1
+
+
+def test_materialised_origin_set_accepts_semantic_port_order() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(
+                route_id="H-PORT",
+                url="https://example.test:8080/public",
+                source_urls=("https://example.test:8080/source",),
+            ),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+        materialised_origins=(
+            "https://example.test:8080",
+            "https://example.test:10000",
+        ),
+    )
+
+    assert tuple(request.request_url for request in plan.requests) == (
+        "https://example.test:8080/public",
+    )
+
+
+@pytest.mark.parametrize(
+    "materialised_origins",
+    (
+        ("https://example.test/path",),
+        ("https://example.test", "https://example.test"),
+    ),
+)
+def test_materialised_origin_set_rejects_noncanonical_or_duplicate_values(
+    materialised_origins: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="materialised origin"):
+        build_deep_shallow_route_followup_plan(
+            _html_result(),
+            _js_result(),
+            programme_scope_policy=_programme_policy(
+                (
+                    ACTION_INCLUDE,
+                    RULE_EXACT_HOSTNAME,
+                    "example.test",
+                    "include-source",
+                ),
+            ),
+            materialised_origins=materialised_origins,
+        )
+
+
+def test_standalone_programme_scope_preserves_same_origin_html() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(route_id="H-SAME", url="http://example.test/public"),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+    )
+
+    assert tuple(request.request_url for request in plan.requests) == (
+        "http://example.test/public",
+    )
+
+
+def test_standalone_programme_scope_preserves_same_origin_javascript() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(),
+        _js_result(
+            _js_candidate(
+                candidate_id="J-SAME",
+                safe_resolved_url="http://example.test/api",
+                source_urls=("http://example.test/app.js",),
+            ),
+        ),
+        programme_scope_policy=policy,
+    )
+
+    assert tuple(request.request_url for request in plan.requests) == (
+        "http://example.test/api",
+    )
+
+
+def test_scope_blocked_and_unknown_reasons_precede_materialisation() -> None:
+    policy = _programme_policy(
+        (ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test", "include-source"),
+        (
+            ACTION_EXCLUDE,
+            RULE_HTTP_PATH_PREFIX,
+            "http://example.test/private",
+            "exclude-private",
+        ),
+    )
+
+    plan = build_deep_shallow_route_followup_plan(
+        _html_result(
+            _html_route(
+                route_id="H-BLOCK",
+                url="http://example.test/private/report",
+            ),
+            _html_route(
+                route_id="H-UNKNOWN",
+                url="http://unknown.test/public",
+                origin="cross_origin",
+            ),
+        ),
+        _js_result(),
+        programme_scope_policy=policy,
+        materialised_origins=("http://example.test",),
+    )
+
+    assert plan.requests == ()
+    assert {(item.source_id, item.reason) for item in plan.skipped} == {
+        ("H-BLOCK", "programme_scope_blocked"),
+        ("H-UNKNOWN", "programme_scope_unknown"),
+    }
 
 
 def test_programme_scope_refused_shallow_candidate_never_reaches_fetcher() -> None:
@@ -946,6 +1159,22 @@ def test_manual_external_shallow_plan_is_rejected_before_fetch() -> None:
         collect_deep_shallow_route_followups(
             _manual_plan((request,)),
             fetcher=_raising_fetcher,
+        )
+
+
+def test_programme_scoped_plan_does_not_hide_exact_origin_refusal() -> None:
+    request = replace(
+        _manual_request("R1", "http://other.test/admin"),
+        selection_reason="programme_scope_allowed",
+    )
+
+    def exact_origin_refusal(_request, _bounds):
+        raise ValueError("Internal HTTP request origin is not approved.")
+
+    with pytest.raises(ValueError, match="origin is not approved"):
+        collect_deep_shallow_route_followups(
+            _manual_plan((request,)),
+            fetcher=exact_origin_refusal,
         )
 
 

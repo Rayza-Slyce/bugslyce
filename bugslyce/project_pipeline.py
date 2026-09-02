@@ -2238,6 +2238,10 @@ def _step_runners(
                 html_routes,
                 javascript_routes,
                 programme_scope_policy=project_runtime.programme_scope_policy,
+                materialised_origins=tuple(
+                    item.canonical_origin
+                    for item in execution_orchestration.http_work_items
+                ),
             )
             if project_runtime
             else build_deep_shallow_route_followup_plan(html_routes, javascript_routes)

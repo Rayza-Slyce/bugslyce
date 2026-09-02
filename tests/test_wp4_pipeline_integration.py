@@ -413,6 +413,7 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
     )
     real_build_html = build_deep_html_route_extraction
     real_build_javascript = build_deep_javascript_route_extraction
+    real_build_shallow = pipeline.build_deep_shallow_route_followup_plan
 
     def build_html(actual_source):
         result = real_build_html(actual_source)
@@ -426,11 +427,20 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
             observed["javascript_extraction"] = result
         return result
 
+    def build_shallow(actual_html, actual_javascript, **kwargs):
+        observed["shallow_planner_kwargs"] = kwargs
+        return real_build_shallow(actual_html, actual_javascript, **kwargs)
+
     monkeypatch.setattr(pipeline, "build_deep_html_route_extraction", build_html)
     monkeypatch.setattr(
         pipeline,
         "build_deep_javascript_route_extraction",
         build_javascript,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_deep_shallow_route_followup_plan",
+        build_shallow,
     )
     executor, transport = _executor(
         runtime,
@@ -483,6 +493,9 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
 
     assert observed["deep_executor_inputs"] == (runtime, state, orchestration)
     assert fetcher_executors == [deep_executor]
+    assert observed["shallow_planner_kwargs"]["materialised_origins"] == tuple(
+        item.canonical_origin for item in orchestration.http_work_items
+    )
     assert tuple(request.url for request in transport.requests) == (
         "https://app.example.test/docs/websocket",
     )

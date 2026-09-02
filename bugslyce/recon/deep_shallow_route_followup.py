@@ -27,7 +27,7 @@ from bugslyce.recon.deep_javascript_route_extraction import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_source_route_collector import MAX_BODY_PREVIEW_CHARS
-from bugslyce.recon.http_origin import same_http_origin
+from bugslyce.recon.http_origin import http_origin_from_url, same_http_origin
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
 from bugslyce.recon.http_enforcement import (
     HTTPRateRejected,
@@ -78,6 +78,7 @@ LOW_VALUE_STATIC_SUFFIXES = (
 DYNAMIC_SUFFIXES = (".php", ".asp", ".aspx", ".jsp", ".json", ".xml", ".html", ".htm", ".txt", ".map")
 JAVASCRIPT_SUFFIXES = (".js", ".mjs", ".cjs")
 PROGRAMME_SCOPE_SELECTION_REASON = "programme_scope_allowed"
+REASON_UNMATERIALISED_ORIGIN = "unmaterialised_origin"
 PLAN_SAFETY_NOTES = (
     "This is one bounded shallow follow-up planning pass.",
     "Only path-only GET requests were planned.",
@@ -259,10 +260,13 @@ def build_deep_shallow_route_followup_plan(
     *,
     max_requests: int = DEFAULT_MAX_REQUESTS,
     programme_scope_policy: ProgrammeScopePolicy | None = None,
+    materialised_origins: tuple[str, ...] | None = None,
 ) -> DeepShallowRouteFollowupPlan:
     """Build a deterministic one-pass shallow follow-up plan."""
 
     active_max = _validate_max_requests(max_requests)
+    has_materialisation_context = materialised_origins is not None
+    executable_origins = _materialised_origin_set(materialised_origins)
     pending: dict[str, list[_PendingEvidence]] = {}
     skipped: list[DeepShallowRouteFollowupSkippedItem] = []
     eligible_occurrences = 0
@@ -296,6 +300,16 @@ def build_deep_shallow_route_followup_plan(
         )
         if scope_reason is not None:
             skipped.append(_skip("html_route", route.route_id, request_url, scope_reason, route.source_response_ids, route.evidence_ids))
+            continue
+        materialisation_reason = _materialisation_no_contact_reason(
+            programme_scope_mode=programme_scope_policy is not None,
+            has_materialisation_context=has_materialisation_context,
+            request_url=request_url,
+            source_request_urls=_valid_safe_urls(route.source_request_urls),
+            materialised_origins=executable_origins,
+        )
+        if materialisation_reason is not None:
+            skipped.append(_skip("html_route", route.route_id, request_url, REASON_UNMATERIALISED_ORIGIN, route.source_response_ids, route.evidence_ids))
             continue
         if _has_low_value_suffix(request_url):
             skipped.append(_skip("html_route", route.route_id, request_url, "low_value_static_suffix", route.source_response_ids, route.evidence_ids))
@@ -353,6 +367,16 @@ def build_deep_shallow_route_followup_plan(
         )
         if scope_reason is not None:
             skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, scope_reason, candidate.source_response_ids, candidate.evidence_ids))
+            continue
+        materialisation_reason = _materialisation_no_contact_reason(
+            programme_scope_mode=programme_scope_policy is not None,
+            has_materialisation_context=has_materialisation_context,
+            request_url=request_url,
+            source_request_urls=source_urls,
+            materialised_origins=executable_origins,
+        )
+        if materialisation_reason is not None:
+            skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, REASON_UNMATERIALISED_ORIGIN, candidate.source_response_ids, candidate.evidence_ids))
             continue
         if _has_low_value_suffix(request_url):
             skipped.append(_skip("javascript_route", candidate.candidate_id, request_url, "low_value_static_suffix", candidate.source_response_ids, candidate.evidence_ids))
@@ -651,6 +675,50 @@ def _query_names(query: str) -> tuple[str, ...]:
 
 def _same_origin(source_url: str, target_url: str) -> bool:
     return same_http_origin(source_url, target_url)
+
+
+def _materialised_origin_set(
+    values: tuple[str, ...] | None,
+) -> frozenset[str]:
+    if values is None:
+        return frozenset()
+    if not isinstance(values, tuple):
+        raise ValueError("materialised origins must be an immutable tuple")
+    canonical: set[str] = set()
+    for value in values:
+        origin = http_origin_from_url(value)
+        if origin is None or value != origin.origin_url:
+            raise ValueError("materialised origin must be a canonical HTTP origin")
+        if value in canonical:
+            raise ValueError("materialised origins must not contain duplicates")
+        canonical.add(value)
+    return frozenset(canonical)
+
+
+def _origin_is_materialised(url: str, materialised_origins: frozenset[str]) -> bool:
+    origin = http_origin_from_url(url)
+    return origin is not None and origin.origin_url in materialised_origins
+
+
+def _materialisation_no_contact_reason(
+    *,
+    programme_scope_mode: bool,
+    has_materialisation_context: bool,
+    request_url: str,
+    source_request_urls: tuple[str, ...],
+    materialised_origins: frozenset[str],
+) -> str | None:
+    if not programme_scope_mode:
+        return None
+    if has_materialisation_context:
+        return (
+            None
+            if _origin_is_materialised(request_url, materialised_origins)
+            else REASON_UNMATERIALISED_ORIGIN
+        )
+    if any(_same_origin(source_url, request_url) for source_url in source_request_urls):
+        return None
+    return REASON_UNMATERIALISED_ORIGIN
 
 
 def _has_low_value_suffix(url: str) -> bool:

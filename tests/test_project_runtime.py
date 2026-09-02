@@ -868,6 +868,9 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
         pass
 
     programme_plan = _ProgrammePlan()
+    programme_plan.http_work_items = (
+        SimpleNamespace(canonical_origin="https://app.example.test"),
+    )
     original_plan_builder = (
         pipeline_module.build_deep_collection_request_plan_from_project_state
     )
@@ -895,12 +898,20 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
 
         return fetch
 
-    def build_followup(html_routes, javascript_routes, *, programme_scope_policy=None):
+    def build_followup(
+        html_routes,
+        javascript_routes,
+        *,
+        programme_scope_policy=None,
+        materialised_origins=None,
+    ):
         observed["followup_scope"] = programme_scope_policy
+        observed["followup_materialised_origins"] = materialised_origins
         return original_followup_builder(
             html_routes,
             javascript_routes,
             programme_scope_policy=programme_scope_policy,
+            materialised_origins=materialised_origins,
         )
 
     monkeypatch.setattr(pipeline_module, "build_project_state", lambda _path: state)
@@ -964,6 +975,7 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
         "executor_view_inputs": (runtime, state, programme_plan),
         "executor": executor_view,
         "followup_scope": runtime.programme_scope_policy,
+        "followup_materialised_origins": ("https://app.example.test",),
     }
 
 

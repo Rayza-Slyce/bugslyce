@@ -159,7 +159,11 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     runtime = SimpleNamespace(programme_scope_policy=None, http_executor=None)
     context = _context(tmp_path, runtime=runtime)
     context["wp4_root_plan"] = object()
-    context["wp4_programme_orchestration"] = object()
+    context["wp4_programme_orchestration"] = SimpleNamespace(
+        http_work_items=(
+            SimpleNamespace(canonical_origin="https://docs.example.test"),
+        ),
+    )
 
     monkeypatch.setattr(pipeline, "build_project_state", lambda _root: state)
     monkeypatch.setattr(
