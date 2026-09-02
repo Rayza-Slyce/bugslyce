@@ -16,6 +16,11 @@ from bugslyce.recon.body_fetch_commands import (
     MAX_BODY_FETCHES_PER_ORIGIN,
     build_body_fetch_commands,
 )
+from bugslyce.recon.content_followup import (
+    CONTENT_DISCOVERY_ARTIFACT_TYPES,
+    INCOMPLETE_CONTENT_DISCOVERY_TAGS,
+    select_content_followup_urls,
+)
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 from bugslyce.recon.runner import LiveBodyFetchRunner
 from bugslyce.reports.markdown import write_project_outputs
@@ -164,6 +169,13 @@ def run_body_fetch_workflow(
         )
     considered, selected_urls = select_body_fetch_urls(initial_state, target, manifest)
     if considered == 0:
+        content_considered, pending_followup_urls = select_content_followup_urls(
+            initial_state,
+            target,
+            manifest,
+        )
+        if content_considered > 0 and not pending_followup_urls:
+            raise BodyFetchNoWork(0)
         if _completed_content_discovery_is_empty(input_dir, manifest):
             raise BodyFetchNoWork(0)
         raise ValueError("No prior content-followup header artefacts were found.")
@@ -440,7 +452,10 @@ def _completed_content_discovery_is_empty(
 
     completed_paths: list[Path] = []
     for artifact in artifacts:
-        if not isinstance(artifact, dict) or artifact.get("type") != "gobuster":
+        if (
+            not isinstance(artifact, dict)
+            or artifact.get("type") not in CONTENT_DISCOVERY_ARTIFACT_TYPES
+        ):
             continue
         raw_tags = artifact.get("tags")
         tags = (
@@ -448,7 +463,7 @@ def _completed_content_discovery_is_empty(
             if isinstance(raw_tags, list)
             else set()
         )
-        if {"partial", "timed_out"} & tags:
+        if INCOMPLETE_CONTENT_DISCOVERY_TAGS & tags:
             return False
         file_value = artifact.get("file")
         if not isinstance(file_value, str) or not file_value:

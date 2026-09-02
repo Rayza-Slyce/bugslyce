@@ -24,6 +24,7 @@ from bugslyce.recon.body_fetch_commands import (
     build_body_fetch_commands,
     validate_live_body_fetch_command,
 )
+from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.runner import LiveBodyFetchRunner
 
 
@@ -197,6 +198,88 @@ def test_body_fetch_clean_noop_when_completed_discovery_found_no_paths(
 
     assert exc_info.value.considered == 0
     assert runner.called is False
+
+
+def test_body_fetch_noop_when_native_discovery_has_no_eligible_followup(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _native_discovery_input(
+        tmp_path,
+        "/missing (Status: 404) [Size: 0]\n",
+    )
+    state = build_project_state(input_dir)
+    manifest = _manifest(input_dir)
+    considered, selected = select_content_followup_urls(
+        state,
+        "10.10.10.10",
+        manifest,
+    )
+    runner = _NeverRunBodyFetchRunner()
+
+    assert considered == 1
+    assert selected == []
+    with pytest.raises(BodyFetchNoWork) as exc_info:
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 0
+    assert runner.called is False
+
+
+def test_body_fetch_missing_expected_native_followup_evidence_remains_fatal(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _native_discovery_input(
+        tmp_path,
+        "/dashboard (Status: 200) [Size: 24]\n",
+    )
+    state = build_project_state(input_dir)
+    manifest = _manifest(input_dir)
+    considered, selected = select_content_followup_urls(
+        state,
+        "10.10.10.10",
+        manifest,
+    )
+
+    assert considered == 1
+    assert selected == ["http://10.10.10.10/dashboard"]
+    with pytest.raises(ValueError, match="No prior content-followup"):
+        run_body_fetch_workflow(
+            input_dir,
+            scope,
+            runner=_NeverRunBodyFetchRunner(),
+        )
+
+
+def test_body_fetch_noop_when_native_discovery_completed_empty(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _native_discovery_input(tmp_path, "")
+    runner = _NeverRunBodyFetchRunner()
+
+    with pytest.raises(BodyFetchNoWork) as exc_info:
+        run_body_fetch_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 0
+    assert runner.called is False
+
+
+@pytest.mark.parametrize("incomplete_tag", ("partial", "timed_out", "incomplete"))
+def test_body_fetch_native_incomplete_empty_discovery_remains_error(
+    tmp_path: Path,
+    incomplete_tag: str,
+) -> None:
+    input_dir, scope = _native_discovery_input(
+        tmp_path,
+        "",
+        tags=("profile_wordlist", "wp4a_native", incomplete_tag),
+    )
+
+    with pytest.raises(ValueError, match="No prior content-followup"):
+        run_body_fetch_workflow(
+            input_dir,
+            scope,
+            runner=_NeverRunBodyFetchRunner(),
+        )
 
 
 def test_body_fetch_partial_empty_discovery_remains_error(
@@ -898,6 +981,45 @@ def _body_fetch_input(tmp_path: Path) -> tuple[Path, Path]:
 
 def _manifest(input_dir: Path) -> dict[str, object]:
     return json.loads((input_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+
+
+def _native_discovery_input(
+    tmp_path: Path,
+    artifact_content: str,
+    *,
+    tags: tuple[str, ...] = ("profile_wordlist", "wp4a_native"),
+) -> tuple[Path, Path]:
+    input_dir = tmp_path / "native-body-fetch"
+    input_dir.mkdir()
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    artifact = (
+        input_dir
+        / "content-discovery-internal-http-10.10.10.10-80-root.txt"
+    )
+    artifact.write_text(artifact_content, encoding="utf-8")
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "artifacts": [
+                    {
+                        "type": "content_discovery_internal",
+                        "file": artifact.name,
+                        "base_url": "http://10.10.10.10/",
+                        "tags": list(tags),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return input_dir, scope
 
 
 def _followup_artifact(url: str, token: str) -> dict[str, str]:

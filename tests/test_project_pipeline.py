@@ -74,7 +74,10 @@ from bugslyce.project_session import (
     save_project_programme_scope_policy,
     scaffold_project,
 )
-from bugslyce.recon.body_fetch import BodyFetchNoWork
+from bugslyce.recon.body_fetch import (
+    BodyFetchNoWork,
+    run_body_fetch_workflow as run_real_body_fetch_workflow,
+)
 from bugslyce.recon.content_followup import ContentFollowupNoWork
 from bugslyce.recon.content_plan import (
     CONTENT_DISCOVERY_TINY_PROFILE,
@@ -3455,6 +3458,82 @@ def test_pipeline_records_noop_followups_and_continues(
     assert statuses["PIPELINE-STEP-010"] == "completed"
     assert statuses["PIPELINE-STEP-012"] == "completed"
     assert "content-followup-write" not in calls
+    assert "body-fetch-write" not in calls
+    assert "export" in calls
+
+
+def test_pipeline_native_followup_noop_flows_to_body_fetch_noop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def content_followup_no_work(*_args, **_kwargs):
+        native_artifact = (
+            output_dir
+            / "content-discovery-internal-http-10.10.10.10-80-root.txt"
+        )
+        native_artifact.write_text(
+            "/missing (Status: 404) [Size: 0]\n",
+            encoding="utf-8",
+        )
+        (output_dir / "recon_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "target": "10.10.10.10",
+                    "artifacts": [
+                        {
+                            "type": "content_discovery_internal",
+                            "file": native_artifact.name,
+                            "base_url": "http://10.10.10.10/",
+                            "tags": ["profile_wordlist", "wp4a_native"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        raise ContentFollowupNoWork(1)
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_content_followup_workflow",
+        content_followup_no_work,
+    )
+    monkeypatch.setattr(
+        "bugslyce.recon.body_fetch.enforce_r0b2_bug_bounty_live_block",
+        lambda _context: None,
+    )
+
+    def run_real_body_fetch(input_dir, scope_file, **_kwargs):
+        calls.append("body-fetch-real")
+        return run_real_body_fetch_workflow(
+            input_dir,
+            scope_file,
+            runner=SimpleNamespace(
+                run=lambda _command: pytest.fail("body-fetch runner must not run")
+            ),
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_body_fetch_workflow",
+        run_real_body_fetch,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        NORMAL_PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    statuses = {step.step_id: step.status for step in result.steps}
+    assert statuses["PIPELINE-STEP-008"] == "noop"
+    assert statuses["PIPELINE-STEP-009"] == "noop"
+    assert statuses["PIPELINE-STEP-010"] == "completed"
+    assert statuses["PIPELINE-STEP-012"] == "completed"
+    assert "body-fetch-real" in calls
     assert "body-fetch-write" not in calls
     assert "export" in calls
 
