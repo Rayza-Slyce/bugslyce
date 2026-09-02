@@ -57,6 +57,12 @@ STATIC_SUFFIXES = {
     ".woff",
     ".ttf",
 }
+CONTENT_DISCOVERY_ARTIFACT_TYPES = frozenset(
+    {"gobuster", "content_discovery_internal"}
+)
+INCOMPLETE_CONTENT_DISCOVERY_TAGS = frozenset(
+    {"partial", "timed_out", "incomplete"}
+)
 
 
 class ContentFollowupExecutionIncomplete(ValueError):
@@ -91,10 +97,18 @@ def select_content_followup_urls(
         for url in _manifest_urls(manifest, {"html"})
         if urlparse(url).path in {"", "/"}
     }
+    content_discovery_sources = _manifest_content_discovery_sources(
+        project_state.input_dir,
+        manifest,
+    )
     considered_urls: set[str] = set()
     best_by_url: dict[str, tuple[int, str]] = {}
     for record in project_state.discovered_paths:
-        if not _is_content_discovery_record(record):
+        if not _is_content_discovery_record(
+            record,
+            Path(project_state.input_dir),
+            content_discovery_sources,
+        ):
             continue
         considered_urls.add(record.url)
         normalized = _eligible_url(
@@ -417,11 +431,47 @@ def _score_discovered_path(record: DiscoveredPath, url: str) -> int:
     return score
 
 
-def _is_content_discovery_record(record: DiscoveredPath) -> bool:
+def _is_content_discovery_record(
+    record: DiscoveredPath,
+    input_dir: Path,
+    manifest_sources: frozenset[Path],
+) -> bool:
+    source = Path(record.source).expanduser()
+    if not source.is_absolute():
+        source = input_dir / source
     return (
-        Path(record.source).name.startswith("gobuster-")
+        source.resolve() in manifest_sources
+        or Path(record.source).name.startswith("gobuster-")
         or "internal_exact_body_comparator" in record.tags
     )
+
+
+def _manifest_content_discovery_sources(
+    input_dir: str,
+    manifest: dict[str, object],
+) -> frozenset[Path]:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        return frozenset()
+
+    root = Path(input_dir).expanduser().resolve()
+    sources: set[Path] = set()
+    for artifact in artifacts:
+        if (
+            not isinstance(artifact, dict)
+            or artifact.get("type") not in CONTENT_DISCOVERY_ARTIFACT_TYPES
+        ):
+            continue
+        file_value = artifact.get("file")
+        if not isinstance(file_value, str) or not file_value:
+            continue
+        source = (root / file_value).resolve()
+        try:
+            source.relative_to(root)
+        except ValueError:
+            continue
+        sources.add(source)
+    return frozenset(sources)
 
 
 def _completed_content_discovery_is_empty(
@@ -434,7 +484,10 @@ def _completed_content_discovery_is_empty(
 
     completed_paths: list[Path] = []
     for artifact in artifacts:
-        if not isinstance(artifact, dict) or artifact.get("type") != "gobuster":
+        if (
+            not isinstance(artifact, dict)
+            or artifact.get("type") not in CONTENT_DISCOVERY_ARTIFACT_TYPES
+        ):
             continue
         raw_tags = artifact.get("tags")
         tags = (
@@ -442,7 +495,7 @@ def _completed_content_discovery_is_empty(
             if isinstance(raw_tags, list)
             else set()
         )
-        if {"partial", "timed_out"} & tags:
+        if INCOMPLETE_CONTENT_DISCOVERY_TAGS & tags:
             return False
         file_value = artifact.get("file")
         if not isinstance(file_value, str) or not file_value:

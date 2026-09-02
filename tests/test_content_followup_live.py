@@ -219,6 +219,62 @@ def test_content_followup_clean_noop_when_completed_discovery_found_no_paths(
     assert runner.called is False
 
 
+def test_native_content_discovery_manifest_source_is_selected_without_policy_tag(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _native_content_input(
+        tmp_path,
+        "/dashboard (Status: 200) [Size: 24]\n",
+    )
+    state = build_project_state(input_dir)
+    manifest = json.loads(
+        (input_dir / "recon_manifest.json").read_text(encoding="utf-8")
+    )
+
+    considered, selected = select_content_followup_urls(
+        state,
+        "10.10.10.10",
+        manifest,
+    )
+
+    assert considered == 1
+    assert selected == ["http://10.10.10.10/dashboard"]
+    assert state.discovered_paths[0].tags == ["profile_wordlist", "wp4a_native"]
+    assert "internal_exact_body_comparator" not in state.discovered_paths[0].tags
+
+
+def test_native_completed_empty_discovery_uses_typed_no_work_contract(
+    tmp_path: Path,
+) -> None:
+    input_dir, scope = _native_content_input(tmp_path, "")
+    runner = _NeverRunContentFollowupRunner()
+
+    with pytest.raises(ContentFollowupNoWork) as exc_info:
+        run_content_followup_workflow(input_dir, scope, runner=runner)
+
+    assert exc_info.value.considered == 0
+    assert runner.called is False
+
+
+@pytest.mark.parametrize("incomplete_tag", ("partial", "timed_out", "incomplete"))
+def test_native_incomplete_empty_discovery_remains_error(
+    tmp_path: Path,
+    incomplete_tag: str,
+) -> None:
+    input_dir, scope = _native_content_input(
+        tmp_path,
+        "",
+        tags=("profile_wordlist", "wp4a_native", incomplete_tag),
+    )
+
+    with pytest.raises(ValueError, match="No discovered_path records"):
+        run_content_followup_workflow(
+            input_dir,
+            scope,
+            runner=_NeverRunContentFollowupRunner(),
+        )
+
+
 def test_content_followup_partial_empty_discovery_remains_error(
     tmp_path: Path,
 ) -> None:
@@ -608,6 +664,45 @@ def _content_input(tmp_path: Path) -> tuple[Path, Path]:
                         "file": "gobuster-10.10.10.10-8080-root.txt",
                         "base_url": "http://10.10.10.10:8080/",
                     },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return input_dir, scope
+
+
+def _native_content_input(
+    tmp_path: Path,
+    artifact_content: str,
+    *,
+    tags: tuple[str, ...] = ("profile_wordlist", "wp4a_native"),
+) -> tuple[Path, Path]:
+    input_dir = tmp_path / "native-content-followup"
+    input_dir.mkdir()
+    scope = input_dir / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- 10.10.10.10\n",
+        encoding="utf-8",
+    )
+    artifact = (
+        input_dir
+        / "content-discovery-internal-http-10.10.10.10-80-root.txt"
+    )
+    artifact.write_text(artifact_content, encoding="utf-8")
+    (input_dir / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "10.10.10.10",
+                "scope_file": "scope.md",
+                "artifacts": [
+                    {
+                        "type": "content_discovery_internal",
+                        "file": artifact.name,
+                        "base_url": "http://10.10.10.10/",
+                        "tags": list(tags),
+                    }
                 ],
             }
         ),

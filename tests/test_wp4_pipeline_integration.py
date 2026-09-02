@@ -16,6 +16,8 @@ from bugslyce.recon.content_plan import (
     DEEP_BOUNDED_CORE_PROFILE,
     STANDARD_BOUNDED_CORE_PROFILE,
 )
+from bugslyce.core.project import build_project_state as build_real_project_state
+from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.content_run import ContentBaselineDecision
 from bugslyce.recon.deep_html_route_extraction import (
     build_deep_html_route_extraction,
@@ -351,6 +353,18 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         ),
         "tags": ["native_baseline", "wp4a_native"],
     }
+    parsed_state = build_real_project_state(Path(runtime.project.output_dir))
+    considered, selected = select_content_followup_urls(
+        parsed_state,
+        runtime.project.target,
+        manifest,
+    )
+    assert considered == 1
+    assert selected == ["https://app.example.test/health"]
+    assert parsed_state.discovered_paths[0].tags == [
+        "profile_wordlist",
+        "wp4a_native",
+    ]
 
 
 def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_analysis(
