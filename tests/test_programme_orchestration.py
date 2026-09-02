@@ -39,6 +39,12 @@ from bugslyce.project_session import (
     save_project_programme_scope_policy,
 )
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
+from bugslyce.recon.http_enforcement import (
+    HTTPRedirectRefused,
+    HTTPTransportResponse,
+    PeerBoundHTTPTransport,
+    internal_http_executors_share_enforcement_state,
+)
 from bugslyce.recon.modes import STANDARD_RECON_PROFILE
 from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
 
@@ -116,10 +122,124 @@ def _runtime(tmp_path: Path, *, bind_origin: bool = True):
         load_project(project_file),
         STANDARD_RECON_PROFILE,
         capabilities=_capabilities(),
+        ipv4_resolver=lambda _hostname, _port: ("8.8.8.8",),
     )
     if bind_origin:
         runtime.bind_http_origins(("https://app.example.test/",))
     return runtime
+
+
+class _ResponseTransport(PeerBoundHTTPTransport):
+    def __init__(self, responses: list[HTTPTransportResponse]) -> None:
+        self.responses = responses
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        return self.responses.pop(0)
+
+
+def _response(
+    status_code: int = 200,
+    headers: tuple[tuple[str, str], ...] = (),
+    body: bytes = b"ok",
+) -> HTTPTransportResponse:
+    return HTTPTransportResponse(
+        status_code=status_code,
+        headers=headers,
+        body=body,
+    )
+
+
+def test_programme_executor_view_uses_only_materialised_work_items_and_shared_state(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    state = _state(
+        runtime,
+        discovered_paths=(
+            DiscoveredPath(
+                url="https://app.example.test/start",
+                status_code=301,
+                content_length=0,
+                redirect_location="https://child.example.test/login",
+                source="raw/child-headers.txt",
+                evidence_ids=["EVID-CHILD"],
+                tags=[],
+            ),
+        ),
+    )
+    module = _programme_orchestration_module()
+    plan = module.build_programme_orchestration_plan(runtime, state)
+    source_executor = runtime.http_executor
+    before_origins = runtime.approved_http_origins
+
+    with pytest.raises(ValueError, match="origin is not approved"):
+        source_executor.request("https://child.example.test/deep")
+
+    executor = module.build_programme_orchestration_http_executor(
+        runtime,
+        state,
+        plan,
+    )
+    transport = _ResponseTransport([_response(body=b"dynamic deep response")])
+    executor.transport = transport
+    response = executor.request("https://child.example.test/deep")
+
+    assert response.body == b"dynamic deep response"
+    assert [request.url for request in transport.requests] == [
+        "https://child.example.test/deep"
+    ]
+    assert tuple(
+        origin.origin_url for origin in executor.configuration.approved_origins
+    ) == ("https://app.example.test", "https://child.example.test")
+    assert internal_http_executors_share_enforcement_state(source_executor, executor)
+    assert runtime.http_executor is source_executor
+    assert runtime.approved_http_origins == before_origins
+
+    with pytest.raises(ValueError, match="origin is not approved"):
+        executor.request("https://ghost.example.test/deep")
+    assert len(transport.requests) == 1
+    executor.close()
+
+
+def test_programme_executor_view_redirects_only_to_materialised_work_items(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, bind_origin=False)
+    runtime.bind_http_origins(
+        ("http://app.example.test", "https://app.example.test")
+    )
+    module = _programme_orchestration_module()
+    state = _state(runtime)
+    materialised_plan = module.build_programme_orchestration_plan(runtime, state)
+    executor = module.build_programme_orchestration_http_executor(
+        runtime,
+        state,
+        materialised_plan,
+    )
+    allowed_transport = _ResponseTransport(
+        [
+            _response(302, (("Location", "https://app.example.test/login"),)),
+            _response(body=b"followed only after independent materialisation"),
+        ]
+    )
+    executor.transport = allowed_transport
+
+    response = executor.request("http://app.example.test/start")
+
+    assert response.final_url == "https://app.example.test/login"
+    assert len(allowed_transport.requests) == 2
+
+    refused_transport = _ResponseTransport(
+        [_response(302, (("Location", "https://child.example.test/login"),))]
+    )
+    executor.transport = refused_transport
+
+    with pytest.raises(HTTPRedirectRefused, match="origin_not_approved"):
+        executor.request("https://app.example.test/start")
+    assert len(refused_transport.requests) == 1
+    executor.close()
 
 
 def _state(

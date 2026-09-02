@@ -862,6 +862,12 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
         discovered_paths=(),
     )
     observed: dict[str, object] = {}
+    executor_view = object()
+
+    class _ProgrammePlan:
+        pass
+
+    programme_plan = _ProgrammePlan()
     original_plan_builder = (
         pipeline_module.build_deep_collection_request_plan_from_project_state
     )
@@ -906,6 +912,33 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
     monkeypatch.setattr(pipeline_module, "build_deep_http_fetcher", build_fetcher)
     monkeypatch.setattr(
         pipeline_module,
+        "ProgrammeOrchestrationPlan",
+        _ProgrammePlan,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_programme_orchestration_plan",
+        lambda actual_runtime, actual_state: (
+            observed.setdefault(
+                "programme_plan_inputs",
+                (actual_runtime, actual_state),
+            ),
+            programme_plan,
+        )[1],
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_programme_orchestration_http_executor",
+        lambda actual_runtime, actual_state, actual_plan: (
+            observed.setdefault(
+                "executor_view_inputs",
+                (actual_runtime, actual_state, actual_plan),
+            ),
+            executor_view,
+        )[1],
+    )
+    monkeypatch.setattr(
+        pipeline_module,
         "build_deep_shallow_route_followup_plan",
         build_followup,
     )
@@ -927,7 +960,9 @@ def test_deep_pipeline_threads_canonical_scope_and_shared_executor(
 
     assert observed == {
         "plan_scope": runtime.programme_scope_policy,
-        "executor": runtime.http_executor,
+        "programme_plan_inputs": (runtime, state),
+        "executor_view_inputs": (runtime, state, programme_plan),
+        "executor": executor_view,
         "followup_scope": runtime.programme_scope_policy,
     }
 

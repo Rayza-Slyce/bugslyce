@@ -7,6 +7,12 @@ from hashlib import sha256
 
 import pytest
 
+from bugslyce.core.programme_scope import (
+    DESTINATION_HTTP_URL,
+    ScopeDecision,
+    build_programme_scope_policy,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionDecision,
@@ -20,6 +26,7 @@ from bugslyce.recon.deep_collection_request_plan import (
     _active_deep_collection_bounds,
 )
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
+from bugslyce.recon.http_enforcement import HTTPProgrammeScopeRefused
 from bugslyce.recon.deep_source_route_collector import (
     collect_deep_source_routes_from_plan,
     render_deep_source_route_collection_result_markdown,
@@ -239,6 +246,26 @@ def test_fetcher_exception_and_oversized_response_are_skipped() -> None:
     assert tuple(item.reason for item in result.skipped) == (
         "fetch_error",
         "response_too_large",
+    )
+
+
+def test_programme_scope_refusal_retains_stage_and_safe_reason_code() -> None:
+    request = _request(
+        "http://example.test/login.php",
+        source="source_route_coverage",
+    )
+
+    def refused(_request, _bounds):
+        raise HTTPProgrammeScopeRefused("initial", _scope_refusal_decision())
+
+    result = collect_deep_source_routes_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=refused,
+    )
+
+    assert result.collected == ()
+    assert result.skipped[0].reason == (
+        "programme_scope_refused:initial:no_matching_inclusion"
     )
 
 
@@ -695,3 +722,14 @@ def _fake_fetcher(
         )
 
     return fetcher
+
+
+def _scope_refusal_decision() -> ScopeDecision:
+    return evaluate_raw_scope_destination(
+        build_programme_scope_policy(
+            (),
+            updated_at="2026-09-02T00:00:00Z",
+        ),
+        DESTINATION_HTTP_URL,
+        "http://example.test/",
+    )

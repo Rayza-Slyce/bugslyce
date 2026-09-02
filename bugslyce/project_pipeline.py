@@ -167,6 +167,7 @@ from bugslyce.recon.native_content_discovery import (
 )
 from bugslyce.recon.programme_orchestration import (
     ProgrammeOrchestrationPlan,
+    build_programme_orchestration_http_executor,
     build_programme_orchestration_plan,
 )
 from bugslyce.recon.recursive_evidence_feedback import (
@@ -2199,11 +2200,22 @@ def _step_runners(
             if project_runtime
             else build_deep_collection_request_plan_from_project_state(project_state)
         )
-        fetcher = (
-            build_deep_http_fetcher(executor=project_runtime.http_executor)
-            if project_runtime
-            else build_deep_http_fetcher()
-        )
+        execution_orchestration = None
+        if project_runtime is not None:
+            execution_orchestration = context.get("wp4_programme_orchestration")
+            if not isinstance(execution_orchestration, ProgrammeOrchestrationPlan):
+                execution_orchestration = build_programme_orchestration_plan(
+                    project_runtime,
+                    project_state,
+                )
+            deep_executor = build_programme_orchestration_http_executor(
+                project_runtime,
+                project_state,
+                execution_orchestration,
+            )
+            fetcher = build_deep_http_fetcher(executor=deep_executor)
+        else:
+            fetcher = build_deep_http_fetcher()
         initial_source_collection = collect_deep_source_routes_from_plan(
             plan,
             fetcher=fetcher,

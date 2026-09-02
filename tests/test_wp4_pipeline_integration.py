@@ -94,6 +94,7 @@ def _patch_deep_inputs(
     source_collection: DeepSourceRouteCollectionResult,
     metadata_collection,
     written_sources: list[DeepSourceRouteCollectionResult] | None = None,
+    fetcher_executors: list[object] | None = None,
 ) -> None:
     monkeypatch.setattr(pipeline, "build_project_state", lambda _path: state)
     monkeypatch.setattr(
@@ -101,13 +102,14 @@ def _patch_deep_inputs(
         "build_deep_collection_request_plan_from_project_state",
         lambda *_args, **_kwargs: SimpleNamespace(),
     )
-    monkeypatch.setattr(
-        pipeline,
-        "build_deep_http_fetcher",
-        lambda *args, **kwargs: (lambda *_args, **_kwargs: pytest.fail(
+    def build_fetcher(*_args, **kwargs):
+        if fetcher_executors is not None:
+            fetcher_executors.append(kwargs.get("executor"))
+        return lambda *_args, **_kwargs: pytest.fail(
             "the patched empty Deep input must not fetch"
-        )),
-    )
+        )
+
+    monkeypatch.setattr(pipeline, "build_deep_http_fetcher", build_fetcher)
     monkeypatch.setattr(
         pipeline,
         "collect_deep_source_routes_from_plan",
@@ -386,14 +388,29 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
     context["wp4_root_plan"] = root_plan
     context["wp4_programme_orchestration"] = orchestration
     written_sources: list[DeepSourceRouteCollectionResult] = []
+    fetcher_executors: list[object] = []
     _patch_deep_inputs(
         monkeypatch,
         state=state,
         source_collection=source,
         metadata_collection=metadata,
         written_sources=written_sources,
+        fetcher_executors=fetcher_executors,
     )
     observed: dict[str, object] = {}
+    deep_executor = object()
+    monkeypatch.setattr(
+        pipeline,
+        "build_programme_orchestration_http_executor",
+        lambda actual_runtime, actual_state, actual_plan: (
+            observed.setdefault(
+                "deep_executor_inputs",
+                (actual_runtime, actual_state, actual_plan),
+            ),
+            deep_executor,
+        )[1],
+        raising=False,
+    )
     real_build_html = build_deep_html_route_extraction
     real_build_javascript = build_deep_javascript_route_extraction
 
@@ -464,6 +481,8 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
     runners["PIPELINE-STEP-010D"]()
     runners["PIPELINE-STEP-011D"]()
 
+    assert observed["deep_executor_inputs"] == (runtime, state, orchestration)
+    assert fetcher_executors == [deep_executor]
     assert tuple(request.url for request in transport.requests) == (
         "https://app.example.test/docs/websocket",
     )

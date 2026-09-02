@@ -31,12 +31,12 @@ from bugslyce.recon.http_enforcement import (
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
     build_http_enforcement_configuration,
-    build_internal_http_executor_view,
     internal_http_executors_share_enforcement_state,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.programme_orchestration import (
     ProgrammeOrchestrationPlan,
+    build_programme_orchestration_http_executor,
     require_programme_orchestration_plan_binding,
 )
 from bugslyce.recon.project_runtime import BugBountyProjectRuntime
@@ -222,20 +222,10 @@ def build_native_content_discovery_http_executor(
 ) -> InternalHTTPExecutor:
     """Build an exact-origin view of the runtime's aggregate HTTP enforcement."""
 
-    bound_plan = require_programme_orchestration_plan_binding(
+    return build_programme_orchestration_http_executor(
         runtime,
+        project_state,
         orchestration_plan,
-        project_state=project_state,
-    )
-    origins = tuple(item.canonical_origin for item in bound_plan.http_work_items)
-    if not origins:
-        raise ValueError("Native content discovery requires authorised HTTP work items.")
-    source_executor = runtime.http_executor
-    if not isinstance(source_executor, InternalHTTPExecutor):
-        raise ValueError("Native content discovery requires a bound HTTP runtime.")
-    return build_internal_http_executor_view(
-        source_executor,
-        approved_origins=origins,
     )
 
 

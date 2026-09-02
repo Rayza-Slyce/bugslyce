@@ -23,6 +23,7 @@ from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.http_header_display import render_response_headers_for_humans
 from bugslyce.recon.http_enforcement import (
+    HTTPProgrammeScopeRefused,
     HTTPRateRejected,
     HTTPRedirectRefused,
     HTTPTransportFailure,
@@ -146,6 +147,14 @@ def collect_deep_source_routes_from_plan(
             response = fetcher(request, bounds)
         except HTTPRateRejected:
             raise
+        except HTTPProgrammeScopeRefused as exc:
+            skipped.append(
+                _skip_from_request(
+                    request,
+                    f"programme_scope_refused:{exc.stage}:{exc.reason_code}",
+                )
+            )
+            continue
         except HTTPRedirectRefused as exc:
             skipped.append(
                 _skip_from_request(request, f"redirect_refused:{exc.reason}")

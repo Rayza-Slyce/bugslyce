@@ -215,6 +215,19 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     monkeypatch.setattr(pipeline, "BugBountyProjectRuntime", object)
     monkeypatch.setattr(
         pipeline,
+        "build_programme_orchestration_http_executor",
+        lambda actual_runtime, actual_state, actual_plan: _same_triple(
+            actual_runtime,
+            runtime,
+            actual_state,
+            state,
+            actual_plan,
+            context["wp4_programme_orchestration"],
+            object(),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
         "build_recursive_evidence_feedback_plan",
         lambda *_args, **_kwargs: object(),
     )
@@ -409,6 +422,21 @@ def _same_pair(
 ) -> object:
     assert first is expected_first
     assert second is expected_second
+    return result
+
+
+def _same_triple(
+    first: object,
+    expected_first: object,
+    second: object,
+    expected_second: object,
+    third: object,
+    expected_third: object,
+    result: object,
+) -> object:
+    assert first is expected_first
+    assert second is expected_second
+    assert third is expected_third
     return result
 
 

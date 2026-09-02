@@ -19,6 +19,10 @@ from bugslyce.core.programme_graph import (
     build_programme_relationship_evidence,
 )
 from bugslyce.core.programme_scope import ScopeDecision
+from bugslyce.recon.http_enforcement import (
+    InternalHTTPExecutor,
+    build_internal_http_executor_view,
+)
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.project_runtime import BugBountyProjectRuntime
 
@@ -134,6 +138,30 @@ def require_programme_orchestration_plan_binding(
     if plan.http_work_items != expected_work_items:
         raise ValueError("Programme orchestration work-item plan is not canonical.")
     return plan
+
+
+def build_programme_orchestration_http_executor(
+    runtime: BugBountyProjectRuntime,
+    project_state: ProjectState,
+    plan: ProgrammeOrchestrationPlan,
+) -> InternalHTTPExecutor:
+    """Build an exact-origin executor view from canonical authorised work."""
+
+    bound_plan = require_programme_orchestration_plan_binding(
+        runtime,
+        plan,
+        project_state=project_state,
+    )
+    origins = tuple(item.canonical_origin for item in bound_plan.http_work_items)
+    if not origins:
+        raise ValueError("Programme execution requires authorised HTTP work items.")
+    source_executor = runtime.http_executor
+    if not isinstance(source_executor, InternalHTTPExecutor):
+        raise ValueError("Programme execution requires a bound HTTP runtime.")
+    return build_internal_http_executor_view(
+        source_executor,
+        approved_origins=origins,
+    )
 
 
 def _build_expected_programme_graph(

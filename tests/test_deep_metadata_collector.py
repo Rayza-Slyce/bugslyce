@@ -7,6 +7,12 @@ from hashlib import sha256
 
 import pytest
 
+from bugslyce.core.programme_scope import (
+    DESTINATION_HTTP_URL,
+    ScopeDecision,
+    build_programme_scope_policy,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionDecision,
@@ -24,7 +30,11 @@ from bugslyce.recon.deep_metadata_collector import (
     collect_deep_metadata_from_plan,
     render_deep_metadata_collection_result_markdown,
 )
-from bugslyce.recon.http_enforcement import HTTPRateRejected, HTTPRedirectRefused
+from bugslyce.recon.http_enforcement import (
+    HTTPProgrammeScopeRefused,
+    HTTPRateRejected,
+    HTTPRedirectRefused,
+)
 from bugslyce.recon.modes import (
     QUICK_RECON_PROFILE,
     STANDARD_RECON_PROFILE,
@@ -160,6 +170,23 @@ def test_redirect_refusal_retains_a_structured_redacted_skip_reason() -> None:
 
     assert result.collected == ()
     assert result.skipped[0].reason == "redirect_refused:origin_not_approved"
+
+
+def test_programme_scope_refusal_retains_stage_and_safe_reason_code() -> None:
+    request = _request("http://example.test/robots.txt", source="metadata_coverage")
+
+    def refused(_request, _bounds):
+        raise HTTPProgrammeScopeRefused("resolved_peer", _scope_refusal_decision())
+
+    result = collect_deep_metadata_from_plan(
+        _plan((request,), allowed_origins=("http://example.test",)),
+        fetcher=refused,
+    )
+
+    assert result.collected == ()
+    assert result.skipped[0].reason == (
+        "programme_scope_refused:resolved_peer:no_matching_inclusion"
+    )
 
 
 def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> None:
@@ -473,3 +500,14 @@ def _fake_fetcher(
         )
 
     return fetcher
+
+
+def _scope_refusal_decision() -> ScopeDecision:
+    return evaluate_raw_scope_destination(
+        build_programme_scope_policy(
+            (),
+            updated_at="2026-09-02T00:00:00Z",
+        ),
+        DESTINATION_HTTP_URL,
+        "http://example.test/",
+    )
