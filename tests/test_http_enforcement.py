@@ -988,6 +988,131 @@ def test_scope_inclusion_does_not_weaken_existing_redirect_mechanics(
     assert executor.total_request_attempts == 1
 
 
+def test_opt_in_retains_refused_cross_origin_exchange_without_transmitting_destination() -> None:
+    policy = _programme_scope_policy(
+        (
+            ("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),
+            ("other", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "other.test"),
+        )
+    )
+    transport = _RecordingPeerBoundTransport(
+        [
+            _response(
+                301,
+                (("Location", "https://other.test/landing"),),
+                body=b"first-hop redirect",
+            )
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://example.test",)),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    response = executor.request_retaining_refused_redirect(
+        "https://example.test/start"
+    )
+
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/start"
+    ]
+    assert executor.total_request_attempts == 1
+    assert response.status_code == 301
+    assert response.final_url == "https://example.test/start"
+    assert response.body == b"first-hop redirect"
+    assert response.redirects == ()
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=301,
+        source_url="https://example.test/start",
+        destination_url="https://other.test/landing",
+        reason="origin_not_approved",
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "approved_origins", "allow_query_strings", "reason"),
+    (
+        (
+            "http://example.test/landing",
+            ("http://example.test", "https://example.test"),
+            False,
+            "https_downgrade",
+        ),
+        (
+            "https://example.test/landing?source=redirect",
+            ("https://example.test",),
+            False,
+            "redirect_query_not_allowed",
+        ),
+    ),
+)
+def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
+    location: str,
+    approved_origins: tuple[str, ...],
+    allow_query_strings: bool,
+    reason: str,
+) -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", location),))]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(approved_origins=approved_origins),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    with pytest.raises(HTTPRedirectRefused, match=reason) as exc_info:
+        executor.request_retaining_refused_redirect(
+            "https://example.test/start",
+            allow_query_strings=allow_query_strings,
+        )
+
+    assert exc_info.value.reason == reason
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/start"
+    ]
+    assert executor.total_request_attempts == 1
+
+
+def test_opt_in_retained_refusal_operation_still_follows_permitted_redirects() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    transport = _RecordingPeerBoundTransport(
+        [
+            _response(302, (("Location", "/final"),)),
+            _response(200, body=b"permitted final"),
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    response = executor.request_retaining_refused_redirect(
+        "https://example.test/start"
+    )
+
+    assert [request.url for request in transport.requests] == [
+        "https://example.test/start",
+        "https://example.test/final",
+    ]
+    assert response.final_url == "https://example.test/final"
+    assert response.refused_redirect is None
+    assert response.redirects == (
+        http_enforcement_module.HTTPRedirectHop(
+            status_code=302,
+            source_url="https://example.test/start",
+            destination_url="https://example.test/final",
+        ),
+    )
+
+
 def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> None:
     policy = _programme_scope_policy(
         (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)

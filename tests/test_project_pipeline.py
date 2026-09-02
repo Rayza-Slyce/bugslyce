@@ -4121,6 +4121,93 @@ def test_deep_content_failure_continues_independent_deep_and_local_steps(
     assert "remains classified as failed" in guidance[2]
 
 
+def test_native_baseline_refusal_artifact_is_retained_in_pipeline_failure_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce.recon.content_run import (
+        ContentBaselineObservation,
+        classify_content_discovery_baseline,
+    )
+    from bugslyce.recon.native_content_discovery import (
+        NativeContentDiscoveryBaselineRefused,
+    )
+
+    project_file, output_dir = _fresh_project(tmp_path)
+    baseline_path = output_dir / "content_discovery_baseline.json"
+    baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    decision = classify_content_discovery_baseline(
+        "https://app.example.test/",
+        tuple(
+            ContentBaselineObservation.failed(
+                f"https://app.example.test/.bugslyce-negative-{token}",
+                "transport_failure:fixture",
+            )
+            for token in ("one", "two", "three")
+        ),
+    )
+    refusal = NativeContentDiscoveryBaselineRefused(
+        baseline_path,
+        (decision,),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(*_args, **_kwargs):
+        runners = {
+            step_id: (lambda step_id=step_id: (f"{step_id} complete", [], {}))
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        }
+        runners["PIPELINE-STEP-007"] = lambda: (_ for _ in ()).throw(refusal)
+        return runners
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    step = next(
+        item
+        for item in exc_info.value.result.steps
+        if item.step_id == "PIPELINE-STEP-007"
+    )
+    assert step.status == "failed"
+    assert step.output_paths == [str(baseline_path)]
+    persisted = json.loads(
+        (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    persisted_step = next(
+        item for item in persisted["steps"] if item["step_id"] == "PIPELINE-STEP-007"
+    )
+    assert persisted_step["output_paths"] == [str(baseline_path)]
+
+
 def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(
     tmp_path: Path,
     monkeypatch,

@@ -158,6 +158,7 @@ from bugslyce.recon.path_followup import (
     write_path_followup_execution_result,
 )
 from bugslyce.recon.native_content_discovery import (
+    NativeContentDiscoveryBaselineRefused,
     NativeContentDiscoveryLimits,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryResult,
@@ -749,6 +750,11 @@ def run_project_pipeline(
                 started_step,
                 diagnostic,
                 clock,
+                output_paths=(
+                    [str(exc.baseline_artifact_path)]
+                    if isinstance(exc, NativeContentDiscoveryBaselineRefused)
+                    else None
+                ),
             )
             _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             result = _reconcile_failed_pipeline_outputs(
@@ -2112,13 +2118,20 @@ def _step_runners(
             profile=_content_discovery_profile_for_pipeline(profile),
             limits=_native_content_discovery_limits_for_pipeline(profile),
         )
-        native_result = run_native_content_discovery(
-            project_runtime,
-            project_state,
-            programme_orchestration,
-            root_plan,
-            output_dir=output_dir,
-        )
+        try:
+            native_result = run_native_content_discovery(
+                project_runtime,
+                project_state,
+                programme_orchestration,
+                root_plan,
+                output_dir=output_dir,
+            )
+        except NativeContentDiscoveryBaselineRefused as exc:
+            _register_native_content_discovery_baseline_artifact(
+                output_dir,
+                exc.baseline_artifact_path,
+            )
+            raise
         artifact_paths = _register_native_content_discovery_artifacts(
             output_dir,
             native_result,
@@ -2553,7 +2566,66 @@ def _register_native_content_discovery_artifacts(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    registered_paths.append(
+        _register_native_content_discovery_baseline_artifact(
+            output_dir,
+            result.baseline_artifact_path,
+        )
+    )
     return tuple(registered_paths)
+
+
+def _register_native_content_discovery_baseline_artifact(
+    output_dir: Path,
+    baseline_artifact_path: Path,
+) -> Path:
+    if baseline_artifact_path.is_symlink():
+        raise ValueError(
+            "Native content discovery baseline artefact is not a regular file."
+        )
+    baseline_path = baseline_artifact_path.resolve(strict=True)
+    output_root = output_dir.resolve()
+    try:
+        baseline_path.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError(
+            "Native content discovery baseline artefact escapes the project "
+            "output directory."
+        ) from exc
+    if not baseline_path.is_file():
+        raise ValueError(
+            "Native content discovery baseline artefact is not a regular file."
+        )
+
+    manifest_path = output_dir / "recon_manifest.json"
+    manifest = _load_json_object(manifest_path, "recon manifest")
+    existing = manifest.get("artifacts")
+    if not isinstance(existing, list):
+        raise ValueError("Recon manifest artefacts must be a list.")
+    if any(
+        isinstance(artifact, dict) and artifact.get("file") == baseline_path.name
+        for artifact in existing
+    ):
+        raise ValueError(
+            "Native content discovery baseline artefact is already registered."
+        )
+    payload = dict(manifest)
+    payload["artifacts"] = [
+        *existing,
+        {
+            "type": "content_discovery_baseline",
+            "file": baseline_path.name,
+            "description": (
+                "BugSlyce-native structured negative-response baseline provenance"
+            ),
+            "tags": ["native_baseline", "wp4a_native"],
+        },
+    ]
+    manifest_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return baseline_path
 
 
 def _recursive_response_to_deep_source_item(
@@ -3299,13 +3371,14 @@ def _failed_result(
     started_step: PipelineStep,
     message: str,
     clock: Clock | None,
+    output_paths: list[str] | None = None,
 ) -> PipelineResult:
     failed_step = replace(
         started_step,
         status="failed",
         completed_at=utc_now_iso(clock),
         message=message,
-        output_paths=[],
+        output_paths=output_paths or [],
     )
     return replace(
         _refresh_result_counts(_replace_step(result, index, failed_step)),

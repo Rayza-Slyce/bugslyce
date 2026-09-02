@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 from bugslyce.core.models import ProjectState
 from bugslyce.recon.content_plan import get_content_discovery_profile
 from bugslyce.recon.content_run import (
+    BASELINE_ARTIFACT_NAME,
     BASELINE_CLASSIFICATION_CONVENTIONAL,
     BASELINE_CLASSIFICATION_STABLE_FALLBACK,
     BASELINE_CLASSIFICATION_STABLE_REDIRECT,
@@ -24,6 +25,7 @@ from bugslyce.recon.content_run import (
     ContentBaselineDecision,
     collect_content_discovery_baseline,
     response_comparison_signature,
+    write_content_discovery_baseline_artifact,
 )
 from bugslyce.recon.http_enforcement import (
     InternalHTTPExecutor,
@@ -42,6 +44,7 @@ from bugslyce.recon.project_runtime import BugBountyProjectRuntime
 
 PROFILE_WORDLIST_SELECTION_REASON = "profile_wordlist"
 NATIVE_CONVENTIONAL_NEGATIVE_POLICY = "native_conventional_negative"
+NATIVE_CONTENT_BASELINE_CREATED_BY = "bugslyce-native-content-baseline"
 MAXIMUM_NATIVE_CANDIDATE_REQUESTS = MAX_INTERNAL_COMPARATOR_CANDIDATES
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
 
@@ -162,12 +165,19 @@ class NativeContentDiscoveryResult:
     external_commands_started: int
     origin_results: tuple[NativeContentDiscoveryOriginResult, ...]
     artifacts: tuple[NativeContentDiscoveryArtifact, ...]
+    baseline_artifact_path: Path
 
 
 class NativeContentDiscoveryBaselineRefused(ValueError):
     """Typed refusal retaining the native baseline decisions that stopped work."""
 
-    def __init__(self, decisions: tuple[ContentBaselineDecision, ...]) -> None:
+    def __init__(
+        self,
+        baseline_artifact_path: Path,
+        decisions: tuple[ContentBaselineDecision, ...],
+    ) -> None:
+        if not isinstance(baseline_artifact_path, Path):
+            raise ValueError("Native baseline refusal artefact path is invalid.")
         if (
             not isinstance(decisions, tuple)
             or not decisions
@@ -177,6 +187,7 @@ class NativeContentDiscoveryBaselineRefused(ValueError):
             )
         ):
             raise ValueError("Native baseline refusal decisions are invalid.")
+        self.baseline_artifact_path = baseline_artifact_path
         self.decisions = decisions
         super().__init__(
             "Native content discovery refused an incomplete or unstable baseline."
@@ -193,6 +204,7 @@ class _NativeArtifactTarget:
 class _NativeOutputTransaction:
     destination: Path
     targets: tuple[_NativeArtifactTarget, ...]
+    baseline_artifact_path: Path
 
 
 @dataclass(frozen=True)
@@ -354,20 +366,36 @@ def _execute_native_plan(
             f"{origin}/",
             executor,
             token_factory=token_factory,
+            retain_refused_redirect_response=True,
         )
-        if baseline.selected_policy == BASELINE_POLICY_REFUSE:
-            raise NativeContentDiscoveryBaselineRefused((baseline,))
-        elif baseline.classification == BASELINE_CLASSIFICATION_CONVENTIONAL:
+        if baseline.classification == BASELINE_CLASSIFICATION_CONVENTIONAL:
             baseline = replace(
                 baseline,
                 selected_policy=NATIVE_CONVENTIONAL_NEGATIVE_POLICY,
             )
-        elif baseline.classification not in {
-            BASELINE_CLASSIFICATION_STABLE_FALLBACK,
-            BASELINE_CLASSIFICATION_STABLE_REDIRECT,
-        }:
+        elif (
+            baseline.selected_policy != BASELINE_POLICY_REFUSE
+            and baseline.classification not in {
+                BASELINE_CLASSIFICATION_STABLE_FALLBACK,
+                BASELINE_CLASSIFICATION_STABLE_REDIRECT,
+            }
+        ):
             raise ValueError("Native content discovery baseline is unsupported.")
         baselines[origin] = baseline
+    baseline_decisions = tuple(baselines.values())
+    if any(
+        decision.selected_policy == BASELINE_POLICY_REFUSE
+        for decision in baseline_decisions
+    ):
+        write_content_discovery_baseline_artifact(
+            output_transaction.baseline_artifact_path,
+            baseline_decisions,
+            created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
+        )
+        raise NativeContentDiscoveryBaselineRefused(
+            output_transaction.baseline_artifact_path,
+            baseline_decisions,
+        )
 
     origin_results: list[NativeContentDiscoveryOriginResult] = []
     retained_content: dict[str, str] = {}
@@ -377,7 +405,7 @@ def _execute_native_plan(
         retained = 0
         retained_lines: list[str] = []
         for request in requests:
-            response = executor.request(
+            response = executor.request_retaining_refused_redirect(
                 request.url,
                 method="GET",
                 timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
@@ -404,6 +432,11 @@ def _execute_native_plan(
                 retained_candidate_count=retained,
             )
         )
+    write_content_discovery_baseline_artifact(
+        output_transaction.baseline_artifact_path,
+        tuple(result.baseline_decision for result in origin_results),
+        created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
+    )
     _commit_new_artifacts(
         tuple(
             (target.path, retained_content[target.canonical_origin])
@@ -425,6 +458,7 @@ def _execute_native_plan(
         external_commands_started=0,
         origin_results=tuple(origin_results),
         artifacts=artifacts,
+        baseline_artifact_path=output_transaction.baseline_artifact_path,
     )
 
 
@@ -441,7 +475,8 @@ def _prepare_output_transaction(
         )
         for origin in origins
     )
-    paths = tuple(target.path for target in targets)
+    baseline_artifact_path = destination / BASELINE_ARTIFACT_NAME
+    paths = (*tuple(target.path for target in targets), baseline_artifact_path)
     if len(set(paths)) != len(paths):
         raise ValueError("Native content discovery artefact identities collide.")
     for path in paths:
@@ -455,7 +490,11 @@ def _prepare_output_transaction(
             ) from None
         raise ValueError("Native content discovery artefact path already exists.")
     _probe_output_directory(destination)
-    return _NativeOutputTransaction(destination=destination, targets=targets)
+    return _NativeOutputTransaction(
+        destination=destination,
+        targets=targets,
+        baseline_artifact_path=baseline_artifact_path,
+    )
 
 
 def _probe_output_directory(destination: Path) -> None:
@@ -553,11 +592,12 @@ def _write_new_artifact(path: Path, content: str) -> None:
 def _artifact_line(candidate_url: str, response) -> str:
     parsed = urlparse(candidate_url)
     path = parsed.path or "/"
-    redirect = (
-        f" [--> {response.final_url}]"
-        if response.final_url != candidate_url
-        else ""
+    redirect_target = (
+        response.refused_redirect.destination_url
+        if response.refused_redirect is not None
+        else response.final_url
     )
+    redirect = f" [--> {redirect_target}]" if redirect_target != candidate_url else ""
     return (
         f"{path} (Status: {response.status_code}) "
         f"[Size: {len(response.body)}]{redirect}\n"

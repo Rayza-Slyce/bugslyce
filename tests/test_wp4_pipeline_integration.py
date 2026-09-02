@@ -266,7 +266,9 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         artifact_path = output_dir / (
             "content-discovery-internal-https-app.example.test-443-root.txt"
         )
+        baseline_path = output_dir / "content_discovery_baseline.json"
         artifact_path.write_text("/health (Status: 200) [Size: 2]\n", encoding="utf-8")
+        baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
         result = NativeContentDiscoveryResult(
             external_commands_started=0,
             origin_results=(),
@@ -279,6 +281,7 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
                     path=artifact_path,
                 ),
             ),
+            baseline_artifact_path=baseline_path,
         )
         observed["root_result"] = result
         return result
@@ -329,15 +332,24 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
     assert context["wp4_root_result"] is observed["root_result"]
     assert context["wp4_programme_orchestration"] is orchestration
     assert "native" in message.lower()
-    assert len(output_paths) == 1
+    assert len(output_paths) == 2
+    assert Path(output_paths[1]).name == "content_discovery_baseline.json"
     assert observed["root_result"].external_commands_started == 0
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["artifacts"][-1] == {
+    assert manifest["artifacts"][-2] == {
         "type": "content_discovery_internal",
         "file": Path(output_paths[0]).name,
         "base_url": "https://app.example.test",
         "description": "BugSlyce-native bounded root content discovery",
         "tags": ["profile_wordlist", "wp4a_native"],
+    }
+    assert manifest["artifacts"][-1] == {
+        "type": "content_discovery_baseline",
+        "file": "content_discovery_baseline.json",
+        "description": (
+            "BugSlyce-native structured negative-response baseline provenance"
+        ),
+        "tags": ["native_baseline", "wp4a_native"],
     }
 
 
@@ -561,7 +573,22 @@ def test_pipeline_native_root_failure_propagates_without_legacy_fallback(
     orchestration = build_programme_orchestration_plan(runtime, state)
     context = _pipeline_context(tmp_path, runtime)
     root_plan = _root_plan()
+    manifest_path = Path(runtime.project.output_dir) / "recon_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": runtime.project.target,
+                "artifacts": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    baseline_path = Path(runtime.project.output_dir) / "content_discovery_baseline.json"
+    baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
     refusal = NativeContentDiscoveryBaselineRefused(
+        baseline_path,
         (
             ContentBaselineDecision(
                 origin="https://app.example.test",
@@ -613,6 +640,17 @@ def test_pipeline_native_root_failure_propagates_without_legacy_fallback(
         pipeline._step_runners(context, None)["PIPELINE-STEP-007"]()
 
     assert raised.value is refusal
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["artifacts"] == [
+        {
+            "type": "content_discovery_baseline",
+            "file": "content_discovery_baseline.json",
+            "description": (
+                "BugSlyce-native structured negative-response baseline provenance"
+            ),
+            "tags": ["native_baseline", "wp4a_native"],
+        }
+    ]
 
 
 def test_pipeline_recursive_rate_rejection_propagates_from_deep_collection_stage(

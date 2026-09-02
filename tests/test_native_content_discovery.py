@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -203,8 +204,13 @@ class _ResponseTransport(PeerBoundHTTPTransport):
 
     def __call__(self, request):
         self.requests.append(request)
-        status, body = self.responder(request.url)
-        return HTTPTransportResponse(status_code=status, headers=(), body=body)
+        response = self.responder(request.url)
+        if len(response) == 2:
+            status, body = response
+            headers = ()
+        else:
+            status, headers, body = response
+        return HTTPTransportResponse(status_code=status, headers=headers, body=body)
 
 
 def _executor(runtime, origins: tuple[str, ...], responder):
@@ -500,6 +506,145 @@ def test_stable_fallback_native_execution_uses_exact_response_signature(
     output = result.artifacts[0].path.read_text(encoding="utf-8")
     assert "/same-length-different" in output
     assert "/same (Status:" not in output
+    executor.close()
+
+
+def test_cross_origin_first_hop_redirect_is_compared_without_destination_transmission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("same", "different"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+
+    def respond(url: str):
+        if url.endswith("/different"):
+            return (
+                302,
+                (("Location", "https://status.example.test/different"),),
+                b"materially different first-hop redirect",
+            )
+        return (
+            301,
+            (("Location", "https://docs.example.test/landing"),),
+            b"stable first-hop redirect",
+        )
+
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        respond,
+    )
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "native-output",
+        token_factory=iter(("one", "two", "three")).__next__,
+    )
+
+    assert len(transport.requests) == 5
+    assert all(
+        request.url.startswith("https://app.example.test/")
+        for request in transport.requests
+    )
+    assert all("docs.example.test" not in request.url for request in transport.requests)
+    assert all("status.example.test" not in request.url for request in transport.requests)
+    origin_result = result.origin_results[0]
+    assert origin_result.baseline_decision.classification == "stable_redirect_fallback"
+    assert origin_result.baseline_decision.completed_observations == 3
+    assert origin_result.suppressed_candidate_count == 1
+    assert origin_result.retained_candidate_count == 1
+    output = result.artifacts[0].path.read_text(encoding="utf-8")
+    assert "/different" in output
+    assert "[--> https://status.example.test/different]" in output
+    assert "/same" not in output
+    baseline = json.loads(result.baseline_artifact_path.read_text(encoding="utf-8"))
+    assert baseline["created_by"] == "bugslyce-native-content-baseline"
+    observations = baseline["origins"][0]["observations"]
+    assert all(item["observation_status"] == "complete" for item in observations)
+    assert all(item["terminal_http_status"] == 301 for item in observations)
+    assert all(item["response_bytes"] == 25 for item in observations)
+    assert all(item["body_sha256"] for item in observations)
+    assert all(
+        item["final_url"] == item["request_url"]
+        for item in observations
+    )
+    assert all(item["failure_reason"] is None for item in observations)
+    assert all(
+        item["refused_redirect"]["destination_url"]
+        == "https://docs.example.test/landing"
+        for item in observations
+    )
+    executor.close()
+
+
+def test_true_native_baseline_refusal_persists_structured_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=1,
+            maximum_candidate_requests_per_origin=1,
+        ),
+    )
+    bodies = iter((b"first", b"second", b"third"))
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (500, next(bodies)),
+    )
+
+    with pytest.raises(module.NativeContentDiscoveryBaselineRefused) as exc_info:
+        module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=tmp_path / "native-output",
+            token_factory=iter(("one", "two", "three")).__next__,
+        )
+
+    assert len(transport.requests) == 3
+    baseline_path = exc_info.value.baseline_artifact_path
+    assert baseline_path == tmp_path / "native-output" / "content_discovery_baseline.json"
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert payload["created_by"] == "bugslyce-native-content-baseline"
+    origin = payload["origins"][0]
+    assert origin["classification"] == "unstable"
+    assert origin["selected_policy"] == "refuse"
+    assert origin["completed_observations"] == 3
+    assert len(origin["generated_negative_request_urls"]) == 3
+    assert all(item["terminal_http_status"] == 500 for item in origin["observations"])
+    assert all(item["response_bytes"] for item in origin["observations"])
+    assert all(item["body_sha256"] for item in origin["observations"])
+    assert all(item["failure_reason"] is None for item in origin["observations"])
+    assert "headers" not in baseline_path.read_text(encoding="utf-8").casefold()
     executor.close()
 
 

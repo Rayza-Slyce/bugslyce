@@ -124,6 +124,7 @@ COMPARATOR_FIXED_ALLOWANCE_SECONDS = 60
 COMPARATOR_PER_CANDIDATE_ALLOWANCE_SECONDS = 1
 MAX_COMPARATOR_RUNTIME_SECONDS = 2 * 60 * 60
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+LEGACY_CONTENT_BASELINE_CREATED_BY = "bugslyce-r2-content-baseline"
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,7 @@ class ContentBaselineObservation:
     body_sha256: str | None
     final_url: str | None
     redirect_hops: tuple[tuple[int, str], ...]
+    refused_redirect: tuple[int, str, str, str] | None
     failure_reason: str | None
 
     @classmethod
@@ -145,6 +147,7 @@ class ContentBaselineObservation:
         request_url: str,
         response: InternalHTTPResponse,
     ) -> ContentBaselineObservation:
+        refused_redirect = response.refused_redirect
         return cls(
             request_url=request_url,
             observation_status="complete",
@@ -154,6 +157,16 @@ class ContentBaselineObservation:
             final_url=response.final_url,
             redirect_hops=tuple(
                 (hop.status_code, hop.destination_url) for hop in response.redirects
+            ),
+            refused_redirect=(
+                (
+                    refused_redirect.status_code,
+                    refused_redirect.source_url,
+                    refused_redirect.destination_url,
+                    refused_redirect.reason,
+                )
+                if refused_redirect is not None
+                else None
             ),
             failure_reason=None,
         )
@@ -168,6 +181,7 @@ class ContentBaselineObservation:
             body_sha256=None,
             final_url=None,
             redirect_hops=(),
+            refused_redirect=None,
             failure_reason=reason,
         )
 
@@ -178,6 +192,7 @@ ContentComparisonSignature = tuple[
     str,
     str,
     tuple[tuple[int, str], ...],
+    tuple[int, str, str, str] | None,
 ]
 
 
@@ -220,14 +235,20 @@ def collect_content_discovery_baseline(
     executor: InternalHTTPExecutor,
     *,
     token_factory: Callable[[], str] | None = None,
+    retain_refused_redirect_response: bool = False,
 ) -> ContentBaselineDecision:
     """Collect exactly three bounded negative paths through the enforced executor."""
 
     request_urls = _negative_request_urls(origin, token_factory or _default_token)
     observations: list[ContentBaselineObservation] = []
+    request = (
+        executor.request_retaining_refused_redirect
+        if retain_refused_redirect_response
+        else executor.request
+    )
     for request_url in request_urls:
         try:
-            response = executor.request(
+            response = request(
                 request_url,
                 method="GET",
                 timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
@@ -289,7 +310,10 @@ def classify_content_discovery_baseline(
     signatures = {_observation_comparison_signature(item) for item in observations}
     if len(signatures) == 1:
         signature = next(iter(signatures))
-        has_redirect = any(item.redirect_hops for item in observations)
+        has_redirect = any(
+            item.redirect_hops or item.refused_redirect is not None
+            for item in observations
+        )
         return ContentBaselineDecision(
             origin=origin,
             classification=(
@@ -337,6 +361,19 @@ def response_comparison_signature(
         hashlib.sha256(response.body).hexdigest(),
         _relative_final_url_marker(response.requested_url, response.final_url),
         tuple((hop.status_code, hop.destination_url) for hop in response.redirects),
+        (
+            (
+                response.refused_redirect.status_code,
+                _relative_final_url_marker(
+                    response.requested_url,
+                    response.refused_redirect.source_url,
+                ),
+                response.refused_redirect.destination_url,
+                response.refused_redirect.reason,
+            )
+            if response.refused_redirect is not None
+            else None
+        ),
     )
 
 
@@ -580,7 +617,10 @@ def _execute_content_discovery(
         for step in selected_steps
     )
     baseline_artifact_path = input_dir / BASELINE_ARTIFACT_NAME
-    _write_baseline_artifact(baseline_artifact_path, baseline_decisions)
+    write_content_discovery_baseline_artifact(
+        baseline_artifact_path,
+        baseline_decisions,
+    )
     if any(decision.selected_policy == BASELINE_POLICY_REFUSE for decision in baseline_decisions):
         raise ContentDiscoveryBaselineRefused(
             baseline_artifact_path,
@@ -628,14 +668,17 @@ def _execute_content_discovery(
                 updated_decisions = tuple(
                     decision_by_origin[item.origin] for item in selected_steps
                 )
-                _write_baseline_artifact(baseline_artifact_path, updated_decisions)
+                write_content_discovery_baseline_artifact(
+                    baseline_artifact_path,
+                    updated_decisions,
+                )
                 raise ContentDiscoveryComparatorIncomplete(
                     baseline_artifact_path,
                     stopped.decision,
                 ) from None
             artifact_sources.append(artifact_source)
             decision_by_origin[step.origin] = decision
-            _write_baseline_artifact(
+            write_content_discovery_baseline_artifact(
                 baseline_artifact_path,
                 tuple(decision_by_origin[item.origin] for item in selected_steps),
             )
@@ -754,7 +797,10 @@ def _execute_content_discovery(
     final_decisions = tuple(
         decision_by_origin[step.origin] for step in selected_steps
     )
-    _write_baseline_artifact(baseline_artifact_path, final_decisions)
+    write_content_discovery_baseline_artifact(
+        baseline_artifact_path,
+        final_decisions,
+    )
     return _finalize_execution(
         plan_path,
         plan,
@@ -984,6 +1030,19 @@ def _observation_comparison_signature(
         observation.body_sha256,
         _relative_final_url_marker(observation.request_url, observation.final_url),
         observation.redirect_hops,
+        (
+            (
+                observation.refused_redirect[0],
+                _relative_final_url_marker(
+                    observation.request_url,
+                    observation.refused_redirect[1],
+                ),
+                observation.refused_redirect[2],
+                observation.refused_redirect[3],
+            )
+            if observation.refused_redirect is not None
+            else None
+        ),
     )
 
 
@@ -991,13 +1050,17 @@ def _relative_final_url_marker(request_url: str, final_url: str) -> str:
     return "requested_url" if final_url == request_url else final_url
 
 
-def _write_baseline_artifact(
+def write_content_discovery_baseline_artifact(
     path: Path,
     decisions: tuple[ContentBaselineDecision, ...],
+    *,
+    created_by: str = LEGACY_CONTENT_BASELINE_CREATED_BY,
 ) -> None:
+    if not isinstance(created_by, str) or _TOKEN_PATTERN.fullmatch(created_by) is None:
+        raise ValueError("Content baseline producer must be a non-blank token.")
     payload = {
         "schema_version": "1.0",
-        "created_by": "bugslyce-r2-content-baseline",
+        "created_by": created_by,
         "required_observations_per_origin": BASELINE_REQUEST_COUNT,
         "origins": [_baseline_decision_payload(decision) for decision in decisions],
     }
@@ -1014,19 +1077,7 @@ def _baseline_decision_payload(decision: ContentBaselineDecision) -> dict[str, o
             observation.request_url for observation in decision.observations
         ],
         "observations": [
-            {
-                "request_url": observation.request_url,
-                "observation_status": observation.observation_status,
-                "terminal_http_status": observation.terminal_http_status,
-                "response_bytes": observation.response_bytes,
-                "body_sha256": observation.body_sha256,
-                "final_url": observation.final_url,
-                "redirect_hops": [
-                    {"status_code": status, "destination_url": destination}
-                    for status, destination in observation.redirect_hops
-                ],
-                "failure_reason": observation.failure_reason,
-            }
+            _baseline_observation_payload(observation)
             for observation in decision.observations
         ],
         "classification": decision.classification,
@@ -1041,6 +1092,32 @@ def _baseline_decision_payload(decision: ContentBaselineDecision) -> dict[str, o
             decision.comparator_runtime_budget_seconds
         ),
     }
+
+
+def _baseline_observation_payload(
+    observation: ContentBaselineObservation,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "request_url": observation.request_url,
+        "observation_status": observation.observation_status,
+        "terminal_http_status": observation.terminal_http_status,
+        "response_bytes": observation.response_bytes,
+        "body_sha256": observation.body_sha256,
+        "final_url": observation.final_url,
+        "redirect_hops": [
+            {"status_code": status, "destination_url": destination}
+            for status, destination in observation.redirect_hops
+        ],
+        "failure_reason": observation.failure_reason,
+    }
+    if observation.refused_redirect is not None:
+        payload["refused_redirect"] = {
+            "status_code": observation.refused_redirect[0],
+            "source_url": observation.refused_redirect[1],
+            "destination_url": observation.refused_redirect[2],
+            "reason": observation.refused_redirect[3],
+        }
+    return payload
 
 
 def _run_internal_exact_body_comparator(

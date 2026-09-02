@@ -185,6 +185,16 @@ class HTTPRedirectHop:
 
 
 @dataclass(frozen=True)
+class HTTPRedirectRefusal:
+    """One received redirect response whose destination was not transmitted."""
+
+    status_code: int
+    source_url: str
+    destination_url: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class InternalHTTPResponse:
     """Structured response from the central internal execution boundary."""
 
@@ -195,6 +205,7 @@ class InternalHTTPResponse:
     body: bytes
     elapsed_seconds: float
     redirects: tuple[HTTPRedirectHop, ...]
+    refused_redirect: HTTPRedirectRefusal | None = None
 
 
 class HTTPTransport(Protocol):
@@ -515,6 +526,51 @@ class InternalHTTPExecutor:
     ) -> InternalHTTPResponse:
         """Execute one request and any permitted redirect hops."""
 
+        return self._request(
+            url,
+            method=method,
+            timeout_seconds=timeout_seconds,
+            maximum_response_bytes=maximum_response_bytes,
+            allow_query_strings=allow_query_strings,
+            additional_headers=additional_headers,
+            retain_refused_redirect=False,
+        )
+
+    def request_retaining_refused_redirect(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        timeout_seconds: int = 10,
+        maximum_response_bytes: int = 1_000_000,
+        allow_query_strings: bool = False,
+        additional_headers: tuple[tuple[str, str], ...] = (),
+    ) -> InternalHTTPResponse:
+        """Return a received exchange when only its cross-origin hop is refused."""
+
+        return self._request(
+            url,
+            method=method,
+            timeout_seconds=timeout_seconds,
+            maximum_response_bytes=maximum_response_bytes,
+            allow_query_strings=allow_query_strings,
+            additional_headers=additional_headers,
+            retain_refused_redirect=True,
+        )
+
+    def _request(
+        self,
+        url: str,
+        *,
+        method: str,
+        timeout_seconds: int,
+        maximum_response_bytes: int,
+        allow_query_strings: bool,
+        additional_headers: tuple[tuple[str, str], ...],
+        retain_refused_redirect: bool,
+    ) -> InternalHTTPResponse:
+        """Execute one bounded request under the selected redirect disposition."""
+
         method = _validate_request_shape(
             url,
             method,
@@ -561,11 +617,34 @@ class InternalHTTPExecutor:
                 )
 
             location = _redirect_location(response.headers)
-            destination = self._redirect_destination(
-                current_url,
-                location,
-                allow_query_strings=allow_query_strings,
-            )
+            try:
+                destination = self._redirect_destination(
+                    current_url,
+                    location,
+                    allow_query_strings=allow_query_strings,
+                )
+            except HTTPRedirectRefused as exc:
+                if not retain_refused_redirect or exc.reason != "origin_not_approved":
+                    raise
+                destination = _resolve_redirect_location(current_url, location)
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=current_url,
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    body=response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects),
+                    refused_redirect=HTTPRedirectRefusal(
+                        status_code=response.status_code,
+                        source_url=current_url,
+                        destination_url=destination,
+                        reason=exc.reason,
+                    ),
+                )
             if destination in visited:
                 raise HTTPRedirectRefused("redirect_loop")
             if len(redirects) >= self.configuration.maximum_redirect_hops:

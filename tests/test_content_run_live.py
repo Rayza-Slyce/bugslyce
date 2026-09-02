@@ -1282,6 +1282,7 @@ def test_unstable_origin_writes_all_baselines_before_refusing_all_discovery(
     payload = json.loads(baseline_path.read_text(encoding="utf-8"))
 
     assert exc_info.value.baseline_artifact_path == baseline_path
+    assert payload["created_by"] == "bugslyce-r2-content-baseline"
     assert runner.called is False
     assert len(executor.urls) == 6
     assert len(payload["origins"]) == 2
@@ -1313,8 +1314,16 @@ def test_failed_baseline_is_written_before_content_discovery_refusal(
     payload = json.loads(
         (input_dir / BASELINE_ARTIFACT_NAME).read_text(encoding="utf-8")
     )
+    assert payload["created_by"] == "bugslyce-r2-content-baseline"
     assert payload["origins"][0]["classification"] == "failed"
     assert payload["origins"][0]["completed_observations"] == 2
+    failed_observation = next(
+        item
+        for item in payload["origins"][0]["observations"]
+        if item["observation_status"] == "failed"
+    )
+    assert failed_observation["observation_status"] == "failed"
+    assert failed_observation["failure_reason"] is not None
     assert len(executor.urls) == 3
     assert runner.called is False
     assert not list(output_dir.glob("gobuster-*.txt"))
