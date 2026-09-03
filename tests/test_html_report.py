@@ -121,6 +121,20 @@ def test_html_report_renders_existing_structured_review_data(tmp_path: Path) -> 
     assert "<details" in html
 
 
+def test_overview_labels_candidate_count_as_manual_review_candidates(
+    tmp_path: Path,
+) -> None:
+    model = build_html_report_model(_write_current_pack(tmp_path / "candidate-metric"))
+    html = render_html_report(model)
+
+    assert model.candidates
+    assert (
+        f"<span>Manual review candidates</span><strong>{len(model.candidates)}</strong>"
+        in html
+    )
+    assert "<span>Review leads</span>" not in html
+
+
 def test_html_model_loads_additive_nmap_reported_host_peer_state(tmp_path: Path) -> None:
     pack = _write_current_pack(tmp_path / "reported-host-peer")
     state_path = pack / "project_state.json"
@@ -592,8 +606,8 @@ def test_html_report_renders_shared_human_triage_source_context(
 
     assert 'id="human-triage"' in html
     assert "Supporting triage evidence" in html
-    assert "Supporting evidence prompts (not ranked)" in html
-    assert "Evidence values worth noting" in html
+    assert "Supporting evidence prompts (not ranked)" not in html
+    assert "Additional evidence values worth noting" in html
     assert 'data-category="human_triage"' in html
     assert '<option value="human_triage">Human triage</option>' in html
     for value in (
@@ -2416,11 +2430,12 @@ def test_html_model_prefers_persisted_operator_brief(
     assert model.operator_brief.threads[0].title == "Persisted workflow thread"
 
 
-def test_html_model_treats_empty_persisted_operator_brief_as_authoritative(
+def test_html_model_empty_persisted_operator_brief_uses_meaningful_fallback(
     tmp_path: Path,
 ) -> None:
     from bugslyce.reports.operator_brief import (
         OperatorBriefView,
+        build_operator_brief_view,
         write_operator_brief_artifact,
     )
 
@@ -2434,8 +2449,37 @@ def test_html_model_treats_empty_persisted_operator_brief_as_authoritative(
     model = build_html_report_model(pack)
 
     assert model.operator_summary.ranked_leads
+    assert model.operator_brief == build_operator_brief_view(model.operator_summary)
+    assert model.operator_brief.threads
+
+
+def test_html_model_preserves_disposition_only_persisted_operator_brief(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.reports.operator_brief import (
+        EVIDENCE_ONLY,
+        OperatorBriefDisposition,
+        OperatorBriefView,
+        write_operator_brief_artifact,
+    )
+
+    pack = _write_current_pack(tmp_path / "disposition-only-operator-brief")
+    persisted = OperatorBriefView(
+        threads=(),
+        dispositions=(
+            OperatorBriefDisposition(
+                source_kind="workflow_lead",
+                source_id="WORKFLOW-EVIDENCE-ONLY",
+                disposition=EVIDENCE_ONLY,
+            ),
+        ),
+    )
+    write_operator_brief_artifact(pack, persisted)
+
+    model = build_html_report_model(pack)
+
+    assert model.operator_summary.ranked_leads
     assert model.operator_brief == persisted
-    assert model.operator_brief.threads == ()
 
 
 def test_html_model_without_operator_brief_keeps_legacy_reconstruction(

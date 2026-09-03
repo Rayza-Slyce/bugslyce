@@ -24,7 +24,13 @@ from bugslyce.reports.html_model import (
     build_html_report_model,
 )
 from bugslyce.reports.analysis_coverage_presentation import (
-    build_analysis_coverage_presentation,
+    AnalysisCoveragePresentationGroup,
+    AnalysisCoveragePresentationItem,
+    build_analysis_coverage_grouped_presentation,
+)
+from bugslyce.reports.attack_surface_presentation import (
+    AttackSurfaceBlockedCoverage,
+    build_attack_surface_presentation,
 )
 from bugslyce.reports.investigation_context import (
     InvestigationContextItem,
@@ -34,6 +40,7 @@ from bugslyce.reports.investigation_context_presentation import (
     InvestigationContextPresentationIndex,
     build_investigation_context_presentation_index,
 )
+from bugslyce.reports.human_triage import HumanTriageItem
 
 
 _SOURCE_ARTEFACT_TYPES = frozenset(
@@ -51,6 +58,7 @@ _SOURCE_ARTEFACT_TYPES = frozenset(
 _OPERATOR_SUMMARY_CATEGORY = "operator_summary"
 _ANALYSIS_COVERAGE_CATEGORY = "analysis_coverage"
 _HUMAN_TRIAGE_CATEGORY = "human_triage"
+_ATTACK_SURFACE_CATEGORY = "attack_surface"
 _SKIPPED_COLLECTION_CATEGORY = "skipped_collection"
 _ENDPOINT_CATEGORY = "endpoint"
 _DISCOVERED_PATH_CATEGORY = "discovered_path"
@@ -251,21 +259,31 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
     )
     sections = [
         ("overview", "Overview", _overview_section(model)),
+        ("attack-surface", "Attack surface summary", _attack_surface_section(model)),
         (
             "operator-summary",
             "Operator summary",
             _operator_summary_section(model, context_index),
         ),
         ("analysis-coverage", "Analysis coverage", _analysis_coverage_section(model)),
-        ("human-triage", "Supporting triage evidence", _human_triage_section(model)),
+        *(
+            [("human-triage", "Supporting triage evidence", _human_triage_section(model))]
+            if _additional_human_triage_values(model)
+            else []
+        ),
         ("confidence", "Collection confidence", _confidence_section(model)),
         ("manual-review", "Manual review leads", _candidate_section(model)),
         ("routes", "Routes and provenance", _routes_section(model, context_index)),
         ("http-evidence", "HTTP evidence", _http_section(model)),
     ]
     if model.deep_disclosures:
+        operator_summary_index = next(
+            index
+            for index, section in enumerate(sections)
+            if section[0] == "operator-summary"
+        )
         sections.insert(
-            2,
+            operator_summary_index + 1,
             (
                 "deep-interpretations",
                 "Deep interpretations",
@@ -277,17 +295,28 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
         or model.metadata_collection.skipped
         or model.source_collection.skipped
     ):
+        analysis_coverage_index = next(
+            index
+            for index, section in enumerate(sections)
+            if section[0] == "analysis-coverage"
+        )
         sections.insert(
-            3,
+            analysis_coverage_index + 1,
             ("limitations", "Warnings and skipped collection", _limitations_section(model)),
         )
     canonical_presentation = model.operator_brief_presentation
     if canonical_presentation is not None:
-        legacy_primary_sections = {"operator-summary", "human-triage", "manual-review"}
-        sections = [
-            section for section in sections if section[0] not in legacy_primary_sections
-        ]
         if model.operator_brief.threads:
+            legacy_primary_sections = {
+                "operator-summary",
+                "human-triage",
+                "manual-review",
+            }
+            sections = [
+                section
+                for section in sections
+                if section[0] not in legacy_primary_sections
+            ]
             sections.insert(
                 1,
                 (
@@ -729,7 +758,7 @@ def _overview_section(model: HtmlReportModel) -> str:
             str(sum(group.origin_group == "relative" for group in model.route_groups)),
         ),
         ("Evidence records", str(len(state.evidence))),
-        ("Review leads", str(len(model.candidates))),
+        ("Manual review candidates", str(len(model.candidates))),
     )
     return _section(
         "overview",
@@ -741,6 +770,107 @@ def _overview_section(model: HtmlReportModel) -> str:
         )
         + "</div>"
         + f'<p class="scope searchable"><strong>Scope:</strong> {_h(state.scope_summary)}</p>',
+    )
+
+
+def _attack_surface_section(model: HtmlReportModel) -> str:
+    presentation = build_attack_surface_presentation(
+        model.http_fingerprints,
+        model.similarity_review,
+        model.human_triage_brief,
+    )
+    metrics = presentation.http_metrics
+    metric_values = (
+        ("Retained HTTP responses", metrics.retained_responses),
+        ("Successful responses", metrics.successful_responses),
+        ("HTTP 403 responses", metrics.blocked_responses),
+        ("Not-found responses", metrics.not_found_responses),
+        (
+            "Successful JavaScript resources",
+            metrics.successful_javascript_resources,
+        ),
+        (
+            "Successful non-JavaScript URLs",
+            metrics.successful_non_javascript_url_count,
+        ),
+    )
+    metric_cards = "".join(
+        '<div class="metric searchable" data-category="attack_surface">'
+        f"<span>{_h(label)}</span><strong>{value}</strong></div>"
+        for label, value in metric_values
+    )
+    routes = (
+        '<details class="record searchable" data-category="attack_surface" '
+        'data-status=""><summary>Successful non-JavaScript URLs '
+        f"({len(presentation.successful_non_javascript_urls)})</summary>"
+        '<ul class="path-list">'
+        + "".join(
+            f"<li><code>{_h(url)}</code></li>"
+            for url in presentation.successful_non_javascript_urls
+        )
+        + "</ul></details>"
+        if presentation.successful_non_javascript_urls
+        else _empty("No successful non-JavaScript response is retained in this report.")
+    )
+    worth_reviewing = (
+        "".join(
+            _detail_card(
+                item.title,
+                (
+                    ("Priority", item.priority),
+                    ("URL", item.url or "Not recorded"),
+                    ("Existing context", item.value),
+                    ("Why it matters", item.why_it_matters),
+                    ("Suggested manual action", item.suggested_manual_action),
+                    ("Evidence", _compact_list(item.evidence_ids, "evidence IDs")),
+                ),
+                category=_ATTACK_SURFACE_CATEGORY,
+            )
+            for item in presentation.worth_reviewing
+        )
+        if presentation.worth_reviewing
+        else _empty("No additional non-ranked human review prompts were identified.")
+    )
+    blocked = (
+        "".join(_blocked_coverage_card(item) for item in presentation.blocked_coverage)
+        if presentation.blocked_coverage
+        else _empty("No repeated blocked/access-controlled response group was retained.")
+    )
+    return _section(
+        "attack-surface",
+        "Attack surface summary",
+        '<p class="section-note">This is a bounded summary of retained evidence, not '
+        "an exhaustive map or a list of confirmed vulnerabilities.</p>"
+        f'<div class="metric-grid">{metric_cards}</div>'
+        "<h3>Successful non-JavaScript URLs</h3>"
+        + routes
+        + "<h3>Worth reviewing</h3>"
+        + '<p class="section-note">These are existing non-ranked human review prompts; '
+        "they are not Investigation priorities or confirmed findings.</p>"
+        + worth_reviewing
+        + "<h3>Blocked / unverified coverage</h3>"
+        + blocked,
+    )
+
+
+def _blocked_coverage_card(item: AttackSurfaceBlockedCoverage) -> str:
+    statuses = "/".join(str(value) for value in item.status_codes)
+    response = "request" if item.response_count == 1 else "requests"
+    return _detail_card(
+        f"{item.response_count} {response} received HTTP {statuses} responses",
+        (
+            (
+                "Coverage meaning",
+                "These paths remain unverified; the retained responses do not "
+                "establish resource presence or absence.",
+            ),
+            ("Observed response titles", _joined(item.titles)),
+            ("URLs", _joined(item.requested_urls)),
+            ("Evidence", _compact_list(item.evidence_ids, "evidence IDs")),
+            ("Response fingerprints", _joined(item.fingerprint_ids)),
+            ("Similarity group", item.group_id),
+        ),
+        category=_ATTACK_SURFACE_CATEGORY,
     )
 
 
@@ -825,7 +955,7 @@ def _operator_summary_section(
 def _analysis_coverage_section(model: HtmlReportModel) -> str:
     """Render only source-attributable C2 claims supplied by the shared view."""
 
-    items = build_analysis_coverage_presentation(
+    groups = build_analysis_coverage_grouped_presentation(
         model.operator_report_view.analysis_coverage
     )
     introduction = (
@@ -833,7 +963,7 @@ def _analysis_coverage_section(model: HtmlReportModel) -> str:
         "analysis states proven by retained execution evidence. An analyser/source not "
         "listed here may have run; absence is not a clean result.</p>"
     )
-    if not items:
+    if not groups:
         return _section(
             "analysis-coverage",
             "Analysis coverage",
@@ -843,22 +973,41 @@ def _analysis_coverage_section(model: HtmlReportModel) -> str:
                 "the retained execution evidence available to this report."
             ),
         )
-    records = "".join(
-        _detail_card(
-            presentation.state_label,
-            (
-                ("Capability", presentation.item.unit.capability),
-                ("Source role", presentation.item.unit.source_role),
-                ("Source identity", presentation.item.unit.source_id),
-                ("Finding count", presentation.finding_count_label or ""),
-                ("Execution", presentation.execution_note_label or ""),
-                ("Reason", presentation.unknown_reason_label or ""),
-            ),
-            category=_ANALYSIS_COVERAGE_CATEGORY,
-        )
-        for presentation in items
-    )
+    records = "".join(_analysis_coverage_group(group) for group in groups)
     return _section("analysis-coverage", "Analysis coverage", introduction + records)
+
+
+def _analysis_coverage_group(group: AnalysisCoveragePresentationGroup) -> str:
+    technical = "".join(
+        f"<dt>{_h(label)}</dt><dd>{_render_value(value)}</dd>"
+        for label, value in (
+            ("State", group.state_label),
+            ("Capability", group.capability),
+            ("Source role", group.source_role),
+            ("Source count", str(group.source_count)),
+            (
+                "Finding count",
+                str(group.total_finding_count)
+                if group.total_finding_count is not None
+                else "",
+            ),
+            ("Execution", group.execution_note_label or ""),
+            ("Reason", group.unknown_reason_label or ""),
+        )
+        if value
+    )
+    return (
+        '<article class="record analysis-coverage-summary searchable" '
+        f'data-category="{_ANALYSIS_COVERAGE_CATEGORY}">'
+        f"<h3>{_h(group.capability_label)}</h3>"
+        f'<p class="human-summary">{_h(group.human_summary)}</p>'
+        '<details><summary>Technical coverage details</summary>'
+        + "<dl>"
+        + technical
+        + "</dl>"
+        + _analysis_coverage_source_records(group.items)
+        + "</details></article>"
+    )
 
 
 def _html_investigation_context(
@@ -963,25 +1112,6 @@ def _html_evidence_identity(
 
 
 def _human_triage_section(model: HtmlReportModel) -> str:
-    brief = model.human_triage_brief
-    supporting = "".join(
-        _detail_card(
-            item.title,
-            (
-                ("Priority", item.priority),
-                ("Category", item.category),
-                ("Source", item.source),
-                ("URL", item.url),
-                ("Value", item.value),
-                ("Why it matters", item.why_it_matters),
-                ("Suggested manual action", item.suggested_manual_action),
-                ("Evidence", _compact_list(item.evidence_ids, "evidence IDs")),
-                ("Signal", item.signal),
-            ),
-            category=_HUMAN_TRIAGE_CATEGORY,
-        )
-        for item in brief.start_here
-    ) or _empty("No additional supporting evidence prompts were identified.")
     values = "".join(
         _detail_card(
             item.title,
@@ -994,19 +1124,30 @@ def _human_triage_section(model: HtmlReportModel) -> str:
             ),
             category=_HUMAN_TRIAGE_CATEGORY,
         )
-        for item in brief.evidence_values
+        for item in _additional_human_triage_values(model)
     ) or _empty("No additional source-comment, metadata, or encoded values were promoted.")
     return _section(
         "human-triage",
         "Supporting triage evidence",
         (
-            '<p class="section-note">These supporting evidence prompts do not define or alter '
-            "the canonical lead ranking in the Operator summary.</p>"
-            '<h3>Supporting evidence prompts (not ranked)</h3>'
-            + supporting
-            + '<h3>Evidence values worth noting</h3>'
+            '<p class="section-note">These additional evidence values do not define or alter '
+            "the canonical lead ranking in the Operator summary. Primary non-ranked review "
+            "prompts appear once in Attack surface summary.</p>"
+            '<h3>Additional evidence values worth noting</h3>'
             + values
         ),
+    )
+
+
+def _additional_human_triage_values(
+    model: HtmlReportModel,
+) -> tuple[HumanTriageItem, ...]:
+    """Return evidence values not already shown as primary review prompts."""
+
+    return tuple(
+        item
+        for item in model.human_triage_brief.evidence_values
+        if item not in model.human_triage_brief.start_here
     )
 
 
@@ -1066,6 +1207,32 @@ def _confidence_section(model: HtmlReportModel) -> str:
         "Collection confidence",
         '<p class="section-note">Absence of a notice does not prove exhaustive coverage.</p>'
         + content,
+    )
+
+
+def _analysis_coverage_source_records(
+    items: tuple[AnalysisCoveragePresentationItem, ...],
+) -> str:
+    rows = tuple(
+        (
+            item.item.unit.source_id,
+            item.finding_count_label or "Not recorded",
+            item.execution_note_label or "Not recorded",
+            item.unknown_reason_label or "Not recorded",
+        )
+        for item in items
+    )
+    return (
+        '<div class="analysis-coverage-sources"><h4>'
+        "Exact per-source execution records</h4>"
+        + _table(
+            ("Source identity", "Finding count", "Execution", "Reason"),
+            [
+                _row(row, category=_ANALYSIS_COVERAGE_CATEGORY)
+                for row in rows
+            ],
+        )
+        + "</div>"
     )
 
 
@@ -1882,6 +2049,7 @@ def _category_options(model: HtmlReportModel) -> str:
 def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
     state = model.project_state
     values = {
+        _ATTACK_SURFACE_CATEGORY,
         *(candidate.candidate_type for candidate in model.candidates),
         *(item.evidence_type for item in state.evidence),
         *(
@@ -1908,7 +2076,10 @@ def _category_values(model: HtmlReportModel) -> tuple[str, ...]:
         values.add(_TECHNICAL_INVESTIGATION_CATEGORY)
     if model.operator_report_view.analysis_coverage.items:
         values.add(_ANALYSIS_COVERAGE_CATEGORY)
-    if model.human_triage_brief.start_here or model.human_triage_brief.evidence_values:
+    if _additional_human_triage_values(model) and not (
+        model.operator_brief_presentation is not None
+        and model.operator_brief.threads
+    ):
         values.add(_HUMAN_TRIAGE_CATEGORY)
     if model.metadata_collection.skipped or model.source_collection.skipped:
         values.add(_SKIPPED_COLLECTION_CATEGORY)

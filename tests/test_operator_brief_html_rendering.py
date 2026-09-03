@@ -28,8 +28,10 @@ from bugslyce.reports.operator_brief import (
     OperatorBriefSubjectKind,
     OperatorBriefThread,
     OperatorBriefView,
+    build_operator_brief_view,
     write_operator_brief_artifact,
 )
+from bugslyce.reports.operator_summary import OperatorSummary
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -197,6 +199,42 @@ def _model_with_human_brief_and_composition(
     write_operator_brief_composition_artifact(root, composition)
     write_operator_brief_artifact(root, _human_blog_operator_brief())
     return build_html_report_model(root)
+
+
+def test_empty_persisted_brief_does_not_suppress_ranked_human_fallback(
+    tmp_path: Path,
+) -> None:
+    root, _initial, _canonical_bytes = _LOADING_HELPERS[
+        "_write_canonical_html_pack"
+    ](tmp_path / "empty-human-brief-canonical-pack")
+    write_operator_brief_composition_artifact(
+        root,
+        _PERSISTENCE_HELPERS["_representative_composition"](),
+    )
+    write_operator_brief_artifact(
+        root,
+        OperatorBriefView(threads=(), dispositions=()),
+    )
+
+    model = build_html_report_model(root)
+    expected = build_operator_brief_view(model.operator_summary)
+    html = render_html_report(model)
+
+    assert model.operator_summary.ranked_leads
+    assert model.operator_brief == expected
+    assert model.operator_brief.threads
+    assert "<h2>Investigation priorities</h2>" in html
+    assert "<h2>Technical investigation evidence</h2>" in html
+
+
+def test_canonical_report_does_not_advertise_suppressed_human_triage_filter(
+    tmp_path: Path,
+) -> None:
+    html = render_html_report(_model_with_human_brief_and_composition(tmp_path))
+
+    assert '<section id="human-triage"' not in html
+    assert '<option value="human_triage">Human triage</option>' not in html
+    assert 'data-category="human_triage"' not in html
 
 
 def _source_native_only_composition(policy: object) -> OperatorBriefComposition:
@@ -720,15 +758,16 @@ def test_future_canonical_nonempty_suppresses_legacy_primary_sections_and_action
     assert _primary_card_headings(section) == tuple(
         thread.title for thread in model.operator_brief.threads
     )
+    assert html.index("<h2>Investigation priorities</h2>") < html.index(
+        "<h2>Technical investigation evidence</h2>"
+    )
+    assert "<h2>Technical investigation evidence</h2>" in html
 
 
-def test_future_empty_canonical_uses_human_threads_without_legacy_resurrection(
+def test_canonical_report_without_human_threads_retains_unranked_human_context(
     tmp_path: Path,
 ) -> None:
-    model = _model_with_human_brief_and_composition(
-        tmp_path,
-        _R3C_B_HELPERS["_empty_composition"](),
-    )
+    model = _model_with_human_brief_and_composition(tmp_path)
     html = render_html_report(model)
     section = _priority_section(html)
 
@@ -750,12 +789,45 @@ def test_future_empty_canonical_uses_human_threads_without_legacy_resurrection(
     no_human_threads = replace(
         model,
         operator_brief=OperatorBriefView(threads=(), dispositions=()),
+        operator_summary=OperatorSummary(
+            review_first=[],
+            low_signal=model.operator_summary.low_signal,
+            coverage=model.operator_summary.coverage,
+        ),
     )
+    assert no_human_threads.human_triage_brief.start_here
+    assert no_human_threads.candidates
+
     no_human_html = render_html_report(no_human_threads)
+    triage_item = no_human_threads.human_triage_brief.start_here[0]
+    candidate = no_human_threads.candidates[0]
+
     assert "<h2>Investigation priorities</h2>" not in no_human_html
-    assert '<h2>Operator summary</h2>' not in no_human_html
-    assert '<h2>Supporting triage evidence</h2>' not in no_human_html
-    assert '<h2>Manual review leads</h2>' not in no_human_html
+    assert '<h2>Operator summary</h2>' in no_human_html
+    assert "No evidence-backed leads met the existing summary threshold." in no_human_html
+    assert '<h2>Supporting triage evidence</h2>' in no_human_html
+    assert escape(triage_item.title) in no_human_html
+    assert escape(triage_item.why_it_matters) in no_human_html
+    assert escape(triage_item.suggested_manual_action) in no_human_html
+    assert '<h2>Manual review leads</h2>' in no_human_html
+    assert escape(candidate.title) in no_human_html
+    assert escape(candidate.rationale) in no_human_html
+    assert escape(candidate.evidence_ids[0]) in no_human_html
+    assert "<h2>Technical investigation evidence</h2>" in no_human_html
+    assert no_human_html.index("<h2>Overview</h2>") < no_human_html.index(
+        "<h2>Operator summary</h2>"
+    )
+    assert no_human_html.index("<h2>Operator summary</h2>") < no_human_html.index(
+        "<h2>Supporting triage evidence</h2>"
+    )
+    assert no_human_html.index("<h2>Supporting triage evidence</h2>") < no_human_html.index(
+        "<h2>Manual review leads</h2>"
+    )
+    assert no_human_html.index("<h2>Manual review leads</h2>") < no_human_html.index(
+        "<h2>Technical investigation evidence</h2>"
+    )
+    assert '<option value="human_triage">Human triage</option>' in no_human_html
+    assert 'data-category="human_triage"' in no_human_html
     assert not re.search(
         r"\b(?:all clear|no vulnerabilities|nothing found|safe to proceed)\b",
         no_human_html,

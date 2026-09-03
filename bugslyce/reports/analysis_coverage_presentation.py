@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, replace
 
 from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageExecutionNote,
@@ -35,12 +36,129 @@ class AnalysisCoveragePresentationItem:
         return None
 
 
+@dataclass(frozen=True)
+class AnalysisCoveragePresentationGroup:
+    """Human synthesis of items sharing one exact epistemic state."""
+
+    items: tuple[AnalysisCoveragePresentationItem, ...]
+    capability: str
+    source_role: str
+    state: AnalysisCoverageState
+    outcome: AnalysisCoverageOutcome | None
+    unknown_reason: AnalysisCoverageUnknownReason | None
+    execution_note: AnalysisCoverageExecutionNote | None
+    capability_label: str
+    state_label: str
+    unknown_reason_label: str | None
+    execution_note_label: str | None
+    human_summary: str
+
+    @property
+    def source_count(self) -> int:
+        return len(self.items)
+
+    @property
+    def total_finding_count(self) -> int | None:
+        values = tuple(item.item.finding_count for item in self.items)
+        if any(value is None for value in values):
+            return None
+        return sum(value for value in values if value is not None)
+
+
 def build_analysis_coverage_presentation(
     view: AnalysisCoverageView,
 ) -> tuple[AnalysisCoveragePresentationItem, ...]:
     """Project supplied C2 items in their existing deterministic order."""
 
     return tuple(_present(item) for item in view.items)
+
+
+def build_analysis_coverage_grouped_presentation(
+    view: AnalysisCoverageView,
+) -> tuple[AnalysisCoveragePresentationGroup, ...]:
+    """Group only records with identical capability and epistemic state."""
+
+    grouped: dict[tuple[object, ...], list[AnalysisCoveragePresentationItem]] = (
+        defaultdict(list)
+    )
+    for item in build_analysis_coverage_presentation(view):
+        value = item.item
+        grouped[
+            (
+                value.unit.capability,
+                value.unit.source_role,
+                value.state,
+                value.outcome,
+                value.unknown_reason,
+                value.execution_note,
+            )
+        ].append(item)
+
+    results = []
+    for key, items in grouped.items():
+        capability, source_role, state, outcome, unknown_reason, execution_note = key
+        ordered = tuple(sorted(items, key=lambda item: item.item.unit.source_id))
+        first = ordered[0]
+        group = AnalysisCoveragePresentationGroup(
+            items=ordered,
+            capability=capability,
+            source_role=source_role,
+            state=state,
+            outcome=outcome,
+            unknown_reason=unknown_reason,
+            execution_note=execution_note,
+            capability_label=_capability_label(capability),
+            state_label=first.state_label,
+            unknown_reason_label=first.unknown_reason_label,
+            execution_note_label=first.execution_note_label,
+            human_summary="",
+        )
+        results.append(replace(group, human_summary=_group_summary(group)))
+    return tuple(sorted(results, key=_group_sort_key))
+
+
+def _group_summary(group: AnalysisCoveragePresentationGroup) -> str:
+    count = group.source_count
+    if (
+        group.capability == "deep_javascript_route_extraction"
+        and group.source_role == "deep_source_response"
+        and group.state is AnalysisCoverageState.ANALYSED
+        and group.outcome is AnalysisCoverageOutcome.FINDING_PRESENT
+        and group.total_finding_count is not None
+    ):
+        source = "source was" if count == 1 else "sources were"
+        finding_count = group.total_finding_count
+        finding = "finding" if finding_count == 1 else "findings"
+        return (
+            f"{count} retained JavaScript {source} analysed and produced "
+            f"{finding_count} source-attributed route {finding}."
+        )
+    source = "source" if count == 1 else "sources"
+    return (
+        f"{count} {_human_label(group.source_role)} {source}: "
+        f"{group.state_label}."
+    )
+
+
+def _group_sort_key(group: AnalysisCoveragePresentationGroup) -> tuple[str, ...]:
+    return (
+        group.capability,
+        group.source_role,
+        group.state.value,
+        group.outcome.value if group.outcome is not None else "",
+        group.unknown_reason.value if group.unknown_reason is not None else "",
+        group.execution_note.value if group.execution_note is not None else "",
+    )
+
+
+def _human_label(value: str) -> str:
+    return value.replace("_", " ").strip().capitalize()
+
+
+def _capability_label(value: str) -> str:
+    if value == "deep_javascript_route_extraction":
+        return "JavaScript route analysis"
+    return _human_label(value)
 
 
 def _present(item: AnalysisCoverageItem) -> AnalysisCoveragePresentationItem:

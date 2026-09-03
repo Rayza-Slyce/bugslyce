@@ -281,6 +281,10 @@ def build_html_report_model(
     operator_brief = (
         persisted_operator_brief
         if persisted_operator_brief is not None
+        and (
+            persisted_operator_brief.threads
+            or persisted_operator_brief.dispositions
+        )
         else build_operator_brief_view(operator_summary)
     )
     human_triage_brief = build_human_triage_brief(
