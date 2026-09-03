@@ -209,6 +209,7 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         encoding="utf-8",
     )
     observed: dict[str, object] = {}
+    progress_events: list[object] = []
 
     monkeypatch.setattr(pipeline, "build_project_state", lambda _path: state)
     monkeypatch.setattr(
@@ -258,8 +259,11 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         actual_plan,
         *,
         output_dir,
+        progress_callback,
         **_kwargs,
     ):
+        observed["progress_callback"] = progress_callback
+        progress_callback(SimpleNamespace(completed=1, total=1))
         observed["run_inputs"] = (
             actual_runtime,
             actual_state,
@@ -310,9 +314,11 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         ),
     )
 
-    message, output_paths, _updates = pipeline._step_runners(context, None)[
-        "PIPELINE-STEP-007"
-    ]()
+    message, output_paths, _updates = pipeline._step_runners(
+        context,
+        None,
+        gobuster_progress_callback=progress_events.append,
+    )["PIPELINE-STEP-007"]()
 
     build_inputs = observed["build_inputs"]
     limits = build_inputs[4]
@@ -332,6 +338,9 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         observed["root_plan"],
         Path(runtime.project.output_dir),
     )
+    assert observed["progress_callback"] is not None
+    assert len(progress_events) == 1
+    assert progress_events[0].completed == progress_events[0].total == 1
     assert context["wp4_root_plan"] is observed["root_plan"]
     assert context["wp4_root_result"] is observed["root_result"]
     assert context["wp4_programme_orchestration"] is orchestration

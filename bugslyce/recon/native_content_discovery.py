@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import time
+from typing import Callable
 from urllib.parse import urljoin, urlparse
 
 from bugslyce.core.models import ProjectState
@@ -40,6 +42,7 @@ from bugslyce.recon.programme_orchestration import (
     require_programme_orchestration_plan_binding,
 )
 from bugslyce.recon.project_runtime import BugBountyProjectRuntime
+from bugslyce.recon.runner import ContentDiscoveryProgressEvent
 
 
 PROFILE_WORDLIST_SELECTION_REASON = "profile_wordlist"
@@ -47,6 +50,7 @@ NATIVE_CONVENTIONAL_NEGATIVE_POLICY = "native_conventional_negative"
 NATIVE_CONTENT_BASELINE_CREATED_BY = "bugslyce-native-content-baseline"
 MAXIMUM_NATIVE_CANDIDATE_REQUESTS = MAX_INTERNAL_COMPARATOR_CANDIDATES
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
+_MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN = 20
 
 
 @dataclass(frozen=True)
@@ -296,6 +300,7 @@ def run_native_content_discovery(
     http_executor: InternalHTTPExecutor | None = None,
     output_dir: Path,
     token_factory=None,
+    progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None = None,
 ) -> NativeContentDiscoveryResult:
     """Execute a canonical native plan through the central HTTP boundary."""
 
@@ -333,6 +338,7 @@ def run_native_content_discovery(
             executor,
             output_transaction=output_transaction,
             token_factory=token_factory,
+            progress_callback=progress_callback,
         )
     finally:
         if owns_executor:
@@ -345,6 +351,7 @@ def _execute_native_plan(
     *,
     output_transaction: _NativeOutputTransaction,
     token_factory,
+    progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
 ) -> NativeContentDiscoveryResult:
     requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {}
     for request in plan.requests:
@@ -352,6 +359,14 @@ def _execute_native_plan(
 
     baselines: dict[str, ContentBaselineDecision] = {}
     for origin in requests_by_origin:
+        progress_started = time.monotonic()
+        _emit_native_progress(
+            progress_callback,
+            origin=origin,
+            completed=0,
+            total=len(requests_by_origin[origin]),
+            started_at=progress_started,
+        )
         baseline = collect_content_discovery_baseline(
             f"{origin}/",
             executor,
@@ -390,10 +405,17 @@ def _execute_native_plan(
     origin_results: list[NativeContentDiscoveryOriginResult] = []
     retained_content: dict[str, str] = {}
     for origin, requests in requests_by_origin.items():
+        progress_started = time.monotonic()
         baseline = baselines[origin]
         suppressed = 0
         retained = 0
         retained_lines: list[str] = []
+        progress_interval = max(
+            1,
+            (len(requests) + _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN - 1)
+            // _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN,
+        )
+        next_progress_completed = progress_interval
         for request in requests:
             response = executor.request_retaining_refused_redirect(
                 request.url,
@@ -407,6 +429,16 @@ def _execute_native_plan(
             else:
                 retained += 1
                 retained_lines.append(_artifact_line(request.url, response))
+            completed = suppressed + retained
+            if completed >= next_progress_completed or completed == len(requests):
+                _emit_native_progress(
+                    progress_callback,
+                    origin=origin,
+                    completed=completed,
+                    total=len(requests),
+                    started_at=progress_started,
+                )
+                next_progress_completed += progress_interval
 
         retained_content[origin] = "".join(retained_lines)
         updated_baseline = replace(
@@ -449,6 +481,27 @@ def _execute_native_plan(
         origin_results=tuple(origin_results),
         artifacts=artifacts,
         baseline_artifact_path=output_transaction.baseline_artifact_path,
+    )
+
+
+def _emit_native_progress(
+    callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
+    *,
+    origin: str,
+    completed: int,
+    total: int,
+    started_at: float,
+) -> None:
+    if callback is None or total <= 0:
+        return
+    callback(
+        ContentDiscoveryProgressEvent(
+            origin=origin,
+            completed=completed,
+            total=total,
+            elapsed_seconds=max(0.0, time.monotonic() - started_at),
+            trusted=True,
+        )
     )
 
 

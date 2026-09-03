@@ -38,10 +38,12 @@ from bugslyce.recon.content_plan import (
 )
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.http_enforcement import (
+    HTTPTransportFailure,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
 )
+from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.modes import STANDARD_RECON_PROFILE
 from bugslyce.recon.programme_orchestration import (
     build_programme_orchestration_plan,
@@ -418,6 +420,7 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         ("https://app.example.test",),
         respond,
     )
+    progress = []
     result = module.run_native_content_discovery(
         runtime,
         state,
@@ -426,6 +429,7 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         http_executor=executor,
         output_dir=tmp_path / "native-output",
         token_factory=iter(("one", "two", "three")).__next__,
+        progress_callback=progress.append,
     )
 
     assert len(transport.requests) == 5
@@ -453,6 +457,247 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
     assert "/admin" in output
     assert "/missing" not in output
     assert not artifact.path.name.startswith("gobuster")
+    assert [event.completed for event in progress] == [0, 1, 2]
+    executor.close()
+
+
+def test_native_progress_reaches_known_total_without_changing_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = tuple(f"candidate-{index:03d}" for index in range(25))
+    _install_profile(monkeypatch, tmp_path, entries)
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=25,
+            maximum_candidate_requests_per_origin=25,
+        ),
+    )
+
+    def respond(url: str) -> tuple[int, bytes]:
+        if ".bugslyce-negative-" in url:
+            return 404, url.encode("utf-8")
+        return 404, b"candidate response"
+
+    progress = []
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        respond,
+    )
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "with-progress",
+        token_factory=iter(("one", "two", "three")).__next__,
+        progress_callback=progress.append,
+    )
+
+    assert progress[0].completed == 0
+    assert progress[0].total == 25
+    assert progress[-1].completed == progress[-1].total == 25
+    assert all(event.trusted for event in progress)
+    assert all(
+        earlier.completed <= later.completed
+        for earlier, later in zip(progress, progress[1:])
+    )
+    assert len(progress) < len(plan.requests)
+    assert len(progress) <= 1 + 20
+    assert result.origin_results[0].suppressed_candidate_count == 25
+    assert result.origin_results[0].retained_candidate_count == 0
+    assert result.artifacts[0].path.read_bytes() == b""
+    assert tuple(request.url for request in transport.requests[3:]) == tuple(
+        request.url for request in plan.requests
+    )
+    executor.close()
+
+
+def test_native_multi_origin_elapsed_is_candidate_time_for_named_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _child_state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=1,
+        ),
+    )
+    origins = tuple(dict.fromkeys(request.canonical_origin for request in plan.requests))
+    assert len(origins) == 2
+
+    now = [0.0]
+    monkeypatch.setattr(
+        module,
+        "time",
+        type("FakeTime", (), {"monotonic": staticmethod(lambda: now[0])}),
+    )
+    candidate_durations = {origins[0]: 11.0, origins[1]: 3.0}
+
+    def respond(url: str) -> tuple[int, bytes]:
+        origin = http_origin_from_url(url)
+        assert origin is not None
+        if ".bugslyce-negative-" in url:
+            now[0] += 1.0
+            return 404, url.encode("utf-8")
+        now[0] += candidate_durations[origin.origin_url]
+        return 404, b"candidate response"
+
+    progress = []
+    executor, transport = _executor(runtime, origins, respond)
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "multi-origin-progress",
+        token_factory=iter(("a", "b", "c", "d", "e", "f")).__next__,
+        progress_callback=progress.append,
+    )
+
+    request_origins = tuple(
+        http_origin_from_url(request.url).origin_url
+        for request in transport.requests
+    )
+    assert request_origins == (
+        origins[0],
+        origins[0],
+        origins[0],
+        origins[1],
+        origins[1],
+        origins[1],
+        origins[0],
+        origins[1],
+    )
+    assert tuple(request.url for request in transport.requests[-2:]) == tuple(
+        request.url for request in plan.requests
+    )
+    for origin in origins:
+        events = [event for event in progress if event.origin == origin]
+        assert [event.completed for event in events] == [0, 1]
+        assert [event.total for event in events] == [1, 1]
+        assert events[0].elapsed_seconds == 0.0
+        assert events[-1].elapsed_seconds == candidate_durations[origin]
+    assert tuple(item.canonical_origin for item in result.origin_results) == origins
+    executor.close()
+
+
+def test_native_progress_callback_failure_remains_hard_before_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=1,
+            maximum_candidate_requests_per_origin=1,
+        ),
+    )
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (404, b"unused"),
+    )
+
+    def stop_progress(_event) -> None:
+        raise RuntimeError("synthetic progress callback failure")
+
+    with pytest.raises(RuntimeError, match="progress callback failure"):
+        module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=tmp_path / "callback-failure",
+            token_factory=iter(("one", "two", "three")).__next__,
+            progress_callback=stop_progress,
+        )
+
+    assert transport.requests == []
+    executor.close()
+
+
+def test_native_progress_does_not_report_completion_after_request_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(
+        monkeypatch,
+        tmp_path,
+        tuple(f"candidate-{index}" for index in range(5)),
+    )
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=5,
+            maximum_candidate_requests_per_origin=5,
+        ),
+    )
+
+    def respond(url: str) -> tuple[int, bytes]:
+        if url.endswith("/candidate-2"):
+            raise OSError("synthetic transport failure")
+        if ".bugslyce-negative-" in url:
+            return 404, url.encode("utf-8")
+        return 404, b"candidate response"
+
+    progress = []
+    executor, _transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        respond,
+    )
+    with pytest.raises(HTTPTransportFailure, match="transport_error"):
+        module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=tmp_path / "failed-progress",
+            token_factory=iter(("one", "two", "three")).__next__,
+            progress_callback=progress.append,
+        )
+
+    assert progress
+    assert progress[-1].completed < progress[-1].total
+    assert all(event.completed != event.total for event in progress)
     executor.close()
 
 

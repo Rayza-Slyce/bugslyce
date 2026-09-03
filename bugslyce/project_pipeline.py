@@ -2126,6 +2126,7 @@ def _step_runners(
                 programme_orchestration,
                 root_plan,
                 output_dir=output_dir,
+                progress_callback=gobuster_progress_callback,
             )
         except NativeContentDiscoveryBaselineRefused as exc:
             _register_native_content_discovery_baseline_artifact(
