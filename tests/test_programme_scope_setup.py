@@ -106,7 +106,13 @@ def test_show_missing_policy_and_wrong_context_are_safe(tmp_path: Path) -> None:
         project_file, print_func=output.append, error_func=errors.append
     ) == 0
     assert "Programme scope is not configured." in output
-    assert "execution remains unavailable" in " ".join(output).lower()
+    rendered_missing = " ".join(output)
+    assert (
+        "Live project reconnaissance remains unavailable until programme scope "
+        "is configured and strict preflight succeeds."
+    ) in rendered_missing
+    assert "Standard" not in rendered_missing
+    assert "Deep" not in rendered_missing
     assert errors == []
 
     wrong = _project(tmp_path / "ctf", context="ctf_lab")
@@ -204,6 +210,12 @@ def test_new_rule_flow_explains_rule_id_and_every_scope_kind_without_writing(
     assert "not an IPv4 rule" in rendered
     assert "exact_ipv4" in rendered and "127.0.0.1" in rendered
     assert "ipv4_cidr" in rendered and "192.0.2.0/24" in rendered
+    assert "Programme scope is enforced during live project reconnaissance." in rendered
+    assert "strict preflight" in rendered
+    assert "engagement policy" in rendered
+    assert "project target" in rendered
+    assert "Standard" not in rendered
+    assert "Deep" not in rendered
     assert project_file.read_bytes() == before
     assert not (project_file.parent / "programme_scope.json").exists()
 
@@ -352,9 +364,29 @@ def test_bulk_scope_review_requires_one_explicit_save(
     rendered = "\n".join(output)
     saved_at = rendered.index("Programme scope saved privately")
     review = rendered[:saved_at]
+    assert "Source: Structured manual entry" in review
+    assert "PROPOSED EXECUTABLE AUTHORITY" in review
+    assert "INCLUDE" in review
+    assert "EXCLUDE" in review
+    assert "UNRESOLVED / REQUIRES REVIEW\n- none" in review
+    assert "NON-AUTHORITY CONTEXT\n- none" in review
+    assert "Default: DENY" in review
+    assert "Exclusions override inclusions" in review
+    assert (
+        "Runtime programme-scope enforcement is active for live project "
+        "reconnaissance."
+    ) in review
+    assert "engagement-policy readiness and target evaluation" in review
+    assert "Standard" not in review
+    assert "Deep" not in review
     assert all(rule.rule_id in review for rule in policy.rules)
     assert "*.example.test" in review
     assert "https" in review and "443" in review
+    assert "No reconnaissance was executed." in rendered
+    assert (
+        "Live project reconnaissance remains subject to strict engagement-policy, "
+        "programme-scope and target preflight."
+    ) in rendered
 
 
 def test_bulk_scope_save_refusal_preserves_stored_policy(
@@ -802,6 +834,40 @@ def test_failed_save_returns_two_without_private_output(tmp_path: Path, monkeypa
     assert PRIVATE_NOTE not in combined
     assert PRIVATE_SOURCE not in combined
     assert "could not be saved safely" in combined
+
+
+def test_invalid_proposal_fails_before_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file = _project(tmp_path)
+    errors: list[str] = []
+
+    def invalid_proposal(_rules):
+        raise ValueError("invalid proposal")
+
+    monkeypatch.setattr(
+        scope_setup_module,
+        "build_manual_programme_scope_proposal",
+        invalid_proposal,
+    )
+    monkeypatch.setattr(
+        scope_setup_module,
+        "save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: pytest.fail("invalid proposal must not save"),
+    )
+
+    result = configure_project_programme_scope(
+        project_file,
+        input_func=_inputs("3"),
+        print_func=lambda _line: None,
+        error_func=errors.append,
+        now_func=lambda: pytest.fail("invalid proposal must not request time"),
+    )
+
+    assert result == 2
+    assert errors == ["Error: invalid proposal"]
+    assert load_project(project_file).programme_scope_file is None
 
 
 def test_legacy_extension_upgrade_refusal_is_safe_and_non_mutating(

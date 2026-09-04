@@ -178,7 +178,7 @@ def render_programme_scope_local_summary(
             "Programme scope is default-deny: destinations without an inclusion "
             "are not authorised.",
             "Explicit exclusions override every inclusion.",
-            "Runtime programme-scope enforcement is active for strict Standard and Deep project pipelines.",
+            "Runtime programme-scope enforcement is active for live project reconnaissance.",
             "Stored configuration authorises traffic only after engagement-policy readiness and target evaluation.",
         )
     )

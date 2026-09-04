@@ -248,7 +248,7 @@ def test_safe_summary_is_exact_deterministic_and_private() -> None:
             "Programme scope is default-deny: destinations without an inclusion "
             "are not authorised.",
             "Explicit exclusions override every inclusion.",
-            "Runtime programme-scope enforcement is active for strict Standard and Deep project pipelines.",
+            "Runtime programme-scope enforcement is active for live project reconnaissance.",
             "Stored configuration authorises traffic only after engagement-policy readiness and target evaluation.",
         )
     )
@@ -259,6 +259,8 @@ def test_safe_summary_is_exact_deterministic_and_private() -> None:
     assert "unrelated-project-private-sentinel" not in rendered
     assert "{" not in rendered
     assert "ProgrammeScope" not in rendered
+    assert "Standard" not in rendered
+    assert "Deep" not in rendered
 
 
 def test_zero_rule_summary_and_wrong_context_refusal() -> None:

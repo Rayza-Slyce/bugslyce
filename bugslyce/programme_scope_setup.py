@@ -26,6 +26,11 @@ from bugslyce.programme_scope_management import (
     replace_programme_scope_rule,
     update_programme_scope_rule_private_fields,
 )
+from bugslyce.programme_scope_proposal import (
+    ProgrammeScopeProposal,
+    build_manual_programme_scope_proposal,
+    render_programme_scope_proposal_review,
+)
 from bugslyce.project_session import (
     BugSlyceProject,
     load_project,
@@ -40,7 +45,6 @@ PrintFunc = Callable[[str], None]
 NowFunc = Callable[[], str]
 
 _CANCEL = "CANCEL"
-_DRAFT_TIMESTAMP = "1970-01-01T00:00:00Z"
 
 
 class _Cancelled(Exception):
@@ -65,8 +69,8 @@ def show_project_programme_scope(
         if policy is None:
             print_func("Programme scope is not configured.")
             print_func(
-                "Standard and Deep project execution remains unavailable until "
-                "programme scope is configured and strict preflight succeeds."
+                "Live project reconnaissance remains unavailable until programme "
+                "scope is configured and strict preflight succeeds."
             )
             return 0
         print_func(render_programme_scope_local_summary(project, policy))
@@ -133,7 +137,7 @@ def _render_initial_screen(
     print_func(f"Engagement context: {project.engagement_context}")
     print_func(f"Programme scope configured: {'yes' if policy is not None else 'no'}")
     print_func("Copy rules manually from the current authorised programme brief.")
-    print_func("Programme scope is enforced by strict Standard and Deep project pipelines.")
+    print_func("Programme scope is enforced during live project reconnaissance.")
     print_func(
         "Stored configuration alone does not authorise traffic; strict preflight "
         "must also validate engagement policy and the project target."
@@ -390,11 +394,15 @@ def _review_and_save(
     error_func: PrintFunc,
     now_func: NowFunc,
 ) -> int:
-    print_func(_render_draft(project, stored, rules))
-    if stored is not None and not programme_scope_rules_changed(stored, rules):
+    proposal = build_manual_programme_scope_proposal(rules)
+    print_func(_render_proposal_draft(project, stored, proposal))
+    if stored is not None and not programme_scope_rules_changed(
+        stored,
+        proposal.rules,
+    ):
         print_func("No programme-scope changes to save.")
         return 0
-    required = "SAVE EMPTY POLICY" if not rules else "YES"
+    required = "SAVE EMPTY POLICY" if not proposal.rules else "YES"
     confirmation = _prompt(
         input_func,
         f"Type {required} to save this private local policy: ",
@@ -405,13 +413,17 @@ def _review_and_save(
     timestamp = now_func()
     policy = (
         build_programme_scope_policy(
-            rules,
+            proposal.rules,
             schema_version=PROGRAMME_SCOPE_SCHEMA_VERSION,
             engagement_context=BUG_BOUNTY_CONTEXT,
             updated_at=timestamp,
         )
         if stored is None
-        else build_changed_programme_scope_policy(stored, rules, updated_at=timestamp)
+        else build_changed_programme_scope_policy(
+            stored,
+            proposal.rules,
+            updated_at=timestamp,
+        )
     )
     try:
         updated_project, policy_path = save_project_programme_scope_policy(
@@ -426,8 +438,8 @@ def _review_and_save(
     print_func(render_programme_scope_local_summary(updated_project, policy))
     print_func(f"Programme scope saved privately: {policy_path.name} (mode 0600).")
     print_func(
-        "No reconnaissance was executed. Standard and Deep remain subject to strict "
-        "engagement-policy, programme-scope and target preflight."
+        "No reconnaissance was executed. Live project reconnaissance remains subject "
+        "to strict engagement-policy, programme-scope and target preflight."
     )
     return 0
 
@@ -437,16 +449,36 @@ def _render_draft(
     stored: ProgrammeScopePolicy | None,
     rules: tuple[ProgrammeScopeRule, ...],
 ) -> str:
-    timestamp = stored.updated_at if stored is not None else _DRAFT_TIMESTAMP
-    draft = build_programme_scope_policy(rules, updated_at=timestamp)
-    rendered = render_programme_scope_local_summary(project, draft)
-    if stored is None:
-        return rendered.replace(
-            f"Updated at: {_DRAFT_TIMESTAMP}",
-            "Updated at: not saved yet",
-            1,
+    return _render_proposal_draft(
+        project,
+        stored,
+        build_manual_programme_scope_proposal(rules),
+    )
+
+
+def _render_proposal_draft(
+    project: BugSlyceProject,
+    stored: ProgrammeScopePolicy | None,
+    proposal: ProgrammeScopeProposal,
+) -> str:
+    updated_at = "not saved yet" if stored is None else stored.updated_at
+    return "\n".join(
+        (
+            f"Project: {project.name}",
+            f"Engagement context: {project.engagement_context}",
+            f"Schema version: {PROGRAMME_SCOPE_SCHEMA_VERSION}",
+            f"Updated at: {updated_at}",
+            render_programme_scope_proposal_review(proposal),
+            (
+                "Runtime programme-scope enforcement is active for live project "
+                "reconnaissance."
+            ),
+            (
+                "Stored configuration authorises traffic only after engagement-policy "
+                "readiness and target evaluation."
+            ),
         )
-    return rendered
+    )
 
 
 def _find_rule(
