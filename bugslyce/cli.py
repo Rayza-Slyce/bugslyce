@@ -52,6 +52,7 @@ from bugslyce.programme_scope_setup import (
 )
 from bugslyce.project_pipeline import (
     NORMAL_PIPELINE_PROFILE,
+    ProjectPipelineProgressOutput,
     ProjectPipelineFailed,
     format_exception_diagnostic,
     render_project_pipeline_failure_guidance,
@@ -1347,12 +1348,13 @@ def _project(args: argparse.Namespace) -> int:
             )
             print("No pipeline phase was executed.", file=sys.stderr)
             return 2
+        progress_output = ProjectPipelineProgressOutput(sys.stdout)
         try:
             result = run_project_pipeline(
                 project_file=args.project_file,
                 profile=NORMAL_PIPELINE_PROFILE,
                 resume=args.resume,
-                progress_callback=print,
+                progress_callback=progress_output,
             )
         except ProjectPipelineFailed as exc:
             result = exc.result
@@ -1364,6 +1366,8 @@ def _project(args: argparse.Namespace) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             print("No pipeline phase was executed.", file=sys.stderr)
             return 2
+        finally:
+            progress_output.finish()
         print(render_project_pipeline_summary(result))
         return 0
 

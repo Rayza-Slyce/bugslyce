@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 import json
+import os
 from pathlib import Path
 import textwrap
-from typing import Callable
+from typing import Callable, TextIO
 
 from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.core.engagement_policy import READINESS_FUTURE_ENFORCEMENT
@@ -489,6 +490,99 @@ class ResumeAssessment:
     preserve_canonical_pipeline_metadata: bool = False
 
 
+class ProjectPipelineProgressOutput:
+    """Render pipeline messages and bounded progress to one output stream."""
+
+    def __init__(
+        self,
+        stream: TextIO,
+        *,
+        terminal_width: Callable[[], int | None] | None = None,
+    ) -> None:
+        self._stream = stream
+        self._terminal_width = terminal_width
+        self._live_line = False
+
+    def __call__(self, message: str) -> None:
+        self._finish_live_line()
+        self._stream.write(f"{message}\n")
+        self._stream.flush()
+
+    def content_discovery_progress(
+        self,
+        message: str,
+        *,
+        complete: bool,
+        compact_message: str | None = None,
+        essential_message: str | None = None,
+        origin: str | None = None,
+    ) -> None:
+        if not self._stream.isatty():
+            self._stream.write(f"{message}\n")
+            self._stream.flush()
+            return
+
+        payload = self._fit_tty_progress(
+            compact_message or message,
+            essential_message or compact_message or message,
+            origin,
+        )
+        self._stream.write(f"\r{payload}\x1b[K")
+        self._live_line = True
+        if complete:
+            self._finish_live_line()
+        self._stream.flush()
+
+    def finish(self) -> None:
+        """Terminate an interrupted live line, if one is active."""
+
+        if self._finish_live_line():
+            self._stream.flush()
+
+    def _finish_live_line(self) -> bool:
+        if not self._live_line:
+            return False
+        self._stream.write("\n")
+        self._live_line = False
+        return True
+
+    def _fit_tty_progress(
+        self,
+        message: str,
+        essential_message: str,
+        origin: str | None,
+    ) -> str:
+        width = self._read_terminal_width()
+        if width is None:
+            return essential_message
+
+        limit = max(1, width - 1)
+        preferred = message if len(message) <= limit else essential_message
+        core = preferred[:limit]
+        if len(preferred) > limit or not origin:
+            return core
+
+        available = limit - len(core) - 1
+        if available < 4:
+            return core
+        if len(origin) <= available:
+            return f"{core} {origin}"
+        return f"{core} {origin[: available - 3]}..."
+
+    def _read_terminal_width(self) -> int | None:
+        try:
+            width = (
+                self._terminal_width()
+                if self._terminal_width is not None
+                else os.get_terminal_size(self._stream.fileno()).columns
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
+        if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
+            return None
+        return width
+
+
 def enforce_project_execution_policy(
     project: object,
     profile: str | None = None,
@@ -642,18 +736,42 @@ def run_project_pipeline(
         else:
             gobuster_indeterminate_origins.add(event.origin)
 
-        _emit(
+        rendered_progress = render_content_discovery_progress(
+            origin=event.origin,
+            completed=event.completed,
+            total=event.total,
+            elapsed_seconds=event.elapsed_seconds,
+            trusted=event.trusted,
+        )
+        compact_progress = rendered_progress.removesuffix(
+            f" {event.origin}"
+        ).replace("Content discovery", "Discovery", 1)
+        compact_parts = compact_progress.split()
+        if (
+            len(compact_parts) > 1
+            and compact_parts[1].startswith("[")
+            and compact_parts[1].endswith("]")
+            and set(compact_parts[1][1:-1]) <= {"#", "-"}
+        ):
+            del compact_parts[1]
+        essential_progress = " ".join(compact_parts)
+        _emit_content_discovery_progress(
             progress_callback,
-            (
-                f"[{content_step_position}/{total_steps}] {content_step_name}: "
-                + render_content_discovery_progress(
-                    origin=event.origin,
-                    completed=event.completed,
-                    total=event.total,
-                    elapsed_seconds=event.elapsed_seconds,
-                    trusted=event.trusted,
-                )
+            f"[{content_step_position}/{total_steps}] {content_step_name}: "
+            + rendered_progress,
+            complete=(
+                event.trusted
+                and event.completed is not None
+                and event.total is not None
+                and event.completed >= event.total
             ),
+            compact_message=(
+                f"[{content_step_position}/{total_steps}] {compact_progress}"
+            ),
+            essential_message=(
+                f"[{content_step_position}/{total_steps}] {essential_progress}"
+            ),
+            origin=event.origin,
         )
 
     gobuster_progress_callback = (
@@ -3426,3 +3544,27 @@ def _write_incomplete_phase_metadata(exc, output_dir: Path, plan_dir: Path) -> N
 def _emit(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _emit_content_discovery_progress(
+    callback: Callable[[str], None] | None,
+    message: str,
+    *,
+    complete: bool,
+    compact_message: str | None = None,
+    essential_message: str | None = None,
+    origin: str | None = None,
+) -> None:
+    if callback is None:
+        return
+    live_renderer = getattr(callback, "content_discovery_progress", None)
+    if callable(live_renderer):
+        live_renderer(
+            message,
+            complete=complete,
+            compact_message=compact_message,
+            essential_message=essential_message,
+            origin=origin,
+        )
+        return
+    callback(message)

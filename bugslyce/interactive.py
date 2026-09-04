@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 from typing import Callable
 
 from bugslyce.branding import get_banner
@@ -26,6 +27,7 @@ from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     NORMAL_PIPELINE_PROFILE,
     PIPELINE_JSON_FILENAME,
+    ProjectPipelineProgressOutput,
     ProjectPipelineFailed,
     STANDARD_PIPELINE_PROFILE,
     render_project_pipeline_failure_guidance,
@@ -399,12 +401,17 @@ def _run_pipeline(
     profile: str,
     resume: bool,
 ) -> int:
+    progress_callback = (
+        ProjectPipelineProgressOutput(sys.stdout)
+        if print_func is print
+        else print_func
+    )
     try:
         result = run_project_pipeline(
             project_file=project_file,
             profile=profile,
             resume=resume,
-            progress_callback=print_func,
+            progress_callback=progress_callback,
         )
     except ProjectPipelineFailed as exc:
         result = exc.result
@@ -416,6 +423,9 @@ def _run_pipeline(
         print_func(f"Error: {exc}")
         print_func("No pipeline phase was executed.")
         return 2
+    finally:
+        if isinstance(progress_callback, ProjectPipelineProgressOutput):
+            progress_callback.finish()
     print_func(render_project_pipeline_summary(result))
     return 0
 
