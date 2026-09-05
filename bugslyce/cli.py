@@ -50,6 +50,9 @@ from bugslyce.programme_scope_setup import (
     configure_project_programme_scope,
     show_project_programme_scope,
 )
+from bugslyce.programme_scope_hackerone_import import (
+    import_hackerone_programme_scope,
+)
 from bugslyce.project_pipeline import (
     NORMAL_PIPELINE_PROFILE,
     ProjectPipelineProgressOutput,
@@ -442,6 +445,24 @@ def _build_parser() -> argparse.ArgumentParser:
             type=Path,
             help="Path to bugslyce_project.json.",
         )
+    hackerone_import_parser = programme_scope_subparsers.add_parser(
+        "import-hackerone",
+        help="Review and import one local HackerOne scope CSV.",
+    )
+    hackerone_import_parser.add_argument(
+        "--project",
+        dest="project_file",
+        required=True,
+        type=Path,
+        help="Path to bugslyce_project.json.",
+    )
+    hackerone_import_parser.add_argument(
+        "--csv",
+        dest="hackerone_csv",
+        required=True,
+        type=Path,
+        help="Path to one local HackerOne scope CSV export.",
+    )
     project_run_parser.add_argument(
         "--confirm",
         action="store_true",
@@ -1401,6 +1422,11 @@ def _project(args: argparse.Namespace) -> int:
             return show_project_programme_scope(args.project_file)
         if args.programme_scope_command == "configure":
             return configure_project_programme_scope(args.project_file)
+        if args.programme_scope_command == "import-hackerone":
+            return import_hackerone_programme_scope(
+                args.project_file,
+                args.hackerone_csv,
+            )
         print("Error: programme-scope command required.", file=sys.stderr)
         return 2
 

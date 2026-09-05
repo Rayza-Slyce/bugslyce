@@ -1217,6 +1217,7 @@ def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
             "3",
             "1",
             "YES",
+            "2",
             "",
         ]
     )
@@ -1235,6 +1236,139 @@ def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
     assert stages == ["policy", "scope"]
     assert any("Run Reconnaissance now?" in prompt for prompt in prompts)
     assert "Reconnaissance was not started." in output
+
+
+def test_programme_scope_menu_dispatches_hackerone_import_once(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from bugslyce.interactive import _configure_bug_bounty_programme_scope
+
+    project_file = tmp_path / "project" / "bugslyce_project.json"
+    calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        "bugslyce.interactive.import_hackerone_programme_scope",
+        lambda project, csv_path, **_kwargs: calls.append((project, csv_path)) or 0,
+    )
+    output: list[str] = []
+    iter_values = iter(("1", "scope.csv"))
+
+    assert _configure_bug_bounty_programme_scope(
+        project_file,
+        input_func=lambda _prompt: next(iter_values),
+        print_func=output.append,
+        error_func=pytest.fail,
+        cwd=tmp_path,
+    ) == 0
+    assert calls == [(project_file, tmp_path / "scope.csv")]
+    assert "Import HackerOne CSV" in "\n".join(output)
+    assert "Configure manually" in "\n".join(output)
+
+
+def test_programme_scope_menu_preserves_manual_and_back_paths(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from bugslyce.interactive import _configure_bug_bounty_programme_scope
+
+    project_file = tmp_path / "project" / "bugslyce_project.json"
+    manual_calls: list[Path] = []
+    import_calls: list[Path] = []
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_programme_scope",
+        lambda project, **_kwargs: manual_calls.append(project) or 0,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.import_hackerone_programme_scope",
+        lambda _project, csv_path, **_kwargs: import_calls.append(csv_path) or 0,
+    )
+    manual_values = iter(("2",))
+    back_values = iter(("3",))
+
+    assert _configure_bug_bounty_programme_scope(
+        project_file,
+        input_func=lambda _prompt: next(manual_values),
+        print_func=lambda _line: None,
+        error_func=pytest.fail,
+        cwd=tmp_path,
+    ) == 0
+    assert manual_calls == [project_file]
+    assert _configure_bug_bounty_programme_scope(
+        project_file,
+        input_func=lambda _prompt: next(back_values),
+        print_func=lambda _line: None,
+        error_func=pytest.fail,
+        cwd=tmp_path,
+    ) is None
+    assert import_calls == []
+
+
+def test_csv_path_back_returns_to_scope_menu_without_calling_importer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from bugslyce.interactive import _configure_bug_bounty_programme_scope
+
+    project_file = tmp_path / "project" / "bugslyce_project.json"
+    import_calls: list[tuple[Path, Path]] = []
+    manual_calls: list[Path] = []
+    monkeypatch.setattr(
+        "bugslyce.interactive.import_hackerone_programme_scope",
+        lambda project, csv_path, **_kwargs: import_calls.append((project, csv_path)) or 0,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_programme_scope",
+        lambda project, **_kwargs: manual_calls.append(project) or 0,
+    )
+    answers = iter(("1", "BACK", "2"))
+
+    assert _configure_bug_bounty_programme_scope(
+        project_file,
+        input_func=lambda _prompt: next(answers),
+        print_func=lambda _line: None,
+        error_func=pytest.fail,
+        cwd=tmp_path,
+    ) == 0
+    assert import_calls == []
+    assert manual_calls == [project_file]
+
+
+def test_programme_scope_back_stops_new_project_before_scope_completion(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    output: list[str] = []
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **_kwargs: _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            saved=True, cancelled=False, policy=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.assess_engagement_policy",
+        lambda _policy: SimpleNamespace(not_ready_reasons=()),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.load_project",
+        lambda *_args, **_kwargs: pytest.fail("BACK must not continue scope completion"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *_args, **_kwargs: pytest.fail("BACK must not start reconnaissance"),
+    )
+    answers = iter(("1", "demo", "10.10.10.10", "projects", "3", "1", "YES", "3"))
+
+    assert run_interactive_launcher(
+        input_func=lambda _prompt: next(answers),
+        print_func=output.append,
+        cwd=tmp_path,
+    ) == 0
+    assert "Programme-scope setup was left unfinished." in "\n".join(output)
 
 
 def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
@@ -1282,6 +1416,7 @@ def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
             "3",
             "1",
             "YES",
+            "2",
         ]
     )
 

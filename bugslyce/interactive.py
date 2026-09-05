@@ -23,6 +23,9 @@ from bugslyce.engagement_policy_setup import (
     show_project_policy,
 )
 from bugslyce.programme_scope_setup import configure_project_programme_scope
+from bugslyce.programme_scope_hackerone_import import (
+    import_hackerone_programme_scope,
+)
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     NORMAL_PIPELINE_PROFILE,
@@ -233,12 +236,18 @@ def _start_new_project(
             print_func("No network requests were made.")
             return 0
 
-        scope_exit_code = configure_project_programme_scope(
+        scope_exit_code = _configure_bug_bounty_programme_scope(
             project_file,
             input_func=input_func,
             print_func=print_func,
             error_func=print_func,
+            cwd=cwd,
         )
+        if scope_exit_code is None:
+            print_func("Programme-scope setup was left unfinished.")
+            print_func("No reconnaissance was started.")
+            print_func("No network requests were made.")
+            return 0
         if scope_exit_code != 0:
             print_func("Programme-scope setup did not complete successfully.")
             print_func("No network requests were made.")
@@ -277,6 +286,49 @@ def _start_new_project(
         return 0
 
     return _run_pipeline(project_file, print_func, profile=profile, resume=False)
+
+
+def _configure_bug_bounty_programme_scope(
+    project_file: Path,
+    *,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    error_func: PrintFunc,
+    cwd: Path,
+) -> int | None:
+    """Offer the normal manual and HackerOne programme-scope setup paths."""
+
+    while True:
+        print_func("Programme scope")
+        print_func("1. Import HackerOne CSV")
+        print_func("2. Configure manually")
+        print_func("3. Back")
+        choice = _prompt_choice(
+            input_func,
+            "Select programme-scope setup",
+            {"1", "2", "3"},
+        )
+        if choice == "3":
+            return None
+        if choice == "2":
+            return configure_project_programme_scope(
+                project_file,
+                input_func=input_func,
+                print_func=print_func,
+                error_func=error_func,
+            )
+        csv_value = _prompt_text(input_func, "HackerOne CSV path (or BACK)")
+        if csv_value.upper() == "BACK":
+            continue
+        if csv_value.upper() == "CANCEL":
+            return None
+        return import_hackerone_programme_scope(
+            project_file,
+            _resolve_prompt_path(csv_value, cwd),
+            input_func=input_func,
+            print_func=print_func,
+            error_func=error_func,
+        )
 
 
 def _resume_existing_project(

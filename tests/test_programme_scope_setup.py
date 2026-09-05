@@ -28,7 +28,13 @@ from bugslyce.core.programme_scope import (
 from bugslyce.core.programme_scope_store import save_programme_scope_policy
 from bugslyce.programme_scope_setup import (
     configure_project_programme_scope,
+    review_and_save_programme_scope_proposal,
     show_project_programme_scope,
+)
+from bugslyce.programme_scope_proposal import (
+    ProgrammeScopeProposalUnresolvedItem,
+    build_manual_programme_scope_proposal,
+    build_programme_scope_proposal,
 )
 from bugslyce.project_session import (
     initialize_project,
@@ -96,6 +102,97 @@ def test_show_configured_policy_is_deterministic_and_private(tmp_path: Path) -> 
     assert "host | include | exact_hostname | example.test" in rendered
     assert PRIVATE_NOTE not in rendered
     assert PRIVATE_SOURCE not in rendered
+
+
+def test_complete_external_proposal_uses_existing_review_confirmation_and_save_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_file = _project(tmp_path)
+    proposal = build_manual_programme_scope_proposal(_policy().rules)
+    real_save = scope_setup_module.save_project_programme_scope_policy
+    calls = 0
+
+    def counted_save(path, policy):
+        nonlocal calls
+        calls += 1
+        return real_save(path, policy)
+
+    monkeypatch.setattr(scope_setup_module, "save_project_programme_scope_policy", counted_save)
+    output: list[str] = []
+    assert review_and_save_programme_scope_proposal(
+        project_file,
+        proposal,
+        input_func=_inputs("YES"),
+        print_func=output.append,
+        error_func=pytest.fail,
+        now_func=lambda: CHANGED_TIME,
+    ) == 0
+    assert calls == 1
+    assert load_project_programme_scope_policy(load_project(project_file)) is not None
+    assert "PROPOSED EXECUTABLE AUTHORITY" in "\n".join(output)
+
+
+def test_external_proposal_refusal_eof_and_unresolved_never_save(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_file = _project(tmp_path)
+    proposal = build_manual_programme_scope_proposal(_policy().rules)
+    monkeypatch.setattr(
+        scope_setup_module,
+        "save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: pytest.fail("unconfirmed proposal must not save"),
+    )
+    assert review_and_save_programme_scope_proposal(
+        project_file,
+        proposal,
+        input_func=_inputs("NO"),
+        print_func=lambda _line: None,
+        error_func=pytest.fail,
+        now_func=lambda: pytest.fail("refusal must not request a timestamp"),
+    ) == 0
+    cancelled_output: list[str] = []
+    assert review_and_save_programme_scope_proposal(
+        project_file,
+        proposal,
+        input_func=_inputs("CANCEL"),
+        print_func=cancelled_output.append,
+        error_func=pytest.fail,
+        now_func=lambda: pytest.fail("cancellation must not request a timestamp"),
+    ) == 0
+    assert "stored values are unchanged" in "\n".join(cancelled_output)
+    errors: list[str] = []
+    assert review_and_save_programme_scope_proposal(
+        project_file,
+        proposal,
+        input_func=lambda _prompt: (_ for _ in ()).throw(EOFError),
+        print_func=lambda _line: None,
+        error_func=errors.append,
+        now_func=lambda: pytest.fail("EOF must not request a timestamp"),
+    ) == 2
+    assert errors == ["Error: programme-scope input ended unexpectedly."]
+
+    unresolved = build_programme_scope_proposal(
+        source=proposal.source,
+        rules=proposal.rules,
+        unresolved_items=(
+            ProgrammeScopeProposalUnresolvedItem(
+                item_id="pending-row",
+                description="Synthetic source row requires review.",
+            ),
+        ),
+    )
+    errors.clear()
+    assert review_and_save_programme_scope_proposal(
+        project_file,
+        unresolved,
+        input_func=pytest.fail,
+        print_func=lambda _line: None,
+        error_func=errors.append,
+        now_func=lambda: pytest.fail("invalid proposal must not request a timestamp"),
+    ) == 2
+    assert errors == [
+        "Error: Programme-scope proposal must be fully resolved before review and save."
+    ]
 
 
 def test_show_missing_policy_and_wrong_context_are_safe(tmp_path: Path) -> None:

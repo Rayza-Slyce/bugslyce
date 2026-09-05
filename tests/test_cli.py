@@ -159,12 +159,12 @@ def test_cli_project_programme_scope_help_registers_exact_commands(capsys) -> No
     assert "usage: bugslyce project programme-scope" in captured.out
     assert "show" in captured.out
     assert "configure" in captured.out
+    assert "import-hackerone" in captured.out
     assert "delete" not in captured.out
-    assert "import" not in captured.out
     assert "export" not in captured.out
 
 
-@pytest.mark.parametrize("command", ("show", "configure"))
+@pytest.mark.parametrize("command", ("show", "configure", "import-hackerone"))
 def test_cli_project_programme_scope_requires_project(command: str, capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["project", "programme-scope", command])
@@ -172,6 +172,20 @@ def test_cli_project_programme_scope_requires_project(command: str, capsys) -> N
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--project" in captured.err
+
+
+def test_cli_hackerone_import_requires_csv(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "project", "programme-scope", "import-hackerone",
+                "--project", "project.json",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "--csv" in captured.err
 
 
 def test_cli_project_programme_scope_dispatches_show(monkeypatch) -> None:
@@ -198,6 +212,22 @@ def test_cli_project_programme_scope_dispatches_configure_and_exit_code(monkeypa
         ["project", "programme-scope", "configure", "--project", "project.json"]
     ) == 2
     assert calls == [Path("project.json")]
+
+
+def test_cli_project_programme_scope_dispatches_hackerone_import(monkeypatch) -> None:
+    calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        cli_module,
+        "import_hackerone_programme_scope",
+        lambda project, csv_path: calls.append((project, csv_path)) or 2,
+    )
+    assert main(
+        [
+            "project", "programme-scope", "import-hackerone",
+            "--project", "project.json", "--csv", "scope.csv",
+        ]
+    ) == 2
+    assert calls == [(Path("project.json"), Path("scope.csv"))]
 
 
 def test_cli_run_help_exits_successfully(capsys) -> None:

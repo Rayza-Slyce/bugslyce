@@ -120,6 +120,50 @@ def configure_project_programme_scope(
         return 2
 
 
+def review_and_save_programme_scope_proposal(
+    project_path: Path,
+    proposal: ProgrammeScopeProposal,
+    *,
+    input_func: InputFunc = input,
+    print_func: PrintFunc = print,
+    error_func: PrintFunc = _stderr_print,
+    now_func: NowFunc = utc_now_iso,
+) -> int:
+    """Review one complete proposal and cross the existing atomic save boundary."""
+
+    try:
+        if not isinstance(proposal, ProgrammeScopeProposal):
+            raise ValueError("Programme-scope review requires a canonical proposal.")
+        if proposal.unresolved_items:
+            raise ValueError(
+                "Programme-scope proposal must be fully resolved before review and save."
+            )
+        project = _load_bug_bounty_project(project_path)
+        stored = load_project_programme_scope_policy(project)
+        return _review_and_save_proposal(
+            Path(project_path),
+            project,
+            stored,
+            proposal,
+            input_func=input_func,
+            print_func=print_func,
+            error_func=error_func,
+            now_func=now_func,
+        )
+    except _Cancelled:
+        print_func("Programme-scope save cancelled; stored values are unchanged.")
+        return 0
+    except EOFError:
+        error_func("Error: programme-scope input ended unexpectedly.")
+        return 2
+    except ValueError as exc:
+        error_func(f"Error: {exc}")
+        return 2
+    except (OSError, UnicodeError):
+        error_func("Error: programme scope could not be read or saved safely.")
+        return 2
+
+
 def _load_bug_bounty_project(project_path: Path) -> BugSlyceProject:
     project = load_project(Path(project_path))
     if project.engagement_context != BUG_BOUNTY_CONTEXT:
@@ -395,6 +439,35 @@ def _review_and_save(
     now_func: NowFunc,
 ) -> int:
     proposal = build_manual_programme_scope_proposal(rules)
+    return _review_and_save_proposal(
+        project_path,
+        project,
+        stored,
+        proposal,
+        input_func=input_func,
+        print_func=print_func,
+        error_func=error_func,
+        now_func=now_func,
+    )
+
+
+def _review_and_save_proposal(
+    project_path: Path,
+    project: BugSlyceProject,
+    stored: ProgrammeScopePolicy | None,
+    proposal: ProgrammeScopeProposal,
+    *,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    error_func: PrintFunc,
+    now_func: NowFunc,
+) -> int:
+    if not isinstance(proposal, ProgrammeScopeProposal):
+        raise ValueError("Programme-scope review requires a canonical proposal.")
+    if proposal.unresolved_items:
+        raise ValueError(
+            "Programme-scope proposal must be fully resolved before review and save."
+        )
     print_func(_render_proposal_draft(project, stored, proposal))
     if stored is not None and not programme_scope_rules_changed(
         stored,
