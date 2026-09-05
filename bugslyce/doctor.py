@@ -29,7 +29,6 @@ SUPPORTED_PYTHON = (3, 11)
 REQUIRED_EXTERNAL_TOOLS = (
     ("nmap", "TCP discovery and service/version detection", ("deep",)),
     ("curl", "bounded HTTP metadata, follow-up, and body-fetch requests", ("deep",)),
-    ("gobuster", "bounded content discovery with approved wordlists", ("deep",)),
 )
 MANUAL_MODE_ID = "manual_setup"
 MODE_LABELS = {
@@ -714,7 +713,9 @@ def _legacy_resources(report: DoctorReport) -> tuple[ResourceReadiness, ...]:
 
 def _legacy_modes(report: DoctorReport) -> tuple[ModeReadiness, ...]:
     core_ready = report.python_supported and report.project_commands_available
-    recon_ready = core_ready and report.bundled_wordlist_available and all(report.tool_paths.get(tool) for tool in ("nmap", "curl", "gobuster"))
+    recon_ready = core_ready and report.bundled_wordlist_available and all(
+        report.tool_paths.get(tool) for tool in ("nmap", "curl")
+    )
     return (
         ModeReadiness(MANUAL_MODE_ID, MODE_LABELS[MANUAL_MODE_ID], "ready" if core_ready else "blocked"),
         ModeReadiness("quick", MODE_LABELS["quick"], "ready" if recon_ready else "blocked"),

@@ -22,6 +22,10 @@ from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.content_plan import DEEP_BOUNDED_CORE_PROFILE
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.deep_collection_policy import DeepCollectionRequest
+from bugslyce.recon.native_content_discovery import (
+    NativeContentDiscoveryArtifact,
+    NativeContentDiscoveryResult,
+)
 from bugslyce.recon.deep_shallow_route_followup import DEFAULT_MAX_REQUESTS
 
 
@@ -80,16 +84,18 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     fetch_records: list[tuple[str, str]] = []
 
     _patch_local_base_pipeline(monkeypatch, output_dir)
+    _patch_native_step_seven(monkeypatch, output_dir)
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
-        lambda plan_path, scope_file, **_kwargs: _write_sitemap_content_discovery(
-            output_dir,
-            plan_path,
-        ),
+        "bugslyce.project_pipeline.build_programme_orchestration_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.write_content_discovery_execution_result",
-        lambda result, output_dir: (output_dir / "content-run.json", output_dir / "content-run.md"),
+        "bugslyce.project_pipeline.build_native_content_discovery_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(profile=DEEP_BOUNDED_CORE_PROFILE),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_native_content_discovery",
+        lambda *_args, **_kwargs: _write_sitemap_native_content_discovery(output_dir),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.run_content_followup_workflow",
@@ -153,7 +159,6 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     local_runbook = (output_dir / "runbook.md").read_text(encoding="utf-8")
     assert "Pipeline steps satisfied: 15/15" in local_runbook
     assert "Deep pipeline phases: 2/2" in local_runbook
-    assert "Review the Operator Summary and raw evidence manually." in local_runbook
     assert "Optional bounded" in local_runbook
 
     deep_report = (output_dir / "deep_recon_review.md").read_text(encoding="utf-8")
@@ -246,7 +251,6 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert "* Output directory: `.`" in packed_runbook
     assert "* Project file: `bugslyce_project.json`" in packed_runbook
     assert "Pipeline steps satisfied: 15/15" in packed_runbook
-    assert "Review the Operator Summary and raw evidence manually." in packed_runbook
     assert "review the Operator Summary in `report.md`" in packed_status_markdown
     assert "Optional additional bounded collection:" in packed_status_markdown
     assert "Pipeline steps satisfied: 15/15" in packed_runbook
@@ -363,7 +367,7 @@ def _ready_doctor():
             blocked_workflows=("quick", "standard", "deep"),
             problem=None,
         )
-        for name in ("nmap", "curl", "gobuster")
+        for name in ("nmap", "curl")
     )
     resources = tuple(
         ResourceReadiness(
@@ -437,29 +441,110 @@ def _write_root_http_metadata(output_dir: Path):
     return SimpleNamespace(artifact_paths=[str(header)], report_path=str(output_dir / "report.md"))
 
 
-def _write_sitemap_content_discovery(output_dir: Path, plan_path: Path):
-    from bugslyce.recon.content_run import load_content_discovery_plan
+class _NativeStepSevenRuntime:
+    """Minimal current-runtime double used only by the native Step 007 fixture."""
 
-    plan = load_content_discovery_plan(plan_path)
-    assert plan.profile == DEEP_BOUNDED_CORE_PROFILE
-    step = plan.steps[0]
-    gobuster = output_dir / step.expected_artifact.file
-    gobuster.write_text("sitemap (Status: 301) [Size: 0] [--> /sitemap/]\n", encoding="utf-8")
-    manifest_path = output_dir / "recon_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["artifacts"].append(
-        {
-            "type": "gobuster",
-            "file": gobuster.name,
-            "base_url": step.origin,
-            "description": "Bounded Deep content discovery",
-        }
+    tcp_discovery_skipped = False
+
+
+def _native_step_state(output_dir: Path) -> ProjectState:
+    return ProjectState(
+        project_name="coverage-pipeline",
+        input_dir=str(output_dir),
+        processed_files=[],
+        scope_summary="Fixture scope.",
+        assets=[],
+        http_services=[],
+        endpoints=[],
+        port_services=[],
+        http_artifacts=[],
+        discovered_paths=[],
+        recon_summary=None,
+        recon_manifest=None,
+        evidence=[],
+        warnings=[],
+        generated_at="2026-07-17T00:00:00+00:00",
     )
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return SimpleNamespace(
-        profile=plan.profile,
-        artifact_paths=[str(gobuster)],
-        report_path=str(output_dir / "report.md"),
+
+
+def _patch_native_step_seven(monkeypatch, output_dir: Path) -> None:
+    """Run only Step 007 through the current native-only runtime boundary."""
+
+    import bugslyce.project_pipeline as pipeline
+
+    runtime = _NativeStepSevenRuntime()
+    monkeypatch.setattr(pipeline, "BugBountyProjectRuntime", _NativeStepSevenRuntime)
+    monkeypatch.setattr(
+        pipeline,
+        "enforce_project_execution_policy",
+        lambda *_args, **_kwargs: runtime,
+    )
+    original_step_runners = pipeline._step_runners
+
+    def step_runners(context, *args, **kwargs):
+        offline_context = dict(context)
+        offline_context["project_runtime"] = None
+        runners = original_step_runners(offline_context, *args, **kwargs)
+        native_context = dict(context)
+        native_context["project_runtime"] = runtime
+        native_runner = original_step_runners(native_context, *args, **kwargs)[
+            "PIPELINE-STEP-007"
+        ]
+        state_builder = pipeline.build_project_state
+
+        def mirror_offline(runner):
+            def run():
+                result = runner()
+                context.update(offline_context)
+                return result
+
+            return run
+
+        def run_native():
+            pipeline.build_project_state = lambda _path: _native_step_state(output_dir)
+            try:
+                result = native_runner()
+            finally:
+                pipeline.build_project_state = state_builder
+            for key in (
+                "wp4_root_plan",
+                "wp4_root_result",
+                "wp4_programme_orchestration",
+            ):
+                offline_context[key] = native_context[key]
+                context[key] = native_context[key]
+            return result
+
+        runners = {step_id: mirror_offline(runner) for step_id, runner in runners.items()}
+        runners["PIPELINE-STEP-007"] = run_native
+        return runners
+
+    monkeypatch.setattr(pipeline, "_step_runners", step_runners)
+
+
+def _write_sitemap_native_content_discovery(
+    output_dir: Path,
+) -> NativeContentDiscoveryResult:
+    artifact = output_dir / "content-discovery-internal-http-10.10.10.10-80-root.txt"
+    artifact.write_text(
+        "sitemap (Status: 301) [Size: 0] [--> /sitemap/]\n",
+        encoding="utf-8",
+    )
+    baseline = output_dir / "content_discovery_baseline.json"
+    baseline.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    return NativeContentDiscoveryResult(
+        external_commands_started=0,
+        origin_results=(),
+        artifacts=(
+            NativeContentDiscoveryArtifact(
+                artifact_type="content_discovery_internal",
+                canonical_origin="http://10.10.10.10",
+                profile=DEEP_BOUNDED_CORE_PROFILE,
+                selection_reason="profile_wordlist",
+                path=artifact,
+            ),
+        ),
+        baseline_artifact_path=baseline,
     )
 
 

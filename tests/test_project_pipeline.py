@@ -131,7 +131,6 @@ def test_pipeline_records_tcp_skip_nmap_stages_as_noops(
         "bugslyce.project_pipeline.build_doctor_report",
         lambda: _doctor(),
     )
-
     def step_runners(*_args, **_kwargs):
         runners = {
             step_id: (lambda: ("Synthetic offline phase completed.", [], {}))
@@ -1017,7 +1016,7 @@ def test_pipeline_rejects_missing_scope_and_existing_plan_directory(
 @pytest.mark.parametrize(
     ("doctor_kwargs", "message"),
     [
-        ({"gobuster": None}, "Reconnaissance is blocked.*gobuster"),
+        ({"nmap": None}, "Reconnaissance is blocked.*nmap"),
         ({"bundled": False}, "Reconnaissance is blocked.*deep-bounded-core"),
     ],
 )
@@ -1098,7 +1097,7 @@ def test_pipeline_ignores_irrelevant_missing_resource_for_selected_profile(
         run_project_pipeline(project_file, profile)
 
 
-@pytest.mark.parametrize("missing_tool", ("nmap", "curl", "gobuster"))
+@pytest.mark.parametrize("missing_tool", ("nmap", "curl"))
 @pytest.mark.parametrize("profile", (DEEP_PIPELINE_PROFILE,))
 def test_pipeline_missing_shared_tool_blocks_every_executable_profile(
     tmp_path: Path,
@@ -1128,21 +1127,21 @@ def test_pipeline_malformed_readiness_blocks_before_any_step_or_metadata(
     malformed = _structured_doctor()
     malformed = replace(
         malformed,
-        tools=tuple(tool for tool in malformed.tools if tool.name != "gobuster"),
+        tools=tuple(tool for tool in malformed.tools if tool.name != "curl"),
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_doctor_report",
         lambda: malformed,
     )
 
-    with pytest.raises(ValueError, match="gobuster.*missing"):
+    with pytest.raises(ValueError, match="curl.*missing"):
         run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE)
 
     assert not (output_dir / PIPELINE_JSON_FILENAME).exists()
     assert not (output_dir / PIPELINE_MARKDOWN_FILENAME).exists()
 
 
-def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
+def test_pipeline_forwards_native_content_discovery_progress_through_step_seven(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1151,22 +1150,23 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     progress: list[str] = []
 
-    def content_run(*_args, comparator_progress_callback=None, **_kwargs):
-        calls.append("content-run")
-        assert comparator_progress_callback is not None
-        comparator_progress_callback(
-            "250/1753 candidates checked; 7 retained; "
-            "243 baseline-equivalent; elapsed 24s"
+    def native_content_run(*_args, progress_callback=None, **_kwargs):
+        calls.append("native-content-run")
+        assert progress_callback is not None
+        progress_callback(
+            SimpleNamespace(
+                origin="http://10.10.10.10/",
+                completed=1052,
+                total=1753,
+                elapsed_seconds=277,
+                trusted=True,
+            )
         )
-        return SimpleNamespace(
-            profile="lab-root-light",
-            artifact_paths=[str(output_dir / "internal-content-comparator.txt")],
-            report_path=str(output_dir / "report.md"),
-        )
+        return SimpleNamespace()
 
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
-        content_run,
+        "bugslyce.project_pipeline.run_native_content_discovery",
+        native_content_run,
     )
 
     result = run_project_pipeline(
@@ -1178,54 +1178,6 @@ def test_pipeline_content_comparator_progress_uses_existing_step_seven_lines(
 
     assert result.final_status == "completed"
     assert "[8/15] bounded content discovery execution starting..." in progress
-    assert (
-        "[8/15] bounded content discovery execution: 250/1753 candidates checked; "
-        "7 retained; 243 baseline-equivalent; elapsed 24s"
-    ) in progress
-    assert "[8/15] bounded content discovery execution complete" in progress
-    assert all("\r" not in message for message in progress)
-
-
-def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    project_file, output_dir = _fresh_project(tmp_path)
-    calls: list[str] = []
-    _patch_successful_pipeline(monkeypatch, output_dir, calls)
-    progress: list[str] = []
-
-    def content_run(*_args, gobuster_progress_callback=None, **_kwargs):
-        calls.append("content-run")
-        assert gobuster_progress_callback is not None
-        gobuster_progress_callback(
-            SimpleNamespace(
-                origin="http://10.10.10.10/",
-                completed=1052,
-                total=1753,
-                elapsed_seconds=277,
-                trusted=True,
-            )
-        )
-        return SimpleNamespace(
-            profile="lab-root-light",
-            artifact_paths=[str(output_dir / "gobuster.txt")],
-            report_path=str(output_dir / "report.md"),
-        )
-
-    monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
-        content_run,
-    )
-
-    result = run_project_pipeline(
-        project_file,
-        NORMAL_PIPELINE_PROFILE,
-        clock=lambda: FIXED_TIME,
-        progress_callback=progress.append,
-    )
-
-    assert result.final_status == "completed"
     forwarded = [
         message
         for message in progress
@@ -1235,10 +1187,14 @@ def test_pipeline_forwards_generic_gobuster_progress_through_step_seven(
     assert any("1052/1753" in message for message in forwarded)
     assert any("60%" in message for message in forwarded)
     assert any("04:37" in message for message in forwarded)
+    assert calls.index("native-programme-orchestration") < calls.index(
+        "native-content-plan"
+    ) < calls.index("native-content-run") < calls.index("native-content-artifacts")
+    assert "[8/15] bounded content discovery execution complete" in progress
+    assert all("\r" not in message for message in progress)
 
 
-
-def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hiding_trusted_updates(
+def test_pipeline_suppresses_repeated_indeterminate_native_progress_without_hiding_trusted_updates(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1247,9 +1203,9 @@ def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hi
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     progress: list[str] = []
 
-    def content_run(*_args, gobuster_progress_callback=None, **_kwargs):
-        calls.append("content-run")
-        assert gobuster_progress_callback is not None
+    def native_content_run(*_args, progress_callback=None, **_kwargs):
+        calls.append("native-content-run")
+        assert progress_callback is not None
         events = (
             SimpleNamespace(
                 origin="http://10.10.10.10/",
@@ -1302,17 +1258,13 @@ def test_pipeline_suppresses_repeated_indeterminate_gobuster_progress_without_hi
             ),
         )
         for event in events:
-            gobuster_progress_callback(event)
+            progress_callback(event)
 
-        return SimpleNamespace(
-            profile="lab-root-light",
-            artifact_paths=[str(output_dir / "gobuster.txt")],
-            report_path=str(output_dir / "report.md"),
-        )
+        return SimpleNamespace()
 
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
-        content_run,
+        "bugslyce.project_pipeline.run_native_content_discovery",
+        native_content_run,
     )
 
     result = run_project_pipeline(
@@ -3568,7 +3520,7 @@ def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
     assert result.no_op_steps == 1
     assert "path-followup-write" not in calls
     assert "content-plan" in calls
-    assert calls.index("content-plan") < calls.index("content-run")
+    assert calls.index("content-plan") < calls.index("native-content-run")
     assert "[6/15] discovered-path follow-up no-op" in progress
     assert "export" in calls
 
@@ -3686,7 +3638,7 @@ def test_resume_uses_valid_deep_plan_and_skips_content_plan(
 
     assert result.steps[5].status == "skipped_existing"
     assert "content-plan" not in calls
-    assert "content-run" in calls
+    assert "native-content-run" in calls
 
 
 def test_resume_records_followup_noops_and_continues(
@@ -3798,7 +3750,7 @@ def test_resume_recognises_current_native_step_seven_artifact(
             "PIPELINE-STEP-009",
         )
     )
-    assert "content-run" not in calls
+    assert "native-content-run" not in calls
 
 
 def test_resume_refuses_prior_standard_profile_without_live_calls(
@@ -4299,6 +4251,11 @@ def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(
         "bugslyce.project_pipeline.build_doctor_report",
         lambda: _doctor(),
     )
+    _patch_current_native_runtime(
+        monkeypatch,
+        output_dir,
+        stub_project_state=False,
+    )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.run_nmap_discovery_workflow",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -4401,7 +4358,15 @@ def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(
         write_content_plan_fixture,
     )
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
+        "bugslyce.project_pipeline.build_programme_orchestration_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_native_content_discovery_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(profile=DEEP_BOUNDED_CORE_PROFILE),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_native_content_discovery",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError(failure)),
     )
 
@@ -4620,6 +4585,130 @@ def _fresh_project(tmp_path: Path) -> tuple[Path, Path]:
     return Path(scaffold.project_file), Path(scaffold.project.output_dir)
 
 
+class _FixtureCurrentProjectRuntime:
+    """Narrow current-runtime double for pipeline orchestration fixtures."""
+
+    tcp_discovery_skipped = False
+    service_version_permitted = True
+
+    def __init__(self) -> None:
+        self.bound_http_origins: tuple[str, ...] = ()
+
+    def nmap_discovery_runner(self) -> object:
+        return object()
+
+    def nmap_service_runner(self) -> object:
+        return object()
+
+    def curl_runner(self) -> object:
+        return object()
+
+    def bind_http_origins(self, origins: tuple[str, ...]) -> None:
+        self.bound_http_origins = origins
+
+
+def _fixture_project_state(output_dir: Path) -> ProjectState:
+    return ProjectState(
+        project_name="pipeline-test",
+        input_dir=str(output_dir),
+        processed_files=[],
+        scope_summary="Fixture scope.",
+        assets=[],
+        http_services=[],
+        endpoints=[],
+        port_services=[],
+        http_artifacts=[],
+        discovered_paths=[],
+        recon_summary=None,
+        recon_manifest=None,
+        evidence=[],
+        warnings=[],
+        generated_at="2026-06-15T12:00:00+00:00",
+    )
+
+
+def _patch_current_native_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    output_dir: Path,
+    *,
+    stub_project_state: bool = True,
+) -> _FixtureCurrentProjectRuntime:
+    """Bind fixture pipeline runs to the current native-only Step 007 contract."""
+
+    import bugslyce.project_pipeline as pipeline_module
+    import bugslyce.recon.http_metadata as http_metadata_module
+
+    runtime = _FixtureCurrentProjectRuntime()
+    monkeypatch.setattr(
+        pipeline_module,
+        "BugBountyProjectRuntime",
+        _FixtureCurrentProjectRuntime,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "enforce_project_execution_policy",
+        lambda *_args, **_kwargs: runtime,
+    )
+    if stub_project_state:
+        monkeypatch.setattr(
+            pipeline_module,
+            "build_project_state",
+            lambda _path: _fixture_project_state(output_dir),
+        )
+    monkeypatch.setattr(
+        http_metadata_module,
+        "discover_http_origins",
+        lambda *_args, **_kwargs: ["http://10.10.10.10/"],
+    )
+
+    original_step_runners = pipeline_module._step_runners
+
+    def native_step_seven_only(context, *args, **kwargs):
+        """Use the current runtime only at its native-only ownership boundary."""
+
+        legacy_context = dict(context)
+        legacy_context["project_runtime"] = None
+        runners = original_step_runners(legacy_context, *args, **kwargs)
+        native_context = dict(context)
+        native_context["project_runtime"] = runtime
+        native_runner = original_step_runners(
+            native_context,
+            *args,
+            **kwargs,
+        )["PIPELINE-STEP-007"]
+        native_state_builder = pipeline_module.build_project_state
+
+        def mirror_legacy(runner):
+            def run():
+                result = runner()
+                context.update(legacy_context)
+                return result
+
+            return run
+
+        def run_native_step_seven():
+            pipeline_module.build_project_state = lambda _path: _fixture_project_state(
+                output_dir
+            )
+            try:
+                result = native_runner()
+            finally:
+                pipeline_module.build_project_state = native_state_builder
+            context.update(native_context)
+            legacy_context.update(native_context)
+            return result
+
+        runners = {
+            step_id: mirror_legacy(runner)
+            for step_id, runner in runners.items()
+        }
+        runners["PIPELINE-STEP-007"] = run_native_step_seven
+        return runners
+
+    monkeypatch.setattr(pipeline_module, "_step_runners", native_step_seven_only)
+    return runtime
+
+
 def _patch_controlled_failure_runners(
     monkeypatch,
     calls: list[str],
@@ -4731,11 +4820,6 @@ def _tcp_skip_project_runtime(
             "--max-redirs --max-time --noproxy --output --proto --resolve --silent "
             "--show-error --user-agent --write-out",
         ),
-        "gobuster": assess_tool_capabilities(
-            "gobuster",
-            "dir --url --wordlist --threads --delay --useragent --headers value "
-            "-H value --timeout --output --follow-redirect (default false)",
-        ),
         "nmap": assess_tool_capabilities(
             "nmap", "-sT -sV -Pn -n -p --max-rate --max-retries -oN"
         ),
@@ -4774,7 +4858,6 @@ def _doctor(
     *,
     nmap: str | None = "/usr/bin/nmap",
     curl: str | None = "/usr/bin/curl",
-    gobuster: str | None = "/usr/bin/gobuster",
     bundled: bool = True,
 ) -> DoctorReport:
     tools = tuple(
@@ -4791,7 +4874,6 @@ def _doctor(
         for name, path in (
             ("nmap", nmap),
             ("curl", curl),
-            ("gobuster", gobuster),
         )
     )
     resources = tuple(
@@ -4823,7 +4905,7 @@ def _doctor(
         virtual_environment=True,
         platform_summary="Linux",
         current_working_directory="/tmp",
-        tool_paths={"nmap": nmap, "curl": curl, "gobuster": gobuster},
+        tool_paths={"nmap": nmap, "curl": curl},
         bundled_wordlist_available=bundled,
         bundled_wordlist_path="/package/lab-root-tiny.txt" if bundled else None,
         dirbuster_wordlist_available=False,
@@ -4855,7 +4937,7 @@ def _structured_doctor(
             blocked_workflows=("quick", "standard", "deep"),
             problem="not found on PATH" if tool == missing_tool else None,
         )
-        for tool in ("nmap", "curl", "gobuster")
+        for tool in ("nmap", "curl")
     )
     resources = tuple(
         ResourceReadiness(
@@ -4914,6 +4996,7 @@ def _patch_successful_pipeline(
     output_dir: Path,
     calls: list[str],
 ) -> None:
+    _patch_current_native_runtime(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_doctor_report",
         lambda: _doctor(),
@@ -5020,16 +5103,25 @@ def _patch_successful_pipeline(
         write_plan,
     )
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.run_content_discovery_workflow",
-        phase(
-            "content-run",
-            artifact_paths=[str(output_dir / "gobuster.txt")],
-            report_path=report,
-        ),
+        "bugslyce.project_pipeline.build_programme_orchestration_plan",
+        phase("native-programme-orchestration"),
     )
     monkeypatch.setattr(
-        "bugslyce.project_pipeline.write_content_discovery_execution_result",
-        writer("content-run-write"),
+        "bugslyce.project_pipeline.build_native_content_discovery_plan",
+        phase("native-content-plan", profile="deep-bounded-core"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_native_content_discovery",
+        phase("native-content-run"),
+    )
+
+    def register_native_artifacts(*_args, **_kwargs):
+        calls.append("native-content-artifacts")
+        return (output_dir / "content-discovery-internal-fixture.txt",)
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._register_native_content_discovery_artifacts",
+        register_native_artifacts,
     )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.run_content_followup_workflow",
@@ -5345,7 +5437,6 @@ def _patch_live_calls_to_fail(monkeypatch) -> None:
         "run_nmap_service_workflow",
         "run_http_metadata_workflow",
         "run_path_followup_workflow",
-        "run_content_discovery_workflow",
         "run_content_followup_workflow",
         "run_body_fetch_workflow",
         "collect_deep_source_routes_from_plan",

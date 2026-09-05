@@ -52,7 +52,6 @@ from bugslyce.recon.content_plan import (
 from bugslyce.recon.content_run import (
     ContentDiscoveryExecutionIncomplete,
     load_content_discovery_plan,
-    run_content_discovery_workflow,
     write_content_discovery_execution_result,
 )
 from bugslyce.recon.collection_confidence import (
@@ -2190,42 +2189,15 @@ def _step_runners(
         )
 
     def content_run():
-        def legacy_content_run():
-            result = (
-                run_content_discovery_workflow(
-                    plan_path,
-                    scope_file,
-                    comparator_progress_callback=comparator_progress_callback,
-                    gobuster_progress_callback=gobuster_progress_callback,
-                    runner=project_runtime.gobuster_runner(),
-                    http_executor=project_runtime.http_executor,
-                    project_runtime=project_runtime,
-                )
-                if project_runtime is not None
-                else run_content_discovery_workflow(
-                    plan_path,
-                    scope_file,
-                    comparator_progress_callback=comparator_progress_callback,
-                    gobuster_progress_callback=gobuster_progress_callback,
-                )
-            )
-            metadata = write_content_discovery_execution_result(result, plan_dir)
-            result_profile = getattr(
-                result,
-                "profile",
-                _content_discovery_profile_for_pipeline(profile),
-            )
-            return (
-                f"Approved {result_profile} content discovery completed.",
-                [*result.artifact_paths, *(str(path) for path in metadata)],
-                {"report_path": result.report_path},
-            )
-
         if project_runtime is None:
-            return legacy_content_run()
+            raise ValueError(
+                "Current project content discovery requires a bound project runtime."
+            )
         project_state = build_project_state(output_dir)
         if not isinstance(project_state, ProjectState):
-            return legacy_content_run()
+            raise ValueError(
+                "Current project content discovery requires validated ProjectState evidence."
+            )
         programme_orchestration = build_programme_orchestration_plan(
             project_runtime,
             project_state,

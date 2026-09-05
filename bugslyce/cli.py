@@ -81,12 +81,6 @@ from bugslyce.recon.content_plan import (
     render_content_discovery_plan_summary,
     write_content_discovery_plan,
 )
-from bugslyce.recon.content_run import (
-    ContentDiscoveryExecutionIncomplete,
-    render_content_discovery_execution_summary,
-    run_content_discovery_workflow,
-    write_content_discovery_execution_result,
-)
 from bugslyce.recon.content_followup import (
     ContentFollowupExecutionIncomplete,
     ContentFollowupNoWork,
@@ -2119,42 +2113,13 @@ def _recon(args: argparse.Namespace) -> int:
         return 0
 
     if args.recon_command == "content-run":
-        if not args.confirm:
-            print(
-                "Error: live content discovery requires explicit --confirm.",
-                file=sys.stderr,
-            )
-            print("No gobuster command was executed.", file=sys.stderr)
-            return 2
-        try:
-            result = run_content_discovery_workflow(
-                plan_path=args.plan_path,
-                scope_file=args.scope_file,
-                step_id=args.step_id,
-                progress_callback=print,
-            )
-            write_content_discovery_execution_result(
-                result,
-                Path(result.output_dir),
-            )
-        except ContentDiscoveryExecutionIncomplete as exc:
-            result = exc.result
-            execution_json, execution_markdown = write_content_discovery_execution_result(
-                result,
-                Path(result.output_dir),
-            )
-            print(f"Error: {exc}", file=sys.stderr)
-            print(render_content_discovery_execution_summary(result), file=sys.stderr)
-            print(f"Execution JSON path: {execution_json}", file=sys.stderr)
-            print(f"Execution Markdown path: {execution_markdown}", file=sys.stderr)
-            return 2
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            print("No gobuster command was executed.", file=sys.stderr)
-            return 2
-
-        print(render_content_discovery_execution_summary(result))
-        return 0
+        print(
+            "Error: legacy Gobuster content discovery is no longer supported; "
+            "use the project reconnaissance workflow.",
+            file=sys.stderr,
+        )
+        print("No legacy Gobuster command was executed.", file=sys.stderr)
+        return 2
 
     if args.recon_command == "content-followup":
         if not args.confirm:

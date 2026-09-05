@@ -402,8 +402,8 @@ class BugBountyExternalEnforcementSession:
         approved_origins: tuple[str, ...],
         profile: str,
         curl_capabilities: ToolCapabilities,
-        gobuster_capabilities: ToolCapabilities,
         nmap_capabilities: ToolCapabilities,
+        gobuster_capabilities: ToolCapabilities | None = None,
         programme_scope_policy: ProgrammeScopePolicy | None = None,
         ipv4_resolver: IPv4Resolver | None = None,
         http_executor: InternalHTTPExecutor | None = None,
@@ -425,8 +425,8 @@ class BugBountyExternalEnforcementSession:
             policy=self.policy,
             profile=profile,
             curl_capabilities=curl_capabilities,
-            gobuster_capabilities=gobuster_capabilities,
             nmap_capabilities=nmap_capabilities,
+            gobuster_capabilities=gobuster_capabilities,
             _provenance_token=self._token,
         )
         if not self.preflight.ready:
@@ -477,6 +477,8 @@ class BugBountyExternalEnforcementSession:
             raise ValueError("Nmap-only enforcement cannot plan Gobuster execution.")
         if self._programme_scope_policy is None:
             raise ValueError("Strict Gobuster planning requires programme scope policy.")
+        if self.gobuster_capabilities is None:
+            raise ValueError("Gobuster capability is unavailable for legacy planning.")
         return self._register_plan(build_bug_bounty_gobuster_plan(
             configuration=self.configuration,
             capabilities=self.gobuster_capabilities,
@@ -1334,8 +1336,8 @@ def build_bug_bounty_external_preflight(
     policy: EngagementPolicy,
     profile: str,
     curl_capabilities: ToolCapabilities,
-    gobuster_capabilities: ToolCapabilities,
     nmap_capabilities: ToolCapabilities,
+    gobuster_capabilities: ToolCapabilities | None = None,
     _provenance_token: object | None = None,
 ) -> ExternalExecutionPreflight:
     """Assess every selected component before any target process can start."""
@@ -1386,31 +1388,32 @@ def build_bug_bounty_external_preflight(
             curl_reason or "Strict curl identity, protocol and redirect controls are available.",
         )
     )
-    gobuster_reason = _capability_reason(
-        gobuster_capabilities, "gobuster", _GOBUSTER_REQUIRED_OPTIONS
-    )
-    if not gobuster_reason and not gobuster_capabilities.repeated_headers_supported:
-        gobuster_reason = "Gobuster repeatable custom-header support could not be proven."
-    if not gobuster_reason and not gobuster_capabilities.redirect_following_opt_in:
-        gobuster_reason = "Gobuster disabled-by-default redirect behaviour could not be proven."
-    if not http_runtime_available:
-        gobuster_reason = "Shared policy-derived HTTP enforcement configuration is unavailable."
-    if not gobuster_reason:
-        try:
-            gobuster_delay_for_rate(
-                Decimal(canonical.maximum_http_requests_per_second)
-            )
-        except ValueError as exc:
-            gobuster_reason = str(exc)
-    components.append(
-        ComponentAssessment(
-            "gobuster",
-            COMPONENT_OMITTED if gobuster_reason else COMPONENT_SUPPORTED,
-            False,
-            gobuster_reason
-            or GOBUSTER_STARTUP_DISCLOSURE,
+    if gobuster_capabilities is not None:
+        gobuster_reason = _capability_reason(
+            gobuster_capabilities, "gobuster", _GOBUSTER_REQUIRED_OPTIONS
         )
-    )
+        if not gobuster_reason and not gobuster_capabilities.repeated_headers_supported:
+            gobuster_reason = "Gobuster repeatable custom-header support could not be proven."
+        if not gobuster_reason and not gobuster_capabilities.redirect_following_opt_in:
+            gobuster_reason = "Gobuster disabled-by-default redirect behaviour could not be proven."
+        if not http_runtime_available:
+            gobuster_reason = "Shared policy-derived HTTP enforcement configuration is unavailable."
+        if not gobuster_reason:
+            try:
+                gobuster_delay_for_rate(
+                    Decimal(canonical.maximum_http_requests_per_second)
+                )
+            except ValueError as exc:
+                gobuster_reason = str(exc)
+        components.append(
+            ComponentAssessment(
+                "gobuster",
+                COMPONENT_OMITTED if gobuster_reason else COMPONENT_SUPPORTED,
+                False,
+                gobuster_reason
+                or GOBUSTER_STARTUP_DISCLOSURE,
+            )
+        )
     if canonical.tcp_discovery_policy == TCP_SKIP:
         nmap_status = COMPONENT_SUPPORTED
         nmap_reason = "TCP discovery is deliberately skipped by policy."

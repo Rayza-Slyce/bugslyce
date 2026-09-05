@@ -29,7 +29,6 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
     tool_paths = {
         "nmap": "/usr/bin/nmap",
         "curl": "/usr/bin/curl",
-        "gobuster": "/usr/bin/gobuster",
     }
 
     report = build_doctor_report(
@@ -65,7 +64,7 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
     assert "Virtual environment:" in rendered
     assert "nmap: ready (/usr/bin/nmap)" in rendered
     assert "curl: ready (/usr/bin/curl)" in rendered
-    assert "gobuster: ready (/usr/bin/gobuster)" in rendered
+    assert "gobuster:" not in rendered
     assert "lab-root-tiny: ready" in rendered
     assert "standard-bounded-core: ready" in rendered
     assert "deep-bounded-core: ready" in rendered
@@ -81,7 +80,7 @@ def test_doctor_reports_environment_tools_and_wordlists() -> None:
 def test_build_doctor_report_produces_complete_structured_readiness() -> None:
     report = _ready_report()
 
-    assert tuple(tool.name for tool in report.tools) == ("nmap", "curl", "gobuster")
+    assert tuple(tool.name for tool in report.tools) == ("nmap", "curl")
     assert tuple(resource.name for resource in report.resources) == (
         "lab-root-tiny",
         "standard-bounded-core",
@@ -89,6 +88,25 @@ def test_build_doctor_report_produces_complete_structured_readiness() -> None:
     )
     assert mode_readiness_failures(report, "deep") == ()
     assert doctor_exit_code(report) == 0
+
+
+def test_gobuster_absence_does_not_block_current_reconnaissance_readiness() -> None:
+    report = build_doctor_report(
+        which=lambda tool: f"/usr/bin/{tool}" if tool in {"nmap", "curl"} else None,
+        path_exists=lambda path: path in {
+            TINY_WORDLIST, STANDARD_BOUNDED_CORE_WORDLIST, DEEP_BOUNDED_CORE_WORDLIST
+        } or str(path).startswith("/usr/bin/"),
+        path_is_file=lambda _path: True,
+        path_is_dir=lambda _path: False,
+        path_is_executable=lambda path: str(path).startswith("/usr/bin/"),
+        path_is_readable=lambda _path: True,
+        path_size=lambda _path: 10,
+        bundled_wordlist_probe=lambda: (True, "/package/lab-root-tiny.txt"),
+    )
+
+    assert report.recon_ready is True
+    assert doctor_exit_code(report) == 0
+    assert "gobuster" not in report.tool_paths
 
 
 def test_missing_required_tools_block_recon_but_not_manual_setup() -> None:
@@ -110,11 +128,9 @@ def test_missing_required_tools_block_recon_but_not_manual_setup() -> None:
     assert report.readiness == "not ready"
     assert doctor_exit_code(report) == 2
     assert "nmap: blocked (not found)" in rendered
-    assert "gobuster: blocked (not found)" in rendered
     assert "Manual Setup Only: ready" in rendered
     assert "Reconnaissance: blocked" in rendered
     assert "Install `nmap`" in rendered
-    assert "Install `gobuster`" in rendered
     assert any("optional legacy lab-root-light" in warning for warning in report.warnings)
 
 
@@ -212,7 +228,7 @@ def test_mode_readiness_resource_blockers_are_profile_specific() -> None:
     assert set(modes) == {"manual_setup", "deep"}
 
 
-@pytest.mark.parametrize("tool", ("nmap", "curl", "gobuster"))
+@pytest.mark.parametrize("tool", ("nmap", "curl"))
 def test_mode_readiness_shared_tools_block_all_executable_modes(tool: str) -> None:
     report = _ready_report_with_missing_tool(tool)
 
@@ -266,12 +282,11 @@ def test_mode_readiness_failure_ordering_is_deterministic() -> None:
     assert mode_readiness_failures(report, "deep") == (
         "Reconnaissance is blocked: required pipeline tool `nmap` is unavailable: not found on PATH.",
         "Reconnaissance is blocked: required pipeline tool `curl` is unavailable: not found on PATH.",
-        "Reconnaissance is blocked: required pipeline tool `gobuster` is unavailable: not found on PATH.",
         "Reconnaissance is blocked: required bundled resource `deep-bounded-core` is unavailable: resource file is missing.",
     )
 
 
-@pytest.mark.parametrize("missing_tool", ("nmap", "curl", "gobuster"))
+@pytest.mark.parametrize("missing_tool", ("nmap", "curl"))
 def test_mode_readiness_missing_tool_record_blocks_all_modes(missing_tool: str) -> None:
     report = _ready_report()
     report = replace(

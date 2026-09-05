@@ -14,8 +14,8 @@ from bugslyce.recon.profiles import recon_profile_names
 
 
 EXPECTED_TOOLS = {
-    "lab-full": ("nmap", "curl", "gobuster"),
-    "bug-bounty-standard": ("nmap", "curl", "gobuster"),
+    "lab-full": ("nmap", "curl"),
+    "bug-bounty-standard": ("nmap", "curl"),
     "passive-only": (),
 }
 FORBIDDEN_COMMAND_TOKENS = (

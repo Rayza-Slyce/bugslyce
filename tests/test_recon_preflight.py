@@ -25,7 +25,7 @@ def test_lab_full_preflight_passes_with_tools_and_safe_output(tmp_path: Path, mo
     assert result.no_commands_executed is True
 
 
-def test_missing_required_tool_fails_active_profile(tmp_path: Path, monkeypatch) -> None:
+def test_missing_gobuster_does_not_block_active_current_profile(tmp_path: Path, monkeypatch) -> None:
     plan_path = _write_plan(tmp_path, "lab-full")
     monkeypatch.setattr(
         "bugslyce.recon.preflight.shutil.which",
@@ -34,11 +34,8 @@ def test_missing_required_tool_fails_active_profile(tmp_path: Path, monkeypatch)
 
     result = run_preflight(plan_path)
 
-    assert result.passed is False
-    assert any(
-        check.name == "Tool availability: gobuster" and check.status == "fail"
-        for check in result.checks
-    )
+    assert result.passed is True
+    assert all("gobuster" not in check.name for check in result.checks)
 
 
 def test_missing_tools_do_not_fail_passive_only(tmp_path: Path, monkeypatch) -> None:

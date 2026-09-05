@@ -306,14 +306,6 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         run_native,
         raising=False,
     )
-    monkeypatch.setattr(
-        pipeline,
-        "run_content_discovery_workflow",
-        lambda *_args, **_kwargs: pytest.fail(
-            "legacy Gobuster content execution must not own the WP4 root workload"
-        ),
-    )
-
     message, output_paths, _updates = pipeline._step_runners(
         context,
         None,
@@ -676,21 +668,6 @@ def test_pipeline_native_root_failure_propagates_without_legacy_fallback(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(refusal),
         raising=False,
     )
-    monkeypatch.setattr(
-        pipeline,
-        "run_content_discovery_workflow",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            artifact_paths=(),
-            profile=DEEP_BOUNDED_CORE_PROFILE,
-            report_path=None,
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "write_content_discovery_execution_result",
-        lambda *_args, **_kwargs: (),
-    )
-
     with pytest.raises(NativeContentDiscoveryBaselineRefused) as raised:
         pipeline._step_runners(context, None)["PIPELINE-STEP-007"]()
 

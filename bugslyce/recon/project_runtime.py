@@ -38,14 +38,12 @@ from bugslyce.project_session import (
     load_project_programme_scope_policy,
 )
 from bugslyce.recon.external_enforcement import (
-    COMPONENT_SUPPORTED,
     BugBountyExternalEnforcementSession,
     BugBountyExternalToolRuntime,
     SafeSubprocessRunner,
     ToolCapabilities,
     assess_tool_capabilities,
 )
-from bugslyce.recon.content_commands import gobuster_request_timeout_seconds
 from bugslyce.recon.http_enforcement import (
     InternalHTTPExecutor,
     IPv4Resolver,
@@ -286,31 +284,6 @@ class BugBountyProjectRuntime:
                 )
         return Runner()
 
-    def gobuster_runner(self):
-        runtime = self
-        class Runner:
-            def __init__(self) -> None:
-                self._bugslyce_project_runtime = runtime
-                self._bugslyce_runner_kind = "gobuster"
-
-            def run(self, command: ReconCommand) -> ReconCommandResult:
-                if runtime._http_session is None or runtime._http_runtime is None:
-                    raise ValueError("Strict HTTP runtime is not initialised.")
-                plan = runtime._http_session.build_gobuster_plan(
-                    origin=command.argv[3],
-                    wordlist=Path(command.argv[5]),
-                    output_file=Path(command.output_file),
-                    timeout_seconds=gobuster_request_timeout_seconds(command.argv),
-                )
-                if plan.compatibility_status != COMPONENT_SUPPORTED:
-                    raise ValueError(plan.reason)
-                return _result(
-                    command,
-                    runtime._http_runtime.run(plan),
-                    Path(runtime.project.output_dir),
-                )
-        return Runner()
-
     def require_runner(self, runner: object, kind: str) -> None:
         if (
             getattr(runner, "_bugslyce_project_runtime", None) is not self
@@ -330,7 +303,6 @@ class BugBountyProjectRuntime:
             approved_origins=origins,
             profile=self.profile,
             curl_capabilities=self.capabilities["curl"],
-            gobuster_capabilities=self.capabilities["gobuster"],
             nmap_capabilities=self.capabilities["nmap"],
             programme_scope_policy=self.programme_scope_policy,
             ipv4_resolver=self.ipv4_resolver,
@@ -445,7 +417,7 @@ def build_bug_bounty_project_runtime(
             "programme scope for the project target."
         )
     selected_capabilities = capabilities or {
-        tool: _probe_capabilities(tool) for tool in ("curl", "gobuster", "nmap")
+        tool: _probe_capabilities(tool) for tool in ("curl", "nmap")
     }
     runtime = BugBountyProjectRuntime(
         project=project,

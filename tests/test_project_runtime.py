@@ -132,6 +132,47 @@ def test_project_runtime_probe_preserves_curl_and_nmap_help_argv(monkeypatch) ->
     assert calls == [("curl", "--help", "all"), ("nmap", "--help")]
 
 
+def test_current_project_runtime_does_not_probe_or_require_gobuster(monkeypatch, tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    calls: list[str] = []
+    capabilities = _capabilities()
+
+    def probe(tool: str):
+        calls.append(tool)
+        if tool == "gobuster":
+            pytest.fail("current project runtime must not probe Gobuster")
+        return capabilities[tool]
+
+    monkeypatch.setattr(project_runtime_module, "_probe_capabilities", probe)
+    runtime = build_bug_bounty_project_runtime(project, STANDARD_RECON_PROFILE)
+
+    assert calls == ["curl", "nmap"]
+    assert "gobuster" not in runtime.capabilities
+
+
+def test_current_content_stage_fails_closed_without_runtime_instead_of_legacy_fallback(
+    tmp_path: Path,
+) -> None:
+    runners = _step_runners(
+        {
+            "output_dir": tmp_path / "output",
+            "scope_file": tmp_path / "scope.md",
+            "plan_dir": tmp_path / "plan",
+            "plan_path": tmp_path / "plan" / "content_discovery_plan.json",
+            "export_path": tmp_path / "evidence.zip",
+            "target": "app.example.test",
+            "project_file": tmp_path / "bugslyce_project.json",
+            "resume": False,
+            "profile": STANDARD_RECON_PROFILE,
+            "project_runtime": None,
+        },
+        None,
+    )
+
+    with pytest.raises(ValueError, match="requires a bound project runtime"):
+        runners["PIPELINE-STEP-007"]()
+
+
 def _capabilities():
     return {
         "curl": assess_tool_capabilities(
@@ -1026,16 +1067,6 @@ def test_standard_pipeline_stages_receive_only_strict_runtime_adapters(
             function_name,
             workflow(name, artifact_paths=(), report_path=report_path),
         )
-    monkeypatch.setattr(
-        pipeline_module,
-        "run_content_discovery_workflow",
-        workflow(
-            "content",
-            artifact_paths=(),
-            report_path=report_path,
-            profile="standard-bounded-core",
-        ),
-    )
     for writer_name in (
         "write_http_metadata_execution_result",
         "write_path_followup_execution_result",
@@ -1059,6 +1090,27 @@ def test_standard_pipeline_stages_receive_only_strict_runtime_adapters(
                 ),
             ),
         ),
+    )
+    monkeypatch.setattr(pipeline_module, "ProjectState", SimpleNamespace)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_programme_orchestration_plan",
+        lambda *_args: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_native_content_discovery_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(profile="standard-bounded-core"),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "run_native_content_discovery",
+        workflow("content"),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_register_native_content_discovery_artifacts",
+        lambda *_args: (),
     )
     context: dict[str, object] = {
         "output_dir": output_dir,
@@ -1091,7 +1143,9 @@ def test_standard_pipeline_stages_receive_only_strict_runtime_adapters(
     assert set(observed) == {
         "nmap", "metadata", "path", "content", "content_followup", "body"
     }
-    for values in observed.values():
+    for name, values in observed.items():
+        if name == "content":
+            continue
         assert values["project_runtime"] is runtime
         assert values["runner"] is not None
-    assert observed["content"]["http_executor"] is runtime.http_executor
+    assert observed["content"]["progress_callback"] is None

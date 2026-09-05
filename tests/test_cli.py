@@ -3000,7 +3000,7 @@ def test_cli_recon_content_run_help_exits_successfully(capsys) -> None:
     assert "--wordlist" not in captured.out
 
 
-def test_cli_recon_content_run_requires_confirm(tmp_path: Path, capsys) -> None:
+def test_cli_recon_content_run_refuses_obsolete_live_gobuster_execution(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
             "recon",
@@ -3016,8 +3016,8 @@ def test_cli_recon_content_run_requires_confirm(tmp_path: Path, capsys) -> None:
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "requires explicit --confirm" in captured.err
-    assert "No gobuster command was executed." in captured.err
+    assert "legacy Gobuster content discovery is no longer supported" in captured.err
+    assert "No legacy Gobuster command was executed." in captured.err
 
 
 def test_cli_recon_content_followup_help_exits_successfully(capsys) -> None:
@@ -3179,132 +3179,17 @@ def test_cli_recon_body_fetch_clean_noop_returns_success(
     assert "No eligible new high-signal followed-path URLs remain" in captured.out
     assert "Followed paths considered: 4" in captured.out
     assert "No body-fetch request was executed." in captured.out
-def test_cli_recon_content_run_timeout_is_honest(
-    tmp_path: Path,
-    capsys,
-    monkeypatch,
-) -> None:
-    result = ReconContentDiscoveryExecutionResult(
-        mode="content-run",
-        plan_path=str(tmp_path / "content_discovery_plan.json"),
-        target="10.10.10.10",
-        profile="lab-root-tiny",
-        input_dir=str(tmp_path / "private_recon" / "lab"),
-        output_dir=str(tmp_path / "bugslyce-output" / "plan"),
-        origins=["http://10.10.10.10/"],
-        artifact_paths=[],
-        manifest_path=str(tmp_path / "private_recon" / "lab" / "recon_manifest.json"),
-        report_path=str(tmp_path / "private_recon" / "lab" / "report.md"),
-        project_state_path=str(tmp_path / "private_recon" / "lab" / "project_state.json"),
-        execution_count=1,
-        commands_started=1,
-        commands_completed=0,
-        commands_timed_out=1,
-        selected_step_id=None,
-        selected_origin=None,
-        partial_artifacts_imported=0,
-        completed_artifacts_imported=0,
-        timed_out_step_id="CONTENT-STEP-001",
-        timed_out_origin="http://10.10.10.10/",
-        command_results=[],
-        no_recursion=True,
-        no_extensions=True,
-        no_arbitrary_urls=True,
-        no_exploitation=True,
-        warnings=[],
-    )
-
-    def fake_workflow(**_kwargs):
-        raise ContentDiscoveryExecutionIncomplete(
-            "Content discovery command CONTENT-STEP-001 started and exceeded 120 seconds.",
-            result,
-        )
-
-    monkeypatch.setattr("bugslyce.cli.run_content_discovery_workflow", fake_workflow)
-
+def test_cli_recon_content_run_refuses_even_with_confirm(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
-            "recon",
-            "content-run",
-            "--plan",
-            result.plan_path,
-            "--scope",
-            str(tmp_path / "scope.md"),
-            "--confirm",
+            "recon", "content-run", "--plan", str(tmp_path / "plan.json"),
+            "--scope", str(tmp_path / "scope.md"), "--confirm",
         ]
     )
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "started and exceeded" in captured.err
-    assert "Commands started: 1" in captured.err
-    assert "Commands timed out: 1" in captured.err
-    assert "No gobuster command was executed." not in captured.err
-
-
-def test_cli_recon_content_run_forwards_selected_step(
-    tmp_path: Path,
-    capsys,
-    monkeypatch,
-) -> None:
-    captured_kwargs = {}
-    result = ReconContentDiscoveryExecutionResult(
-        mode="content-run",
-        plan_path=str(tmp_path / "content_discovery_plan.json"),
-        target="10.10.10.10",
-        profile="lab-root-light",
-        input_dir=str(tmp_path / "private_recon" / "lab"),
-        output_dir=str(tmp_path / "bugslyce-output" / "plan"),
-        origins=["http://10.10.10.10:65524/"],
-        artifact_paths=[],
-        manifest_path=str(tmp_path / "private_recon" / "lab" / "recon_manifest.json"),
-        report_path=str(tmp_path / "private_recon" / "lab" / "report.md"),
-        project_state_path=str(tmp_path / "private_recon" / "lab" / "project_state.json"),
-        execution_count=1,
-        commands_started=1,
-        commands_completed=1,
-        commands_timed_out=0,
-        selected_step_id="CONTENT-STEP-002",
-        selected_origin="http://10.10.10.10:65524/",
-        partial_artifacts_imported=0,
-        completed_artifacts_imported=1,
-        timed_out_step_id=None,
-        timed_out_origin=None,
-        command_results=[],
-        no_recursion=True,
-        no_extensions=True,
-        no_arbitrary_urls=True,
-        no_exploitation=True,
-        warnings=[],
-    )
-
-    def fake_workflow(**kwargs):
-        captured_kwargs.update(kwargs)
-        return result
-
-    monkeypatch.setattr("bugslyce.cli.run_content_discovery_workflow", fake_workflow)
-    monkeypatch.setattr(
-        "bugslyce.cli.write_content_discovery_execution_result",
-        lambda *_args: (tmp_path / "execution.json", tmp_path / "execution.md"),
-    )
-
-    exit_code = main(
-        [
-            "recon",
-            "content-run",
-            "--plan",
-            result.plan_path,
-            "--scope",
-            str(tmp_path / "scope.md"),
-            "--step-id",
-            "CONTENT-STEP-002",
-            "--confirm",
-        ]
-    )
-
-    assert exit_code == 0
-    assert captured_kwargs["step_id"] == "CONTENT-STEP-002"
-    assert "Selected step ID: CONTENT-STEP-002" in capsys.readouterr().out
+    assert "legacy Gobuster content discovery is no longer supported" in captured.err
 
 
 def test_cli_recon_http_metadata_requires_confirm(tmp_path: Path, capsys) -> None:
