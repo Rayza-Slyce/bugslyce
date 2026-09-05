@@ -998,3 +998,122 @@ def test_legacy_extension_upgrade_refusal_is_safe_and_non_mutating(
     assert "extension-private-sentinel-4412" not in errors[0]
     assert project_file.read_bytes() == before
     assert not (project_file.parent / "programme_scope.json").exists()
+
+
+
+def test_preproject_manual_scope_returns_reviewed_proposal_not_policy(
+    monkeypatch,
+) -> None:
+    from bugslyce.core.programme_scope import (
+        ACTION_INCLUDE,
+        RULE_EXACT_HOSTNAME,
+        build_programme_scope_rule,
+    )
+    from bugslyce.programme_scope_proposal import ProgrammeScopeProposal
+    from bugslyce.programme_scope_setup import (
+        prepare_new_programme_scope_proposal_interactively,
+    )
+
+    rule = build_programme_scope_rule(
+        rule_id="manual-target",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value="example.test",
+    )
+    monkeypatch.setattr(
+        scope_setup_module,
+        "_collect_rule",
+        lambda _input_func: rule,
+    )
+
+    output: list[str] = []
+    result = prepare_new_programme_scope_proposal_interactively(
+        input_func=_inputs("1", "3", "ACCEPT"),
+        print_func=output.append,
+        error_func=pytest.fail,
+    )
+
+    assert isinstance(result, ProgrammeScopeProposal)
+    assert result.rules == (rule,)
+    assert "PROPOSED EXECUTABLE AUTHORITY" in "\n".join(output)
+
+
+def test_preproject_manual_scope_offers_replace_and_remove() -> None:
+    from bugslyce.programme_scope_setup import (
+        prepare_new_programme_scope_proposal_interactively,
+    )
+
+    output: list[str] = []
+    assert prepare_new_programme_scope_proposal_interactively(
+        input_func=_inputs("4"),
+        print_func=output.append,
+        error_func=pytest.fail,
+    ) is None
+
+    rendered = "\n".join(output)
+    assert "Replace rule" in rendered
+    assert "Remove rule" in rendered
+
+
+
+def test_preproject_manual_scope_replace_and_remove_change_returned_proposal(
+    monkeypatch,
+) -> None:
+    from bugslyce.core.programme_scope import (
+        ACTION_INCLUDE,
+        RULE_EXACT_HOSTNAME,
+        build_programme_scope_rule,
+    )
+    from bugslyce.programme_scope_proposal import ProgrammeScopeProposal
+    from bugslyce.programme_scope_setup import (
+        prepare_new_programme_scope_proposal_interactively,
+    )
+
+    first = build_programme_scope_rule(
+        rule_id="first",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value="first.example.test",
+    )
+    second = build_programme_scope_rule(
+        rule_id="second",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value="second.example.test",
+    )
+    replacement = build_programme_scope_rule(
+        rule_id="first",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value="replacement.example.test",
+    )
+
+    collected = iter((first, second, replacement))
+    monkeypatch.setattr(
+        scope_setup_module,
+        "_collect_rule",
+        lambda _input_func: next(collected),
+    )
+
+    output: list[str] = []
+    result = prepare_new_programme_scope_proposal_interactively(
+        input_func=_inputs(
+            "1",
+            "1",
+            "6",
+            "first",
+            "7",
+            "second",
+            "3",
+            "ACCEPT",
+        ),
+        print_func=output.append,
+        error_func=pytest.fail,
+    )
+
+    assert isinstance(result, ProgrammeScopeProposal)
+    assert result.rules == (replacement,)
+
+    rendered = "\n".join(output)
+    assert "Rule replaced: first -> first" in rendered
+    assert "Rule removed: second" in rendered

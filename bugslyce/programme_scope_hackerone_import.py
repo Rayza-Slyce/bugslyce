@@ -63,6 +63,7 @@ from bugslyce.programme_scope_proposal import (
     ProgrammeScopeNonAuthorityContext,
     ProgrammeScopeProposal,
     build_programme_scope_proposal,
+    render_programme_scope_proposal_review,
 )
 from bugslyce.programme_scope_setup import (
     review_and_save_programme_scope_proposal,
@@ -110,6 +111,94 @@ class HackerOneImportCompleteness:
             or self.unresolved_exclude_rows
             or self.unacknowledged_instruction_rows
         )
+
+
+
+def prepare_new_hackerone_programme_scope_proposal(
+    csv_path: Path,
+    *,
+    input_func: InputFunc = input,
+    print_func: PrintFunc = print,
+    error_func: PrintFunc | None = None,
+) -> ProgrammeScopeProposal | None:
+    """Resolve and accept one HackerOne proposal before project persistence."""
+
+    errors = error_func or _stderr_print
+    try:
+        source_result = build_hackerone_programme_scope_proposal(Path(csv_path))
+        session = build_hackerone_scope_resolution_session(source_result)
+        print_func(render_hackerone_import_summary(session))
+        if _prompt(
+            input_func,
+            "Type CONTINUE to review this import, or CANCEL: ",
+        ) != "CONTINUE":
+            print_func(
+                "HackerOne programme-scope preparation cancelled; nothing was persisted."
+            )
+            return None
+
+        session = review_hackerone_instruction_dossier(
+            session,
+            input_func=input_func,
+            print_func=print_func,
+            error_func=errors,
+        )
+        session, resolved = _run_resolution_loop(
+            session,
+            input_func=input_func,
+            print_func=print_func,
+            error_func=errors,
+        )
+
+        changed = session
+        resolved_proposal = resolved
+        while True:
+            candidate = prepare_hackerone_import_proposal(
+                resolved_proposal,
+                existing_policy=None,
+                mode=HACKERONE_IMPORT_MODE_NEW,
+            )
+            print_func(
+                _render_final_import_review(
+                    changed,
+                    candidate,
+                    mode=HACKERONE_IMPORT_MODE_NEW,
+                )
+            )
+            print_func(render_programme_scope_proposal_review(candidate))
+            action = _prompt(
+                input_func,
+                "Final imported scope [ACCEPT/CHANGE/INSTRUCTIONS/CANCEL]: ",
+            ).upper()
+
+            if action == "CANCEL":
+                return None
+            if action == "INSTRUCTIONS":
+                view_hackerone_instruction_dossier(
+                    changed,
+                    input_func=input_func,
+                    print_func=print_func,
+                    error_func=errors,
+                )
+                continue
+            if action == "CHANGE":
+                changed, resolved_proposal = _run_resolution_loop(
+                    changed,
+                    input_func=input_func,
+                    print_func=print_func,
+                    error_func=errors,
+                )
+                continue
+            if action != "ACCEPT":
+                errors("Error: choose ACCEPT, CHANGE, INSTRUCTIONS, or CANCEL.")
+                continue
+
+            return candidate
+    except HackerOneImportCancelled:
+        print_func(
+            "HackerOne programme-scope preparation cancelled; nothing was persisted."
+        )
+        return None
 
 
 def import_hackerone_programme_scope(

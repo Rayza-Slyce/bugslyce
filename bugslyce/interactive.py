@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+from urllib.parse import urlsplit
 from pathlib import Path
 import sys
 from typing import Callable
@@ -17,15 +19,33 @@ from bugslyce.core.engagement_context import (
     parse_engagement_context_choice,
 )
 from bugslyce.core.engagement_policy import assess_engagement_policy
+from bugslyce.core.programme_scope import (
+    ACTION_INCLUDE,
+    DESTINATION_HOSTNAME,
+    DESTINATION_IPV4,
+    OUTCOME_ALLOWED,
+    RULE_EXACT_HOSTNAME,
+    RULE_EXACT_HTTP_URL,
+    RULE_EXACT_IPV4,
+    ProgrammeScopePolicy,
+    build_programme_scope_policy,
+    evaluate_raw_scope_destination,
+)
 from bugslyce.doctor import build_doctor_report, render_doctor_text
 from bugslyce.engagement_policy_setup import (
     configure_project_policy_interactively,
     show_project_policy,
 )
-from bugslyce.programme_scope_setup import configure_project_programme_scope
+from bugslyce.programme_scope_setup import (
+    configure_project_programme_scope,
+    prepare_new_programme_scope_proposal_interactively,
+)
 from bugslyce.programme_scope_hackerone_import import (
     import_hackerone_programme_scope,
+    prepare_new_hackerone_programme_scope_proposal,
 )
+from bugslyce.programme_scope_proposal import ProgrammeScopeProposal
+from bugslyce.project_session import save_project_programme_scope_policy
 from bugslyce.project_pipeline import (
     DEEP_PIPELINE_PROFILE,
     NORMAL_PIPELINE_PROFILE,
@@ -142,14 +162,64 @@ def _start_new_project(
     cwd: Path,
 ) -> int:
     name = _prompt_text(input_func, "Project name")
-    target_input, target = _prompt_target_with_retries(input_func, print_func)
+    projects_dir = _prompt_projects_dir(input_func, cwd)
+    engagement_context = _prompt_engagement_context(input_func, print_func)
+
+    programme_scope_proposal: ProgrammeScopeProposal | None = None
+    programme_scope_policy: ProgrammeScopePolicy | None = None
+    if engagement_context == BUG_BOUNTY_CONTEXT:
+        try:
+            programme_scope_proposal = _prepare_bug_bounty_programme_scope_proposal(
+                input_func=input_func,
+                print_func=print_func,
+                error_func=print_func,
+                cwd=cwd,
+            )
+        except ValueError as exc:
+            print_func(f"Error: {exc}")
+            print_func("No project was created.")
+            print_func("No network requests were made.")
+            return 2
+        except EOFError:
+            print_func("Error: programme-scope input ended unexpectedly.")
+            print_func("No project was created.")
+            print_func("No network requests were made.")
+            return 2
+        except (OSError, UnicodeError):
+            print_func("Error: programme scope could not be read safely.")
+            print_func("No project was created.")
+            print_func("No network requests were made.")
+            return 2
+
+        if programme_scope_proposal is None:
+            print_func("Programme-scope setup was cancelled.")
+            print_func("No project was created.")
+            print_func("No network requests were made.")
+            return 0
+
+        if programme_scope_proposal.unresolved_items:
+            print_func("Error: accepted programme-scope proposal is not fully resolved.")
+            print_func("No project was created.")
+            print_func("No network requests were made.")
+            return 2
+
+        programme_scope_policy = build_programme_scope_policy(
+            programme_scope_proposal.rules,
+            engagement_context=BUG_BOUNTY_CONTEXT,
+        )
+
+        target_input, target = _prompt_bug_bounty_target_with_retries(
+            programme_scope_policy,
+            input_func,
+            print_func,
+        )
+    else:
+        target_input, target = _prompt_target_with_retries(input_func, print_func)
     if not target:
         print_func("No project was created.")
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 2
-    projects_dir = _prompt_projects_dir(input_func, cwd)
-    engagement_context = _prompt_engagement_context(input_func, print_func)
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
@@ -204,6 +274,27 @@ def _start_new_project(
 
     project_file = Path(scaffold.project_file)
     if engagement_context == BUG_BOUNTY_CONTEXT:
+        if programme_scope_policy is None:
+            print_func("Error: accepted programme scope is missing.")
+            print_func("The project was saved, but programme scope was not written.")
+            print_func("No network requests were made.")
+            return 2
+        try:
+            save_project_programme_scope_policy(
+                project_file,
+                programme_scope_policy,
+            )
+        except ValueError as exc:
+            print_func(f"Error: {exc}")
+            print_func("The project was saved, but programme scope was not written.")
+            print_func("No network requests were made.")
+            return 2
+        except (OSError, UnicodeError):
+            print_func("Error: programme scope could not be saved safely.")
+            print_func("The project was saved, but programme scope was not written.")
+            print_func("No network requests were made.")
+            return 2
+
         try:
             policy_result = configure_project_policy_interactively(
                 project_file,
@@ -236,40 +327,6 @@ def _start_new_project(
             print_func("No network requests were made.")
             return 0
 
-        scope_exit_code = _configure_bug_bounty_programme_scope(
-            project_file,
-            input_func=input_func,
-            print_func=print_func,
-            error_func=print_func,
-            cwd=cwd,
-        )
-        if scope_exit_code is None:
-            print_func("Programme-scope setup was left unfinished.")
-            print_func("No reconnaissance was started.")
-            print_func("No network requests were made.")
-            return 0
-        if scope_exit_code != 0:
-            print_func("Programme-scope setup did not complete successfully.")
-            print_func("No network requests were made.")
-            return scope_exit_code
-
-        try:
-            scoped_project = load_project(project_file)
-        except (ValueError, OSError, UnicodeError) as exc:
-            print_func(f"Error: programme-scope readiness could not be confirmed: {exc}")
-            print_func("No network requests were made.")
-            return 2
-
-        if scoped_project.programme_scope_file is None:
-            if profile is not None:
-                print_func(
-                    f"{_profile_display_name(profile)} was selected but not started. "
-                    "Programme scope was not saved."
-                )
-            else:
-                print_func("Manual setup was saved. No recon was started.")
-            print_func("No network requests were made.")
-            return 0
     if profile is None:
         _print_interactive_next_steps(scaffold, print_func, profile=None)
         return 0
@@ -286,6 +343,156 @@ def _start_new_project(
         return 0
 
     return _run_pipeline(project_file, print_func, profile=profile, resume=False)
+
+
+
+def _prepare_bug_bounty_programme_scope_proposal(
+    *,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    error_func: PrintFunc,
+    cwd: Path,
+) -> ProgrammeScopeProposal | None:
+    """Prepare accepted bug-bounty programme proposal before project creation."""
+
+    while True:
+        print_func("Programme scope")
+        print_func("1. Import HackerOne CSV")
+        print_func("2. Configure manually")
+        print_func("3. Cancel")
+        choice = _prompt_choice(
+            input_func,
+            "Select programme-scope setup",
+            {"1", "2", "3"},
+        )
+        if choice == "3":
+            return None
+        if choice == "2":
+            return prepare_new_programme_scope_proposal_interactively(
+                input_func=input_func,
+                print_func=print_func,
+                error_func=error_func,
+            )
+
+        csv_value = _prompt_text(input_func, "HackerOne CSV path (or BACK)")
+        if csv_value.upper() == "BACK":
+            continue
+        if csv_value.upper() == "CANCEL":
+            return None
+        return prepare_new_hackerone_programme_scope_proposal(
+            _resolve_prompt_path(csv_value, cwd),
+            input_func=input_func,
+            print_func=print_func,
+            error_func=error_func,
+        )
+
+
+def _derive_bug_bounty_target_candidates(
+    programme_scope_policy: ProgrammeScopePolicy,
+) -> tuple[str, ...]:
+    """Derive enumerable exact targets and retain only canonically allowed values."""
+
+    raw_candidates: set[str] = set()
+
+    for rule in programme_scope_policy.rules:
+        if rule.action != ACTION_INCLUDE:
+            continue
+
+        if rule.kind in {RULE_EXACT_HOSTNAME, RULE_EXACT_IPV4}:
+            raw_candidates.add(rule.canonical_value)
+            continue
+
+        if rule.kind == RULE_EXACT_HTTP_URL:
+            hostname = urlsplit(rule.canonical_value).hostname
+            if hostname:
+                raw_candidates.add(hostname)
+
+    allowed: list[str] = []
+    for candidate in sorted(raw_candidates):
+        try:
+            ipaddress.IPv4Address(candidate)
+        except ValueError:
+            kind = DESTINATION_HOSTNAME
+        else:
+            kind = DESTINATION_IPV4
+
+        decision = evaluate_raw_scope_destination(
+            programme_scope_policy,
+            kind,
+            candidate,
+        )
+        if decision.outcome == OUTCOME_ALLOWED:
+            allowed.append(candidate)
+
+    return tuple(allowed)
+
+
+def _prompt_bug_bounty_target_with_retries(
+    programme_scope_policy: ProgrammeScopePolicy,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+    *,
+    attempts: int = 3,
+) -> tuple[str, str | None]:
+    """Require one syntactically valid target allowed by proposed programme scope."""
+
+    candidates = _derive_bug_bounty_target_candidates(programme_scope_policy)
+    if candidates:
+        print_func("Proposed in-scope targets derived from reviewed exact authority:")
+        for number, candidate in enumerate(candidates, start=1):
+            print_func(f"{number}. {candidate}")
+        print_func(
+            "Choose a candidate number or enter another target covered by reviewed scope."
+        )
+    else:
+        print_func(
+            "No enumerable exact target was derived. "
+            "Wildcard/CIDR authority may still validate an operator-entered target."
+        )
+
+    prompt = "Target IP, hostname, or simple URL"
+    for attempt in range(attempts):
+        value = input_func(f"{prompt}: ").strip()
+        if value.isdecimal() and candidates:
+            number = int(value)
+            if 1 <= number <= len(candidates):
+                value = candidates[number - 1]
+        if not value and attempt > 0:
+            print_func("Target entry was cancelled.")
+            return "", None
+
+        try:
+            target = _validate_target(value)
+        except ValueError as exc:
+            print_func(str(exc))
+            if attempt < attempts - 1:
+                prompt = "Target IP, hostname, or simple URL (or press Enter to cancel)"
+            continue
+
+        try:
+            ipaddress.IPv4Address(target)
+        except ValueError:
+            kind = DESTINATION_HOSTNAME
+        else:
+            kind = DESTINATION_IPV4
+
+        decision = evaluate_raw_scope_destination(
+            programme_scope_policy,
+            kind,
+            target,
+        )
+        if decision.outcome == OUTCOME_ALLOWED:
+            return value, target
+
+        print_func(
+            "Target is not allowed by the accepted programme scope "
+            f"({decision.reason_code})."
+        )
+        if attempt < attempts - 1:
+            prompt = "Target IP, hostname, or simple URL (or press Enter to cancel)"
+
+    print_func("Target entry was cancelled.")
+    return "", None
 
 
 def _configure_bug_bounty_programme_scope(

@@ -24,6 +24,335 @@ from bugslyce.project_pipeline import (
 from bugslyce.project_session import PROJECT_SCHEMA_VERSION
 
 
+
+def test_bug_bounty_context_is_selected_before_target_entry(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class StopAfterContext(Exception):
+        pass
+
+    prompts: list[str] = []
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **_kwargs: pytest.fail(
+            "project must not be scaffolded during prompt-order inspection"
+        ),
+    )
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+
+        if "Engagement context:" in prompt:
+            raise StopAfterContext
+
+        if "Project name" in prompt:
+            return "demo"
+        if "Target IP, hostname, or simple URL" in prompt:
+            return "example.test"
+        if "Projects directory" in prompt:
+            return "projects"
+
+        return "1"
+
+    with pytest.raises(StopAfterContext):
+        run_interactive_launcher(
+            input_func=fake_input,
+            print_func=lambda _line: None,
+            cwd=tmp_path,
+        )
+
+    context_index = next(
+        index
+        for index, prompt in enumerate(prompts)
+        if "Engagement context:" in prompt
+    )
+    assert not any(
+        "Target IP, hostname, or simple URL" in prompt
+        for prompt in prompts[:context_index]
+    )
+
+
+def test_bug_bounty_programme_scope_begins_before_project_scaffold(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class StopAtProgrammeScope(Exception):
+        pass
+
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    stages: list[str] = []
+    calls = 0
+
+    def fake_scaffold(**_kwargs):
+        stages.append("scaffold")
+        return _scaffold_result(project_file)
+
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        fake_scaffold,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            saved=True,
+            cancelled=False,
+            policy=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.assess_engagement_policy",
+        lambda _policy: SimpleNamespace(not_ready_reasons=()),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *_args, **_kwargs: pytest.fail(
+            "reconnaissance must not run during setup-order inspection"
+        ),
+    )
+
+    def fake_input(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+
+        if "Select programme-scope setup" in prompt:
+            raise StopAtProgrammeScope
+
+        if calls == 1:
+            return "1"
+        if "Project name" in prompt:
+            return "demo"
+        if "Target IP, hostname, or simple URL" in prompt:
+            return "example.test"
+        if "Projects directory" in prompt:
+            return "projects"
+        if "Engagement context:" in prompt:
+            return "3"
+        if "authorised to test this target" in prompt:
+            return "YES"
+        if "Type YES to continue" in prompt:
+            return "YES"
+
+        return "2"
+
+    with pytest.raises(StopAtProgrammeScope):
+        run_interactive_launcher(
+            input_func=fake_input,
+            print_func=lambda _line: None,
+            cwd=tmp_path,
+        )
+
+    assert stages == []
+
+
+def _wp7b_exact_hostname_proposal(hostname: str):
+    from bugslyce.core.programme_scope import (
+        ACTION_INCLUDE,
+        RULE_EXACT_HOSTNAME,
+        build_programme_scope_rule,
+    )
+    from bugslyce.programme_scope_proposal import (
+        build_manual_programme_scope_proposal,
+    )
+
+    rule = build_programme_scope_rule(
+        rule_id="wp7b-target",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HOSTNAME,
+        value=hostname,
+    )
+    return build_manual_programme_scope_proposal((rule,))
+
+
+def test_bug_bounty_preproject_scope_cancel_creates_no_project(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **_kwargs: pytest.fail(
+            "cancelled pre-project programme scope must not create a project"
+        ),
+    )
+
+    calls = 0
+    output: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            return "1"
+        if "Project name" in prompt:
+            return "demo"
+        if "Projects directory" in prompt:
+            return "projects"
+        if "Engagement context:" in prompt:
+            return "3"
+        if "Target" in prompt:
+            pytest.fail("target must not be requested after pre-project scope cancellation")
+        return "2"
+
+    assert run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path,
+    ) == 0
+
+    assert "No project was created." in output
+    assert "No network requests were made." in output
+
+
+def test_bug_bounty_target_must_be_allowed_by_preproject_policy_before_scaffold(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    proposal = _wp7b_exact_hostname_proposal("allowed.example.test")
+
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda *_args, **_kwargs: proposal,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **_kwargs: pytest.fail(
+            "programme-scope-blocked target must not be scaffolded"
+        ),
+    )
+
+    calls = 0
+    target_answers = iter(("blocked.example.test", ""))
+    output: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            return "1"
+        if "Project name" in prompt:
+            return "demo"
+        if "Projects directory" in prompt:
+            return "projects"
+        if "Engagement context:" in prompt:
+            return "3"
+        if "Target" in prompt:
+            return next(target_answers)
+        if "Recon" in prompt:
+            return "2"
+        if "authorised to test this target" in prompt:
+            return "YES"
+        return "2"
+
+    assert run_interactive_launcher(
+        input_func=fake_input,
+        print_func=output.append,
+        cwd=tmp_path,
+    ) == 2
+
+    assert "No project was created." in output
+    assert "No network requests were made." in output
+
+
+def test_bug_bounty_preproject_policy_is_saved_exactly_before_engagement_policy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    proposal = _wp7b_exact_hostname_proposal("allowed.example.test")
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    stages: list[str] = []
+    saved: list[object] = []
+
+    def fake_prepare(*_args, **_kwargs):
+        stages.append("prepare")
+        return proposal
+
+    def fake_scaffold(**_kwargs):
+        stages.append("scaffold")
+        return _scaffold_result(project_file)
+
+    def fake_save_scope(path, candidate):
+        stages.append("save_scope")
+        saved.append(candidate)
+        return (
+            SimpleNamespace(
+                programme_scope_file="programme_scope.json",
+                engagement_context="bug_bounty",
+            ),
+            project_file.parent / "programme_scope.json",
+        )
+
+    def fake_policy(*_args, **_kwargs):
+        stages.append("policy")
+        return SimpleNamespace(
+            saved=False,
+            cancelled=True,
+            policy=None,
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        fake_prepare,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        fake_scaffold,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.save_project_programme_scope_policy",
+        fake_save_scope,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        fake_policy,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.run_project_pipeline",
+        lambda *_args, **_kwargs: pytest.fail(
+            "reconnaissance must not run after engagement-policy cancellation"
+        ),
+    )
+
+    calls = 0
+
+    def fake_input(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            return "1"
+        if "Project name" in prompt:
+            return "demo"
+        if "Projects directory" in prompt:
+            return "projects"
+        if "Engagement context:" in prompt:
+            return "3"
+        if "Target" in prompt:
+            return "allowed.example.test"
+        if "authorised to test this target" in prompt:
+            return "YES"
+        return "2"
+
+    assert run_interactive_launcher(
+        input_func=fake_input,
+        print_func=lambda _line: None,
+        cwd=tmp_path,
+    ) == 0
+
+    assert stages == ["prepare", "scaffold", "save_scope", "policy"]
+    assert len(saved) == 1
+    assert tuple(saved[0].rules) == proposal.rules
+
 def test_no_args_non_interactive_prints_help(capsys) -> None:
     exit_code = main([])
 
@@ -73,7 +402,7 @@ def test_launcher_auth_abort_creates_nothing(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setattr("bugslyce.interactive.scaffold_project", fail_scaffold)
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "no", ""])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "1", "no", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -101,7 +430,7 @@ def test_launcher_lowercase_yes_retries_and_exact_yes_confirms(
         or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "2", "yes", "YES"])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "2", "yes", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -126,7 +455,7 @@ def test_launcher_invalid_target_retries_then_accepts_ipv4(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10", "10.10.10.10", "projects", "", "2", "YES"])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10", "10.10.10.10", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -155,7 +484,7 @@ def test_launcher_invalid_target_cancel_creates_nothing(
         lambda *args, **kwargs: pytest.fail("pipeline must not run after target cancel"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "https://example.com/admin", ""])
+    inputs = iter(["1", "demo", "projects", "", "https://example.com/admin", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -192,7 +521,7 @@ def test_launcher_accepts_simple_urls_and_normalises_target(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", target_input, "projects", "", "2", "YES"])
+    inputs = iter(["1", "demo", "projects", "", target_input, "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -225,7 +554,7 @@ def test_launcher_rejects_unsafe_url_targets(
         lambda **kwargs: pytest.fail("scaffold must not run for invalid URL target"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", target_input, ""])
+    inputs = iter(["1", "demo", "projects", "", target_input, ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -258,7 +587,7 @@ def test_reconnaissance_selection_runs_deep_bounded_profile(
         lambda result: "DEEP PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "YES"])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -291,7 +620,7 @@ def test_manual_setup_only_scaffolds_and_shows_next_without_pipeline(
         lambda *args, **kwargs: pytest.fail("pipeline must not run"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "2", "YES"])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -330,7 +659,7 @@ def test_start_new_project_default_projects_dir_uses_home_level_output(
     monkeypatch.setattr("bugslyce.interactive.scaffold_project", fake_scaffold)
     output: list[str] = []
     prompts: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "", "", "2", "YES"])
+    inputs = iter(["1", "demo", "", "", "10.10.10.10", "2", "YES"])
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
@@ -370,7 +699,7 @@ def test_start_new_project_custom_projects_dir_still_resolves_from_cwd(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "custom-output", "", "2", "YES"])
+    inputs = iter(["1", "demo", "custom-output", "", "10.10.10.10", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -396,7 +725,7 @@ def test_start_new_project_accepts_engagement_context_choice(
     )
     output: list[str] = []
     prompts: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "2", "2", "YES"])
+    inputs = iter(["1", "demo", "projects", "2", "10.10.10.10", "2", "YES"])
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
@@ -448,9 +777,18 @@ def test_start_new_project_accepts_engagement_context_aliases(
         "bugslyce.interactive.configure_project_policy_interactively",
         lambda *_args, **_kwargs: SimpleNamespace(saved=False, cancelled=True),
     )
+    proposal = _wp7b_exact_hostname_proposal("example.test")
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda *_args, **_kwargs: proposal,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: None,
+    )
     output: list[str] = []
     prompts: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", context_input, "2", "YES"])
+    inputs = iter(["1", "demo", "projects", context_input, "example.test", "2", "YES"])
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
@@ -481,7 +819,7 @@ def test_start_new_project_invalid_engagement_context_reprompts(
         lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "ctf maybe", "ctf", "2", "YES"])
+    inputs = iter(["1", "demo", "projects", "ctf maybe", "ctf", "10.10.10.10", "2", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -517,7 +855,7 @@ def test_reconnaissance_run_now_calls_pipeline(monkeypatch, tmp_path: Path) -> N
         lambda result: "PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "YES"])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -556,7 +894,7 @@ def test_reconnaissance_run_now_uses_resolved_home_project_file(
         lambda result: "PIPELINE SUMMARY",
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "", "", "1", "YES", "YES"])
+    inputs = iter(["1", "demo", "", "", "10.10.10.10", "1", "YES", "YES"])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -658,7 +996,7 @@ def test_reconnaissance_no_run_shows_command_preview(
         lambda *args, **kwargs: pytest.fail("pipeline must not run"),
     )
     output: list[str] = []
-    inputs = iter(["1", "demo", "10.10.10.10", "projects", "", "1", "YES", "no", ""])
+    inputs = iter(["1", "demo", "projects", "", "10.10.10.10", "1", "YES", "no", ""])
 
     exit_code = run_interactive_launcher(
         input_func=lambda prompt: next(inputs),
@@ -1163,28 +1501,48 @@ def _completed_deep_project(tmp_path: Path) -> tuple[Path, tuple[Path, ...]]:
         [project_dir / name for name in canonical_names] + [export_path]
     )
 
-def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
+
+def test_ready_bug_bounty_reconnaissance_continues_from_scope_to_policy(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    proposal = _wp7b_exact_hostname_proposal("example.test")
     stages: list[str] = []
     prompts: list[str] = []
     output: list[str] = []
 
-    monkeypatch.setattr(
-        "bugslyce.interactive.scaffold_project",
-        lambda **kwargs: _scaffold_result(project_file),
-    )
+    def fake_scope(*_args, **_kwargs):
+        stages.append("scope")
+        return proposal
+
+    def fake_scaffold(**_kwargs):
+        stages.append("scaffold")
+        return _scaffold_result(project_file)
+
+    def fake_save_scope(*_args, **_kwargs):
+        stages.append("save_scope")
 
     def fake_policy(*_args, **_kwargs):
         stages.append("policy")
-        return SimpleNamespace(saved=True, cancelled=False, policy=object())
+        return SimpleNamespace(
+            saved=True,
+            cancelled=False,
+            policy=object(),
+        )
 
-    def fake_scope(*_args, **_kwargs):
-        stages.append("scope")
-        return 0
-
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        fake_scope,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        fake_scaffold,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.save_project_programme_scope_policy",
+        fake_save_scope,
+    )
     monkeypatch.setattr(
         "bugslyce.interactive.configure_project_policy_interactively",
         fake_policy,
@@ -1194,32 +1552,21 @@ def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
         lambda _policy: SimpleNamespace(not_ready_reasons=()),
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_programme_scope",
-        fake_scope,
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.load_project",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            programme_scope_file="programme_scope.json",
-        ),
-    )
-    monkeypatch.setattr(
         "bugslyce.interactive.run_project_pipeline",
-        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
+        lambda *_args, **_kwargs: pytest.fail("pipeline must not run"),
     )
 
     answers = iter(
-        [
+        (
             "1",
             "demo",
-            "10.10.10.10",
             "projects",
             "3",
+            "example.test",
             "1",
             "YES",
-            "2",
             "",
-        ]
+        )
     )
 
     def fake_input(prompt: str) -> str:
@@ -1233,10 +1580,9 @@ def test_ready_bug_bounty_reconnaissance_continues_from_policy_to_scope(
     )
 
     assert exit_code == 0
-    assert stages == ["policy", "scope"]
+    assert stages == ["scope", "scaffold", "save_scope", "policy"]
     assert any("Run Reconnaissance now?" in prompt for prompt in prompts)
     assert "Reconnaissance was not started." in output
-
 
 def test_programme_scope_menu_dispatches_hackerone_import_once(
     monkeypatch,
@@ -1333,91 +1679,91 @@ def test_csv_path_back_returns_to_scope_menu_without_calling_importer(
     assert manual_calls == [project_file]
 
 
-def test_programme_scope_back_stops_new_project_before_scope_completion(
+
+def test_programme_scope_cancel_stops_new_project_before_scaffold(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
     output: list[str] = []
+
     monkeypatch.setattr(
         "bugslyce.interactive.scaffold_project",
-        lambda **_kwargs: _scaffold_result(project_file),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_policy_interactively",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            saved=True, cancelled=False, policy=object(),
+        lambda **_kwargs: pytest.fail(
+            "cancelled pre-project programme scope must not scaffold"
         ),
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.assess_engagement_policy",
-        lambda _policy: SimpleNamespace(not_ready_reasons=()),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.load_project",
-        lambda *_args, **_kwargs: pytest.fail("BACK must not continue scope completion"),
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: pytest.fail(
+            "cancelled pre-project programme scope must not reach engagement policy"
+        ),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.run_project_pipeline",
-        lambda *_args, **_kwargs: pytest.fail("BACK must not start reconnaissance"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "cancelled pre-project programme scope must not start reconnaissance"
+        ),
     )
-    answers = iter(("1", "demo", "10.10.10.10", "projects", "3", "1", "YES", "3"))
+
+    answers = iter(("1", "demo", "projects", "3", "3"))
 
     assert run_interactive_launcher(
         input_func=lambda _prompt: next(answers),
         print_func=output.append,
         cwd=tmp_path,
     ) == 0
-    assert "Programme-scope setup was left unfinished." in "\n".join(output)
+
+    rendered = "\n".join(output)
+    assert "Programme-scope setup was cancelled." in rendered
+    assert "No project was created." in rendered
+    assert "No network requests were made." in rendered
 
 
-def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
+def test_bug_bounty_scope_persistence_failure_remains_fail_closed(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    proposal = _wp7b_exact_hostname_proposal("example.test")
     output: list[str] = []
 
     monkeypatch.setattr(
-        "bugslyce.interactive.scaffold_project",
-        lambda **kwargs: _scaffold_result(project_file),
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda *_args, **_kwargs: proposal,
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_policy_interactively",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            saved=True,
-            cancelled=False,
-            policy=object(),
+        "bugslyce.interactive.scaffold_project",
+        lambda **_kwargs: _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("simulated programme-scope persistence failure")
         ),
     )
     monkeypatch.setattr(
-        "bugslyce.interactive.assess_engagement_policy",
-        lambda _policy: SimpleNamespace(not_ready_reasons=()),
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.configure_project_programme_scope",
-        lambda *_args, **_kwargs: 0,
-    )
-    monkeypatch.setattr(
-        "bugslyce.interactive.load_project",
-        lambda *_args, **_kwargs: SimpleNamespace(programme_scope_file=None),
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: pytest.fail(
+            "engagement policy must not run after programme-scope persistence failure"
+        ),
     )
     monkeypatch.setattr(
         "bugslyce.interactive.run_project_pipeline",
-        lambda *args, **kwargs: pytest.fail("pipeline must not run"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "pipeline must not run after programme-scope persistence failure"
+        ),
     )
 
     answers = iter(
-        [
+        (
             "1",
             "demo",
-            "10.10.10.10",
             "projects",
             "3",
+            "example.test",
             "1",
             "YES",
-            "2",
-        ]
+        )
     )
 
     exit_code = run_interactive_launcher(
@@ -1426,6 +1772,168 @@ def test_ready_bug_bounty_scope_cancel_remains_fail_closed(
         cwd=tmp_path,
     )
 
-    assert exit_code == 0
-    assert "Reconnaissance was selected but not started. Programme scope was not saved." in output
-    assert "No network requests were made." in output
+    rendered = "\n".join(output)
+    assert exit_code == 2
+    assert "The project was saved, but programme scope was not written." in rendered
+    assert "No network requests were made." in rendered
+
+def test_bug_bounty_target_candidates_are_exact_allowed_authorities_only() -> None:
+    import bugslyce.interactive as interactive_module
+    from bugslyce.core.programme_scope import (
+        ACTION_EXCLUDE,
+        ACTION_INCLUDE,
+        RULE_EXACT_HOSTNAME,
+        RULE_EXACT_HTTP_URL,
+        RULE_EXACT_IPV4,
+        RULE_IPV4_CIDR,
+        RULE_WILDCARD_SUBDOMAIN,
+        build_programme_scope_policy,
+        build_programme_scope_rule,
+    )
+
+    rules = (
+        build_programme_scope_rule(
+            rule_id="allowed-host",
+            action=ACTION_INCLUDE,
+            kind=RULE_EXACT_HOSTNAME,
+            value="api.example.test",
+        ),
+        build_programme_scope_rule(
+            rule_id="allowed-url",
+            action=ACTION_INCLUDE,
+            kind=RULE_EXACT_HTTP_URL,
+            value="https://api.example.test/v1",
+        ),
+        build_programme_scope_rule(
+            rule_id="allowed-ip",
+            action=ACTION_INCLUDE,
+            kind=RULE_EXACT_IPV4,
+            value="192.0.2.10",
+        ),
+        build_programme_scope_rule(
+            rule_id="wildcard",
+            action=ACTION_INCLUDE,
+            kind=RULE_WILDCARD_SUBDOMAIN,
+            value="*.example.test",
+        ),
+        build_programme_scope_rule(
+            rule_id="cidr",
+            action=ACTION_INCLUDE,
+            kind=RULE_IPV4_CIDR,
+            value="192.0.2.0/24",
+        ),
+        build_programme_scope_rule(
+            rule_id="blocked-host-include",
+            action=ACTION_INCLUDE,
+            kind=RULE_EXACT_HOSTNAME,
+            value="blocked.example.test",
+        ),
+        build_programme_scope_rule(
+            rule_id="blocked-host-exclude",
+            action=ACTION_EXCLUDE,
+            kind=RULE_EXACT_HOSTNAME,
+            value="blocked.example.test",
+        ),
+    )
+    policy = build_programme_scope_policy(
+        rules,
+        updated_at="2026-09-05T19:00:00Z",
+    )
+
+    derive = getattr(
+        interactive_module,
+        "_derive_bug_bounty_target_candidates",
+        None,
+    )
+    assert callable(derive)
+
+    candidates = derive(policy)
+
+    assert candidates == derive(policy)
+    assert set(candidates) == {"api.example.test", "192.0.2.10"}
+    assert "*.example.test" not in candidates
+    assert "192.0.2.0/24" not in candidates
+    assert "blocked.example.test" not in candidates
+
+
+
+def test_bug_bounty_url_only_authority_does_not_seed_host_target() -> None:
+    from bugslyce.core.programme_scope import (
+        ACTION_INCLUDE,
+        RULE_EXACT_HTTP_URL,
+        build_programme_scope_policy,
+        build_programme_scope_rule,
+    )
+    from bugslyce.interactive import (
+        _derive_bug_bounty_target_candidates,
+        _prompt_bug_bounty_target_with_retries,
+    )
+
+    rule = build_programme_scope_rule(
+        rule_id="url-only",
+        action=ACTION_INCLUDE,
+        kind=RULE_EXACT_HTTP_URL,
+        value="https://url-only.example.test/v1",
+    )
+    policy = build_programme_scope_policy(
+        (rule,),
+        updated_at="2026-09-05T19:00:00Z",
+    )
+
+    assert _derive_bug_bounty_target_candidates(policy) == ()
+
+    answers = iter(("url-only.example.test", ""))
+    output: list[str] = []
+
+    target_input, target = _prompt_bug_bounty_target_with_retries(
+        policy,
+        lambda _prompt: next(answers),
+        output.append,
+    )
+
+    assert target_input == ""
+    assert target is None
+    assert any("Target is not allowed" in line for line in output)
+
+
+@pytest.mark.parametrize(
+    ("kind", "authority", "target"),
+    (
+        ("wildcard_subdomain", "*.example.test", "api.example.test"),
+        ("ipv4_cidr", "192.0.2.0/24", "192.0.2.55"),
+    ),
+)
+def test_bug_bounty_operator_target_can_use_non_enumerable_authority(
+    kind: str,
+    authority: str,
+    target: str,
+) -> None:
+    from bugslyce.core.programme_scope import (
+        ACTION_INCLUDE,
+        build_programme_scope_policy,
+        build_programme_scope_rule,
+    )
+    from bugslyce.interactive import (
+        _derive_bug_bounty_target_candidates,
+        _prompt_bug_bounty_target_with_retries,
+    )
+
+    rule = build_programme_scope_rule(
+        rule_id="non-enumerable-authority",
+        action=ACTION_INCLUDE,
+        kind=kind,
+        value=authority,
+    )
+    policy = build_programme_scope_policy(
+        (rule,),
+        updated_at="2026-09-05T19:00:00Z",
+    )
+
+    assert _derive_bug_bounty_target_candidates(policy) == ()
+
+    output: list[str] = []
+    assert _prompt_bug_bounty_target_with_retries(
+        policy,
+        lambda _prompt: target,
+        output.append,
+    ) == (target, target)

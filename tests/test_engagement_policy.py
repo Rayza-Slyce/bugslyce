@@ -714,23 +714,44 @@ def test_direct_cli_run_reports_non_bypassable_bug_bounty_refusal(
     assert "No pipeline phase was executed" in captured.err
 
 
+
 def test_interactive_bug_bounty_reconnaissance_is_save_only(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from bugslyce.programme_scope_proposal import (
+        build_manual_programme_scope_proposal,
+    )
+
+    proposal = build_manual_programme_scope_proposal(
+        (
+            build_programme_scope_rule(
+                rule_id="target",
+                action="include",
+                kind="exact_ipv4",
+                value="10.10.10.10",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda **_kwargs: proposal,
+    )
     monkeypatch.setattr(
         "bugslyce.interactive._run_pipeline",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("interactive live pipeline must not be called")
         ),
     )
+
     answers = iter(
         [
             "1",
             "bounty-test",
-            "10.10.10.10",
             "projects",
             "3",
+            "10.10.10.10",
             "1",
             "YES",
             "2",
@@ -750,7 +771,6 @@ def test_interactive_bug_bounty_reconnaissance_is_save_only(
     assert "not started" in rendered
     assert "Use the strict project pipeline" in rendered
     assert "No network requests were made" in rendered
-
 
 def test_interactive_bug_bounty_resume_is_save_only(
     tmp_path: Path,
@@ -1258,16 +1278,47 @@ def test_policy_cli_converts_expected_local_failures_to_redacted_error(
     assert SENTINEL_HEADER not in captured.err
 
 
+
 def test_new_project_policy_storage_failure_returns_redacted_nonzero(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from bugslyce.programme_scope_proposal import (
+        build_manual_programme_scope_proposal,
+    )
+
+    proposal = build_manual_programme_scope_proposal(
+        (
+            build_programme_scope_rule(
+                rule_id="target",
+                action="include",
+                kind="exact_ipv4",
+                value="10.10.10.10",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda **_kwargs: proposal,
+    )
     monkeypatch.setattr(
         "bugslyce.interactive.configure_project_policy_interactively",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("private sentinel")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("private sentinel")
+        ),
     )
+
     answers = iter(
-        ["1", "bounty-error", "10.10.10.10", "projects", "3", "2", "YES"]
+        [
+            "1",
+            "bounty-error",
+            "projects",
+            "3",
+            "10.10.10.10",
+            "2",
+            "YES",
+        ]
     )
     output: list[str] = []
 
@@ -1282,7 +1333,6 @@ def test_new_project_policy_storage_failure_returns_redacted_nonzero(
     assert "could not be read or written safely" in rendered
     assert "private sentinel" not in rendered
     assert "No network requests were made" in rendered
-
 
 def test_resume_policy_prompt_eof_returns_redacted_nonzero(tmp_path: Path) -> None:
     project_file = _bug_bounty_project(tmp_path)

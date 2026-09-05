@@ -1378,3 +1378,29 @@ def test_shopify_shaped_grouped_import_reaches_complete_p1_proposal_without_save
     assert len(captured[0].non_authority_context) == 30
     assert "Resolution groups: 8" in "\n".join(output)
     assert not (project_file.parent / "programme_scope.json").exists()
+
+
+
+def test_preproject_hackerone_returns_canonical_reviewed_proposal(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.programme_scope_proposal import ProgrammeScopeProposal
+
+    csv_path = _write_csv(
+        tmp_path,
+        _row(identifier="https://example.test/service"),
+    )
+    output: list[str] = []
+
+    result = import_module.prepare_new_hackerone_programme_scope_proposal(
+        csv_path,
+        input_func=_inputs("CONTINUE", "REVIEW", "ACCEPT"),
+        print_func=output.append,
+        error_func=pytest.fail,
+    )
+
+    rendered = "\n".join(output)
+    assert "PROPOSED EXECUTABLE AUTHORITY" in rendered
+    assert "Default: DENY" in rendered
+    assert isinstance(result, ProgrammeScopeProposal)
+    assert result.unresolved_items == ()

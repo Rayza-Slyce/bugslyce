@@ -83,6 +83,130 @@ def show_project_programme_scope(
         return 2
 
 
+
+def prepare_new_programme_scope_proposal_interactively(
+    *,
+    input_func: InputFunc = input,
+    print_func: PrintFunc = print,
+    error_func: PrintFunc = _stderr_print,
+) -> ProgrammeScopeProposal | None:
+    """Prepare one accepted new bug-bounty proposal without persistence."""
+
+    rules: tuple[ProgrammeScopeRule, ...] = ()
+    print_func("Programme scope configuration - pre-project offline review")
+    print_func("No authority is persisted and no network requests are made in this stage.")
+
+    while True:
+        print_func(
+            "1. Add rule\n"
+            "2. Review rules\n"
+            "3. Review and accept\n"
+            "4. Cancel\n"
+            "5. Add structured bulk rules\n"
+            "6. Replace rule\n"
+            "7. Remove rule"
+        )
+        choice = _prompt(input_func, "Select an option: ")
+        action = {
+            "1": "add",
+            "2": "review",
+            "3": "accept",
+            "4": "cancel",
+            "5": "bulk",
+            "6": "replace",
+            "7": "remove",
+        }.get(choice)
+
+        if action is None:
+            error_func("Error: select one of the listed programme-scope options.")
+            continue
+        if action == "cancel":
+            print_func("Programme-scope preparation cancelled; nothing was persisted.")
+            return None
+
+        if action == "review":
+            print_func(
+                render_programme_scope_proposal_review(
+                    build_manual_programme_scope_proposal(rules)
+                )
+            )
+            continue
+
+        if action == "accept":
+            proposal = build_manual_programme_scope_proposal(rules)
+            print_func(render_programme_scope_proposal_review(proposal))
+            required = "ACCEPT EMPTY POLICY" if not proposal.rules else "ACCEPT"
+            confirmation = _prompt(
+                input_func,
+                f"Type {required} to accept this proposed programme authority: ",
+            )
+            if confirmation != required:
+                print_func("Programme-scope acceptance cancelled; nothing was persisted.")
+                return None
+            return proposal
+
+        try:
+            if action == "add":
+                _render_rule_entry_guidance(print_func)
+                rule = _collect_rule(input_func)
+                rules = add_programme_scope_rule(rules, rule)
+                print_func(f"Rule added: {_safe_rule(rule)}")
+            elif action == "bulk":
+                bulk_draft = _collect_bulk_draft(input_func, print_func)
+                changed = rules
+                for rule in bulk_draft.rules:
+                    changed = add_programme_scope_rule(changed, rule)
+                rules = changed
+                print_func(
+                    f"Bulk rules added: {len(bulk_draft.rules)}; exact duplicates "
+                    f"collapsed: {bulk_draft.duplicate_count}."
+                )
+            elif action in {"replace", "remove"}:
+                if not rules:
+                    print_func("No programme-scope rules are available to edit.")
+                    continue
+
+                print_func("Current programme-scope rules:")
+                for current in rules:
+                    print_func(f"- {_safe_rule(current)}")
+
+                selected_id = _prompt(
+                    input_func,
+                    "Rule ID to edit, or BACK: ",
+                )
+                if selected_id.upper() == "BACK":
+                    continue
+
+                current = next(
+                    (
+                        rule
+                        for rule in rules
+                        if rule.rule_id.casefold() == selected_id.casefold()
+                    ),
+                    None,
+                )
+                if current is None:
+                    raise ValueError("Programme-scope rule ID was not found.")
+
+                if action == "remove":
+                    rules = remove_programme_scope_rule(rules, current.rule_id)
+                    print_func(f"Rule removed: {current.rule_id}")
+                    continue
+
+                _render_rule_entry_guidance(print_func)
+                replacement = _collect_rule(input_func)
+                rules = replace_programme_scope_rule(
+                    rules,
+                    current.rule_id,
+                    replacement,
+                )
+                print_func(
+                    f"Rule replaced: {current.rule_id} -> {replacement.rule_id}"
+                )
+        except ValueError as exc:
+            error_func(f"Error: {exc}")
+
+
 def configure_project_programme_scope(
     project_path: Path,
     *,
