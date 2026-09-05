@@ -81,6 +81,8 @@ def _rule(
     *,
     action: str = ACTION_INCLUDE,
     private: bool = False,
+    scheme: str | None = None,
+    port: int | None = None,
 ) -> ProgrammeScopeRule:
     return build_programme_scope_rule(
         rule_id=rule_id,
@@ -89,6 +91,8 @@ def _rule(
         value=value,
         private_note=PRIVATE_NOTE if private else None,
         private_source_wording=PRIVATE_SOURCE if private else None,
+        scheme=scheme,
+        port=port,
     )
 
 
@@ -832,6 +836,243 @@ def test_exclusions_override_host_path_exact_url_and_ip_inclusions() -> None:
     assert _decision(ip_policy, DESTINATION_IPV4, "192.0.2.4").outcome == OUTCOME_BLOCKED
 
 
+def test_narrow_hostname_include_shadows_broader_wildcard_exclusion_but_keeps_match_evidence() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule("include-ai", RULE_EXACT_HOSTNAME, "ai.example.test"),
+    )
+
+    exception = _decision(policy, DESTINATION_HOSTNAME, "ai.example.test")
+    assert exception.outcome == OUTCOME_ALLOWED
+    assert exception.reason_code == REASON_INCLUDED
+    assert exception.matched_inclusion_rule_ids == ("include-ai",)
+    assert exception.matched_exclusion_rule_ids == ("exclude-wildcard",)
+    assert exception.primary_inclusion_rule_id == "include-ai"
+    assert exception.primary_exclusion_rule_id is None
+
+    assert (
+        _decision(policy, DESTINATION_HOSTNAME, "other.example.test").outcome
+        == OUTCOME_BLOCKED
+    )
+
+
+def test_scope_decision_model_allows_shadowed_exclusion_match_evidence_for_allowed_exception() -> None:
+    destination = canonicalise_hostname_destination("ai.example.test")
+
+    decision = ScopeDecision(
+        outcome=OUTCOME_ALLOWED,
+        canonical_destination=destination,
+        reason_code=REASON_INCLUDED,
+        matched_inclusion_rule_ids=("include-ai",),
+        matched_exclusion_rule_ids=("exclude-wildcard",),
+        primary_inclusion_rule_id="include-ai",
+        primary_exclusion_rule_id=None,
+        operator_safe_explanation=(
+            "Destination is included by programme scope rule include-ai."
+        ),
+    )
+
+    assert decision.matched_exclusion_rule_ids == ("exclude-wildcard",)
+    assert decision.primary_exclusion_rule_id is None
+
+
+def test_equal_include_and_exclude_authority_remains_exclusion_winning() -> None:
+    policy = _policy(
+        _rule("include-host", RULE_EXACT_HOSTNAME, "ai.example.test"),
+        _rule(
+            "exclude-host",
+            RULE_EXACT_HOSTNAME,
+            "ai.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+    )
+
+    decision = _decision(policy, DESTINATION_HOSTNAME, "ai.example.test")
+    assert decision.outcome == OUTCOME_BLOCKED
+    assert decision.primary_exclusion_rule_id == "exclude-host"
+
+
+def test_incomparable_hostname_and_transport_qualifiers_remain_exclusion_winning() -> None:
+    policy = _policy(
+        _rule("include-ai", RULE_EXACT_HOSTNAME, "ai.example.test"),
+        _rule(
+            "exclude-https-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+            scheme="https",
+        ),
+    )
+
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://ai.example.test/").outcome
+        == OUTCOME_BLOCKED
+    )
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "http://ai.example.test/").outcome
+        == OUTCOME_ALLOWED
+    )
+
+
+def test_qualified_hostname_exception_shadows_only_where_its_transport_qualifier_matches() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule(
+            "include-ai-https",
+            RULE_EXACT_HOSTNAME,
+            "ai.example.test",
+            scheme="https",
+        ),
+    )
+
+    allowed = _decision(policy, DESTINATION_HTTP_URL, "https://ai.example.test/")
+    assert allowed.outcome == OUTCOME_ALLOWED
+    assert allowed.primary_inclusion_rule_id == "include-ai-https"
+    assert allowed.primary_exclusion_rule_id is None
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "http://ai.example.test/").outcome
+        == OUTCOME_BLOCKED
+    )
+
+
+def test_port_qualified_hostname_exception_shadows_broader_wildcard_only_on_that_port() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule(
+            "include-ai-443",
+            RULE_EXACT_HOSTNAME,
+            "ai.example.test",
+            port=443,
+        ),
+    )
+
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://ai.example.test/").outcome
+        == OUTCOME_ALLOWED
+    )
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://ai.example.test:8443/").outcome
+        == OUTCOME_BLOCKED
+    )
+
+
+def test_host_and_port_include_is_incomparable_with_wildcard_and_scheme_exclusion() -> None:
+    policy = _policy(
+        _rule(
+            "include-ai-443",
+            RULE_EXACT_HOSTNAME,
+            "ai.example.test",
+            port=443,
+        ),
+        _rule(
+            "exclude-https-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+            scheme="https",
+        ),
+    )
+
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://ai.example.test/").outcome
+        == OUTCOME_BLOCKED
+    )
+
+
+def test_exact_ipv4_exception_shadows_broader_cidr_exclusion() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-network",
+            RULE_IPV4_CIDR,
+            "192.0.2.0/24",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule("include-ip", RULE_EXACT_IPV4, "192.0.2.44"),
+    )
+
+    assert _decision(policy, DESTINATION_IPV4, "192.0.2.44").outcome == OUTCOME_ALLOWED
+    assert _decision(policy, DESTINATION_IPV4, "192.0.2.45").outcome == OUTCOME_BLOCKED
+
+
+def test_exact_http_url_exception_shadows_broader_wildcard_exclusion_only_for_that_url() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule(
+            "include-health",
+            RULE_EXACT_HTTP_URL,
+            "https://api.example.test/health",
+        ),
+    )
+
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://api.example.test/health").outcome
+        == OUTCOME_ALLOWED
+    )
+    assert (
+        _decision(policy, DESTINATION_HTTP_URL, "https://api.example.test/health/check").outcome
+        == OUTCOME_BLOCKED
+    )
+
+
+def test_shadowed_broad_inclusion_is_retained_as_match_evidence_but_has_no_primary() -> None:
+    policy = _policy(
+        _rule("include-wildcard", RULE_WILDCARD_SUBDOMAIN, "*.example.test"),
+        _rule(
+            "exclude-admin",
+            RULE_EXACT_HOSTNAME,
+            "admin.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+    )
+
+    decision = _decision(policy, DESTINATION_HOSTNAME, "admin.example.test")
+    assert decision.outcome == OUTCOME_BLOCKED
+    assert decision.matched_inclusion_rule_ids == ("include-wildcard",)
+    assert decision.matched_exclusion_rule_ids == ("exclude-admin",)
+    assert decision.primary_inclusion_rule_id is None
+    assert decision.primary_exclusion_rule_id == "exclude-admin"
+
+
+def test_narrow_hostname_exception_is_rule_order_independent() -> None:
+    rules = (
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule("include-ai", RULE_EXACT_HOSTNAME, "ai.example.test"),
+    )
+
+    decisions = {
+        _decision(_policy(*order), DESTINATION_HOSTNAME, "ai.example.test")
+        for order in permutations(rules)
+    }
+
+    assert len(decisions) == 1
+    assert decisions.pop().outcome == OUTCOME_ALLOWED
+
+
 def test_exclusion_precedence_and_matched_ids_are_rule_order_independent() -> None:
     rules = (
         _rule("z-include-host", RULE_EXACT_HOSTNAME, "example.test"),
@@ -1124,6 +1365,37 @@ def test_resolved_exact_ip_or_cidr_exclusion_blocks_allowed_hostname(kind: str, 
     assert resolved.operator_safe_explanation == (
         "Resolved IPv4 peer is blocked by explicit programme scope rule peer-block."
     )
+
+
+def test_resolved_peer_exclusion_vetoes_an_allowed_narrow_logical_exception() -> None:
+    policy = _policy(
+        _rule(
+            "exclude-wildcard",
+            RULE_WILDCARD_SUBDOMAIN,
+            "*.example.test",
+            action=ACTION_EXCLUDE,
+        ),
+        _rule("include-ai", RULE_EXACT_HOSTNAME, "ai.example.test"),
+        _rule(
+            "peer-block",
+            RULE_EXACT_IPV4,
+            "203.0.113.8",
+            action=ACTION_EXCLUDE,
+        ),
+    )
+    destination = canonicalise_hostname_destination("ai.example.test")
+    logical = evaluate_programme_scope(policy, destination)
+    peer = canonicalise_resolved_ipv4_peer(destination, "203.0.113.8")
+
+    resolved = evaluate_resolved_ipv4_peer(policy, logical, peer)
+
+    assert logical.outcome == OUTCOME_ALLOWED
+    assert logical.primary_exclusion_rule_id is None
+    assert resolved.outcome == OUTCOME_BLOCKED
+    assert resolved.reason_code == REASON_RESOLVED_IP_EXCLUDED
+    assert resolved.primary_inclusion_rule_id == "include-ai"
+    assert resolved.primary_exclusion_rule_id == "peer-block"
+    assert resolved.matched_exclusion_rule_ids == ("exclude-wildcard", "peer-block")
 
 
 def test_resolved_peer_inclusion_cannot_authorise_unknown_hostname() -> None:
@@ -1467,20 +1739,22 @@ def test_scope_decision_rejects_noncanonical_explanations(
         ScopeDecision(**values)
 
 
-def test_nonresolved_blocked_decision_requires_primary_for_matched_inclusions() -> None:
-    with pytest.raises(ValueError, match="primary inclusion"):
-        ScopeDecision(
-            outcome=OUTCOME_BLOCKED,
-            canonical_destination=canonicalise_hostname_destination("example.test"),
-            reason_code=REASON_EXPLICIT_EXCLUSION,
-            matched_inclusion_rule_ids=("include",),
-            matched_exclusion_rule_ids=("exclude",),
-            primary_inclusion_rule_id=None,
-            primary_exclusion_rule_id="exclude",
-            operator_safe_explanation=(
-                "Destination is blocked by explicit programme scope rule exclude."
-            ),
-        )
+def test_nonresolved_blocked_decision_allows_a_shadowed_matching_inclusion() -> None:
+    decision = ScopeDecision(
+        outcome=OUTCOME_BLOCKED,
+        canonical_destination=canonicalise_hostname_destination("example.test"),
+        reason_code=REASON_EXPLICIT_EXCLUSION,
+        matched_inclusion_rule_ids=("include",),
+        matched_exclusion_rule_ids=("exclude",),
+        primary_inclusion_rule_id=None,
+        primary_exclusion_rule_id="exclude",
+        operator_safe_explanation=(
+            "Destination is blocked by explicit programme scope rule exclude."
+        ),
+    )
+
+    assert decision.primary_inclusion_rule_id is None
+    assert decision.primary_exclusion_rule_id == "exclude"
 
 
 @pytest.mark.parametrize(
@@ -1522,7 +1796,6 @@ def test_scope_decision_rejects_primary_rule_for_empty_match_collection(
         {"matched_inclusion_rule_ids": ("include", "include")},
         {"matched_inclusion_rule_ids": ("z", "a"), "primary_inclusion_rule_id": "z"},
         {"primary_inclusion_rule_id": None},
-        {"matched_exclusion_rule_ids": ("exclude",)},
         {"canonical_destination": None},
         {"outcome": OUTCOME_BLOCKED},
         {"reason_code": REASON_NO_MATCHING_INCLUSION},
@@ -1609,3 +1882,98 @@ def test_direct_canonical_destination_models_reject_inconsistent_values() -> Non
             "/a/../b",
             None,
         )
+
+
+
+def test_exact_ipv4_and_single_host_cidr_are_equal_authority() -> None:
+    policies = (
+        _policy(
+            _rule(
+                "exclude-32",
+                RULE_IPV4_CIDR,
+                "192.0.2.44/32",
+                action=ACTION_EXCLUDE,
+            ),
+            _rule("include-exact", RULE_EXACT_IPV4, "192.0.2.44"),
+        ),
+        _policy(
+            _rule("include-32", RULE_IPV4_CIDR, "192.0.2.44/32"),
+            _rule(
+                "exclude-exact",
+                RULE_EXACT_IPV4,
+                "192.0.2.44",
+                action=ACTION_EXCLUDE,
+            ),
+        ),
+    )
+
+    first = _decision(policies[0], DESTINATION_IPV4, "192.0.2.44")
+    assert first.outcome == OUTCOME_BLOCKED
+    assert first.matched_inclusion_rule_ids == ("include-exact",)
+    assert first.matched_exclusion_rule_ids == ("exclude-32",)
+    assert first.primary_inclusion_rule_id == "include-exact"
+    assert first.primary_exclusion_rule_id == "exclude-32"
+
+    second = _decision(policies[1], DESTINATION_IPV4, "192.0.2.44")
+    assert second.outcome == OUTCOME_BLOCKED
+    assert second.matched_inclusion_rule_ids == ("include-32",)
+    assert second.matched_exclusion_rule_ids == ("exclude-exact",)
+    assert second.primary_inclusion_rule_id == "include-32"
+    assert second.primary_exclusion_rule_id == "exclude-exact"
+
+
+def test_qualified_exact_hostname_and_root_prefix_are_equal_authority() -> None:
+    policies = (
+        _policy(
+            _rule(
+                "exclude-qualified-host",
+                RULE_EXACT_HOSTNAME,
+                "ai.example.test",
+                action=ACTION_EXCLUDE,
+                scheme="https",
+                port=443,
+            ),
+            _rule(
+                "include-root-prefix",
+                RULE_HTTP_PATH_PREFIX,
+                "https://ai.example.test/",
+            ),
+        ),
+        _policy(
+            _rule(
+                "include-qualified-host",
+                RULE_EXACT_HOSTNAME,
+                "ai.example.test",
+                scheme="https",
+                port=443,
+            ),
+            _rule(
+                "exclude-root-prefix",
+                RULE_HTTP_PATH_PREFIX,
+                "https://ai.example.test/",
+                action=ACTION_EXCLUDE,
+            ),
+        ),
+    )
+
+    first = _decision(
+        policies[0],
+        DESTINATION_HTTP_URL,
+        "https://ai.example.test/private",
+    )
+    assert first.outcome == OUTCOME_BLOCKED
+    assert first.matched_inclusion_rule_ids == ("include-root-prefix",)
+    assert first.matched_exclusion_rule_ids == ("exclude-qualified-host",)
+    assert first.primary_inclusion_rule_id == "include-root-prefix"
+    assert first.primary_exclusion_rule_id == "exclude-qualified-host"
+
+    second = _decision(
+        policies[1],
+        DESTINATION_HTTP_URL,
+        "https://ai.example.test/private",
+    )
+    assert second.outcome == OUTCOME_BLOCKED
+    assert second.matched_inclusion_rule_ids == ("include-qualified-host",)
+    assert second.matched_exclusion_rule_ids == ("exclude-root-prefix",)
+    assert second.primary_inclusion_rule_id == "include-qualified-host"
+    assert second.primary_exclusion_rule_id == "exclude-root-prefix"

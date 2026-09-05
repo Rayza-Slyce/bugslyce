@@ -215,7 +215,10 @@ def test_preview_separates_categories_states_authority_and_redacts_rules() -> No
     assert "NON-AUTHORITY CONTEXT" in rendered
     assert "Submission eligible: yes" in rendered
     assert "Default: DENY" in rendered
-    assert "Exclusions override inclusions" in rendered
+    assert (
+        "Narrower explicit scope rules may override broader rules; exclusions "
+        "win equal or incomparable overlaps" in rendered
+    )
     assert PRIVATE_NOTE not in rendered
     assert PRIVATE_SOURCE not in rendered
 

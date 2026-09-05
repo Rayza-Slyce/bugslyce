@@ -931,19 +931,6 @@ class ScopeDecision:
             and self.primary_exclusion_rule_id not in self.matched_exclusion_rule_ids
         ):
             raise ValueError("Scope decision primary exclusion is not a matched rule.")
-        if self.resolved_peer is None:
-            if bool(self.matched_inclusion_rule_ids) != bool(
-                self.primary_inclusion_rule_id
-            ):
-                raise ValueError(
-                    "Non-resolved scope decision has inconsistent primary inclusion."
-                )
-            if bool(self.matched_exclusion_rule_ids) != bool(
-                self.primary_exclusion_rule_id
-            ):
-                raise ValueError(
-                    "Non-resolved scope decision has inconsistent primary exclusion."
-                )
         if (
             not isinstance(self.operator_safe_explanation, str)
             or not self.operator_safe_explanation.strip()
@@ -993,7 +980,6 @@ class ScopeDecision:
             self.reason_code != REASON_INCLUDED
             or not self.matched_inclusion_rule_ids
             or self.primary_inclusion_rule_id is None
-            or self.matched_exclusion_rule_ids
             or self.primary_exclusion_rule_id is not None
         ):
             raise ValueError("Allowed scope decision state is inconsistent.")
@@ -1018,7 +1004,6 @@ class ScopeDecision:
                 REASON_NO_MATCHING_INCLUSION,
                 REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
             }
-            or self.matched_exclusion_rule_ids
             or self.primary_inclusion_rule_id is not None
             or self.primary_exclusion_rule_id is not None
             or (self.matched_inclusion_rule_ids and self.resolved_peer is None)
@@ -1028,6 +1013,15 @@ class ScopeDecision:
                     self.resolved_peer is None
                     or not self.matched_inclusion_rule_ids
                 )
+            )
+            or (
+                self.reason_code == REASON_NO_MATCHING_INCLUSION
+                and self.matched_exclusion_rule_ids
+            )
+            or (
+                self.reason_code == REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION
+                and self.matched_exclusion_rule_ids
+                and self.resolved_peer is None
             )
         ):
             raise ValueError("Unknown scope decision state is inconsistent.")
@@ -1250,14 +1244,21 @@ def _decision_from_matches(
 ) -> ScopeDecision:
     inclusions = tuple(rule for rule in matches if rule.action == ACTION_INCLUDE)
     exclusions = tuple(rule for rule in matches if rule.action == ACTION_EXCLUDE)
+    effective = _effective_matching_rules(matches)
+    effective_inclusions = tuple(
+        rule for rule in effective if rule.action == ACTION_INCLUDE
+    )
+    effective_exclusions = tuple(
+        rule for rule in effective if rule.action == ACTION_EXCLUDE
+    )
     inclusion_ids = _sorted_ids(rule.rule_id for rule in inclusions)
     exclusion_ids = _sorted_ids(rule.rule_id for rule in exclusions)
-    primary_inclusion = _primary_rule_id(inclusions)
-    primary_exclusion = _primary_rule_id(exclusions)
-    if exclusions:
+    primary_inclusion = _primary_rule_id(effective_inclusions)
+    primary_exclusion = _primary_rule_id(effective_exclusions)
+    if effective_exclusions:
         outcome = OUTCOME_BLOCKED
         reason = REASON_EXPLICIT_EXCLUSION
-    elif inclusions:
+    elif effective_inclusions:
         outcome = OUTCOME_ALLOWED
         reason = REASON_INCLUDED
     else:
@@ -1278,6 +1279,177 @@ def _decision_from_matches(
         primary_exclusion_rule_id=primary_exclusion,
         operator_safe_explanation=explanation,
     )
+
+
+def _effective_matching_rules(
+    matches: tuple[ProgrammeScopeRule, ...],
+) -> tuple[ProgrammeScopeRule, ...]:
+    """Return matching rules not strictly broadened by another matching rule."""
+
+    return tuple(
+        rule
+        for rule in matches
+        if not any(
+            _rule_authority_is_strict_subset(other, rule)
+            for other in matches
+            if other is not rule
+        )
+    )
+
+
+def _rule_authority_is_strict_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    """Return whether one canonical rule represents a provably smaller authority set."""
+
+    return _rule_authority_is_subset(narrower, broader) and not _rule_authority_is_subset(
+        broader,
+        narrower,
+    )
+
+
+def _rule_authority_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    if narrower.kind in {RULE_EXACT_HOSTNAME, RULE_WILDCARD_SUBDOMAIN}:
+        if broader.kind in {RULE_EXACT_HOSTNAME, RULE_WILDCARD_SUBDOMAIN}:
+            return _hostname_rule_authority_is_subset(narrower, broader)
+        if broader.kind == RULE_HTTP_PATH_PREFIX:
+            return _qualified_exact_hostname_authority_is_subset_of_root_prefix(
+                narrower,
+                broader,
+            )
+        return False
+    if narrower.kind in {RULE_EXACT_IPV4, RULE_IPV4_CIDR}:
+        return _ipv4_rule_authority_is_subset(narrower, broader)
+    if narrower.kind in {RULE_EXACT_HTTP_URL, RULE_HTTP_PATH_PREFIX}:
+        return _http_rule_authority_is_subset(narrower, broader)
+    raise ValueError("Programme scope rule kind is unsupported.")
+
+
+def _hostname_rule_authority_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    if broader.kind not in {RULE_EXACT_HOSTNAME, RULE_WILDCARD_SUBDOMAIN}:
+        return False
+    return _hostname_pattern_is_subset(narrower, broader) and _transport_is_subset(
+        narrower,
+        broader,
+    )
+
+
+def _qualified_exact_hostname_authority_is_subset_of_root_prefix(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    """Return whether a fully qualified exact host equals one HTTP origin."""
+
+    if (
+        narrower.kind != RULE_EXACT_HOSTNAME
+        or broader.kind != RULE_HTTP_PATH_PREFIX
+        or narrower.scheme is None
+        or narrower.port is None
+    ):
+        return False
+
+    broad_url = canonicalise_http_url_destination(broader.canonical_value)
+    return (
+        broad_url.path == "/"
+        and broad_url.origin.host_kind == DESTINATION_HOSTNAME
+        and broad_url.origin.host == narrower.canonical_value
+        and broad_url.origin.scheme == narrower.scheme
+        and broad_url.origin.effective_port == narrower.port
+    )
+
+
+def _hostname_pattern_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    if narrower.kind == RULE_EXACT_HOSTNAME:
+        if broader.kind == RULE_EXACT_HOSTNAME:
+            return narrower.canonical_value == broader.canonical_value
+        suffix = broader.canonical_value[2:]
+        return (
+            narrower.canonical_value != suffix
+            and narrower.canonical_value.endswith(f".{suffix}")
+        )
+    if narrower.kind == RULE_WILDCARD_SUBDOMAIN:
+        if broader.kind != RULE_WILDCARD_SUBDOMAIN:
+            return False
+        narrow_suffix = narrower.canonical_value[2:]
+        broad_suffix = broader.canonical_value[2:]
+        return narrow_suffix == broad_suffix or narrow_suffix.endswith(f".{broad_suffix}")
+    raise ValueError("Programme scope rule kind is unsupported.")
+
+
+def _transport_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    return (
+        (broader.scheme is None or narrower.scheme == broader.scheme)
+        and (broader.port is None or narrower.port == broader.port)
+    )
+
+
+def _ipv4_rule_authority_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    if broader.kind not in {RULE_EXACT_IPV4, RULE_IPV4_CIDR}:
+        return False
+    if narrower.kind == RULE_EXACT_IPV4:
+        address = ipaddress.IPv4Address(narrower.canonical_value)
+        if broader.kind == RULE_EXACT_IPV4:
+            return narrower.canonical_value == broader.canonical_value
+        return address in ipaddress.IPv4Network(broader.canonical_value)
+    if narrower.kind == RULE_IPV4_CIDR:
+        network = ipaddress.IPv4Network(narrower.canonical_value)
+        if broader.kind == RULE_EXACT_IPV4:
+            return (
+                network.prefixlen == 32
+                and network.network_address
+                == ipaddress.IPv4Address(broader.canonical_value)
+            )
+        return network.subnet_of(ipaddress.IPv4Network(broader.canonical_value))
+    raise ValueError("Programme scope rule kind is unsupported.")
+
+
+def _http_rule_authority_is_subset(
+    narrower: ProgrammeScopeRule,
+    broader: ProgrammeScopeRule,
+) -> bool:
+    narrow_url = canonicalise_http_url_destination(narrower.canonical_value)
+    if broader.kind in {RULE_EXACT_HOSTNAME, RULE_WILDCARD_SUBDOMAIN}:
+        return (
+            narrow_url.origin.host_kind == DESTINATION_HOSTNAME
+            and _hostname_rule_matches(
+                broader,
+                narrow_url.origin.host,
+                origin=narrow_url.origin,
+            )
+        )
+    if broader.kind in {RULE_EXACT_IPV4, RULE_IPV4_CIDR}:
+        return (
+            narrow_url.origin.host_kind == DESTINATION_IPV4
+            and _ipv4_rule_matches(broader, narrow_url.origin.host)
+        )
+    if broader.kind == RULE_EXACT_HTTP_URL:
+        return (
+            narrower.kind == RULE_EXACT_HTTP_URL
+            and narrower.canonical_value == broader.canonical_value
+        )
+    if broader.kind == RULE_HTTP_PATH_PREFIX:
+        broad_url = canonicalise_http_url_destination(broader.canonical_value)
+        return (
+            narrow_url.origin == broad_url.origin
+            and _path_prefix_matches(broad_url.path, narrow_url.path)
+        )
+    raise ValueError("Programme scope rule kind is unsupported.")
 
 
 def _unknown_decision(reason: str) -> ScopeDecision:

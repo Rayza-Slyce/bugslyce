@@ -468,7 +468,10 @@ def test_bulk_scope_review_requires_one_explicit_save(
     assert "UNRESOLVED / REQUIRES REVIEW\n- none" in review
     assert "NON-AUTHORITY CONTEXT\n- none" in review
     assert "Default: DENY" in review
-    assert "Exclusions override inclusions" in review
+    assert (
+        "Narrower explicit scope rules may override broader rules; exclusions "
+        "win equal or incomparable overlaps"
+    ) in review
     assert (
         "Runtime programme-scope enforcement is active for live project "
         "reconnaissance."

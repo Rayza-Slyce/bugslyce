@@ -22,6 +22,7 @@ from bugslyce.core.programme_scope import (
     ProgrammeScopePolicy,
     build_programme_scope_policy,
     build_programme_scope_rule,
+    evaluate_raw_scope_destination,
 )
 from bugslyce.core.programme_scope_store import (
     MAX_PROGRAMME_SCOPE_FILE_BYTES,
@@ -173,6 +174,35 @@ def test_qualified_hostname_scope_round_trips_with_explicit_qualifiers(
     assert loaded.rules[0].port == 443
     assert payload["rules"][0]["scheme"] == "https"
     assert payload["rules"][0]["port"] == 443
+
+
+def test_narrow_hostname_exception_policy_round_trips_without_losing_rule_evidence(
+    tmp_path: Path,
+) -> None:
+    policy = build_programme_scope_policy(
+        (
+            _rule(
+                "exclude-wildcard",
+                RULE_WILDCARD_SUBDOMAIN,
+                "*.example.test",
+                action=ACTION_EXCLUDE,
+            ),
+            _rule("include-ai", RULE_EXACT_HOSTNAME, "ai.example.test"),
+        ),
+        updated_at=FIXED_TIMESTAMP,
+    )
+    path = _policy_path(tmp_path)
+
+    save_programme_scope_policy(path, policy)
+    loaded = load_programme_scope_policy(path)
+    decision = evaluate_raw_scope_destination(loaded, "hostname", "ai.example.test")
+
+    assert loaded == policy
+    assert loaded.rules == policy.rules
+    assert decision.outcome == "allowed"
+    assert decision.matched_inclusion_rule_ids == ("include-ai",)
+    assert decision.matched_exclusion_rule_ids == ("exclude-wildcard",)
+    assert decision.primary_exclusion_rule_id is None
 
 
 def test_schema_1_0_programme_scope_loads_without_qualifier_inference(

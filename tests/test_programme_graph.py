@@ -133,6 +133,42 @@ def test_authorised_related_origin_materialises_exact_programme_child() -> None:
     assert policy.to_dict() == policy_before
 
 
+def test_narrow_hostname_exception_materialises_through_the_canonical_scope_evaluator() -> None:
+    module = _programme_graph_module()
+    policy = build_programme_scope_policy(
+        (
+            build_programme_scope_rule(
+                rule_id="exclude-wildcard",
+                action=ACTION_EXCLUDE,
+                kind=RULE_WILDCARD_SUBDOMAIN,
+                value="*.example.test",
+            ),
+            build_programme_scope_rule(
+                rule_id="include-ai",
+                action=ACTION_INCLUDE,
+                kind=RULE_EXACT_HOSTNAME,
+                value="ai.example.test",
+            ),
+        ),
+        updated_at=FIXED_TIME,
+    )
+
+    graph = module.build_programme_graph(
+        policy,
+        relationship_evidence=(
+            _seed(module, "https://ai.example.test/"),
+        ),
+    )
+    node = _node(graph, "https://ai.example.test")
+
+    assert node.scope_decision.outcome == OUTCOME_ALLOWED
+    assert node.scope_decision.matched_inclusion_rule_ids == ("include-ai",)
+    assert node.scope_decision.matched_exclusion_rule_ids == ("exclude-wildcard",)
+    assert node.scope_decision.primary_inclusion_rule_id == "include-ai"
+    assert node.scope_decision.primary_exclusion_rule_id is None
+    assert node.materialisation_eligible is True
+
+
 def test_wildcard_relationship_does_not_authorise_apex_child() -> None:
     module = _programme_graph_module()
     relationship = _relationship(

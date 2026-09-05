@@ -247,7 +247,8 @@ def test_safe_summary_is_exact_deterministic_and_private() -> None:
             "- z-url | include | exact_http_url | https://example.test/api?x=1",
             "Programme scope is default-deny: destinations without an inclusion "
             "are not authorised.",
-            "Explicit exclusions override every inclusion.",
+            "Narrower explicit scope rules may override broader rules; exclusions "
+            "win equal or incomparable overlaps.",
             "Runtime programme-scope enforcement is active for live project reconnaissance.",
             "Stored configuration authorises traffic only after engagement-policy readiness and target evaluation.",
         )

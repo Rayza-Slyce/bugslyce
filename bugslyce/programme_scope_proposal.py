@@ -217,7 +217,8 @@ def render_programme_scope_proposal_review(
     lines.extend(
         (
             "Default: DENY",
-            "Exclusions override inclusions",
+            "Narrower explicit scope rules may override broader rules; exclusions "
+            "win equal or incomparable overlaps",
             "This proposal is not authority until explicitly confirmed and saved.",
         )
     )
