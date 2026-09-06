@@ -143,6 +143,21 @@ class BugBountyProjectRuntime:
         return self._approved_origins
 
     @property
+    def validated_nmap_discovery_peer(self) -> str:
+        """Return the IPv4 peer accepted by the completed strict Nmap discovery."""
+
+        peer = self._observed_target_ipv4
+        if peer is None:
+            raise ValueError("Strict Nmap discovery has no validated IPv4 peer.")
+        try:
+            canonical_peer = str(ipaddress.IPv4Address(peer))
+        except ValueError:
+            raise ValueError("Strict Nmap discovery has no validated IPv4 peer.") from None
+        if canonical_peer != peer:
+            raise ValueError("Strict Nmap discovery has no validated IPv4 peer.")
+        return canonical_peer
+
+    @property
     def http_executor(self) -> InternalHTTPExecutor:
         if self._http_executor is None:
             raise ValueError("HTTP origins have not been bound to the project runtime.")

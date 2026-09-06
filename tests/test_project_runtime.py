@@ -24,6 +24,7 @@ from bugslyce.core.models import (
     ReconCommand,
     ReconHTTPMetadataExecutionResult,
 )
+from bugslyce.core.project import build_project_state
 from bugslyce.core.programme_scope import (
     build_programme_scope_policy,
     build_programme_scope_rule,
@@ -41,7 +42,10 @@ from bugslyce.recon.external_enforcement import (
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_metadata_collector import DeepHTTPResponse
 from bugslyce.recon.http_metadata import write_http_metadata_execution_result
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.recon.modes import DEEP_RECON_PROFILE, STANDARD_RECON_PROFILE
+from bugslyce.recon.nmap_discover import run_nmap_discovery_workflow
+from bugslyce.recon.nmap_services import run_nmap_service_workflow
 from bugslyce.recon.project_runtime import (
     build_bug_bounty_project_runtime,
     require_project_runtime_binding,
@@ -312,6 +316,27 @@ class _NmapArtefactProcess:
             "PORT    STATE SERVICE VERSION\n"
             f"80/tcp  open  {service}\n"
             f"443/tcp open  {service}\n"
+            "Nmap done\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+class _IPv4OnlyNmapArtefactProcess:
+    """Strict runner fixture whose normal output names only the resolved peer."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv, _timeout_seconds, _environment):
+        command = tuple(argv)
+        self.calls.append(command)
+        output = Path(command[command.index("-oN") + 1])
+        output.write_text(
+            "Nmap scan report for 192.0.2.10\n"
+            "PORT    STATE SERVICE\n"
+            "80/tcp  open  http\n"
+            "443/tcp open  https\n"
             "Nmap done\n",
             encoding="utf-8",
         )
@@ -603,6 +628,121 @@ def test_strict_runtime_derives_service_ports_from_its_discovery_result(
         "-sC", "--script", "-A", "-O", "--traceroute", "-sU",
         "-T4", "-T5", "--min-rate", "-p-",
     }.intersection(process.calls[1])
+
+
+def test_strict_ipv4_only_nmap_output_persists_validated_peer_for_hostname_origins(
+    tmp_path: Path,
+) -> None:
+    process = _IPv4OnlyNmapArtefactProcess()
+    project = _project(tmp_path)
+    scope_path = Path(project.scope_file)
+    scope_path.write_text(
+        "# Scope\n\n## In Scope\n\n- app.example.test\n",
+        encoding="utf-8",
+    )
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.10",)
+
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        STANDARD_RECON_PROFILE,
+        capabilities=_capabilities(),
+        ipv4_resolver=resolver,
+        process_runner=process,
+    )
+    result = run_nmap_discovery_workflow(
+        project.target,
+        scope_path,
+        Path(project.output_dir),
+        profile_name="lab-tcp-full",
+        runner=runtime.nmap_discovery_runner(),
+        project_runtime=runtime,
+    )
+
+    assert result.nmap_output_path.endswith("nmap-allports.txt")
+    assert runtime._observed_target_ipv4 == "192.0.2.10"
+    manifest = json.loads(
+        (Path(project.output_dir) / "recon_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["artifacts"][0]["description"] == "Single bounded nmap TCP discovery command"
+    calls_before_rebuild = tuple(resolver_calls)
+
+    state = build_project_state(Path(project.output_dir))
+
+    assert [
+        (relationship.reported_host, relationship.peer_host)
+        for relationship in state.nmap_reported_host_peers
+    ] == [("app.example.test", "192.0.2.10")]
+    assert [
+        (binding.observed_origin, binding.logical_origin)
+        for binding in resolve_target_http_origins(state, project.target)
+    ] == [
+        ("http://192.0.2.10/", "http://app.example.test/"),
+        ("https://192.0.2.10/", "https://app.example.test/"),
+    ]
+    assert tuple(resolver_calls) == calls_before_rebuild
+
+
+def test_strict_ipv4_only_discovery_peer_survives_post_service_manifest_rebuild(
+    tmp_path: Path,
+) -> None:
+    process = _IPv4OnlyNmapArtefactProcess()
+    project = _project(tmp_path, service_version_detection=SERVICE_VERSION_PERMITTED)
+    scope_path = Path(project.scope_file)
+    scope_path.write_text(
+        "# Scope\n\n## In Scope\n\n- app.example.test\n",
+        encoding="utf-8",
+    )
+    resolver_calls: list[tuple[str, int]] = []
+
+    def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        resolver_calls.append((hostname, port))
+        return ("192.0.2.10",)
+
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        STANDARD_RECON_PROFILE,
+        capabilities=_capabilities(),
+        ipv4_resolver=resolver,
+        process_runner=process,
+    )
+    output_dir = Path(project.output_dir)
+    run_nmap_discovery_workflow(
+        project.target,
+        scope_path,
+        output_dir,
+        profile_name="lab-tcp-full",
+        runner=runtime.nmap_discovery_runner(),
+        project_runtime=runtime,
+    )
+    run_nmap_service_workflow(
+        output_dir,
+        scope_path,
+        runner=runtime.nmap_service_runner(),
+        project_runtime=runtime,
+    )
+    manifest = json.loads((output_dir / "recon_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["profile"] == "bug-bounty-policy-tcp-plus-services"
+    assert manifest["artifacts"][0]["resolved_peer"] == "192.0.2.10"
+    calls_before_rebuild = tuple(resolver_calls)
+
+    state = build_project_state(output_dir)
+
+    assert [
+        (relationship.reported_host, relationship.peer_host)
+        for relationship in state.nmap_reported_host_peers
+    ] == [("app.example.test", "192.0.2.10")]
+    assert [
+        (binding.observed_origin, binding.logical_origin)
+        for binding in resolve_target_http_origins(state, project.target)
+    ] == [
+        ("http://192.0.2.10/", "http://app.example.test/"),
+        ("https://192.0.2.10/", "https://app.example.test/"),
+    ]
+    assert tuple(resolver_calls) == calls_before_rebuild
 
 
 def test_strict_runtime_refuses_extra_service_port_before_process_start(

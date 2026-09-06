@@ -2585,6 +2585,11 @@ def _recon_manifest_artifact_from_dict(value: object) -> ReconManifestArtifact:
             if isinstance(value.get("protocol"), str)
             else None
         ),
+        resolved_peer=(
+            str(value["resolved_peer"])
+            if isinstance(value.get("resolved_peer"), str)
+            else None
+        ),
         description=(
             str(value["description"])
             if isinstance(value.get("description"), str)

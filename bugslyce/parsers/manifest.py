@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 from pathlib import Path
 import warnings
 
@@ -157,10 +158,42 @@ def _parse_artifact(
         host=_optional_text(value, "host"),
         port=port,
         protocol=_optional_text(value, "protocol"),
+        resolved_peer=_optional_canonical_ipv4(value, "resolved_peer", artifact_file),
         description=_optional_text(value, "description"),
         status_code=status_code,
         tags=tags,
     )
+
+
+def _optional_canonical_ipv4(
+    payload: dict[str, object],
+    key: str,
+    artifact_file: str,
+) -> str | None:
+    """Retain only exact canonical IPv4 runtime provenance."""
+
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        warnings.warn(
+            f"Ignoring invalid {key} for manifest artefact: {artifact_file}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+    try:
+        canonical = str(ipaddress.IPv4Address(value))
+    except ValueError:
+        canonical = None
+    if canonical is None or canonical != value:
+        warnings.warn(
+            f"Ignoring invalid {key} for manifest artefact: {artifact_file}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+    return canonical
 
 
 def _required_text(payload: dict[str, object], key: str, path: Path) -> str | None:

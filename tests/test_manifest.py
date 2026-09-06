@@ -90,6 +90,53 @@ def test_manifest_parser_ignores_invalid_http_status(tmp_path: Path) -> None:
     assert manifest.artifacts[0].status_code is None
 
 
+def test_manifest_parser_retains_only_canonical_nmap_resolved_peer_provenance(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "scan.txt").write_text("PORT STATE SERVICE\n80/tcp open http\n", encoding="utf-8")
+    manifest_path = _write_manifest(
+        tmp_path,
+        {
+            "schema_version": "1.0",
+            "target": "target.example.test",
+            "artifacts": [
+                {
+                    "type": "nmap",
+                    "file": "scan.txt",
+                    "resolved_peer": "192.0.2.44",
+                }
+            ],
+        },
+    )
+
+    manifest = parse_recon_manifest(manifest_path, tmp_path)
+
+    assert manifest is not None
+    assert manifest.artifacts[0].resolved_peer == "192.0.2.44"
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "scan.txt",
+                        "resolved_peer": "192.0.2.044",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.warns(RuntimeWarning, match="invalid resolved_peer"):
+        manifest = parse_recon_manifest(manifest_path, tmp_path)
+
+    assert manifest is not None
+    assert manifest.artifacts[0].resolved_peer is None
+
+
 def test_missing_manifest_is_not_an_error(tmp_path: Path) -> None:
     assert parse_recon_manifest(tmp_path / "recon_manifest.json", tmp_path) is None
 

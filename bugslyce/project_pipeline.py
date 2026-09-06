@@ -1945,7 +1945,7 @@ def _content_plan_suffix(content_profile: str) -> str:
 def _pending_steps(profile: str) -> list[PipelineStep]:
     definitions = [
         ("PIPELINE-STEP-001", "environment and project validation", "local-validation"),
-        ("PIPELINE-STEP-002", "nmap full TCP discovery", "nmap-discover"),
+        ("PIPELINE-STEP-002", "nmap TCP discovery", "nmap-discover"),
         ("PIPELINE-STEP-003", "nmap service/version scan", "nmap-services"),
         (
             "PIPELINE-STEP-003S",

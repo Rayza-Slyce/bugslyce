@@ -56,6 +56,7 @@ from bugslyce.project_pipeline import (
     TCPDiscoveryNoWork,
     _body_fetch_warning_message,
     _deep_operator_summary_leads,
+    _pending_steps,
     _step_runners,
     _validate_readiness,
     format_exception_diagnostic,
@@ -3525,6 +3526,16 @@ def test_pipeline_records_path_followup_noop_and_continues_to_content_plan(
     assert "export" in calls
 
 
+def test_current_project_pipeline_labels_tcp_discovery_without_claiming_full_scan() -> None:
+    step = next(
+        item
+        for item in _pending_steps(NORMAL_PIPELINE_PROFILE)
+        if item.step_id == "PIPELINE-STEP-002"
+    )
+
+    assert step.name == "nmap TCP discovery"
+
+
 def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     tmp_path: Path,
     monkeypatch,
@@ -3572,7 +3583,7 @@ def test_resume_skips_existing_prefix_and_runs_next_missing_phase(
     assert result.no_op_steps == 1
     assert "Resume: true" in progress[0]
     assert (
-        "[2/15] nmap full TCP discovery skipped.\n"
+        "[2/15] nmap TCP discovery skipped.\n"
         "Existing nmap discovery evidence detected; phase skipped during resume."
         in progress
     )

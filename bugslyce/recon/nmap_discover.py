@@ -72,8 +72,21 @@ def run_nmap_discovery_workflow(
     local_scope_path.write_text(scope_text, encoding="utf-8")
     manifest_path = output_dir / "recon_manifest.json"
     discovery_label = (
-        "top-1000 TCP discovery" if profile_name == "lab-tcp-top" else "full TCP discovery"
+        "TCP discovery"
+        if project_runtime is not None
+        else (
+            "top-1000 TCP discovery"
+            if profile_name == "lab-tcp-top"
+            else "full TCP discovery"
+        )
     )
+    nmap_artifact: dict[str, str] = {
+        "type": "nmap",
+        "file": nmap_output_path.name,
+        "description": f"Single bounded nmap {discovery_label} command",
+    }
+    if project_runtime is not None:
+        nmap_artifact["resolved_peer"] = project_runtime.validated_nmap_discovery_peer
     manifest_path.write_text(
         json.dumps(
             {
@@ -82,13 +95,7 @@ def run_nmap_discovery_workflow(
                 "scope_file": local_scope_path.name,
                 "created_by": "bugslyce-nmap-discover",
                 "profile": recorded_profile,
-                "artifacts": [
-                    {
-                        "type": "nmap",
-                        "file": nmap_output_path.name,
-                        "description": f"Single bounded nmap {discovery_label} command",
-                    }
-                ],
+                "artifacts": [nmap_artifact],
             },
             indent=2,
             sort_keys=True,

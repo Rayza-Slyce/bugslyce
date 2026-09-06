@@ -139,7 +139,7 @@ class PortService:
 
 @dataclass(frozen=True)
 class NmapReportedHostPeer:
-    """Explicit report-name to peer-host relationship retained from Nmap output."""
+    """Evidence-backed logical-host to peer relationship for one Nmap artifact."""
 
     reported_host: str
     peer_host: str
@@ -222,6 +222,7 @@ class ReconManifestArtifact:
     host: str | None = None
     port: int | None = None
     protocol: str | None = None
+    resolved_peer: str | None = None
     description: str | None = None
     status_code: int | None = None
     tags: list[str] = field(default_factory=list)

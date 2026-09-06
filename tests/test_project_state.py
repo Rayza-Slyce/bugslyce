@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.reports.markdown import render_markdown_report
@@ -91,6 +93,208 @@ def test_hostname_only_nmap_service_keeps_exact_logical_origin(tmp_path: Path) -
     assert [item.logical_origin for item in resolve_target_http_origins(state, "blog.thm")] == [
         "http://blog.thm/"
     ]
+
+
+def test_ipv4_only_nmap_evidence_does_not_bind_a_hostname_without_runtime_provenance(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT     STATE SERVICE\n"
+        "80/tcp   open  http\n"
+        "443/tcp  open  https\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "artifacts": [{"type": "nmap", "file": "nmap-allports.txt"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert resolve_target_http_origins(state, "target.example.test") == ()
+
+
+def test_valid_peer_field_without_strict_runtime_manifest_provenance_is_untrusted(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "resolved_peer": "192.0.2.44",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert resolve_target_http_origins(state, "target.example.test") == ()
+
+
+@pytest.mark.parametrize(
+    ("profile", "resolved_peer"),
+    (
+        ("bug-bounty-policy-tcp", "192.0.2.045"),
+        ("bug-bounty-policy-tcp", "not-an-ip"),
+        ("bug-bounty-policy-tcp-plus-services", "192.0.2.45"),
+    ),
+)
+def test_invalid_or_mismatched_persisted_runtime_peer_fails_closed(
+    tmp_path: Path,
+    profile: str,
+    resolved_peer: str,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": profile,
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "resolved_peer": resolved_peer,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert resolve_target_http_origins(state, "target.example.test") == ()
+
+
+def test_persisted_runtime_peer_with_mismatched_artifact_host_fails_closed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "bug-bounty-policy-tcp",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "host": "other.example.test",
+                        "resolved_peer": "192.0.2.44",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert resolve_target_http_origins(state, "target.example.test") == ()
+
+
+def test_ipv4_project_target_remains_directly_compatible_without_peer_projection(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "192.0.2.44",
+                "artifacts": [{"type": "nmap", "file": "nmap-allports.txt"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert state.nmap_reported_host_peers == []
+    assert [item.logical_origin for item in resolve_target_http_origins(state, "192.0.2.44")] == [
+        "http://192.0.2.44/"
+    ]
+
+
+def test_persisted_runtime_peer_deduplicates_parser_derived_relationship(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for target.example.test (192.0.2.44)\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": "bug-bounty-policy-tcp",
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "resolved_peer": "192.0.2.44",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [
+        (item.reported_host, item.peer_host, item.report_line)
+        for item in state.nmap_reported_host_peers
+    ] == [("target.example.test", "192.0.2.44", 1)]
 
 
 def test_parenthesized_ipv6_peer_projects_to_hostname_without_malformed_authority(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import ipaddress
 from pathlib import Path
 import re
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
@@ -23,6 +24,7 @@ from bugslyce.core.models import (
     SMBShare,
 )
 from bugslyce.core.normalise import dedupe_preserve_order, normalise_hostname, normalise_url
+from bugslyce.core.programme_scope import canonicalise_hostname
 from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
@@ -59,6 +61,15 @@ class _ArtifactContext:
     path: Path
     metadata: ReconManifestArtifact | None = None
     manifest_target: str | None = None
+    strict_nmap_runtime_provenance: bool = False
+
+
+_STRICT_NMAP_RUNTIME_MANIFEST_PROFILES = frozenset(
+    {
+        "bug-bounty-policy-tcp",
+        "bug-bounty-policy-tcp-plus-services",
+    }
+)
 
 
 def assemble_raw_artifacts(
@@ -207,8 +218,19 @@ def assemble_raw_artifacts(
 
 def _artifact_contexts(input_dir: Path, manifest: ReconManifest | None) -> list[_ArtifactContext]:
     if manifest:
+        strict_nmap_runtime_provenance = (
+            manifest.schema_version == "1.0"
+            and manifest.created_by == "bugslyce-nmap-discover"
+            and manifest.profile in _STRICT_NMAP_RUNTIME_MANIFEST_PROFILES
+        )
         return [
-            _ArtifactContext(artifact.type, input_dir / artifact.file, artifact, manifest.target)
+            _ArtifactContext(
+                artifact.type,
+                input_dir / artifact.file,
+                artifact,
+                manifest.target,
+                strict_nmap_runtime_provenance,
+            )
             for artifact in manifest.artifacts
         ]
 
@@ -269,6 +291,12 @@ def _assemble_nmap(
             )
         )
     records = parsed.port_services
+    _append_strict_runtime_nmap_peer(
+        context,
+        records,
+        nmap_reported_host_peers,
+        nmap_reported_host_peer_keys,
+    )
     for record in records:
         host = normalise_hostname(
             context_host if metadata and metadata.host else record.host or context_host or ""
@@ -670,6 +698,68 @@ def _context_host(
         target_host = parsed.hostname or manifest_target
         return normalise_hostname(target_host)
     return default_host
+
+
+def _append_strict_runtime_nmap_peer(
+    context: _ArtifactContext,
+    records: list[PortService],
+    relationships: list[NmapReportedHostPeer],
+    relationship_keys: set[tuple[str, str]],
+) -> None:
+    """Materialise one persisted strict-runtime hostname-to-peer relationship.
+
+    A normal Nmap report that names only an IPv4 address is not hostname
+    authority.  This projection is limited to the canonical peer retained by
+    the strict runtime in the same Nmap manifest artifact, and only when the
+    artifact itself contains service evidence for that peer.
+    """
+
+    metadata = context.metadata
+    if (
+        metadata is None
+        or metadata.resolved_peer is None
+        or not context.strict_nmap_runtime_provenance
+    ):
+        return
+    logical_target = _canonical_manifest_hostname(context.manifest_target)
+    peer = _canonical_ipv4(metadata.resolved_peer)
+    if logical_target is None or peer is None:
+        return
+    if metadata.host is not None:
+        return
+    if not any(_canonical_ipv4(record.host) == peer for record in records):
+        return
+    key = (logical_target, peer)
+    if key in relationship_keys:
+        return
+    relationship_keys.add(key)
+    relationships.append(
+        NmapReportedHostPeer(
+            reported_host=logical_target,
+            peer_host=peer,
+            source_file=str(context.path),
+            report_line=0,
+        )
+    )
+
+
+def _canonical_manifest_hostname(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return canonicalise_hostname(value)
+    except ValueError:
+        return None
+
+
+def _canonical_ipv4(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(ipaddress.IPv4Address(value))
+    except ValueError:
+        return None
+    return canonical if canonical == value else None
 
 
 def _metadata_base_url(metadata: ReconManifestArtifact, host: str) -> str:
