@@ -1479,7 +1479,7 @@ def render_external_preflight(preflight: ExternalExecutionPreflight) -> str:
         + ("supported for strict project execution" if preflight.ready else "refused")
     )
     lines.append(
-        "Strict Standard and Deep project execution additionally requires programme-scope preflight."
+        "Policy-aware project Reconnaissance additionally requires programme-scope preflight."
     )
     return "\n".join(lines)
 

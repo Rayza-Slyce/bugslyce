@@ -212,10 +212,10 @@ def test_strict_bug_bounty_execution_documentation_is_current_and_platform_neutr
     assert "no platform preset" in compact.lower()
     assert "aggregate pacing" in compact
     assert "Curl shares aggregate pacing" in compact
-    assert "one thread" in compact
+    assert "Current content discovery is native" in compact
     assert "bounded TCP port-state discovery" in compact
     assert "service/version enrichment" in compact
-    assert "Standard and Deep project pipelines may run only after strict preflight" in compact
+    assert "Project Reconnaissance may run only after strict preflight" in compact
     assert "Unsupported direct and modular bug-bounty live entry points remain blocked" in compact
     assert "R0B3 controlled capture acceptance" not in combined
     assert "CTFs and controlled authorised labs" in compact

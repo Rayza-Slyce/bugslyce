@@ -107,7 +107,7 @@ class BugBountyProjectRuntime:
     def __post_init__(self) -> None:
         if self.profile not in SUPPORTED_BUG_BOUNTY_PROJECT_PROFILES:
             raise ValueError(
-                "Bug-bounty project execution supports Standard and Deep profiles only."
+                "Bug-bounty project execution does not support this profile; use the project Reconnaissance workflow."
             )
         if self.assessment.readiness_state != READINESS_FUTURE_ENFORCEMENT:
             raise ValueError("Engagement policy is incomplete for project execution.")

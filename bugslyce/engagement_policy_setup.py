@@ -97,8 +97,8 @@ def configure_project_policy_interactively(
         "programme brief. No platform preset supersedes those rules."
     )
     print_func(
-        "Standard and Deep project reconnaissance require a ready private policy and "
-        "default-deny programme scope. Direct modular bug-bounty live commands remain blocked."
+        "Project Reconnaissance requires a ready private policy and default-deny "
+        "programme scope. Direct modular bug-bounty live commands remain blocked."
     )
     print_func("")
 
@@ -198,6 +198,11 @@ def configure_project_policy_interactively(
             "Type YES to confirm the programme permits this concurrency: ",
         )
 
+    print_func(
+        "TCP discovery options: 1 skips TCP discovery; 2 uses a bounded common-web-port "
+        "set; 3 uses only custom ports taken from the current programme rules; "
+        "4 scans all TCP ports and requires explicit programme permission."
+    )
     tcp_choice = _choice(
         input_func,
         (
@@ -321,16 +326,14 @@ def show_project_policy(project_file: Path) -> str:
         raise ValueError("Engagement-policy view requires a bug bounty project.")
     if project.engagement_policy_file is None:
         return (
-            "No engagement policy is configured. Standard and Deep project execution "
-            "is unavailable until a ready policy and authorised programme scope pass "
-            "strict preflight."
+            "No engagement policy is configured. Project Reconnaissance is unavailable "
+            "until a ready policy and authorised programme scope pass strict preflight."
         )
     policy_path = Path(project.output_dir) / ENGAGEMENT_POLICY_FILENAME
     if not policy_path.exists() and not policy_path.is_symlink():
         return (
-            "No engagement policy is configured. Standard and Deep project execution "
-            "is unavailable until a ready policy and authorised programme scope pass "
-            "strict preflight."
+            "No engagement policy is configured. Project Reconnaissance is unavailable "
+            "until a ready policy and authorised programme scope pass strict preflight."
         )
     return render_redacted_policy(load_engagement_policy(Path(project.output_dir)))
 
@@ -349,7 +352,7 @@ def _review_and_save(
     _, policy_path = save_project_engagement_policy(project_file, policy)
     print_func(f"Engagement policy saved privately: {policy_path.name} (mode 0600).")
     print_func(
-        "No recon was executed. Standard and Deep remain subject to strict project preflight."
+        "No recon was executed. Project Reconnaissance remains subject to strict project preflight."
     )
     return PolicySetupResult(
         saved=True,

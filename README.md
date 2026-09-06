@@ -15,8 +15,9 @@ BugSlyce does not claim confirmed vulnerabilities.
 BugSlyce `1.3.0` improves authorised-lab reliability, evidence hand-off and
 operator-facing review without expanding the product into exploitation or
 active vulnerability testing. HTTP service identity is preserved across
-hostname/IP collection seams and through portable evidence packs. Gobuster now
-runs under supervised progress handling with parser-safe, no-colour output.
+hostname/IP collection seams and through portable evidence packs. Current
+Reconnaissance uses native bounded content discovery; Gobuster is no longer a
+current execution dependency, while legacy Gobuster artefacts remain readable.
 Persisted human Operator Brief threads own the HTML Investigation priorities,
 while exhaustive machine-oriented technical evidence remains searchable as
 secondary provenance. Duplicate same-host, same-share SMB observations over
@@ -26,8 +27,8 @@ lead without merging the underlying evidence records.
 ## Production bug bounty preflight
 
 BugSlyce `1.3.0` retains the strict bug-bounty runtime introduced in v1.2.
-Standard and Deep bug-bounty project execution uses policy-aware traffic
-controls and default-deny programme-scope enforcement.
+Bug-bounty project Reconnaissance uses policy-aware traffic controls and
+default-deny programme-scope enforcement.
 
 The historical `1.2.1` safety patch hardened resolved-peer enforcement.
 Special-purpose or multicast resolved IPv4 peers require explicit IPv4/CIDR
@@ -43,8 +44,8 @@ peaked at **450 requests per second**. That release also could not consistently
 apply programme-required researcher-identification headers across every HTTP
 request path. The strict v1.2 project runtime replaces those unsafe paths.
 
-**Standard and Deep bug-bounty project execution requires a ready private
-engagement policy, default-deny programme scope, an authorised target and
+**Bug-bounty project Reconnaissance requires a ready private engagement
+policy, default-deny programme scope, an authorised target and
 compatible strict local tools. Unsupported direct and modular live commands
 remain blocked.**
 
@@ -52,15 +53,14 @@ BugSlyce remains suitable for CTFs and controlled authorised labs. No
 production target was involved in discovering these issues.
 
 BugSlyce contains central internal HTTP enforcement and policy-aware
-external-tool planning and enforcement. Curl shares
-aggregate pacing and traffic identity with internal HTTP. Compatible Gobuster
-plans use one thread, a conservative delay and the configured identity. Strict
-bug bounty Nmap plans perform bounded TCP port-state discovery and, only when
-explicitly permitted, service/version enrichment over observed open ports; incompatible
-required curl or Nmap capability blocks preflight, while incompatible optional
-Gobuster is omitted rather than weakened.
+external-tool planning and enforcement. Curl shares aggregate pacing and traffic
+identity with internal HTTP. Current content discovery is native and uses the
+same bounded internal HTTP execution state. Strict bug-bounty Nmap plans perform
+bounded TCP port-state discovery and, when permitted by the recorded policy,
+service/version enrichment over observed open ports; incompatible required curl
+or Nmap capability blocks preflight.
 
-Standard and Deep project pipelines may run only after strict preflight. Save
+Project Reconnaissance may run only after strict preflight. Save
 or update private policy configuration without running recon:
 
 ```bash
@@ -68,9 +68,9 @@ bugslyce project policy --project ./bugslyce_project.json --configure
 ```
 
 No platform preset supersedes current programme rules. CTFs and controlled
-authorised labs remain supported live-testing contexts. Standard and Deep
-bug-bounty project execution is supported only when the current programme
-policy, default-deny programme scope and strict preflight all permit it.
+authorised labs remain supported live-testing contexts. Bug-bounty project
+Reconnaissance is supported only when the current programme policy, default-deny
+programme scope and strict preflight all permit it.
 
 Current package version: `1.3.0`.
 
@@ -144,7 +144,7 @@ For a source install on a Debian-derived workstation:
 
 ```bash
 sudo apt update
-sudo apt install git python3 python3-venv nmap curl gobuster
+sudo apt install git python3 python3-venv nmap curl
 git clone https://github.com/Rayza-Slyce/bugslyce.git
 cd bugslyce
 python3 -m venv .venv

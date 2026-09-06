@@ -2277,7 +2277,7 @@ def test_bug_bounty_modular_collection_commands_refuse_before_live_fetcher(
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "direct or modular entry point" in captured.err
-    assert "policy-aware Standard or Deep project pipeline" in captured.err
+    assert "policy-aware project Reconnaissance workflow" in captured.err
     assert collection_calls == []
 
 

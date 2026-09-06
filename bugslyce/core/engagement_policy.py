@@ -805,8 +805,8 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
             "Internal Python HTTP enforcement: available.",
             "Strict external-tool enforcement: available.",
             (
-                "Standard and Deep bug-bounty project execution is conditional on "
-                "strict engagement-policy and default-deny programme-scope preflight."
+                "Bug-bounty project Reconnaissance is conditional on strict "
+                "engagement-policy and default-deny programme-scope preflight."
             ),
         )
     )
@@ -852,7 +852,7 @@ def r0b2_bug_bounty_live_refusal_message(
         reason_text = " Policy issues: " + " ".join(reasons)
     return (
         "This direct or modular entry point is unsupported for live bug-bounty "
-        "reconnaissance. Use the policy-aware Standard or Deep project pipeline, "
+        "reconnaissance. Use the policy-aware project Reconnaissance workflow, "
         "which requires a ready engagement policy and authorised default-deny "
         "programme scope."
         + reason_text

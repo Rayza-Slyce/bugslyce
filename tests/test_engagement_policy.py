@@ -332,7 +332,7 @@ def test_redacted_rendering_never_exposes_identification_values() -> None:
     assert "Custom User-Agent: configured" in rendered
     assert SENTINEL_HEADER not in rendered
     assert SENTINEL_USER_AGENT not in rendered
-    assert "Standard and Deep bug-bounty project execution" in rendered
+    assert "Bug-bounty project Reconnaissance" in rendered
 
 
 def test_policy_storage_is_atomic_private_and_refuses_symlinks(tmp_path: Path) -> None:
@@ -427,7 +427,9 @@ def test_interactive_setup_supports_multiple_headers_and_user_agent_redacted(
     assert SENTINEL_HEADER not in rendered
     assert SENTINEL_USER_AGENT not in rendered
     assert "X-Researcher-ID: configured" in rendered
-    assert "Standard and Deep remain subject to strict project preflight" in rendered
+    assert "Project Reconnaissance remains subject to strict project preflight" in rendered
+    assert "2 uses a bounded common-web-port set" in rendered
+    assert "4 scans all TCP ports and requires explicit programme permission" in rendered
 
 
 def test_unreviewed_rules_save_incomplete_policy_without_later_questions(

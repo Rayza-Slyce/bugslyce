@@ -2066,7 +2066,7 @@ def test_complete_preflight_is_deterministic_and_secret_safe() -> None:
         "Proxy routing is not enabled unless explicitly supported and configured "
         "by BugSlyce."
     ) in rendered
-    assert "Strict Standard and Deep project execution" in rendered
+    assert "Policy-aware project Reconnaissance" in rendered
 
 
 def test_optional_gobuster_omission_does_not_fail_preflight() -> None:
@@ -2371,7 +2371,7 @@ def test_direct_bug_bounty_block_is_truthful_and_redacted() -> None:
 
     assert HEADER_SECRET not in str(caught.value)
     assert USER_AGENT_SECRET not in str(caught.value)
-    assert "policy-aware Standard or Deep project pipeline" in str(caught.value)
+    assert "policy-aware project Reconnaissance workflow" in str(caught.value)
 
 
 def test_scoped_nmap_hostname_selects_lowest_authorised_ipv4(
