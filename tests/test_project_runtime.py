@@ -7,11 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_HEADERS,
     IDENTIFICATION_NONE,
     SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION,
     SERVICE_VERSION_PERMITTED,
     TCP_SKIP,
     IdentificationHeader,
@@ -213,11 +215,16 @@ def _project(
     policy_kwargs = {}
     if tcp_discovery_policy is not None:
         policy_kwargs["tcp_discovery_policy"] = tcp_discovery_policy
+    if service_version_detection == SERVICE_VERSION_PERMITTED:
+        policy_kwargs["service_version_authorisation_basis"] = (
+            SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION
+        )
     save_project_engagement_policy(
         project_file,
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
             identification_requirement=identification_requirement,
             identification_headers=identification_headers,
             service_version_detection=service_version_detection,

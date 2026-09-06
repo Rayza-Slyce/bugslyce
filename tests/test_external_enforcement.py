@@ -12,12 +12,14 @@ from types import SimpleNamespace
 import pytest
 
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_HEADERS_AND_USER_AGENT,
     IDENTIFICATION_NONE,
     NOT_YET_CONFIRMED,
     SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION,
     SERVICE_VERSION_PERMITTED,
     TCP_CONSERVATIVE,
     TCP_CUSTOM,
@@ -648,6 +650,7 @@ def test_curl_plan_uses_versioned_builtin_user_agent_when_custom_is_absent(
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         identification_requirement=IDENTIFICATION_NONE,
         updated_at="2026-07-28T10:00:00Z",
     )
@@ -2241,6 +2244,7 @@ def test_gobuster_382_session_builds_a_supported_redacted_two_header_plan(
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         maximum_http_requests_per_second="2",
         maximum_http_concurrency=1,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
@@ -3990,22 +3994,89 @@ def _policy(
     tcp_confirmed: str = CONFIRMED,
     service_version_detection: str = SERVICE_VERSION_NOT_PERMITTED,
 ):
-    return build_bug_bounty_policy(
-        programme_rules_reviewed=CONFIRMED,
-        automated_reconnaissance=AUTOMATION_PERMITTED,
-        maximum_http_requests_per_second="2",
-        maximum_http_concurrency=1,
-        tcp_discovery_policy=tcp_mode,
-        custom_tcp_ports=custom_ports,
-        tcp_policy_confirmed=tcp_confirmed,
-        service_version_detection=service_version_detection,
-        identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
-        identification_headers=(
+    values = {
+        "programme_rules_reviewed": CONFIRMED,
+        "automated_reconnaissance": AUTOMATION_PERMITTED,
+        "automated_reconnaissance_basis": AUTOMATION_BASIS_EXPLICIT_PERMISSION,
+        "maximum_http_requests_per_second": "2",
+        "maximum_http_concurrency": 1,
+        "tcp_discovery_policy": tcp_mode,
+        "custom_tcp_ports": custom_ports,
+        "tcp_policy_confirmed": tcp_confirmed,
+        "service_version_detection": service_version_detection,
+        "identification_requirement": IDENTIFICATION_HEADERS_AND_USER_AGENT,
+        "identification_headers": (
             IdentificationHeader("X-Researcher-ID", HEADER_SECRET),
         ),
-        custom_user_agent=USER_AGENT_SECRET,
-        updated_at="2026-07-28T10:00:00Z",
+        "custom_user_agent": USER_AGENT_SECRET,
+        "updated_at": "2026-07-28T10:00:00Z",
+    }
+    if service_version_detection == SERVICE_VERSION_PERMITTED:
+        values["service_version_authorisation_basis"] = (
+            SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION
+        )
+    return build_bug_bounty_policy(**values)
+
+
+def test_schema_12_reviewed_service_permission_uses_the_existing_bounded_nmap_service_plan(
+    tmp_path: Path,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="programme_explicit_permission",
+        service_version_detection="permitted",
+        service_version_authorisation_basis="operator_reviewed_no_prohibition",
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
     )
+
+    plan = build_bug_bounty_nmap_service_plan(
+        target="example.test",
+        observed_open_ports=(80,),
+        output_file=tmp_path / "nmap-services.txt",
+        policy=policy,
+        capabilities=_capabilities("nmap"),
+        programme_scope_policy=_programme_policy(),
+        ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+    )
+
+    assert "-sV" in plan.private_argv
+
+
+@pytest.mark.parametrize(
+    ("execution", "basis"),
+    [
+        ("not_permitted", "programme_explicit_prohibition"),
+        ("not_permitted", "not_confirmed"),
+        ("not_yet_confirmed", "not_confirmed"),
+    ],
+)
+def test_schema_12_nonpermitted_service_execution_cannot_enable_nmap_version_detection(
+    tmp_path: Path,
+    execution: str,
+    basis: str,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="programme_explicit_permission",
+        service_version_detection=execution,
+        service_version_authorisation_basis=basis,
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="service/version"):
+        build_bug_bounty_nmap_service_plan(
+            target="example.test",
+            observed_open_ports=(80,),
+            output_file=tmp_path / "nmap-services.txt",
+            policy=policy,
+            capabilities=_capabilities("nmap"),
+            programme_scope_policy=_programme_policy(),
+            ipv4_resolver=lambda _hostname, _port: ("192.0.2.10",),
+        )
 
 
 def _programme_policy(
@@ -4089,6 +4160,7 @@ def _configuration(
         policy = build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
             maximum_http_requests_per_second=rate,
             http_rate_source="programme_published_limit",
             programme_rate_confirmed=CONFIRMED,

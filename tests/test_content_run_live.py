@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_HEADERS_AND_USER_AGENT,
@@ -2159,6 +2160,7 @@ def _configure_bug_bounty_project(
     engagement_policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         maximum_http_requests_per_second="2",
         maximum_http_concurrency=1,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,

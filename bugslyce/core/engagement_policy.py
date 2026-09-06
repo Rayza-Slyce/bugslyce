@@ -21,8 +21,9 @@ from bugslyce.time_utils import Clock, format_utc_iso, utc_now_iso
 
 
 ENGAGEMENT_POLICY_FILENAME = "engagement_policy.json"
-ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.1"
+ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.2"
 LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.0"
+PREVIOUS_ENGAGEMENT_POLICY_SCHEMA_VERSION = "1.1"
 CONSERVATIVE_HTTP_RATE = Decimal("2")
 CONSERVATIVE_HTTP_CONCURRENCY = 1
 
@@ -30,11 +31,23 @@ CONFIRMED = "confirmed"
 NOT_CONFIRMED = "not_confirmed"
 NOT_YET_CONFIRMED = "not_yet_confirmed"
 
-AUTOMATION_PERMITTED = "explicitly_permitted"
+AUTOMATION_PERMITTED = "permitted"
 AUTOMATION_NOT_PERMITTED = "not_permitted"
 
-SERVICE_VERSION_PERMITTED = "explicitly_permitted"
+AUTOMATION_BASIS_EXPLICIT_PERMISSION = "programme_explicit_permission"
+AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION = "operator_reviewed_no_prohibition"
+AUTOMATION_BASIS_EXPLICIT_PROHIBITION = "programme_explicit_prohibition"
+AUTOMATION_BASIS_NOT_CONFIRMED = NOT_CONFIRMED
+
+SERVICE_VERSION_PERMITTED = "permitted"
 SERVICE_VERSION_NOT_PERMITTED = "not_permitted"
+
+SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION = AUTOMATION_BASIS_EXPLICIT_PERMISSION
+SERVICE_VERSION_BASIS_REVIEWED_NO_PROHIBITION = (
+    AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION
+)
+SERVICE_VERSION_BASIS_EXPLICIT_PROHIBITION = AUTOMATION_BASIS_EXPLICIT_PROHIBITION
+SERVICE_VERSION_BASIS_NOT_CONFIRMED = AUTOMATION_BASIS_NOT_CONFIRMED
 
 RATE_SOURCE_CONSERVATIVE = "bugslyce_conservative_default"
 RATE_SOURCE_PROGRAMME = "programme_published_limit"
@@ -45,10 +58,10 @@ TCP_CONSERVATIVE = "conservative_common_web_ports"
 TCP_CUSTOM = "programme_approved_custom_ports"
 TCP_FULL = "full_tcp_explicitly_permitted"
 
-IDENTIFICATION_NONE = "confirmed_none"
-IDENTIFICATION_HEADERS = "custom_headers"
-IDENTIFICATION_USER_AGENT = "custom_user_agent"
-IDENTIFICATION_HEADERS_AND_USER_AGENT = "custom_headers_and_user_agent"
+IDENTIFICATION_NONE = "programme_requires_no_custom_identifier"
+IDENTIFICATION_HEADERS = "programme_requires_headers"
+IDENTIFICATION_USER_AGENT = "programme_requires_user_agent"
+IDENTIFICATION_HEADERS_AND_USER_AGENT = "programme_requires_headers_and_user_agent"
 IDENTIFICATION_UNKNOWN = "not_yet_confirmed"
 
 READINESS_INCOMPLETE = "policy_incomplete"
@@ -75,11 +88,18 @@ _AUTOMATION_STATES = {
     AUTOMATION_NOT_PERMITTED,
     NOT_YET_CONFIRMED,
 }
+_AUTOMATION_BASES = {
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
+    AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION,
+    AUTOMATION_BASIS_EXPLICIT_PROHIBITION,
+    AUTOMATION_BASIS_NOT_CONFIRMED,
+}
 _SERVICE_VERSION_STATES = {
     SERVICE_VERSION_PERMITTED,
     SERVICE_VERSION_NOT_PERMITTED,
     NOT_YET_CONFIRMED,
 }
+_SERVICE_VERSION_BASES = _AUTOMATION_BASES
 _RATE_SOURCES = {
     RATE_SOURCE_CONSERVATIVE,
     RATE_SOURCE_PROGRAMME,
@@ -143,6 +163,7 @@ class EngagementPolicy:
     updated_at: str
     programme_rules_reviewed: str
     automated_reconnaissance: str
+    automated_reconnaissance_basis: str
     maximum_http_requests_per_second: str
     http_rate_source: str
     programme_rate_confirmed: str
@@ -152,6 +173,7 @@ class EngagementPolicy:
     custom_tcp_ports: str | None
     tcp_policy_confirmed: str
     service_version_detection: str
+    service_version_authorisation_basis: str
     identification_requirement: str
     identification_headers: tuple[IdentificationHeader, ...] = field(
         default_factory=tuple,
@@ -164,6 +186,7 @@ class EngagementPolicy:
 
         return {
             "automated_reconnaissance": self.automated_reconnaissance,
+            "automated_reconnaissance_basis": self.automated_reconnaissance_basis,
             "concurrent_automation_confirmed": self.concurrent_automation_confirmed,
             "custom_tcp_ports": self.custom_tcp_ports,
             "custom_user_agent": self.custom_user_agent,
@@ -182,6 +205,9 @@ class EngagementPolicy:
             "programme_rules_reviewed": self.programme_rules_reviewed,
             "schema_version": self.schema_version,
             "service_version_detection": self.service_version_detection,
+            "service_version_authorisation_basis": (
+                self.service_version_authorisation_basis
+            ),
             "tcp_discovery_policy": self.tcp_discovery_policy,
             "tcp_policy_confirmed": self.tcp_policy_confirmed,
             "updated_at": self.updated_at,
@@ -351,6 +377,7 @@ def build_bug_bounty_policy(
     *,
     programme_rules_reviewed: str = NOT_YET_CONFIRMED,
     automated_reconnaissance: str = NOT_YET_CONFIRMED,
+    automated_reconnaissance_basis: str = AUTOMATION_BASIS_NOT_CONFIRMED,
     maximum_http_requests_per_second: object = CONSERVATIVE_HTTP_RATE,
     http_rate_source: str = RATE_SOURCE_CONSERVATIVE,
     programme_rate_confirmed: str = NOT_YET_CONFIRMED,
@@ -360,6 +387,7 @@ def build_bug_bounty_policy(
     custom_tcp_ports: str | None = None,
     tcp_policy_confirmed: str = NOT_YET_CONFIRMED,
     service_version_detection: str = SERVICE_VERSION_NOT_PERMITTED,
+    service_version_authorisation_basis: str = SERVICE_VERSION_BASIS_NOT_CONFIRMED,
     identification_requirement: str = IDENTIFICATION_UNKNOWN,
     identification_headers: tuple[IdentificationHeader, ...] = (),
     custom_user_agent: str | None = None,
@@ -377,6 +405,16 @@ def build_bug_bounty_policy(
         automated_reconnaissance,
         _AUTOMATION_STATES,
         "Automated-reconnaissance permission",
+    )
+    _require_choice(
+        automated_reconnaissance_basis,
+        _AUTOMATION_BASES,
+        "Automated-reconnaissance authorisation basis",
+    )
+    _require_execution_basis_pair(
+        automated_reconnaissance,
+        automated_reconnaissance_basis,
+        label="Automated-reconnaissance",
     )
     _require_choice(http_rate_source, _RATE_SOURCES, "HTTP rate source")
     _require_choice(
@@ -399,6 +437,16 @@ def build_bug_bounty_policy(
         service_version_detection,
         _SERVICE_VERSION_STATES,
         "Service/version-detection permission",
+    )
+    _require_choice(
+        service_version_authorisation_basis,
+        _SERVICE_VERSION_BASES,
+        "Service/version-detection authorisation basis",
+    )
+    _require_execution_basis_pair(
+        service_version_detection,
+        service_version_authorisation_basis,
+        label="Service/version-detection",
     )
     _require_choice(
         identification_requirement,
@@ -429,6 +477,7 @@ def build_bug_bounty_policy(
         updated_at=timestamp,
         programme_rules_reviewed=programme_rules_reviewed,
         automated_reconnaissance=automated_reconnaissance,
+        automated_reconnaissance_basis=automated_reconnaissance_basis,
         maximum_http_requests_per_second=rate,
         http_rate_source=http_rate_source,
         programme_rate_confirmed=programme_rate_confirmed,
@@ -438,6 +487,7 @@ def build_bug_bounty_policy(
         custom_tcp_ports=ports,
         tcp_policy_confirmed=tcp_policy_confirmed,
         service_version_detection=service_version_detection,
+        service_version_authorisation_basis=service_version_authorisation_basis,
         identification_requirement=identification_requirement,
         identification_headers=headers,
         custom_user_agent=user_agent,
@@ -453,6 +503,7 @@ def assess_engagement_policy(
         _readiness_reasons(
             programme_rules_reviewed=policy.programme_rules_reviewed,
             automated_reconnaissance=policy.automated_reconnaissance,
+            automated_reconnaissance_basis=policy.automated_reconnaissance_basis,
             rate=Decimal(policy.maximum_http_requests_per_second),
             http_rate_source=policy.http_rate_source,
             programme_rate_confirmed=policy.programme_rate_confirmed,
@@ -462,6 +513,9 @@ def assess_engagement_policy(
             custom_tcp_ports=policy.custom_tcp_ports,
             tcp_policy_confirmed=policy.tcp_policy_confirmed,
             service_version_detection=policy.service_version_detection,
+            service_version_authorisation_basis=(
+                policy.service_version_authorisation_basis
+            ),
             identification_requirement=policy.identification_requirement,
             headers=policy.identification_headers,
             user_agent=policy.custom_user_agent,
@@ -487,8 +541,9 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
 
     if not isinstance(payload, Mapping):
         raise ValueError("Engagement policy must be a JSON object.")
-    expected_fields = {
+    current_fields = {
         "automated_reconnaissance",
+        "automated_reconnaissance_basis",
         "concurrent_automation_confirmed",
         "custom_tcp_ports",
         "custom_user_agent",
@@ -502,21 +557,27 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
         "programme_rules_reviewed",
         "schema_version",
         "service_version_detection",
+        "service_version_authorisation_basis",
         "tcp_discovery_policy",
         "tcp_policy_confirmed",
         "updated_at",
     }
     actual_fields = set(payload)
-    legacy_fields = expected_fields - {"service_version_detection"}
     schema_version = payload.get("schema_version")
-    legacy = schema_version == LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION
-    if actual_fields != (legacy_fields if legacy else expected_fields):
-        raise ValueError("Engagement policy fields do not match the canonical schema.")
-    if schema_version not in {
-        ENGAGEMENT_POLICY_SCHEMA_VERSION,
-        LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION,
-    }:
+    schema_11_fields = current_fields - {
+        "automated_reconnaissance_basis",
+        "service_version_authorisation_basis",
+    }
+    schema_10_fields = schema_11_fields - {"service_version_detection"}
+    expected_fields = {
+        ENGAGEMENT_POLICY_SCHEMA_VERSION: current_fields,
+        PREVIOUS_ENGAGEMENT_POLICY_SCHEMA_VERSION: schema_11_fields,
+        LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION: schema_10_fields,
+    }
+    if schema_version not in expected_fields:
         raise ValueError("Engagement policy schema version is unsupported.")
+    if actual_fields != expected_fields[schema_version]:
+        raise ValueError("Engagement policy fields do not match the canonical schema.")
     headers_payload = payload.get("identification_headers")
     if not isinstance(headers_payload, list):
         raise ValueError("Engagement policy identification_headers must be a list.")
@@ -555,9 +616,33 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
 
     if payload["engagement_context"] != BUG_BOUNTY_CONTEXT:
         raise ValueError("Engagement policy context must be bug_bounty.")
+    legacy = schema_version != ENGAGEMENT_POLICY_SCHEMA_VERSION
+    automation, automation_basis = _migrate_legacy_execution(
+        payload["automated_reconnaissance"]
+    ) if legacy else (
+        payload["automated_reconnaissance"], payload["automated_reconnaissance_basis"]
+    )
+    service, service_basis = (
+        (NOT_YET_CONFIRMED, AUTOMATION_BASIS_NOT_CONFIRMED)
+        if schema_version == LEGACY_ENGAGEMENT_POLICY_SCHEMA_VERSION
+        else _migrate_legacy_execution(payload["service_version_detection"])
+        if legacy
+        else (
+            payload["service_version_detection"],
+            payload["service_version_authorisation_basis"],
+        )
+    )
+    identification = (
+        _migrate_legacy_identification(
+            payload["identification_requirement"], headers, custom_user_agent
+        )
+        if legacy
+        else payload["identification_requirement"]
+    )
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=payload["programme_rules_reviewed"],
-        automated_reconnaissance=payload["automated_reconnaissance"],
+        automated_reconnaissance=automation,
+        automated_reconnaissance_basis=automation_basis,
         maximum_http_requests_per_second=payload[
             "maximum_http_requests_per_second"
         ],
@@ -570,12 +655,9 @@ def policy_from_dict(payload: object) -> EngagementPolicy:
         tcp_discovery_policy=payload["tcp_discovery_policy"],
         custom_tcp_ports=custom_ports,
         tcp_policy_confirmed=payload["tcp_policy_confirmed"],
-        service_version_detection=(
-            NOT_YET_CONFIRMED
-            if legacy
-            else payload["service_version_detection"]
-        ),
-        identification_requirement=payload["identification_requirement"],
+        service_version_detection=service,
+        service_version_authorisation_basis=service_basis,
+        identification_requirement=identification,
         identification_headers=tuple(headers),
         custom_user_agent=custom_user_agent,
         updated_at=payload["updated_at"],
@@ -682,6 +764,10 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
         f"Programme rules reviewed: {_label(policy.programme_rules_reviewed)}",
         f"Automated reconnaissance: {_label(policy.automated_reconnaissance)}",
         (
+            "Automated reconnaissance basis: "
+            f"{_label(policy.automated_reconnaissance_basis)}"
+        ),
+        (
             "Maximum aggregate HTTP rate: "
             f"{policy.maximum_http_requests_per_second} requests per second"
         ),
@@ -689,6 +775,10 @@ def render_redacted_policy(policy: EngagementPolicy) -> str:
         f"Maximum HTTP concurrency: {policy.maximum_http_concurrency}",
         f"TCP discovery: {_label(policy.tcp_discovery_policy)}",
         f"Nmap service/version detection: {_label(policy.service_version_detection)}",
+        (
+            "Nmap service/version basis: "
+            f"{_label(policy.service_version_authorisation_basis)}"
+        ),
         f"Identification requirement: {_label(policy.identification_requirement)}",
     ]
     if policy.custom_tcp_ports:
@@ -793,6 +883,7 @@ def _readiness_reasons(
     *,
     programme_rules_reviewed: str,
     automated_reconnaissance: str,
+    automated_reconnaissance_basis: str,
     rate: Decimal,
     http_rate_source: str,
     programme_rate_confirmed: str,
@@ -802,6 +893,7 @@ def _readiness_reasons(
     custom_tcp_ports: str | None,
     tcp_policy_confirmed: str,
     service_version_detection: str,
+    service_version_authorisation_basis: str,
     identification_requirement: str,
     headers: tuple[IdentificationHeader, ...],
     user_agent: str | None,
@@ -810,7 +902,10 @@ def _readiness_reasons(
     if programme_rules_reviewed != CONFIRMED:
         reasons.append("Current programme rules have not been confirmed as reviewed.")
     if automated_reconnaissance == AUTOMATION_NOT_PERMITTED:
-        reasons.append("The programme does not permit automated reconnaissance.")
+        if automated_reconnaissance_basis == AUTOMATION_BASIS_EXPLICIT_PROHIBITION:
+            reasons.append("The programme explicitly prohibits automated reconnaissance.")
+        else:
+            reasons.append("Automated reconnaissance is not permitted by the recorded decision.")
     elif automated_reconnaissance != AUTOMATION_PERMITTED:
         reasons.append("Automated reconnaissance permission is not yet confirmed.")
     if rate > CONSERVATIVE_HTTP_RATE and http_rate_source == RATE_SOURCE_CONSERVATIVE:
@@ -845,12 +940,8 @@ def _readiness_reasons(
         reasons.append("Traffic-identification requirements are not yet confirmed.")
     if needs_headers and not headers:
         reasons.append("Required custom identification headers are not configured.")
-    if not needs_headers and headers:
-        reasons.append("Custom headers do not match the identification requirement.")
     if needs_user_agent and user_agent is None:
         reasons.append("Required custom User-Agent is not configured.")
-    if not needs_user_agent and user_agent is not None:
-        reasons.append("Custom User-Agent does not match the identification requirement.")
     return reasons
 
 
@@ -858,6 +949,58 @@ def _require_choice(value: object, allowed: set[str], label: str) -> str:
     if not isinstance(value, str) or value not in allowed:
         raise ValueError(f"{label} is invalid.")
     return value
+
+
+def _require_execution_basis_pair(execution: str, basis: str, *, label: str) -> None:
+    """Refuse evidence states that cannot support the recorded execution decision."""
+
+    valid_pairs = {
+        (AUTOMATION_PERMITTED, AUTOMATION_BASIS_EXPLICIT_PERMISSION),
+        (AUTOMATION_PERMITTED, AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION),
+        (AUTOMATION_NOT_PERMITTED, AUTOMATION_BASIS_EXPLICIT_PROHIBITION),
+        (AUTOMATION_NOT_PERMITTED, AUTOMATION_BASIS_NOT_CONFIRMED),
+        (NOT_YET_CONFIRMED, AUTOMATION_BASIS_NOT_CONFIRMED),
+    }
+    if (execution, basis) not in valid_pairs:
+        raise ValueError(f"{label} execution decision and authorisation basis conflict.")
+
+
+def _migrate_legacy_execution(value: object) -> tuple[str, str]:
+    """Map the old conflated value without inventing programme evidence."""
+
+    if value == "explicitly_permitted":
+        return AUTOMATION_PERMITTED, AUTOMATION_BASIS_EXPLICIT_PERMISSION
+    if value == AUTOMATION_NOT_PERMITTED:
+        return AUTOMATION_NOT_PERMITTED, AUTOMATION_BASIS_NOT_CONFIRMED
+    if value == NOT_YET_CONFIRMED:
+        return NOT_YET_CONFIRMED, AUTOMATION_BASIS_NOT_CONFIRMED
+    raise ValueError("Legacy execution permission is invalid.")
+
+
+def _migrate_legacy_identification(
+    requirement: object,
+    headers: list[IdentificationHeader],
+    user_agent: str | None,
+) -> str:
+    """Retain legacy payload, but fail closed where its provenance is ambiguous."""
+
+    expected_payload = {
+        "confirmed_none": (False, False, IDENTIFICATION_NONE),
+        "custom_headers": (True, False, IDENTIFICATION_HEADERS),
+        "custom_user_agent": (False, True, IDENTIFICATION_USER_AGENT),
+        "custom_headers_and_user_agent": (
+            True,
+            True,
+            IDENTIFICATION_HEADERS_AND_USER_AGENT,
+        ),
+        "not_yet_confirmed": (False, False, IDENTIFICATION_UNKNOWN),
+    }
+    if requirement not in expected_payload:
+        raise ValueError("Legacy identification requirement is invalid.")
+    expects_headers, expects_user_agent, migrated = expected_payload[requirement]
+    if bool(headers) != expects_headers or (user_agent is not None) != expects_user_agent:
+        return IDENTIFICATION_UNKNOWN
+    return migrated
 
 
 def _normalise_decimal(value: Decimal) -> str:

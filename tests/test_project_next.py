@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_NONE,
@@ -540,6 +541,7 @@ def _ready_bug_bounty_project(tmp_path: Path) -> tuple[Path, Path]:
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
             identification_requirement=IDENTIFICATION_NONE,
             service_version_detection=SERVICE_VERSION_NOT_PERMITTED,
             updated_at="2026-08-08T12:00:00Z",

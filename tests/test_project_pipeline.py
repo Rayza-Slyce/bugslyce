@@ -4779,6 +4779,7 @@ def _tcp_skip_project_runtime(
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis="programme_explicit_permission",
             identification_requirement=IDENTIFICATION_NONE,
             tcp_discovery_policy=TCP_SKIP,
             service_version_detection=SERVICE_VERSION_NOT_PERMITTED,

@@ -1302,14 +1302,15 @@ def build_http_enforcement_configuration(
     if not isinstance(policy, EngagementPolicy):
         raise ValueError("A canonical bug bounty engagement policy is required.")
     canonical = policy_from_dict(policy.to_dict())
+    if canonical.automated_reconnaissance != AUTOMATION_PERMITTED:
+        raise ValueError(
+            "Engagement policy is incomplete: Automated reconnaissance is not "
+            "confirmed for internal HTTP enforcement."
+        )
     assessment = assess_engagement_policy(canonical)
     if assessment.readiness_state != READINESS_FUTURE_ENFORCEMENT:
         raise ValueError(
             "Engagement policy is incomplete and cannot configure internal HTTP enforcement."
-        )
-    if canonical.automated_reconnaissance != AUTOMATION_PERMITTED:
-        raise ValueError(
-            "Automated reconnaissance is not confirmed for internal HTTP enforcement."
         )
     origins: list[HttpOrigin] = []
     for value in approved_origins:
@@ -1329,7 +1330,7 @@ def build_http_enforcement_configuration(
         identification_headers=canonical.identification_headers,
         approved_origins=canonical_origins,
         user_agent_source=(
-            "programme_custom" if canonical.custom_user_agent else "bugslyce_builtin"
+            "policy_configured" if canonical.custom_user_agent else "bugslyce_builtin"
         ),
     )
 

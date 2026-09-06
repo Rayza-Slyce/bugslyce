@@ -18,6 +18,7 @@ import bugslyce.recon.http_enforcement as http_enforcement_module
 import bugslyce.cli as cli_module
 from bugslyce import __version__
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_HEADERS_AND_USER_AGENT,
@@ -1960,6 +1961,7 @@ def test_multiple_policy_identification_headers_reach_every_exchange_in_order() 
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
         identification_headers=(
             IdentificationHeader("X-Researcher-ID", HEADER_SENTINEL),
@@ -1988,6 +1990,7 @@ def test_policy_configuration_uses_versioned_identity_when_custom_agent_is_absen
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         identification_requirement=IDENTIFICATION_NONE,
         updated_at="2026-07-28T10:00:00Z",
     )
@@ -2160,6 +2163,7 @@ def test_non_strict_compatibility_transport_retains_existing_opener_behaviour(
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
             identification_requirement=IDENTIFICATION_UNKNOWN,
             updated_at="2026-07-28T10:00:00Z",
         ),
@@ -2178,6 +2182,7 @@ def test_runtime_identity_refuses_unencodable_values_without_echoing_them() -> N
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
         identification_headers=(
             IdentificationHeader("X-Researcher-ID", private_value),
@@ -3284,6 +3289,7 @@ def _complete_policy():
     return build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         maximum_http_requests_per_second="2",
         maximum_http_concurrency=1,
         identification_requirement=IDENTIFICATION_HEADERS_AND_USER_AGENT,
@@ -3293,6 +3299,60 @@ def _complete_policy():
         custom_user_agent=USER_AGENT_SENTINEL,
         updated_at="2026-07-28T10:00:00Z",
     )
+
+
+def test_schema_12_reviewed_automation_and_optional_identity_configure_policy_aware_http() -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="operator_reviewed_no_prohibition",
+        service_version_detection="not_permitted",
+        service_version_authorisation_basis="not_confirmed",
+        identification_requirement="programme_requires_no_custom_identifier",
+        identification_headers=(
+            IdentificationHeader("X-Researcher-ID", HEADER_SENTINEL),
+        ),
+        custom_user_agent=USER_AGENT_SENTINEL,
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    configuration = build_http_enforcement_configuration(
+        policy,
+        approved_origins=("https://example.test/",),
+    )
+
+    assert configuration.identification_headers[0].value == HEADER_SENTINEL
+    assert configuration.user_agent == USER_AGENT_SENTINEL
+    assert configuration.user_agent_source == "policy_configured"
+
+
+@pytest.mark.parametrize(
+    ("execution", "basis"),
+    [
+        ("not_permitted", "programme_explicit_prohibition"),
+        ("not_permitted", "not_confirmed"),
+        ("not_yet_confirmed", "not_confirmed"),
+    ],
+)
+def test_schema_12_nonpermitted_automation_cannot_configure_policy_aware_http(
+    execution: str,
+    basis: str,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance=execution,
+        automated_reconnaissance_basis=basis,
+        service_version_detection="not_permitted",
+        service_version_authorisation_basis="not_confirmed",
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="Automated reconnaissance"):
+        build_http_enforcement_configuration(
+            policy,
+            approved_origins=("https://example.test/",),
+        )
 
 
 def _response(

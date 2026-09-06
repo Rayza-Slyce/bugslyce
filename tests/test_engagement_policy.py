@@ -23,6 +23,7 @@ from bugslyce.core.engagement_context import (
     UNKNOWN_CONTEXT,
 )
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     ENGAGEMENT_POLICY_FILENAME,
@@ -38,6 +39,7 @@ from bugslyce.core.engagement_policy import (
     READINESS_FUTURE_ENFORCEMENT,
     READINESS_INCOMPLETE,
     SERVICE_VERSION_NOT_PERMITTED,
+    SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION,
     SERVICE_VERSION_PERMITTED,
     TCP_CUSTOM,
     TCP_FULL,
@@ -128,7 +130,10 @@ def test_bug_bounty_policy_defaults_are_conservative_and_explicit() -> None:
 
 
 def test_service_version_permission_is_explicit_and_unconfirmed_is_fail_closed() -> None:
-    permitted = _complete_policy(service_version_detection=SERVICE_VERSION_PERMITTED)
+    permitted = _complete_policy(
+        service_version_detection=SERVICE_VERSION_PERMITTED,
+        service_version_authorisation_basis=SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION,
+    )
     unconfirmed = _complete_policy(service_version_detection=NOT_YET_CONFIRMED)
 
     assert assess_engagement_policy(permitted).readiness_state == READINESS_FUTURE_ENFORCEMENT
@@ -140,13 +145,12 @@ def test_service_version_permission_is_explicit_and_unconfirmed_is_fail_closed()
 
 
 def test_schema_1_policy_loads_without_implicit_service_version_permission() -> None:
-    payload = _complete_policy().to_dict()
-    payload["schema_version"] = "1.0"
-    payload.pop("service_version_detection")
+    payload = _legacy_engagement_policy_payload("1.0")
 
     loaded = policy_from_dict(payload)
 
     assert loaded.service_version_detection == NOT_YET_CONFIRMED
+    assert loaded.service_version_authorisation_basis == "not_confirmed"
     assert loaded.service_version_detection != SERVICE_VERSION_PERMITTED
     assert assess_engagement_policy(loaded).readiness_state == READINESS_INCOMPLETE
 
@@ -195,6 +199,7 @@ def test_programme_rate_and_higher_concurrency_require_confirmation() -> None:
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         maximum_http_requests_per_second="15.5",
         http_rate_source=RATE_SOURCE_PROGRAMME,
         maximum_http_concurrency=4,
@@ -362,7 +367,7 @@ def test_policy_read_refuses_group_or_world_permissions(tmp_path: Path) -> None:
 def test_project_metadata_contains_only_relative_policy_reference(tmp_path: Path) -> None:
     project_file = _bug_bounty_project(tmp_path)
     output: list[str] = []
-    answers = iter(["1", "1", "1", "", "2", "2", "1", "YES"])
+    answers = iter(["1", "1", "1", "", "2", "3", "1", "1", "YES"])
 
     result = configure_project_policy_interactively(
         project_file,
@@ -390,7 +395,7 @@ def test_interactive_setup_supports_multiple_headers_and_user_agent_redacted(
             "1",  # conservative rate
             "",  # concurrency 1
                 "2",  # conservative TCP
-                "2",  # service/version not permitted
+                "3",  # service/version explicitly prohibited/no run
                 "4",  # headers and User-Agent
             "X-Researcher-ID",
             SENTINEL_HEADER,
@@ -399,6 +404,7 @@ def test_interactive_setup_supports_multiple_headers_and_user_agent_redacted(
             "authorised-lab",
             "",
             SENTINEL_USER_AGENT,
+            "1",  # no optional researcher identity
             "YES",  # save
         ]
     )
@@ -488,10 +494,11 @@ def test_existing_sensitive_values_are_preserved_only_after_deliberate_update(
             "1",  # conservative rate
             "",  # concurrency one
                 "2",  # conservative TCP
-                "2",  # service/version not permitted
+                "3",  # service/version explicitly prohibited/no run
                 "4",  # headers and User-Agent
             "",  # retain headers
             "",  # retain User-Agent
+            "1",  # no optional researcher identity
             "YES",  # save
         ]
     )
@@ -524,7 +531,8 @@ def test_wizard_programme_rate_higher_concurrency_and_custom_ports_need_confirma
             "3",
             "443,8000-8002",
                 "YES",
-                "2",
+                "3",
+                "1",
                 "1",
             "YES",
         ]
@@ -546,10 +554,18 @@ def test_wizard_programme_rate_higher_concurrency_and_custom_ports_need_confirma
     )
 
 
-@pytest.mark.parametrize("permission_choice", ["2", "3"])
+@pytest.mark.parametrize(
+    ("permission_choice", "expected_execution", "expected_basis"),
+    [
+        ("3", "not_permitted", "programme_explicit_prohibition"),
+        ("4", "not_yet_confirmed", "not_confirmed"),
+    ],
+)
 def test_wizard_automation_not_permitted_or_unknown_is_saved_incomplete(
     tmp_path: Path,
     permission_choice: str,
+    expected_execution: str,
+    expected_basis: str,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
     answers = iter(["1", permission_choice, "YES"])
@@ -562,14 +578,39 @@ def test_wizard_automation_not_permitted_or_unknown_is_saved_incomplete(
 
     assert result.saved is True
     assert result.policy is not None
+    assert result.policy.automated_reconnaissance == expected_execution
+    assert result.policy.automated_reconnaissance_basis == expected_basis
     assert assess_engagement_policy(result.policy).readiness_state == READINESS_INCOMPLETE
+
+
+def test_wizard_reviewed_no_prohibition_records_non_explicit_permission(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+    answers = iter(["1", "2", "1", "", "2", "3", "1", "1", "YES"])
+    output: list[str] = []
+
+    result = configure_project_policy_interactively(
+        project_file,
+        input_func=lambda _prompt: next(answers),
+        print_func=output.append,
+    )
+
+    assert result.saved is True
+    assert result.policy is not None
+    assert result.policy.automated_reconnaissance == AUTOMATION_PERMITTED
+    assert (
+        result.policy.automated_reconnaissance_basis
+        == "operator_reviewed_no_prohibition"
+    )
+    assert "programme explicit permission" not in "\n".join(output).lower()
 
 
 def test_wizard_identification_requirements_unknown_remains_incomplete(
     tmp_path: Path,
 ) -> None:
     project_file = _bug_bounty_project(tmp_path)
-    answers = iter(["1", "1", "1", "", "2", "2", "5", "YES"])
+    answers = iter(["1", "1", "1", "", "2", "3", "5", "1", "YES"])
 
     result = configure_project_policy_interactively(
         project_file,
@@ -584,7 +625,7 @@ def test_wizard_identification_requirements_unknown_remains_incomplete(
 
 def test_wizard_supports_dedicated_custom_user_agent(tmp_path: Path) -> None:
     project_file = _bug_bounty_project(tmp_path)
-    answers = iter(["1", "1", "1", "", "2", "2", "3", SENTINEL_USER_AGENT, "YES"])
+    answers = iter(["1", "1", "1", "", "2", "3", "3", SENTINEL_USER_AGENT, "1", "YES"])
     output: list[str] = []
 
     result = configure_project_policy_interactively(
@@ -1610,6 +1651,666 @@ def test_policy_nested_identification_header_schema_is_exact() -> None:
         assert SENTINEL_HEADER not in str(exc_info.value)
 
 
+
+_SCHEMA_12_VALID_EXECUTION_BASIS_PAIRS = (
+    ("permitted", "programme_explicit_permission"),
+    ("permitted", "operator_reviewed_no_prohibition"),
+    ("not_permitted", "programme_explicit_prohibition"),
+    ("not_permitted", "not_confirmed"),
+    ("not_yet_confirmed", "not_confirmed"),
+)
+
+_SCHEMA_12_INVALID_EXECUTION_BASIS_PAIRS = (
+    ("permitted", "programme_explicit_prohibition"),
+    ("permitted", "not_confirmed"),
+    ("not_permitted", "programme_explicit_permission"),
+    ("not_permitted", "operator_reviewed_no_prohibition"),
+    ("not_yet_confirmed", "programme_explicit_permission"),
+    ("not_yet_confirmed", "operator_reviewed_no_prohibition"),
+    ("not_yet_confirmed", "programme_explicit_prohibition"),
+)
+
+
+def _legacy_engagement_policy_payload(
+    schema_version: str,
+    *,
+    automated_reconnaissance: str = "explicitly_permitted",
+    service_version_detection: str = "explicitly_permitted",
+    identification_requirement: str = "custom_headers_and_user_agent",
+    identification_headers=(),
+    custom_user_agent: str | None = None,
+) -> dict:
+    if schema_version not in {"1.0", "1.1"}:
+        raise ValueError("legacy fixture supports only schema 1.0 or 1.1")
+
+    payload = {
+        "automated_reconnaissance": automated_reconnaissance,
+        "concurrent_automation_confirmed": "not_yet_confirmed",
+        "custom_tcp_ports": None,
+        "custom_user_agent": custom_user_agent,
+        "engagement_context": "bug_bounty",
+        "http_rate_source": "bugslyce_conservative_default",
+        "identification_headers": list(identification_headers),
+        "identification_requirement": identification_requirement,
+        "maximum_http_concurrency": 1,
+        "maximum_http_requests_per_second": "2",
+        "programme_rate_confirmed": "not_yet_confirmed",
+        "programme_rules_reviewed": "confirmed",
+        "schema_version": schema_version,
+        "tcp_discovery_policy": "conservative_common_web_ports",
+        "tcp_policy_confirmed": "not_yet_confirmed",
+        "updated_at": "2026-07-28T10:00:00Z",
+    }
+    if schema_version == "1.1":
+        payload["service_version_detection"] = service_version_detection
+    return payload
+
+
+def _schema_12_payload() -> dict:
+    payload = _legacy_engagement_policy_payload(
+        "1.1",
+        automated_reconnaissance="explicitly_permitted",
+        service_version_detection="explicitly_permitted",
+        identification_requirement="custom_headers_and_user_agent",
+        identification_headers=(
+            {"name": "X-Researcher-ID", "value": SENTINEL_HEADER},
+        ),
+        custom_user_agent=SENTINEL_USER_AGENT,
+    )
+    payload.update(
+        {
+            "schema_version": "1.2",
+            "automated_reconnaissance": "permitted",
+            "automated_reconnaissance_basis": "operator_reviewed_no_prohibition",
+            "service_version_detection": "permitted",
+            "service_version_authorisation_basis": "operator_reviewed_no_prohibition",
+            "identification_requirement": "programme_requires_headers_and_user_agent",
+        }
+    )
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("execution_field", "basis_field"),
+    (
+        ("automated_reconnaissance", "automated_reconnaissance_basis"),
+        ("service_version_detection", "service_version_authorisation_basis"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("execution", "basis"),
+    _SCHEMA_12_VALID_EXECUTION_BASIS_PAIRS,
+)
+def test_schema_12_accepts_every_valid_execution_basis_pair(
+    execution_field: str,
+    basis_field: str,
+    execution: str,
+    basis: str,
+) -> None:
+    values = {
+        "programme_rules_reviewed": CONFIRMED,
+        "automated_reconnaissance": "permitted",
+        "automated_reconnaissance_basis": "programme_explicit_permission",
+        "service_version_detection": "not_permitted",
+        "service_version_authorisation_basis": "not_confirmed",
+        "identification_requirement": "programme_requires_no_custom_identifier",
+        "updated_at": "2026-09-06T10:00:00Z",
+    }
+    values[execution_field] = execution
+    values[basis_field] = basis
+
+    policy = build_bug_bounty_policy(**values)
+
+    assert getattr(policy, execution_field) == execution
+    assert getattr(policy, basis_field) == basis
+
+
+@pytest.mark.parametrize(
+    ("execution_field", "basis_field"),
+    (
+        ("automated_reconnaissance", "automated_reconnaissance_basis"),
+        ("service_version_detection", "service_version_authorisation_basis"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("execution", "basis"),
+    _SCHEMA_12_INVALID_EXECUTION_BASIS_PAIRS,
+)
+def test_schema_12_rejects_every_invalid_execution_basis_pair(
+    execution_field: str,
+    basis_field: str,
+    execution: str,
+    basis: str,
+) -> None:
+    values = {
+        "programme_rules_reviewed": CONFIRMED,
+        "automated_reconnaissance": "permitted",
+        "automated_reconnaissance_basis": "programme_explicit_permission",
+        "service_version_detection": "not_permitted",
+        "service_version_authorisation_basis": "not_confirmed",
+        "identification_requirement": "programme_requires_no_custom_identifier",
+        "updated_at": "2026-09-06T10:00:00Z",
+    }
+    values[execution_field] = execution
+    values[basis_field] = basis
+
+    with pytest.raises(ValueError):
+        build_bug_bounty_policy(**values)
+
+
+def test_schema_12_reviewed_permissions_can_form_a_ready_policy() -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="operator_reviewed_no_prohibition",
+        service_version_detection="permitted",
+        service_version_authorisation_basis="operator_reviewed_no_prohibition",
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    assert assess_engagement_policy(policy).readiness_state == READINESS_FUTURE_ENFORCEMENT
+
+
+@pytest.mark.parametrize(
+    ("automation", "automation_basis"),
+    (
+        ("not_permitted", "programme_explicit_prohibition"),
+        ("not_permitted", "not_confirmed"),
+        ("not_yet_confirmed", "not_confirmed"),
+    ),
+)
+def test_schema_12_nonexecuting_automation_remains_not_ready(
+    automation: str,
+    automation_basis: str,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance=automation,
+        automated_reconnaissance_basis=automation_basis,
+        service_version_detection="not_permitted",
+        service_version_authorisation_basis="not_confirmed",
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    assert assess_engagement_policy(policy).readiness_state == READINESS_INCOMPLETE
+
+
+def test_schema_12_unconfirmed_service_permission_remains_not_ready() -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="programme_explicit_permission",
+        service_version_detection="not_yet_confirmed",
+        service_version_authorisation_basis="not_confirmed",
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    assert assess_engagement_policy(policy).readiness_state == READINESS_INCOMPLETE
+
+
+@pytest.mark.parametrize(
+    "service_basis",
+    ("programme_explicit_prohibition", "not_confirmed"),
+)
+def test_schema_12_service_not_permitted_is_a_complete_skip_state(
+    service_basis: str,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="programme_explicit_permission",
+        service_version_detection="not_permitted",
+        service_version_authorisation_basis=service_basis,
+        identification_requirement="programme_requires_no_custom_identifier",
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    assert assess_engagement_policy(policy).readiness_state == READINESS_FUTURE_ENFORCEMENT
+
+
+@pytest.mark.parametrize("schema_version", ("1.0", "1.1"))
+@pytest.mark.parametrize(
+    ("legacy_automation", "expected_execution", "expected_basis"),
+    (
+        ("explicitly_permitted", "permitted", "programme_explicit_permission"),
+        ("not_permitted", "not_permitted", "not_confirmed"),
+        ("not_yet_confirmed", "not_yet_confirmed", "not_confirmed"),
+    ),
+)
+def test_schema_10_and_11_automation_migration_preserves_execution_without_inventing_basis(
+    schema_version: str,
+    legacy_automation: str,
+    expected_execution: str,
+    expected_basis: str,
+) -> None:
+    payload = _legacy_engagement_policy_payload(
+        schema_version,
+        automated_reconnaissance=legacy_automation,
+    )
+
+    migrated = policy_from_dict(payload)
+
+    assert migrated.schema_version == "1.2"
+    assert migrated.automated_reconnaissance == expected_execution
+    assert migrated.automated_reconnaissance_basis == expected_basis
+
+
+def test_schema_10_missing_service_permission_migrates_to_unconfirmed() -> None:
+    payload = _legacy_engagement_policy_payload("1.0")
+
+    migrated = policy_from_dict(payload)
+
+    assert migrated.schema_version == "1.2"
+    assert migrated.service_version_detection == "not_yet_confirmed"
+    assert migrated.service_version_authorisation_basis == "not_confirmed"
+    assert assess_engagement_policy(migrated).readiness_state == READINESS_INCOMPLETE
+
+
+@pytest.mark.parametrize(
+    ("legacy_service", "expected_execution", "expected_basis"),
+    (
+        ("explicitly_permitted", "permitted", "programme_explicit_permission"),
+        ("not_permitted", "not_permitted", "not_confirmed"),
+        ("not_yet_confirmed", "not_yet_confirmed", "not_confirmed"),
+    ),
+)
+def test_schema_11_service_migration_preserves_execution_without_inventing_basis(
+    legacy_service: str,
+    expected_execution: str,
+    expected_basis: str,
+) -> None:
+    payload = _legacy_engagement_policy_payload(
+        "1.1",
+        service_version_detection=legacy_service,
+    )
+
+    migrated = policy_from_dict(payload)
+
+    assert migrated.schema_version == "1.2"
+    assert migrated.service_version_detection == expected_execution
+    assert migrated.service_version_authorisation_basis == expected_basis
+
+
+@pytest.mark.parametrize("schema_version", ("1.0", "1.1"))
+@pytest.mark.parametrize(
+    ("legacy_requirement", "headers", "user_agent", "expected_requirement"),
+    (
+        (
+            "confirmed_none",
+            (),
+            None,
+            "programme_requires_no_custom_identifier",
+        ),
+        (
+            "custom_headers",
+            ({"name": "X-Researcher-ID", "value": SENTINEL_HEADER},),
+            None,
+            "programme_requires_headers",
+        ),
+        (
+            "custom_user_agent",
+            (),
+            SENTINEL_USER_AGENT,
+            "programme_requires_user_agent",
+        ),
+        (
+            "custom_headers_and_user_agent",
+            ({"name": "X-Researcher-ID", "value": SENTINEL_HEADER},),
+            SENTINEL_USER_AGENT,
+            "programme_requires_headers_and_user_agent",
+        ),
+        (
+            "not_yet_confirmed",
+            (),
+            None,
+            "not_yet_confirmed",
+        ),
+    ),
+)
+def test_schema_10_and_11_identification_migration_preserves_proven_requirement_and_payload(
+    schema_version: str,
+    legacy_requirement: str,
+    headers,
+    user_agent: str | None,
+    expected_requirement: str,
+) -> None:
+    payload = _legacy_engagement_policy_payload(
+        schema_version,
+        identification_requirement=legacy_requirement,
+        identification_headers=headers,
+        custom_user_agent=user_agent,
+    )
+
+    migrated = policy_from_dict(payload)
+
+    assert migrated.schema_version == "1.2"
+    assert migrated.identification_requirement == expected_requirement
+    assert [
+        {"name": item.name, "value": item.value}
+        for item in migrated.identification_headers
+    ] == list(headers)
+    assert migrated.custom_user_agent == user_agent
+
+
+@pytest.mark.parametrize("schema_version", ("1.0", "1.1"))
+@pytest.mark.parametrize(
+    ("legacy_requirement", "headers", "user_agent"),
+    (
+        (
+            "confirmed_none",
+            ({"name": "X-Researcher-ID", "value": SENTINEL_HEADER},),
+            None,
+        ),
+        (
+            "confirmed_none",
+            (),
+            SENTINEL_USER_AGENT,
+        ),
+        (
+            "custom_headers",
+            ({"name": "X-Researcher-ID", "value": SENTINEL_HEADER},),
+            SENTINEL_USER_AGENT,
+        ),
+        (
+            "custom_user_agent",
+            ({"name": "X-Researcher-ID", "value": SENTINEL_HEADER},),
+            SENTINEL_USER_AGENT,
+        ),
+    ),
+)
+def test_schema_10_and_11_identity_migration_does_not_reclassify_unproven_extra_payload_as_optional(
+    schema_version: str,
+    legacy_requirement: str,
+    headers,
+    user_agent: str | None,
+) -> None:
+    payload = _legacy_engagement_policy_payload(
+        schema_version,
+        identification_requirement=legacy_requirement,
+        identification_headers=headers,
+        custom_user_agent=user_agent,
+    )
+
+    migrated = policy_from_dict(payload)
+
+    assert migrated.schema_version == "1.2"
+    assert migrated.identification_requirement == "not_yet_confirmed"
+    assert [
+        {"name": item.name, "value": item.value}
+        for item in migrated.identification_headers
+    ] == list(headers)
+    assert migrated.custom_user_agent == user_agent
+    assert assess_engagement_policy(migrated).readiness_state == READINESS_INCOMPLETE
+
+
+def test_schema_12_exact_round_trip_and_redaction_contract() -> None:
+    payload = _schema_12_payload()
+
+    policy = policy_from_dict(payload)
+
+    assert policy.to_dict() == payload
+    assert policy.identification_headers[0].value == SENTINEL_HEADER
+    assert policy.custom_user_agent == SENTINEL_USER_AGENT
+
+    rendered = render_redacted_policy(policy)
+    assert SENTINEL_HEADER not in rendered
+    assert SENTINEL_USER_AGENT not in rendered
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "automated_reconnaissance_basis",
+        "service_version_authorisation_basis",
+    ),
+)
+def test_schema_12_requires_exact_new_basis_fields(missing_field: str) -> None:
+    payload = _schema_12_payload()
+    payload.pop(missing_field)
+
+    with pytest.raises(ValueError, match="canonical schema"):
+        policy_from_dict(payload)
+
+
+def test_schema_12_rejects_extra_noncanonical_fields() -> None:
+    payload = _schema_12_payload()
+    payload["invented_runtime_authority"] = "permitted"
+
+    with pytest.raises(ValueError, match="canonical schema"):
+        policy_from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("requirement", "headers", "user_agent", "ready"),
+    (
+        ("programme_requires_headers", (), None, False),
+        ("programme_requires_user_agent", (), None, False),
+        (
+            "programme_requires_headers",
+            (IdentificationHeader("X-Researcher-ID", SENTINEL_HEADER),),
+            None,
+            True,
+        ),
+        (
+            "programme_requires_user_agent",
+            (),
+            SENTINEL_USER_AGENT,
+            True,
+        ),
+        (
+            "programme_requires_headers_and_user_agent",
+            (IdentificationHeader("X-Researcher-ID", SENTINEL_HEADER),),
+            SENTINEL_USER_AGENT,
+            True,
+        ),
+        (
+            "programme_requires_no_custom_identifier",
+            (IdentificationHeader("X-Researcher-ID", SENTINEL_HEADER),),
+            None,
+            True,
+        ),
+        (
+            "programme_requires_no_custom_identifier",
+            (),
+            SENTINEL_USER_AGENT,
+            True,
+        ),
+        (
+            "not_yet_confirmed",
+            (IdentificationHeader("X-Researcher-ID", SENTINEL_HEADER),),
+            SENTINEL_USER_AGENT,
+            False,
+        ),
+    ),
+)
+def test_schema_12_identification_requirement_is_independent_from_configured_transport_identity(
+    requirement: str,
+    headers: tuple[IdentificationHeader, ...],
+    user_agent: str | None,
+    ready: bool,
+) -> None:
+    policy = build_bug_bounty_policy(
+        programme_rules_reviewed=CONFIRMED,
+        automated_reconnaissance="permitted",
+        automated_reconnaissance_basis="programme_explicit_permission",
+        service_version_detection="not_permitted",
+        service_version_authorisation_basis="not_confirmed",
+        identification_requirement=requirement,
+        identification_headers=headers,
+        custom_user_agent=user_agent,
+        updated_at="2026-09-06T10:00:00Z",
+    )
+
+    assessment = assess_engagement_policy(policy)
+    assert (assessment.readiness_state == READINESS_FUTURE_ENFORCEMENT) is ready
+
+    rendered = render_redacted_policy(policy)
+    assert SENTINEL_HEADER not in rendered
+    assert SENTINEL_USER_AGENT not in rendered
+
+
+def test_policy_setup_prompt_distinguishes_explicit_and_reviewed_automation_permission(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+
+    def input_func(prompt: str) -> str:
+        if "Automated reconnaissance permission" in prompt:
+            assert "explicitly permitted" in prompt
+            assert "reviewed rules; no prohibition identified" in prompt
+            raise RuntimeError("prompt inspected")
+        return "1"
+
+    with pytest.raises(RuntimeError, match="prompt inspected"):
+        configure_project_policy_interactively(project_file, input_func=input_func)
+
+
+def test_policy_setup_prompt_distinguishes_explicit_and_reviewed_service_permission(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+
+    def input_func(prompt: str) -> str:
+        if "Nmap service/version detection" in prompt:
+            assert "explicitly permitted" in prompt
+            assert "reviewed rules; no prohibition identified" in prompt
+            raise RuntimeError("prompt inspected")
+        if "Have you reviewed" in prompt:
+            return "1"
+        if "Automated reconnaissance permission" in prompt:
+            return "1"
+        if "HTTP rate" in prompt:
+            return "1"
+        if "Maximum HTTP concurrency" in prompt:
+            return ""
+        if "TCP discovery" in prompt:
+            return "1"
+        raise AssertionError(f"unexpected prompt before service/version decision: {prompt}")
+
+    with pytest.raises(RuntimeError, match="prompt inspected"):
+        configure_project_policy_interactively(project_file, input_func=input_func)
+
+
+def test_policy_setup_separates_programme_identification_requirement_from_optional_identity(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+    saw_requirement = False
+
+    def input_func(prompt: str) -> str:
+        nonlocal saw_requirement
+
+        if "Have you reviewed" in prompt:
+            return "1"
+        if "Automated reconnaissance permission" in prompt:
+            return "1"
+        if "HTTP rate" in prompt:
+            return "1"
+        if "Maximum HTTP concurrency" in prompt:
+            return ""
+        if "TCP discovery" in prompt:
+            return "1"
+        if "Nmap service/version detection" in prompt:
+            return "2"
+
+        lowered = prompt.lower()
+        if "traffic identification" in lowered:
+            assert "programme" in lowered
+            saw_requirement = True
+            return "1"
+
+        if "optional researcher identification" in lowered:
+            assert saw_requirement
+            raise RuntimeError("optional identity prompt inspected")
+
+        if "save this policy" in lowered:
+            pytest.fail(
+                "optional researcher identification must be offered separately "
+                "from the programme requirement"
+            )
+
+        raise AssertionError(f"unexpected policy-setup prompt: {prompt}")
+
+    with pytest.raises(RuntimeError, match="optional identity prompt inspected"):
+        configure_project_policy_interactively(project_file, input_func=input_func)
+
+
+def test_schema_12_current_permitted_execution_rejects_omitted_basis() -> None:
+    with pytest.raises(ValueError, match="authorisation basis conflict"):
+        build_bug_bounty_policy(
+            automated_reconnaissance="permitted",
+            updated_at="2026-09-06T10:00:00Z",
+        )
+    with pytest.raises(ValueError, match="authorisation basis conflict"):
+        build_bug_bounty_policy(
+            service_version_detection="permitted",
+            updated_at="2026-09-06T10:00:00Z",
+        )
+
+
+def test_schema_12_safe_default_execution_states_keep_not_confirmed_basis() -> None:
+    policy = build_bug_bounty_policy(updated_at="2026-09-06T10:00:00Z")
+
+    assert policy.automated_reconnaissance == "not_yet_confirmed"
+    assert policy.automated_reconnaissance_basis == "not_confirmed"
+    assert policy.service_version_detection == "not_permitted"
+    assert policy.service_version_authorisation_basis == "not_confirmed"
+
+
+def test_schema_12_legacy_explicit_permission_migration_remains_evidence_bound() -> None:
+    for schema_version in ("1.0", "1.1"):
+        migrated = policy_from_dict(
+            _legacy_engagement_policy_payload(
+                schema_version,
+                automated_reconnaissance="explicitly_permitted",
+                service_version_detection="explicitly_permitted",
+            )
+        )
+
+        assert migrated.automated_reconnaissance == "permitted"
+        assert migrated.automated_reconnaissance_basis == "programme_explicit_permission"
+        if schema_version == "1.1":
+            assert migrated.service_version_detection == "permitted"
+            assert (
+                migrated.service_version_authorisation_basis
+                == "programme_explicit_permission"
+            )
+
+
+def test_policy_setup_optional_user_agent_prompt_is_not_presented_as_programme_required(
+    tmp_path: Path,
+) -> None:
+    project_file = _bug_bounty_project(tmp_path)
+
+    def input_func(prompt: str) -> str:
+        if "Have you reviewed" in prompt:
+            return "1"
+        if "Automated reconnaissance permission" in prompt:
+            return "1"
+        if "HTTP rate" in prompt:
+            return "1"
+        if "Maximum HTTP concurrency" in prompt:
+            return ""
+        if "TCP discovery" in prompt:
+            return "1"
+        if "Nmap service/version detection" in prompt:
+            return "3"
+        if "Programme traffic identification requirement" in prompt:
+            return "1"
+        if "Optional researcher identification" in prompt:
+            return "3"
+        if "User-Agent" in prompt:
+            assert "optional" in prompt.lower() or "policy-configured" in prompt.lower()
+            assert "required by the current programme brief" not in prompt
+            raise RuntimeError("optional User-Agent prompt inspected")
+        raise AssertionError(f"unexpected policy-setup prompt: {prompt}")
+
+    with pytest.raises(RuntimeError, match="optional User-Agent prompt inspected"):
+        configure_project_policy_interactively(project_file, input_func=input_func)
+
 def _write_minimal_export_input(input_dir: Path) -> None:
     (input_dir / "report.md").write_text("# Report\n", encoding="utf-8")
     (input_dir / "project_state.json").write_text(
@@ -1635,6 +2336,7 @@ def _complete_policy(**overrides):
     values = {
         "programme_rules_reviewed": CONFIRMED,
         "automated_reconnaissance": AUTOMATION_PERMITTED,
+        "automated_reconnaissance_basis": AUTOMATION_BASIS_EXPLICIT_PERMISSION,
         "maximum_http_requests_per_second": "2",
         "maximum_http_concurrency": 1,
         "identification_requirement": IDENTIFICATION_HEADERS_AND_USER_AGENT,

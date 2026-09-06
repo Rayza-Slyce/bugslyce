@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from bugslyce.core.engagement_policy import (
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
     AUTOMATION_PERMITTED,
     CONFIRMED,
     IDENTIFICATION_NONE,
@@ -95,6 +96,7 @@ def _runtime(tmp_path: Path, *, origin: str = "https://app.example.test/"):
         build_bug_bounty_policy(
             programme_rules_reviewed=CONFIRMED,
             automated_reconnaissance=AUTOMATION_PERMITTED,
+            automated_reconnaissance_basis=AUTOMATION_BASIS_EXPLICIT_PERMISSION,
             identification_requirement=IDENTIFICATION_NONE,
             updated_at=FIXED_TIME,
         ),

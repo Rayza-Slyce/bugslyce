@@ -10,6 +10,10 @@ from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.core.engagement_policy import (
     AUTOMATION_NOT_PERMITTED,
     AUTOMATION_PERMITTED,
+    AUTOMATION_BASIS_EXPLICIT_PERMISSION,
+    AUTOMATION_BASIS_EXPLICIT_PROHIBITION,
+    AUTOMATION_BASIS_NOT_CONFIRMED,
+    AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION,
     CONFIRMED,
     ENGAGEMENT_POLICY_FILENAME,
     IDENTIFICATION_HEADERS,
@@ -24,6 +28,10 @@ from bugslyce.core.engagement_policy import (
     RATE_SOURCE_PROGRAMME,
     SERVICE_VERSION_NOT_PERMITTED,
     SERVICE_VERSION_PERMITTED,
+    SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION,
+    SERVICE_VERSION_BASIS_EXPLICIT_PROHIBITION,
+    SERVICE_VERSION_BASIS_NOT_CONFIRMED,
+    SERVICE_VERSION_BASIS_REVIEWED_NO_PROHIBITION,
     TCP_CONSERVATIVE,
     TCP_CUSTOM,
     TCP_FULL,
@@ -115,18 +123,20 @@ def configure_project_policy_interactively(
     automation_choice = _choice(
         input_func,
         (
-            "Automated reconnaissance permission "
-            "[1 explicitly permitted, 2 not permitted, 3 not yet confirmed, 4 cancel]: "
+            "Automated reconnaissance permission [1 explicitly permitted, "
+            "2 reviewed rules; no prohibition identified, "
+            "3 explicitly prohibited, 4 not yet confirmed, 5 cancel]: "
         ),
-        {"1", "2", "3", "4"},
+        {"1", "2", "3", "4", "5"},
     )
-    if automation_choice == "4":
+    if automation_choice == "5":
         print_func("Engagement-policy setup cancelled. No policy was written.")
         return PolicySetupResult(saved=False, cancelled=True)
-    automation_state = {
-        "1": AUTOMATION_PERMITTED,
-        "2": AUTOMATION_NOT_PERMITTED,
-        "3": NOT_YET_CONFIRMED,
+    automation_state, automation_basis = {
+        "1": (AUTOMATION_PERMITTED, AUTOMATION_BASIS_EXPLICIT_PERMISSION),
+        "2": (AUTOMATION_PERMITTED, AUTOMATION_BASIS_REVIEWED_NO_PROHIBITION),
+        "3": (AUTOMATION_NOT_PERMITTED, AUTOMATION_BASIS_EXPLICIT_PROHIBITION),
+        "4": (NOT_YET_CONFIRMED, AUTOMATION_BASIS_NOT_CONFIRMED),
     }[automation_choice]
     if automation_state != AUTOMATION_PERMITTED:
         print_func("Automated reconnaissance is unavailable under the recorded rules.")
@@ -135,6 +145,7 @@ def configure_project_policy_interactively(
             build_bug_bounty_policy(
                 programme_rules_reviewed=CONFIRMED,
                 automated_reconnaissance=automation_state,
+                automated_reconnaissance_basis=automation_basis,
             ),
             input_func,
             print_func,
@@ -224,20 +235,22 @@ def configure_project_policy_interactively(
         input_func,
         (
             "Bounded Nmap service/version detection under the current programme rules "
-            "[1 explicitly permitted, 2 not permitted, 3 not yet confirmed]: "
+            "[1 explicitly permitted, 2 reviewed rules; no prohibition identified, "
+            "3 explicitly prohibited/no run, 4 not yet confirmed]: "
         ),
-        {"1", "2", "3"},
+        {"1", "2", "3", "4"},
     )
-    service_version_detection = {
-        "1": SERVICE_VERSION_PERMITTED,
-        "2": SERVICE_VERSION_NOT_PERMITTED,
-        "3": NOT_YET_CONFIRMED,
+    service_version_detection, service_version_basis = {
+        "1": (SERVICE_VERSION_PERMITTED, SERVICE_VERSION_BASIS_EXPLICIT_PERMISSION),
+        "2": (SERVICE_VERSION_PERMITTED, SERVICE_VERSION_BASIS_REVIEWED_NO_PROHIBITION),
+        "3": (SERVICE_VERSION_NOT_PERMITTED, SERVICE_VERSION_BASIS_EXPLICIT_PROHIBITION),
+        "4": (NOT_YET_CONFIRMED, SERVICE_VERSION_BASIS_NOT_CONFIRMED),
     }[service_choice]
 
     identification_choice = _choice(
         input_func,
         (
-            "Traffic identification [1 no custom identifier required, "
+            "Programme traffic identification requirement [1 no custom identifier required, "
             "2 custom request headers, 3 custom User-Agent, "
             "4 headers and User-Agent, 5 requirements not yet confirmed]: "
         ),
@@ -258,11 +271,31 @@ def configure_project_policy_interactively(
         IDENTIFICATION_USER_AGENT,
         IDENTIFICATION_HEADERS_AND_USER_AGENT,
     }:
-        user_agent = _collect_user_agent(input_func, print_func, existing)
+        user_agent = _collect_user_agent(
+            input_func,
+            print_func,
+            existing,
+            programme_required=True,
+        )
+    optional_identity = _choice(
+        input_func,
+        "Optional researcher identification [1 none, 2 headers, 3 User-Agent, 4 headers and User-Agent]: ",
+        {"1", "2", "3", "4"},
+    )
+    if optional_identity in {"2", "4"} and not headers:
+        headers = _collect_headers(input_func, print_func, existing)
+    if optional_identity in {"3", "4"} and user_agent is None:
+        user_agent = _collect_user_agent(
+            input_func,
+            print_func,
+            existing,
+            programme_required=False,
+        )
 
     policy = build_bug_bounty_policy(
         programme_rules_reviewed=CONFIRMED,
         automated_reconnaissance=AUTOMATION_PERMITTED,
+        automated_reconnaissance_basis=automation_basis,
         maximum_http_requests_per_second=rate,
         http_rate_source=rate_source,
         programme_rate_confirmed=rate_confirmed,
@@ -272,6 +305,7 @@ def configure_project_policy_interactively(
         custom_tcp_ports=custom_ports,
         tcp_policy_confirmed=tcp_confirmed,
         service_version_detection=service_version_detection,
+        service_version_authorisation_basis=service_version_basis,
         identification_requirement=identification,
         identification_headers=headers,
         custom_user_agent=user_agent,
@@ -367,8 +401,14 @@ def _collect_user_agent(
     input_func: InputFunc,
     print_func: PrintFunc,
     existing: EngagementPolicy | None,
+    *,
+    programme_required: bool,
 ) -> str:
-    prompt = "Custom User-Agent required by the current programme brief: "
+    prompt = (
+        "Custom User-Agent required by the current programme brief: "
+        if programme_required
+        else "Optional policy-configured researcher User-Agent: "
+    )
     if existing is not None and existing.custom_user_agent is not None:
         value = input_func(
             "Press Enter to retain the configured User-Agent, or enter a replacement: "
