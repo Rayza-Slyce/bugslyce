@@ -329,7 +329,7 @@ def render_hackerone_import_summary(
 def render_hackerone_import_groups(
     session: HackerOneScopeResolutionSession,
 ) -> str:
-    """Render deterministic semantic groups and completion counts."""
+    """Render deterministic semantic groups with safe proposal context."""
 
     _require_session(session)
     lines = ["HackerOne semantic resolution groups"]
@@ -346,6 +346,60 @@ def render_hackerone_import_groups(
             f"rows={len(group.row_ids)} | "
             f"complete={sum(item.complete for item in resolutions)}/{len(resolutions)}"
         )
+        for row_id in group.row_ids:
+            row = _row(session, row_id)
+            resolution = get_hackerone_scope_resolution(session, row_id)
+            lines.append(
+                f"  row {row.row_number} | {_safe_identifier(row.identifier)} | "
+                f"{row.asset_type} | {resolution.proposed_action.upper()}"
+            )
+            if resolution.state != ROW_STATE_UNRESOLVED:
+                if resolution.rules:
+                    rule = resolution.rules[0]
+                    lines.append(
+                        "    Resolved canonical BugSlyce rule: "
+                        f"{rule.canonical_value} | {rule.action.upper()} | "
+                        f"{rule.kind}"
+                    )
+                    if (
+                        resolution.instruction_required
+                        and not resolution.instruction_acknowledged
+                    ):
+                        lines.append(
+                            "    Rationale: Authority rule resolved; programme "
+                            "instruction acknowledgement remains outstanding."
+                        )
+                    else:
+                        lines.append("    Rationale: Authority resolution is complete.")
+                else:
+                    lines.append(
+                        "    Resolved non-authority outcome: "
+                        f"{resolution.non_authority_basis}"
+                    )
+                    if (
+                        resolution.instruction_required
+                        and not resolution.instruction_acknowledged
+                    ):
+                        lines.append(
+                            "    Rationale: Non-authority classification resolved; "
+                            "programme instruction acknowledgement remains outstanding."
+                        )
+                    else:
+                        lines.append(
+                            "    Rationale: Non-authority classification is complete."
+                        )
+                continue
+
+            candidate = _safe_deterministic_candidate(session, row_id)
+            if candidate is not None:
+                lines.append(
+                    "    Proposed canonical BugSlyce rule: "
+                    f"{candidate.canonical_value} | {candidate.action.upper()} | "
+                    f"{candidate.kind}"
+                )
+                lines.append("    Rationale: Canonical normalisation is deterministic.")
+            else:
+                lines.append(f"    Rationale: {_resolution_rationale(resolution.reason)}")
     return "\n".join(lines)
 
 
@@ -755,8 +809,12 @@ def _run_resolution_loop(
         print_func(render_hackerone_import_groups(changed))
         selection = _prompt(
             input_func,
-            "Select a group number, INSTRUCTIONS, REVIEW, or CANCEL: ",
+            "Select a group number, ACCEPT ALL SAFE PROPOSALS, INSTRUCTIONS, "
+            "REVIEW, or CANCEL: ",
         ).upper()
+        if selection == "ACCEPT ALL SAFE PROPOSALS":
+            changed = _accept_all_safe_proposals(changed)
+            continue
         if selection == "INSTRUCTIONS":
             if build_hackerone_import_completeness(changed).unacknowledged_instruction_rows:
                 changed = review_hackerone_instruction_dossier(
@@ -784,7 +842,10 @@ def _run_resolution_loop(
                 error_func(f"Error: {exc}")
                 continue
         if not selection.isdecimal() or not 1 <= int(selection) <= len(changed.groups):
-            error_func("Error: select a listed group, INSTRUCTIONS, REVIEW, or CANCEL.")
+            error_func(
+                "Error: select a listed group, ACCEPT ALL SAFE PROPOSALS, "
+                "INSTRUCTIONS, REVIEW, or CANCEL."
+            )
             continue
         changed = _review_group(
             changed,
@@ -823,7 +884,7 @@ def _review_group(
             "outside BugSlyce executable web/IP reconnaissance authority."
         )
     while True:
-        actions = _group_actions(group)
+        actions = _group_actions(changed, group)
         action = _prompt(
             input_func,
             "Group action [" + "/".join(actions) + "]: ",
@@ -845,6 +906,12 @@ def _review_group(
         if action not in actions:
             error_func("Error: that action is not available for this resolution group.")
             continue
+        if action == "ACCEPT":
+            candidates = _safe_group_candidates(changed, group)
+            if not candidates:
+                error_func("Error: this group has no deterministic safe proposal.")
+                continue
+            return _apply_safe_candidates(changed, candidates)
         row_ids = _prompt_group_selection(
             changed,
             group,
@@ -992,7 +1059,71 @@ def _apply_group_action(
     raise ValueError("HackerOne group action is unsupported.")
 
 
-def _group_actions(group: HackerOneScopeResolutionGroup) -> tuple[str, ...]:
+def _safe_deterministic_candidate(
+    session: HackerOneScopeResolutionSession,
+    row_id: str,
+) -> ProgrammeScopeRule | None:
+    """Return one existing canonical candidate only for an unresolved source row."""
+
+    resolution = get_hackerone_scope_resolution(session, row_id)
+    if resolution.state != ROW_STATE_UNRESOLVED:
+        return None
+    return build_hackerone_scope_review_candidate(session, row_id)
+
+
+def _safe_group_candidates(
+    session: HackerOneScopeResolutionSession,
+    group: HackerOneScopeResolutionGroup,
+) -> tuple[tuple[str, ProgrammeScopeRule], ...]:
+    """Return candidates only when every unresolved row is safely deterministic."""
+
+    candidates: list[tuple[str, ProgrammeScopeRule]] = []
+    for row_id in group.row_ids:
+        if get_hackerone_scope_resolution(session, row_id).terminal:
+            continue
+        candidate = _safe_deterministic_candidate(session, row_id)
+        if candidate is None:
+            return ()
+        candidates.append((row_id, candidate))
+    return tuple(candidates)
+
+
+def _apply_safe_candidates(
+    session: HackerOneScopeResolutionSession,
+    candidates: tuple[tuple[str, ProgrammeScopeRule], ...],
+) -> HackerOneScopeResolutionSession:
+    """Resolve already-derived candidates without an authority interpretation step."""
+
+    changed = session
+    for row_id, candidate in candidates:
+        changed = resolve_hackerone_scope_row_with_rule(
+            changed,
+            row_id,
+            kind=candidate.kind,
+            value=candidate.canonical_value,
+            scheme=candidate.scheme,
+            port=candidate.port,
+        )
+    return changed
+
+
+def _accept_all_safe_proposals(
+    session: HackerOneScopeResolutionSession,
+) -> HackerOneScopeResolutionSession:
+    """Apply only fully deterministic unresolved groups in stable group order."""
+
+    changed = session
+    for group in changed.groups:
+        candidates = _safe_group_candidates(changed, group)
+        if candidates:
+            changed = _apply_safe_candidates(changed, candidates)
+    return changed
+
+
+def _group_actions(
+    session: HackerOneScopeResolutionSession,
+    group: HackerOneScopeResolutionGroup,
+) -> tuple[str, ...]:
     common = ["INSPECT"]
     if group.instruction_present:
         common.append("VIEW-INSTRUCTION")
@@ -1017,7 +1148,9 @@ def _group_actions(group: HackerOneScopeResolutionGroup) -> tuple[str, ...]:
         REASON_NONCANONICAL_HTTP_URL,
         REASON_INSTRUCTION_REVIEW_REQUIRED,
     }:
-        common.extend(("ACCEPT-CANONICAL", "CANONICAL"))
+        if _safe_group_candidates(session, group):
+            common.append("ACCEPT")
+        common.append("CANONICAL")
     elif group.reason in {
         REASON_AMBIGUOUS_OTHER_ASSET,
         REASON_UNSUPPORTED_ASSET_TYPE,
@@ -1237,6 +1370,12 @@ def _row(
 
 def _reason_label(reason: str) -> str:
     return reason.replace("_", " ")
+
+
+def _resolution_rationale(reason: str) -> str:
+    if reason == REASON_AMBIGUOUS_BARE_HOSTNAME:
+        return "This source row requires operator choice between hostname and exact URL authority."
+    return "This source row requires detailed operator review before authority can be proposed."
 
 
 def _rule_semantics(rule: ProgrammeScopeRule) -> tuple[object, ...]:

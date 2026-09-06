@@ -45,6 +45,7 @@ from bugslyce.programme_scope_hackerone_resolution import (
     ROW_STATE_TYPED_NON_AUTHORITY,
     acknowledge_hackerone_scope_instruction,
     build_hackerone_scope_resolution_session,
+    build_hackerone_scope_review_candidate,
     finalize_hackerone_scope_resolution,
     resolve_hackerone_scope_include_as_non_authority,
     resolve_hackerone_scope_row_with_rule,
@@ -500,7 +501,7 @@ def test_final_instructions_reopens_read_only_dossier_then_save(
         csv_path,
         input_func=_inputs(
             "CONTINUE", "ACKNOWLEDGE ALL",
-            "1", "ACCEPT-CANONICAL", "all", "ACCEPT CANONICAL RULES", "REVIEW",
+            "1", "ACCEPT", "REVIEW",
             "INSTRUCTIONS", "SAVE",
         ),
         print_func=output.append,
@@ -839,8 +840,7 @@ def test_grouped_bare_hostname_actions_are_explicit_and_empty_needs_exact_confir
         (
             _row(identifier="HTTPS://Example.TEST:443/service"),
             (
-                "CONTINUE", "1", "ACCEPT-CANONICAL", "all",
-                "ACCEPT CANONICAL RULES", "REVIEW", "SAVE",
+                "CONTINUE", "1", "ACCEPT", "REVIEW", "SAVE",
             ),
             RULE_EXACT_HTTP_URL,
             "https://example.test/service",
@@ -998,8 +998,7 @@ def test_identical_instruction_is_displayed_once_but_rule_acceptance_is_per_row(
         project_file,
         csv_path,
         input_func=_inputs(
-            "CONTINUE", "ACKNOWLEDGE ALL", "1", "ACCEPT-CANONICAL", "all",
-            "ACCEPT CANONICAL RULES", "REVIEW", "SAVE",
+            "CONTINUE", "ACKNOWLEDGE ALL", "1", "ACCEPT", "REVIEW", "SAVE",
         ),
         print_func=output.append,
         error_func=pytest.fail,
@@ -1358,8 +1357,8 @@ def test_shopify_shaped_grouped_import_reaches_complete_p1_proposal_without_save
         "5", "NON-WEB", "20",
         "5", "NON-WEB", "21",
         "5", "NON-WEB", "22",
-        "6", "ACCEPT-CANONICAL", "all", "ACCEPT CANONICAL RULES",
-        "7", "ACCEPT-CANONICAL", "all", "ACCEPT CANONICAL RULES",
+        "6", "ACCEPT",
+        "7", "ACCEPT",
         "REVIEW", "SAVE",
     )
     output: list[str] = []
@@ -1404,3 +1403,279 @@ def test_preproject_hackerone_returns_canonical_reviewed_proposal(
     assert "Default: DENY" in rendered
     assert isinstance(result, ProgrammeScopeProposal)
     assert result.unresolved_items == ()
+
+
+def test_resolution_workspace_renders_concise_safe_proposals_and_ambiguous_rationale(
+    tmp_path: Path,
+) -> None:
+    session = _session(
+        tmp_path,
+        _row(identifier="HTTPS://Example.TEST:443/service"),
+        _row(identifier="host.example.test"),
+    )
+
+    rendered = render_hackerone_import_groups(session)
+
+    assert "row 1" in rendered
+    assert "HTTPS://Example.TEST:443/service" in rendered
+    assert "URL" in rendered
+    assert "INCLUDE" in rendered
+    assert "Proposed canonical BugSlyce rule: https://example.test/service" in rendered
+    assert "Canonical normalisation is deterministic" in rendered
+    assert "row 2" in rendered
+    assert "host.example.test" in rendered
+    assert "requires operator choice between hostname and exact URL authority" in rendered
+
+
+def test_accept_all_safe_proposals_resolves_only_deterministic_rows_then_cancels_safely(
+    tmp_path: Path,
+) -> None:
+    project_file = _project(tmp_path)
+    csv_path = _write_csv(
+        tmp_path,
+        _row(identifier="HTTPS://Example.TEST:443/service"),
+        _row(identifier="host.example.test"),
+    )
+    output: list[str] = []
+    errors: list[str] = []
+
+    assert import_hackerone_programme_scope(
+        project_file,
+        csv_path,
+        input_func=_inputs(
+            "CONTINUE",
+            "ACCEPT ALL SAFE PROPOSALS",
+            "REVIEW",
+            "CANCEL",
+        ),
+        print_func=output.append,
+        error_func=errors.append,
+    ) == 0
+
+    rendered = "\n".join(output)
+    safe_group_lines = [
+        line for line in rendered.splitlines() if "noncanonical http url" in line
+    ]
+    ambiguous_group = next(
+        line for line in rendered.splitlines() if "ambiguous bare hostname" in line
+    )
+    assert "complete=0/1" in safe_group_lines[0]
+    assert "complete=1/1" in safe_group_lines[-1]
+    assert "complete=0/1" in ambiguous_group
+    assert "Unresolved include rows: 2" in rendered
+    assert (
+        "HackerOne programme-scope import cancelled; stored values are unchanged."
+        in rendered
+    )
+    assert errors == []
+    assert not (project_file.parent / "programme_scope.json").exists()
+
+
+def test_accept_all_safe_proposals_preserves_deterministic_exclusion_to_p1_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file = _project(tmp_path)
+    csv_path = _write_csv(
+        tmp_path,
+        _row(
+            identifier="HTTPS://Excluded.EXAMPLE.test:443/private",
+            eligible_for_submission="false",
+        ),
+    )
+    captured = []
+    errors: list[str] = []
+    monkeypatch.setattr(
+        import_module,
+        "review_and_save_programme_scope_proposal",
+        lambda _project_path, proposal, **_kwargs: captured.append(proposal) or 0,
+    )
+
+    assert import_hackerone_programme_scope(
+        project_file,
+        csv_path,
+        input_func=_inputs(
+            "CONTINUE",
+            "ACCEPT ALL SAFE PROPOSALS",
+            "REVIEW",
+            "SAVE",
+            "CANCEL",
+        ),
+        print_func=lambda _line: None,
+        error_func=errors.append,
+    ) == 0
+
+    assert len(captured) == 1
+    assert errors == []
+    assert len(captured[0].rules) == 1
+    assert captured[0].rules[0].action == ACTION_EXCLUDE
+    assert captured[0].rules[0].kind == RULE_EXACT_HTTP_URL
+    assert captured[0].rules[0].canonical_value == "https://excluded.example.test/private"
+    assert not (project_file.parent / "programme_scope.json").exists()
+
+
+def test_accept_all_safe_proposals_does_not_acknowledge_instruction_or_bypass_finalisation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file = _project(tmp_path)
+    csv_path = _write_csv(
+        tmp_path,
+        _row(
+            identifier="HTTPS://Example.TEST:443/service",
+            instruction="Review this deterministic scope condition.",
+        ),
+    )
+    output: list[str] = []
+    errors: list[str] = []
+    acknowledgements: list[object] = []
+    monkeypatch.setattr(
+        import_module,
+        "review_hackerone_instruction_dossier",
+        lambda session, **_kwargs: session,
+    )
+    monkeypatch.setattr(
+        import_module,
+        "acknowledge_hackerone_scope_instruction",
+        lambda *args, **_kwargs: acknowledgements.append(args),
+    )
+
+    assert import_hackerone_programme_scope(
+        project_file,
+        csv_path,
+        input_func=_inputs(
+            "CONTINUE",
+            "ACCEPT ALL SAFE PROPOSALS",
+            "REVIEW",
+            "CANCEL",
+        ),
+        print_func=output.append,
+        error_func=errors.append,
+    ) == 0
+
+    rendered = "\n".join(output)
+    safe_group_lines = [
+        line
+        for line in rendered.splitlines()
+        if "noncanonical http url" in line
+    ]
+    assert "complete=0/1" in safe_group_lines[0]
+    assert "complete=0/1" in safe_group_lines[-1]
+    assert "Unresolved include rows: none" in rendered
+    assert "Explicit rules: 1" in rendered
+    assert "Unacknowledged instructions: 1 group(s); rows 1" in rendered
+    assert "Save available: no" in rendered
+    assert acknowledgements == []
+    assert errors == []
+    assert not (project_file.parent / "programme_scope.json").exists()
+
+
+def test_safe_group_accept_resolves_displayed_candidate_without_legacy_ceremony(
+    tmp_path: Path,
+) -> None:
+    safe_session = _session(
+        tmp_path,
+        _row(identifier="HTTPS://Example.TEST:443/service"),
+    )
+    prompts: list[str] = []
+    selections = iter(("1", "REVIEW"))
+
+    def safe_input(prompt: str) -> str:
+        prompts.append(prompt)
+        if prompt.startswith("Select a group number"):
+            return next(selections)
+        if prompt.startswith("Group action"):
+            actions = tuple(prompt.removeprefix("Group action [").removesuffix("]: ").split("/"))
+            assert "ACCEPT" in actions
+            assert "INSPECT" in actions
+            assert "BACK" in actions
+            assert "ACCEPT-CANONICAL" not in actions
+            return "ACCEPT"
+        pytest.fail(f"safe ACCEPT must not require another prompt: {prompt}")
+
+    changed, proposal = import_module._run_resolution_loop(
+        safe_session,
+        input_func=safe_input,
+        print_func=lambda _line: None,
+        error_func=pytest.fail,
+    )
+
+    resolved_workspace = render_hackerone_import_groups(changed)
+    assert "complete=1/1" in resolved_workspace
+    assert (
+        "Resolved canonical BugSlyce rule: https://example.test/service"
+        in resolved_workspace
+    )
+    assert (
+        "requires detailed operator review before authority can be proposed"
+        not in resolved_workspace
+    )
+    assert len(proposal.rules) == 1
+    assert proposal.rules[0].kind == RULE_EXACT_HTTP_URL
+    assert proposal.rules[0].canonical_value == "https://example.test/service"
+    assert proposal.rules[0].action == ACTION_INCLUDE
+    assert not any("Source rows" in prompt for prompt in prompts)
+    assert not any("ACCEPT CANONICAL RULES" in prompt for prompt in prompts)
+
+    ambiguous_session = _session(
+        tmp_path,
+        _row(identifier="host.example.test"),
+    )
+    ambiguous_selections = iter(("1", "CANCEL"))
+
+    def ambiguous_input(prompt: str) -> str:
+        if prompt.startswith("Select a group number"):
+            return next(ambiguous_selections)
+        if prompt.startswith("Group action"):
+            actions = tuple(prompt.removeprefix("Group action [").removesuffix("]: ").split("/"))
+            assert "ACCEPT" not in actions
+            assert "HOSTNAME" in actions
+            assert "URL" in actions
+            return "BACK"
+        pytest.fail(f"unexpected ambiguous-hostname prompt: {prompt}")
+
+    with pytest.raises(HackerOneImportCancelled):
+        import_module._run_resolution_loop(
+            ambiguous_session,
+            input_func=ambiguous_input,
+            print_func=lambda _line: None,
+            error_func=pytest.fail,
+        )
+
+
+def test_safe_candidate_preserves_exclusion_and_instruction_acknowledgement_boundary(
+    tmp_path: Path,
+) -> None:
+    instruction = "Review this exclusion condition."
+    session = _session(
+        tmp_path,
+        _row(
+            identifier="HTTPS://Excluded.EXAMPLE.test:443/private",
+            instruction=instruction,
+            eligible_for_submission="false",
+        ),
+    )
+    resolution = session.resolutions[0]
+    candidate = build_hackerone_scope_review_candidate(session, resolution.row_id)
+
+    assert candidate is not None
+    assert candidate.action == ACTION_EXCLUDE
+    changed = resolve_hackerone_scope_row_with_rule(
+        session,
+        resolution.row_id,
+        kind=candidate.kind,
+        value=candidate.canonical_value,
+        scheme=candidate.scheme,
+        port=candidate.port,
+    )
+    with pytest.raises(ValueError, match="requires instruction acknowledgement"):
+        finalize_hackerone_scope_resolution(changed)
+
+    acknowledged = acknowledge_hackerone_scope_instruction(
+        changed,
+        resolution.row_id,
+        source_sha256=changed.source_sha256,
+        instruction_sha256=resolution.instruction_sha256,
+    )
+    proposal = finalize_hackerone_scope_resolution(acknowledged)
+    assert proposal.rules[0].action == ACTION_EXCLUDE
