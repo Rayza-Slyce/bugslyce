@@ -840,6 +840,67 @@ def test_cross_origin_first_hop_redirect_is_compared_without_destination_transmi
     executor.close()
 
 
+def test_query_refused_first_hop_is_compared_and_later_native_candidate_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("query-redirect", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    query_destination = "https://app.example.test/landing?from=redirect"
+
+    def respond(url: str):
+        if url.endswith("/query-redirect"):
+            return (
+                302,
+                (("Location", "/landing?from=redirect"),),
+                b"query-bearing first-hop redirect",
+            )
+        return 404, b"conventional negative"
+
+    progress = []
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "native-output",
+        token_factory=iter(("one", "two", "three")).__next__,
+        progress_callback=progress.append,
+    )
+
+    assert len(transport.requests) == 5  # three baselines and two candidates
+    assert [request.url for request in transport.requests].count(
+        "https://app.example.test/later-negative"
+    ) == 1
+    assert all(request.url != query_destination for request in transport.requests)
+    assert all("?from=redirect" not in request.url for request in transport.requests)
+    origin_result = result.origin_results[0]
+    assert origin_result.suppressed_candidate_count == 1
+    assert origin_result.retained_candidate_count == 1
+    assert [event.completed for event in progress] == [0, 1, 2]
+    assert progress[-1].total == 2
+    output = result.artifacts[0].path.read_text(encoding="utf-8")
+    assert "/query-redirect" in output
+    assert f"[--> {query_destination}]" in output
+    assert "/later-negative" not in output
+    executor.close()
+
+
 def test_true_native_baseline_refusal_persists_structured_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

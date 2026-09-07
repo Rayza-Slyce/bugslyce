@@ -1039,12 +1039,6 @@ def test_opt_in_retains_refused_cross_origin_exchange_without_transmitting_desti
             False,
             "https_downgrade",
         ),
-        (
-            "https://example.test/landing?source=redirect",
-            ("https://example.test",),
-            False,
-            "redirect_query_not_allowed",
-        ),
     ),
 )
 def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
@@ -1076,6 +1070,50 @@ def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
         "https://example.test/start"
     ]
     assert executor.total_request_attempts == 1
+
+
+def test_opt_in_retains_query_refused_first_hop_without_transmitting_destination() -> None:
+    """A received query redirect is evidence, but its destination is not contacted."""
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    source_url = "https://example.test/start"
+    destination = "https://example.test/landing?source=redirect"
+    retained_transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", "/landing?source=redirect"),), body=b"first-hop")]
+    )
+    retained = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://example.test",)),
+        programme_scope_policy=policy,
+        transport=retained_transport,
+    )
+
+    response = retained.request_retaining_refused_redirect(source_url)
+
+    assert [request.url for request in retained_transport.requests] == [source_url]
+    assert response.status_code == 302
+    assert response.headers == (("Location", "/landing?source=redirect"),)
+    assert response.body == b"first-hop"
+    assert response.final_url == source_url
+    assert response.redirects == ()
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=source_url,
+        destination_url=destination,
+        reason="redirect_query_not_allowed",
+    )
+
+    strict_transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", "/landing?source=redirect"),), body=b"first-hop")]
+    )
+    strict = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://example.test",)),
+        programme_scope_policy=policy,
+        transport=strict_transport,
+    )
+    with pytest.raises(HTTPRedirectRefused, match="redirect_query_not_allowed"):
+        strict.request(source_url)
+    assert [request.url for request in strict_transport.requests] == [source_url]
 
 
 def test_opt_in_retained_refusal_operation_still_follows_permitted_redirects() -> None:

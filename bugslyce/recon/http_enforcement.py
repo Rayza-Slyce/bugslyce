@@ -624,7 +624,10 @@ class InternalHTTPExecutor:
                     allow_query_strings=allow_query_strings,
                 )
             except HTTPRedirectRefused as exc:
-                if not retain_refused_redirect or exc.reason != "origin_not_approved":
+                if not retain_refused_redirect or exc.reason not in {
+                    "origin_not_approved",
+                    "redirect_query_not_allowed",
+                }:
                     raise
                 destination = _resolve_redirect_location(current_url, location)
                 return InternalHTTPResponse(
