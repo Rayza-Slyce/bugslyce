@@ -347,6 +347,39 @@ def test_semantic_html_and_javascript_evidence_select_but_lexical_noise_does_not
     assert "framework-state" not in repr(plan)
 
 
+def test_non_requestable_html_review_evidence_does_not_abort_recursive_admission(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    state = _state_with_evidence(runtime, "EVID-HTML-REVIEW")
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    html = build_deep_html_route_extraction(
+        _source_collection(
+            _source_item(
+                url="https://app.example.test/start",
+                content_type="text/html",
+                body=(
+                    b'<a href="/black hat research/devsecops.svg">Review</a>'
+                    b'<a href="/guide">Guide</a>'
+                ),
+                evidence_ids=("EVID-HTML-REVIEW",),
+            )
+        )
+    )
+    assert {route.safe_resolved_url for route in html.routes} == {
+        "https://app.example.test/black hat research/devsecops.svg",
+        "https://app.example.test/guide",
+    }
+    module = _recursive_module()
+
+    plan = _build_plan(module, runtime, state, orchestration, html=html)
+
+    assert tuple(request.url for request in plan.requests) == (
+        "https://app.example.test/guide",
+    )
+    assert all("black hat" not in request.url for request in plan.requests)
+
+
 def test_duplicate_sources_combine_provenance_and_depth_zero_url_is_not_recollected(
     tmp_path: Path,
 ) -> None:

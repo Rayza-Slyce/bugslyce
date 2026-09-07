@@ -465,9 +465,12 @@ def _aggregate_candidates(
                 )
             )
     for route in html_extraction.routes:
+        request_url = _requestable_html_review_url(route.safe_resolved_url)
+        if request_url is None:
+            continue
         contributions.append(
             _CandidateContribution(
-                raw_url=route.safe_resolved_url,
+                raw_url=request_url,
                 selection_reason=SELECTION_HTML_ROUTE_REFERENCE,
                 evidence_ids=_normalise_strings(route.evidence_ids),
             )
@@ -622,6 +625,15 @@ def _canonical_candidate_destination(raw_url: object):
     if destination.canonical_value != raw_url:
         raise ValueError("Recursive evidence HTTP URL is not canonical.")
     return destination
+
+
+def _requestable_html_review_url(raw_url: object) -> str | None:
+    """Admit static HTML review context only after strict request validation."""
+
+    try:
+        return _canonical_candidate_destination(raw_url).canonical_value
+    except ValueError:
+        return None
 
 
 def _canonical_root_request_url(request: object) -> str:
