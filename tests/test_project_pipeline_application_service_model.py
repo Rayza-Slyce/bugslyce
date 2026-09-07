@@ -166,6 +166,16 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     )
 
     monkeypatch.setattr(pipeline, "build_project_state", lambda _root: state)
+    current_orchestration = SimpleNamespace(
+        http_work_items=context["wp4_programme_orchestration"].http_work_items,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_programme_orchestration_plan",
+        lambda actual_runtime, actual_state: _same_pair(
+            actual_runtime, runtime, actual_state, state, current_orchestration,
+        ),
+    )
     monkeypatch.setattr(
         pipeline,
         "build_deep_collection_request_plan_from_project_state",
@@ -226,7 +236,7 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
             actual_state,
             state,
             actual_plan,
-            context["wp4_programme_orchestration"],
+            current_orchestration,
             object(),
         ),
     )

@@ -2310,12 +2310,12 @@ def _step_runners(
         )
         execution_orchestration = None
         if project_runtime is not None:
-            execution_orchestration = context.get("wp4_programme_orchestration")
-            if not isinstance(execution_orchestration, ProgrammeOrchestrationPlan):
-                execution_orchestration = build_programme_orchestration_plan(
-                    project_runtime,
-                    project_state,
-                )
+            # Retained evidence may have grown since native root discovery.
+            # Bind all Deep execution to this same current state snapshot.
+            execution_orchestration = build_programme_orchestration_plan(
+                project_runtime,
+                project_state,
+            )
             deep_executor = build_programme_orchestration_http_executor(
                 project_runtime,
                 project_state,
@@ -2379,6 +2379,7 @@ def _step_runners(
                     raise ValueError(
                         "Deep recursive feedback requires programme orchestration."
                     )
+                programme_orchestration = execution_orchestration
                 recursive_plan = build_recursive_evidence_feedback_plan(
                     project_runtime,
                     project_state,

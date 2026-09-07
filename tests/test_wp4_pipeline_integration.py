@@ -42,6 +42,7 @@ from bugslyce.recon.native_content_discovery import (
 )
 from bugslyce.recon.programme_orchestration import (
     build_programme_orchestration_plan,
+    require_programme_orchestration_plan_binding,
 )
 
 from test_native_content_discovery import _executor, _runtime
@@ -368,6 +369,80 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         "profile_wordlist",
         "wp4a_native",
     ]
+
+
+@pytest.mark.parametrize("cached_root", (True, False), ids=("after-native", "resume"))
+def test_deep_pipeline_rebuilds_orchestration_for_expanded_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cached_root: bool,
+) -> None:
+    runtime = _runtime(tmp_path / "runtime")
+    earlier = _state_with_evidence(runtime)
+    historical = build_programme_orchestration_plan(runtime, earlier)
+    current = _state_with_evidence(runtime, "EVID-WP4A-CHILD", child=True)
+    expected = build_programme_orchestration_plan(runtime, current)
+    assert expected.programme_graph != historical.programme_graph
+    with pytest.raises(ValueError, match="relationship evidence is not backed by project state"):
+        require_programme_orchestration_plan_binding(
+            runtime, historical, project_state=current,
+        )
+
+    context = _pipeline_context(tmp_path, runtime)
+    context["resume"] = not cached_root
+    root_plan = _root_plan()
+    if cached_root:
+        context["wp4_root_plan"] = root_plan
+        context["wp4_programme_orchestration"] = historical
+    _patch_deep_inputs(
+        monkeypatch,
+        state=current,
+        source_collection=_empty_source_collection(),
+        metadata_collection=_empty_metadata_collection(),
+    )
+    observed = []
+    executors = []
+    real_executor = pipeline.build_programme_orchestration_http_executor
+
+    def build_executor(actual_runtime, actual_state, actual_plan):
+        executor = real_executor(actual_runtime, actual_state, actual_plan)
+        executors.append(executor)
+        observed.append(actual_plan)
+        assert actual_state is current
+        assert actual_plan == expected
+        return executor
+
+    def build_recursive(actual_runtime, actual_state, actual_plan, **kwargs):
+        assert actual_state is current
+        assert actual_plan is observed[0]
+        assert kwargs["root_plan"] is root_plan
+        return recursive_feedback.build_recursive_evidence_feedback_plan(
+            actual_runtime, actual_state, actual_plan, **kwargs,
+        )
+
+    def run_recursive(actual_runtime, actual_state, actual_plan, *args, **kwargs):
+        assert actual_state is current
+        assert actual_plan is observed[0]
+        return recursive_feedback.run_recursive_evidence_feedback(
+            actual_runtime, actual_state, actual_plan, *args, **kwargs,
+        )
+
+    monkeypatch.setattr(pipeline, "build_programme_orchestration_http_executor", build_executor)
+    monkeypatch.setattr(pipeline, "build_recursive_evidence_feedback_plan", build_recursive)
+    monkeypatch.setattr(pipeline, "run_recursive_evidence_feedback", run_recursive)
+    try:
+        pipeline._step_runners(context, None)["PIPELINE-STEP-010D"]()
+        assert len(observed) == 1
+        outputs = context["deep_outputs"]
+        if cached_root:
+            assert context["wp4_programme_orchestration"] is historical
+            assert context["wp4_root_plan"] is root_plan
+            assert outputs.recursive_feedback_result.requests_attempted == 0
+        else:
+            assert outputs.recursive_feedback_result is None
+    finally:
+        for executor in executors:
+            executor.close()
 
 
 def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_analysis(
