@@ -87,6 +87,137 @@ def test_identical_conventional_410_selects_gobuster() -> None:
     assert decision.selected_policy == BASELINE_POLICY_GOBUSTER
 
 
+def test_request_preserving_http_to_https_conventional_negatives_allow_variable_bodies() -> None:
+    observations = tuple(
+        _observation(
+            f"http://app.example.test/.bugslyce-negative-{token}?probe={token}",
+            status=404,
+            body=f"missing generated path {token}".encode(),
+            final_url=(
+                f"https://app.example.test/.bugslyce-negative-{token}?probe={token}"
+            ),
+            redirects=(
+                (
+                    301,
+                    f"https://app.example.test/.bugslyce-negative-{token}?probe={token}",
+                ),
+            ),
+        )
+        for token in ("one", "two", "three")
+    )
+
+    decision = classify_content_discovery_baseline("http://app.example.test/", observations)
+
+    assert decision.classification == BASELINE_CLASSIFICATION_CONVENTIONAL
+    assert decision.selected_policy == BASELINE_POLICY_GOBUSTER
+
+
+@pytest.mark.parametrize(
+    "final_url",
+    (
+        "https://other.example.test/.bugslyce-negative-one?probe=one",
+        "https://app.example.test/changed-path?probe=one",
+    ),
+)
+def test_conventional_negative_shortcut_rejects_non_request_preserving_https_redirect(
+    final_url: str,
+) -> None:
+    observations = tuple(
+        _observation(
+            f"http://app.example.test/.bugslyce-negative-{token}?probe={token}",
+            status=404,
+            body=f"missing generated path {token}".encode(),
+            final_url=(
+                final_url
+                if token == "one"
+                else f"https://app.example.test/.bugslyce-negative-{token}?probe={token}"
+            ),
+            redirects=(
+                (
+                    301,
+                    final_url
+                    if token == "one"
+                    else f"https://app.example.test/.bugslyce-negative-{token}?probe={token}",
+                ),
+            ),
+        )
+        for token in ("one", "two", "three")
+    )
+
+    decision = classify_content_discovery_baseline("http://app.example.test/", observations)
+
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+
+
+def test_conventional_negative_shortcut_rejects_query_changing_https_redirect() -> None:
+    observations = tuple(
+        _observation(
+            f"http://app.example.test/.bugslyce-negative-{token}?probe={token}",
+            status=404,
+            body=f"missing generated path {token}".encode(),
+            final_url=(
+                "https://app.example.test/.bugslyce-negative-one?probe=changed"
+                if token == "one"
+                else f"https://app.example.test/.bugslyce-negative-{token}?probe={token}"
+            ),
+            redirects=(
+                (
+                    301,
+                    "https://app.example.test/.bugslyce-negative-one?probe=changed"
+                    if token == "one"
+                    else f"https://app.example.test/.bugslyce-negative-{token}?probe={token}",
+                ),
+            ),
+        )
+        for token in ("one", "two", "three")
+    )
+
+    decision = classify_content_discovery_baseline("http://app.example.test/", observations)
+
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+
+
+def test_conventional_negative_shortcut_rejects_multi_hop_https_redirect() -> None:
+    observations = tuple(
+        _observation(
+            f"http://app.example.test/.bugslyce-negative-{token}?probe={token}",
+            status=404,
+            body=f"missing generated path {token}".encode(),
+            final_url=f"https://app.example.test/.bugslyce-negative-{token}?probe={token}",
+            redirects=(
+                (
+                    (301, f"http://app.example.test/.bugslyce-negative-{token}?probe={token}"),
+                    (301, f"https://app.example.test/.bugslyce-negative-{token}?probe={token}"),
+                )
+                if token == "one"
+                else ((301, f"https://app.example.test/.bugslyce-negative-{token}?probe={token}"),)
+            ),
+        )
+        for token in ("one", "two", "three")
+    )
+
+    decision = classify_content_discovery_baseline("http://app.example.test/", observations)
+
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+
+
+def test_conventional_negative_shortcut_rejects_non_negative_terminal_status() -> None:
+    observations = tuple(
+        _observation(
+            f"http://app.example.test/.bugslyce-negative-{token}",
+            status=200,
+            body=f"generated response {token}".encode(),
+            final_url=f"https://app.example.test/.bugslyce-negative-{token}",
+            redirects=((301, f"https://app.example.test/.bugslyce-negative-{token}"),),
+        )
+        for token in ("one", "two", "three")
+    )
+
+    decision = classify_content_discovery_baseline("http://app.example.test/", observations)
+
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+
+
 def test_mixed_404_and_410_is_unstable() -> None:
     observations = tuple(
         _observation(

@@ -13,7 +13,7 @@ import secrets
 import shutil
 import time
 from typing import Any
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunparse
 
 from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
 from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
@@ -24,7 +24,11 @@ from bugslyce.core.models import (
     ReconContentDiscoveryExecutionResult,
     ReconPlannedArtifact,
 )
-from bugslyce.core.programme_scope import ProgrammeScopePolicy
+from bugslyce.core.programme_scope import (
+    DESTINATION_HOSTNAME,
+    ProgrammeScopePolicy,
+    canonicalise_http_url_destination,
+)
 from bugslyce.core.project import build_project_state
 from bugslyce.project_session import (
     PROJECT_FILENAME,
@@ -292,7 +296,13 @@ def classify_content_discovery_baseline(
     if (
         len(statuses) == 1
         and next(iter(statuses)) in {404, 410}
-        and all(not item.redirect_hops for item in observations)
+        and (
+            all(not item.redirect_hops for item in observations)
+            or all(
+                _is_request_preserving_http_to_https_conventional_negative(item)
+                for item in observations
+            )
+        )
     ):
         return ContentBaselineDecision(
             origin=origin,
@@ -374,6 +384,46 @@ def response_comparison_signature(
             if response.refused_redirect is not None
             else None
         ),
+    )
+
+
+def _is_request_preserving_http_to_https_conventional_negative(
+    observation: ContentBaselineObservation,
+) -> bool:
+    """Recognise one narrow, request-preserving conventional negative redirect."""
+
+    if (
+        observation.observation_status != "complete"
+        or observation.terminal_http_status not in {404, 410}
+        or observation.refused_redirect is not None
+        or len(observation.redirect_hops) != 1
+        or observation.final_url is None
+    ):
+        return False
+    hop_status, hop_destination = observation.redirect_hops[0]
+    if not 300 <= hop_status < 400:
+        return False
+    try:
+        request = canonicalise_http_url_destination(observation.request_url)
+        final = canonicalise_http_url_destination(observation.final_url)
+        destination = canonicalise_http_url_destination(hop_destination)
+    except ValueError:
+        return False
+    if (
+        request.origin.scheme != "http"
+        or request.origin.host_kind != DESTINATION_HOSTNAME
+        or final.origin.scheme != "https"
+        or final.origin.host_kind != DESTINATION_HOSTNAME
+        or request.origin.host != final.origin.host
+        or destination != final
+    ):
+        return False
+    request_parts = urlsplit(observation.request_url)
+    final_parts = urlsplit(observation.final_url)
+    return (
+        request_parts.path == final_parts.path
+        and request_parts.query == final_parts.query
+        and ("?" in observation.request_url) == ("?" in observation.final_url)
     )
 
 

@@ -6,6 +6,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path, PurePosixPath
+from bugslyce.recon.deep_collection_provenance import (
+    is_response_id, validate_response_id, response_identity, item_response_identity,
+)
+from bugslyce.recon.deep_provenance_artifacts import (
+    SHALLOW_JSON, EXTRACTION_JSON, shallow_collection_from_dict,
+    extraction_from_dict, owned_responses, validate_extraction_bindings,
+)
+from bugslyce.recon.deep_metadata_collection_export import (
+    DEEP_METADATA_COLLECTION_JSON, deep_metadata_collection_result_from_dict,
+)
+from bugslyce.recon.deep_source_route_collection_export import deep_source_route_collection_result_from_dict
+from bugslyce.recon.application_service_composition import build_application_service_composition
+from bugslyce.recon.documentation_assertions import (
+    retained_response_source_reference, retained_response_source_id,
+)
+from bugslyce.recon.http_route_relationships import build_http_redirect_relationship_edges
 
 from bugslyce.core.models import (
     DiscoveredPath,
@@ -92,6 +108,9 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "structured_raw_evidence",
         "project_state_evidence",
         "deep_output",
+        "deep_response",
+        "deep_extraction",
+        "deep_collection_reference",
         "successful_deep_content",
         "http_route_relationship_edge",
         "collection_confidence_notice",
@@ -297,6 +316,7 @@ def discover_evidence_pack_references(
         )
 
     references.extend(_deep_output_references(root))
+    references.extend(_deep_provenance_context(root)[0])
     references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
@@ -388,6 +408,7 @@ def discover_expected_pack_references(
             )
         )
     references.extend(_deep_output_references(root))
+    references.extend(_deep_provenance_context(root)[0])
     references.extend(_analysis_coverage_references(root))
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
@@ -1645,6 +1666,91 @@ def _packed_project_evidence_by_source(root: Path) -> dict[str, tuple[str, ...]]
     }
 
 
+def _deep_provenance_context(root):
+    """Reconstruct retained ownership; the closure declaration is not an input."""
+    references, sources, responses, collections = [], {}, {}, {}
+    collection_paths = {}
+    for owner, filename, loader in (
+        ("metadata", DEEP_METADATA_COLLECTION_JSON, deep_metadata_collection_result_from_dict),
+        ("source-route", DEEP_SOURCE_ROUTE_COLLECTION_JSON, deep_source_route_collection_result_from_dict),
+        ("shallow-followup", SHALLOW_JSON, shallow_collection_from_dict),
+    ):
+        payload = _load_structured_json_object(
+            root, root / filename, required=False, label=filename, reject_duplicate_keys=True,
+        )
+        if payload is None:
+            continue
+        collection = loader(payload)
+        collections[owner] = collection
+        collection_paths[owner] = filename
+        owned = owned_responses(owner, collection)
+        for identifier, item in owned.items():
+            sources.setdefault(identifier, []).append(filename)
+            if identifier in responses:
+                raise ValueError("ambiguous Deep response ownership")
+            responses[identifier] = item
+            references.append(EvidencePackReference(
+                portable_path=filename, owner_kind="deep_response", owner_id=identifier,
+                evidence_ids=(identifier,),
+            ))
+        # An optional new artifact is retained even when all requests skipped.
+        if filename == SHALLOW_JSON:
+            references.append(EvidencePackReference(
+                portable_path=filename, owner_kind="deep_output", owner_id=filename,
+            ))
+    # Retained antecedents are references, even on skipped rows. They cannot
+    # create ownership, but any Deep reference must have one actual owner.
+    for owner, collection in collections.items():
+        identifiers = sorted({value for item in (*collection.collected, *collection.skipped)
+                              for value in item.evidence_ids if is_response_id(value)})
+        for identifier in identifiers:
+            validate_response_id(identifier)
+            paths = sources.get(identifier, ())
+            if len(paths) != 1:
+                raise ValueError("Deep response evidence does not resolve to exactly one retained owner")
+            references.append(EvidencePackReference(
+                portable_path=paths[0], owner_kind="deep_collection_reference",
+                owner_id=collection_paths[owner], evidence_ids=(identifier,),
+            ))
+    html = javascript = None
+    payload = _load_structured_json_object(
+        root, root / EXTRACTION_JSON, required=False, label=EXTRACTION_JSON,
+        reject_duplicate_keys=True,
+    )
+    if payload is not None:
+        html, javascript = extraction_from_dict(payload)
+        source_collection = collections.get("source-route")
+        owned = owned_responses("source-route", source_collection) if source_collection is not None else {}
+        validate_extraction_bindings(html, javascript, owned)
+        references.append(EvidencePackReference(
+            portable_path=EXTRACTION_JSON, owner_kind="deep_extraction", owner_id=EXTRACTION_JSON,
+        ))
+    # Historical empty-evidence observations are not upgraded or composed here.
+    metadata = collections.get("metadata")
+    if metadata is not None:
+        owned_metadata = owned_responses("metadata", metadata)
+        metadata = replace(metadata, collected=tuple(
+            item for item in metadata.collected
+            if item.evidence_ids and (
+                not any(is_response_id(value) for value in item.evidence_ids)
+                or item_response_identity("metadata", item) in owned_metadata
+            )
+        ))
+    if html is not None:
+        html = replace(html, routes=tuple(item for item in html.routes if item.evidence_ids))
+        javascript = replace(javascript, candidates=tuple(item for item in javascript.candidates if item.evidence_ids))
+    source_collection = collections.get("source-route")
+    project = _load_relationship_project_state(root) if source_collection is not None else None
+    redirects = build_http_redirect_relationship_edges(project, source_collection=source_collection) if project is not None else ()
+    composition = build_application_service_composition(
+        metadata_collection=metadata, html_extraction=html, javascript_extraction=javascript,
+        redirect_edges=redirects,
+    )
+    expected = {(relation.relation_id, support)
+                for relation in composition.relations for support in relation.supports}
+    return tuple(references), sources, responses, expected
+
+
 def _application_service_model_references(
     root: Path,
     existing_references: tuple[EvidencePackReference, ...],
@@ -1663,7 +1769,13 @@ def _application_service_model_references(
     evidence_sources: dict[str, list[str]] = {}
     for source_path, evidence_ids in evidence_by_source.items():
         for evidence_id in evidence_ids:
+            if is_response_id(evidence_id):
+                raise ValueError("Deep response IDs cannot be owned by ProjectState")
             evidence_sources.setdefault(evidence_id, []).append(source_path)
+
+    _, deep_sources, responses, expected_supports = _deep_provenance_context(root)
+    for identifier, paths in deep_sources.items():
+        evidence_sources.setdefault(identifier, []).extend(paths)
 
     references: list[EvidencePackReference] = [
         EvidencePackReference(
@@ -1681,6 +1793,8 @@ def _application_service_model_references(
     ) -> None:
         grouped: dict[str, list[str]] = {}
         for evidence_id in evidence_ids:
+            if is_response_id(evidence_id):
+                validate_response_id(evidence_id)
             sources = evidence_sources.get(evidence_id, [])
             if len(sources) != 1:
                 raise ValueError(
@@ -1713,6 +1827,9 @@ def _application_service_model_references(
 
     for relation in model.application_composition.relations:
         for support in relation.supports:
+            if any(is_response_id(value) for value in support.evidence_ids):
+                if (relation.relation_id, support) not in expected_supports:
+                    raise ValueError("Deep response relation source correspondence mismatch")
             owner_id = (
                 f"{relation.relation_id}:"
                 f"{support.source_reference.owner_kind.value}:"
@@ -1745,6 +1862,16 @@ def _application_service_model_references(
 
     for assertion in model.documentation_assertions.assertions:
         for support in assertion.supports:
+            source = support.source_reference
+            if any(is_response_id(value) for value in source.evidence_ids):
+                identifier = response_identity(
+                    owner="source-route", method=source.method,
+                    request_url=source.request_url, final_url=source.final_url,
+                    status_code=source.status_code, body_sha256=source.body_sha256,
+                )
+                item = responses.get(identifier)
+                if item is None or source != retained_response_source_reference(item):
+                    raise ValueError("Deep documentation response source correspondence mismatch")
             add_evidence_references(
                 owner_kind="application_service_model_a2_assertion_support",
                 owner_id=f"{assertion.assertion_id}:{support.source_reference.source_id}",
@@ -1752,6 +1879,16 @@ def _application_service_model_references(
             )
     for skipped in model.documentation_assertions.skipped_sources:
         if skipped.evidence_ids:
+            if any(is_response_id(value) for value in skipped.evidence_ids):
+                matching = [item for identifier, item in responses.items()
+                            if identifier in skipped.evidence_ids
+                            and deep_sources.get(identifier) == [DEEP_SOURCE_ROUTE_COLLECTION_JSON]
+                            and skipped.source_id == retained_response_source_id(item)
+                            and skipped.request_url == item.url
+                            and skipped.body_sha256 == item.body_sha256
+                            and set(skipped.evidence_ids) == set(item.evidence_ids)]
+                if len(matching) != 1:
+                    raise ValueError("Deep skipped documentation source correspondence mismatch")
             add_evidence_references(
                 owner_kind="application_service_model_a2_assertion_support",
                 owner_id=f"skipped:{skipped.source_id}",
@@ -2695,6 +2832,7 @@ def _load_structured_json_object(
     *,
     required: bool,
     label: str,
+    reject_duplicate_keys: bool = False,
 ) -> dict[str, object] | None:
     if path.is_symlink():
         raise ValueError(f"{label} is an unsafe symlink")
@@ -2707,12 +2845,24 @@ def _load_structured_json_object(
             raise ValueError(f"required structured metadata is missing: {label}")
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_members if reject_duplicate_keys else None,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"malformed structured metadata: {label}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"structured metadata must be an object: {label}")
     return payload
+
+
+def _unique_json_members(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate member in Deep provenance JSON")
+        result[key] = value
+    return result
 
 
 def _normalise_portable_path(value: str) -> str:

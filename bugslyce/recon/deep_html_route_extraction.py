@@ -9,6 +9,7 @@ Deep Recon.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from bugslyce.recon.deep_collection_provenance import source_response_reference
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, quote, unquote, urljoin, urlparse
 
@@ -349,7 +350,7 @@ def _select_documents(
         selected.append(
             _SourceDocument(
                 item=item,
-                source_response_id=f"DEEP-HTML-SRC-{index:04d}",
+                source_response_id=source_response_reference(item, f"DEEP-HTML-SRC-{index:04d}"),
                 safe_source_url=_safe_url(item.url),
                 selection_reason=reason,
                 body_text=body_text,
@@ -508,6 +509,11 @@ def _resolve_reference(base_url: str, reference: str) -> str:
         return urljoin(base_url, reference)
     except Exception:
         return ""
+
+
+def redacted_source_url(raw_url: str) -> str:
+    """Return the retained source-URL representation used by extraction."""
+    return _safe_url(raw_url)
 
 
 def _safe_url(raw_url: str) -> str:

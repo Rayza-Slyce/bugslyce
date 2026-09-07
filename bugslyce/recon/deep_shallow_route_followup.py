@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
+from bugslyce.recon.deep_collection_provenance import merge_response_evidence
 import math
 from urllib.parse import parse_qsl, quote, urljoin, urlparse
 
@@ -475,6 +476,15 @@ def collect_deep_shallow_route_followups(
         if len(body) > bounds.max_response_bytes:
             skipped.append(_collection_skip(request, "response_too_large", "response_too_large"))
             continue
+        try:
+            evidence_ids = merge_response_evidence(
+                request.evidence_ids, owner="shallow-followup", method="GET",
+                request_url=request.request_url, final_url=final_url,
+                status_code=status_code, body_sha256=sha256(body).hexdigest(),
+            )
+        except (TypeError, ValueError):
+            skipped.append(_collection_skip(request, "invalid_fetch_response", "invalid_fetch_response"))
+            continue
         collected.append(
             DeepShallowRouteFollowupCollectedItem(
                 request_id=request.request_id,
@@ -490,7 +500,7 @@ def collect_deep_shallow_route_followups(
                 source_model_kinds=request.source_model_kinds,
                 source_route_candidate_ids=request.source_route_candidate_ids,
                 query_parameter_names=request.query_parameter_names,
-                evidence_ids=request.evidence_ids,
+                evidence_ids=evidence_ids,
                 interpretation="Collected response from one bounded shallow same-origin GET follow-up.",
                 body=body,
             )

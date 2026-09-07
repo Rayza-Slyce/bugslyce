@@ -1,6 +1,10 @@
 """Plan-driven orchestration for one approved BugSlyce project pipeline."""
 
 from __future__ import annotations
+from bugslyce.recon.deep_provenance_artifacts import (
+    SHALLOW_JSON, EXTRACTION_JSON, write_deep_provenance_artifacts,
+)
+from bugslyce.recon.deep_collection_provenance import merge_response_evidence
 
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
@@ -260,8 +264,15 @@ PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES = (
     DEEP_RECON_RUNBOOK_MARKDOWN,
     DEEP_RECON_ORCHESTRATION_JSON,
 )
-DEEP_FIXED_ARTEFACT_FILENAMES = (
+PRE_WP7E_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES,
+    APPLICATION_SERVICE_MODEL_FILENAME,
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES[:4],
+    SHALLOW_JSON,
+    EXTRACTION_JSON,
+    *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES[4:],
     APPLICATION_SERVICE_MODEL_FILENAME,
 )
 SKIPPED_STEP_MESSAGES = {
@@ -1625,6 +1636,10 @@ def _deep_completed_resume_verified(
     if Path(recorded_export).expanduser().resolve() != export_path:
         return False
     required_deep_names = _completed_deep_artefact_names(prior_pipeline)
+    if required_deep_names != DEEP_FIXED_ARTEFACT_FILENAMES and any(
+        (output_dir / name).exists() for name in (SHALLOW_JSON, EXTRACTION_JSON)
+    ):
+        return False
     if required_deep_names == LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES and any(
         (output_dir / name).exists()
         for name in (
@@ -1665,8 +1680,10 @@ def _completed_deep_artefact_names(
         recorded_names = {
             Path(path).name for path in output_paths if isinstance(path, str)
         }
-        if APPLICATION_SERVICE_MODEL_FILENAME in recorded_names:
+        if {SHALLOW_JSON, EXTRACTION_JSON} & recorded_names:
             return DEEP_FIXED_ARTEFACT_FILENAMES
+        if APPLICATION_SERVICE_MODEL_FILENAME in recorded_names:
+            return PRE_WP7E_DEEP_FIXED_ARTEFACT_FILENAMES
         if {
             DEEP_METADATA_COLLECTION_MARKDOWN,
             DEEP_METADATA_COLLECTION_JSON,
@@ -2341,6 +2358,9 @@ def _step_runners(
             followup_plan,
             fetcher=fetcher,
         )
+        provenance_paths = write_deep_provenance_artifacts(
+            output_dir, shallow_followups, html_routes, javascript_routes,
+        )
         source_collection = initial_source_collection
         recursive_plan = None
         recursive_result = None
@@ -2417,14 +2437,14 @@ def _step_runners(
             recursive_feedback_result=recursive_result,
             application_service_model=application_service_model,
             deep_artifact_paths=_dedupe_paths(
-                (*source_paths, *metadata_paths, application_service_model_path),
+                (*source_paths, *metadata_paths, *provenance_paths, application_service_model_path),
             ),
         )
         return (
             "Deep bounded source-route and metadata collection, with shallow same-origin follow-up, completed.",
             [
                 str(path)
-                for path in (*source_paths, *metadata_paths, application_service_model_path)
+                for path in (*source_paths, *metadata_paths, *provenance_paths, application_service_model_path)
             ],
             {},
         )
@@ -2768,6 +2788,13 @@ def _merge_recursive_source_collection(
         key = (item.method.upper(), item.url)
         if key in seen:
             continue
+        # This accepted response is now retained by the source collection.
+        # Antecedent discovery evidence cannot stand in for this response.
+        item = replace(item, evidence_ids=merge_response_evidence(
+            item.evidence_ids, owner="source-route", method=item.method,
+            request_url=item.url, final_url=item.final_url,
+            status_code=item.status_code, body_sha256=item.body_sha256,
+        ))
         seen.add(key)
         collected.append(item)
     added = len(collected) - len(initial.collected)

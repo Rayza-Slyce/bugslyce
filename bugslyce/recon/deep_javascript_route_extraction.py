@@ -9,6 +9,7 @@ files, fetch routes, follow links, inventory forms, or enable Deep Recon.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from bugslyce.recon.deep_collection_provenance import source_response_reference
 from html.parser import HTMLParser
 import re
 from urllib.parse import parse_qsl, quote, urljoin, urlparse
@@ -458,7 +459,7 @@ def _select_scripts(
         body_text = item.body.decode("utf-8", errors="replace")
         media = _media_type(_header_value(item, "content-type"))
         safe_source_url = _safe_url(item.url)
-        source_response_id = f"DEEP-JS-SRC-{index:04d}"
+        source_response_id = source_response_reference(item, f"DEEP-JS-SRC-{index:04d}")
         if media in JAVASCRIPT_MEDIA_TYPES:
             counts["js_content_type"] += 1
             counts["js_bodies_scanned"] += 1
@@ -820,6 +821,11 @@ def _header_value(item: DeepSourceRouteCollectedItem, name: str) -> str | None:
         if header_name.lower() == wanted:
             return value
     return None
+
+
+def redacted_source_url(raw_url: str) -> str:
+    """Return the retained source-URL representation used by extraction."""
+    return _safe_url(raw_url)
 
 
 def _safe_url(raw_url: str) -> str:

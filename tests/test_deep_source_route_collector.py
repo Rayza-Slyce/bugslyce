@@ -316,7 +316,8 @@ def test_collected_item_has_bounded_preview_hash_headers_and_in_memory_body() ->
     assert item.body_sha256 == sha256(body).hexdigest()
     assert item.headers == (("content-type", "text/html"),)
     assert item.elapsed_seconds == 0.42
-    assert item.evidence_ids == ("EVID-1", "EVID-2")
+    from bugslyce.recon.deep_collection_provenance import item_response_identity
+    assert item.evidence_ids == ("EVID-1", "EVID-2", item_response_identity("source-route", item))
 
 
 def test_human_collection_markdown_redacts_retained_set_cookie_values() -> None:

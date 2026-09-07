@@ -1935,6 +1935,8 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_dir / "deep_source_route_collection.json",
         output_dir / "deep_metadata_collection.md",
         output_dir / "deep_metadata_collection.json",
+        output_dir / "deep_shallow_route_followup_collection.json",
+        output_dir / "deep_route_extraction.json",
         output_dir / "deep_recon_review.md",
         output_dir / "deep_recon_runbook.md",
         output_dir / "deep_recon_orchestration.json",
@@ -2717,6 +2719,8 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
         "deep_metadata_collection.md",
         "deep_metadata_collection.json",
         "application_service_model.json",
+        "deep_shallow_route_followup_collection.json",
+        "deep_route_extraction.json",
     }
     outputs = context["deep_outputs"]
     assert isinstance(outputs, DeepPipelineOutputs)
@@ -5010,6 +5014,12 @@ def _patch_successful_pipeline(
 ) -> None:
     _patch_current_native_runtime(monkeypatch, output_dir)
     monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_provenance_artifacts",
+        lambda root, shallow, html, javascript: _write_named_files(
+            root, ("deep_shallow_route_followup_collection.json", "deep_route_extraction.json"),
+        ),
+    )
+    monkeypatch.setattr(
         "bugslyce.project_pipeline.build_doctor_report",
         lambda: _doctor(),
     )
@@ -5466,6 +5476,12 @@ def _patch_live_calls_to_fail(monkeypatch) -> None:
 
 
 def _patch_minimal_deep_collection(monkeypatch, calls: list[str]) -> None:
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.write_deep_provenance_artifacts",
+        lambda root, shallow, html, javascript: _write_named_files(
+            root, ("deep_shallow_route_followup_collection.json", "deep_route_extraction.json"),
+        ),
+    )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.build_project_state",
         lambda path: SimpleNamespace(

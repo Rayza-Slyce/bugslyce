@@ -297,6 +297,50 @@ def test_persisted_runtime_peer_deduplicates_parser_derived_relationship(
     ] == [("target.example.test", "192.0.2.44", 1)]
 
 
+@pytest.mark.parametrize(
+    "profile",
+    (
+        "bug-bounty-policy-tcp-plus-services-plus-http-metadata",
+        "bug-bounty-policy-tcp-plus-services-plus-http-metadata-plus-path-followup",
+    ),
+)
+def test_strict_nmap_peer_provenance_survives_downstream_http_metadata_profile(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    (tmp_path / "nmap-allports.txt").write_text(
+        "Nmap scan report for 192.0.2.44\n"
+        "PORT   STATE SERVICE\n"
+        "80/tcp open  http\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "target.example.test",
+                "created_by": "bugslyce-nmap-discover",
+                "profile": profile,
+                "artifacts": [
+                    {
+                        "type": "nmap",
+                        "file": "nmap-allports.txt",
+                        "resolved_peer": "192.0.2.44",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+
+    assert [
+        (item.reported_host, item.peer_host)
+        for item in state.nmap_reported_host_peers
+    ] == [("target.example.test", "192.0.2.44")]
+
+
 def test_parenthesized_ipv6_peer_projects_to_hostname_without_malformed_authority(
     tmp_path: Path,
 ) -> None:

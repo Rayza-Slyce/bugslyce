@@ -534,7 +534,10 @@ def test_deep_pipeline_threads_exact_typed_evidence_into_one_recursive_pass_and_
     assert tuple(route.safe_resolved_url for route in routes) == (
         "https://app.example.test/api/websocket",
     )
-    assert routes[0].evidence_ids == ("EVID-SITEMAP-DOCS",)
+    from bugslyce.recon.deep_collection_provenance import item_response_identity
+    fresh = item_response_identity("source-route", outputs.source_collection.collected[0])
+    assert outputs.source_collection.collected[0].evidence_ids == ("EVID-SITEMAP-DOCS", fresh)
+    assert routes[0].evidence_ids == tuple(sorted(("EVID-SITEMAP-DOCS", fresh)))
     executor.close()
 
 

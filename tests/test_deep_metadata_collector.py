@@ -14,6 +14,9 @@ from bugslyce.core.programme_scope import (
     evaluate_raw_scope_destination,
 )
 from bugslyce.recon.content_plan import STANDARD_BOUNDED_CORE_PROFILE
+from bugslyce.recon.application_service_composition import (
+    build_application_service_composition,
+)
 from bugslyce.recon.deep_collection_policy import (
     DeepCollectionDecision,
     DeepCollectionPolicySummary,
@@ -216,7 +219,33 @@ def test_collected_item_has_bounded_preview_hash_headers_and_no_full_body() -> N
     assert item.body_sha256 == sha256(body).hexdigest()
     assert item.headers == (("content-type", "text/plain"),)
     assert item.elapsed_seconds == 0.42
-    assert item.evidence_ids == ("EVID-1", "EVID-2")
+    from bugslyce.recon.deep_collection_provenance import item_response_identity
+    assert item.evidence_ids == ("EVID-1", "EVID-2", item_response_identity("metadata", item))
+
+
+def test_successful_sitemap_without_antecedent_evidence_gains_collection_provenance(
+) -> None:
+    request = _request(
+        "https://app.example.test/sitemap.xml",
+        source="metadata_coverage",
+        evidence_ids=(),
+    )
+    body = (
+        b'<?xml version="1.0"?><urlset>'
+        b"<url><loc>https://app.example.test/account</loc></url>"
+        b"</urlset>"
+    )
+
+    result = collect_deep_metadata_from_plan(
+        _plan((request,), allowed_origins=("https://app.example.test",)),
+        fetcher=_fake_fetcher([], body=body, headers=(("content-type", "application/xml"),)),
+    )
+
+    item = result.collected[0]
+    assert item.sitemap_route_references == ("https://app.example.test/account",)
+    assert item.evidence_ids
+    composition = build_application_service_composition(metadata_collection=result)
+    assert composition.relations[0].supports[0].evidence_ids == item.evidence_ids
 
 
 def test_bounds_are_passed_to_fetcher_and_oversized_response_is_skipped() -> None:

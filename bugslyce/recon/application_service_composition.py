@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from typing import Iterable
+from bugslyce.recon.deep_collection_provenance import extraction_source_id
 
 from bugslyce.recon.deep_html_route_extraction import (
     DeepHtmlRouteExtractionResult,
@@ -611,7 +612,10 @@ def _add_html_route(
             basis=ApplicationServiceSupportBasis.DETERMINISTIC_DERIVATION,
             semantic=ApplicationServiceSourceSemantic.HTML_ROUTE_REFERENCE,
             owner=ApplicationServiceSourceOwnerKind.DEEP_HTML_ROUTE_REFERENCE,
-            source_id=route.route_id,
+            source_id=extraction_source_id(
+                "html", route.route_id, route.safe_resolved_url,
+                route.source_request_urls, route.evidence_ids, route.source_response_ids,
+            ),
             evidence_ids=route.evidence_ids,
         ),
     )
@@ -653,7 +657,12 @@ def _add_javascript_candidate(
                 owner=(
                     ApplicationServiceSourceOwnerKind.DEEP_JAVASCRIPT_ROUTE_CANDIDATE
                 ),
-                source_id=candidate.candidate_id,
+                source_id=extraction_source_id(
+                    "javascript", candidate.candidate_id, candidate.safe_resolved_url,
+                    candidate.source_request_urls, candidate.evidence_ids,
+                    candidate.source_response_ids,
+                    candidate.semantic_contexts,
+                ),
                 evidence_ids=candidate.evidence_ids,
             ),
         )

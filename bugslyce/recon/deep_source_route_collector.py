@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import sha256
+from bugslyce.recon.deep_collection_provenance import merge_response_evidence
 from urllib.parse import urlparse
 
 from bugslyce.recon.deep_collection_policy import (
@@ -168,10 +169,22 @@ def collect_deep_source_routes_from_plan(
             continue
 
         body = response.body
+        if not isinstance(body, bytes):
+            skipped.append(_skip_from_request(request, "invalid_fetch_response"))
+            continue
         if len(body) > bounds.max_response_bytes:
             skipped.append(_skip_from_request(request, "response_too_large"))
             continue
 
+        try:
+            evidence_ids = merge_response_evidence(
+                request.evidence_ids, owner="source-route", method=request.method,
+                request_url=request.url, final_url=response.final_url,
+                status_code=response.status_code, body_sha256=sha256(body).hexdigest(),
+            )
+        except (TypeError, ValueError):
+            skipped.append(_skip_from_request(request, "invalid_fetch_response"))
+            continue
         collected.append(
             DeepSourceRouteCollectedItem(
                 url=request.url,
@@ -185,7 +198,7 @@ def collect_deep_source_routes_from_plan(
                 elapsed_seconds=response.elapsed_seconds,
                 source=request.source,
                 reason=request.reason,
-                evidence_ids=tuple(_dedupe(list(request.evidence_ids))),
+                evidence_ids=evidence_ids,
                 body=body,
             )
         )

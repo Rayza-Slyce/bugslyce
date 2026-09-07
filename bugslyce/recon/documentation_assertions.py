@@ -600,6 +600,18 @@ def _eligibility_reason(
     return None, evidence_ids, media_type
 
 
+def retained_response_source_id(item: DeepSourceRouteCollectedItem) -> str:
+    """Identify retained sources, including sources ineligible for documentation."""
+    return _source_id(item)
+
+
+def retained_response_source_reference(
+    item: DeepSourceRouteCollectedItem,
+) -> DocumentationAssertionSourceReference:
+    """Reconstruct source identity from a retained response without reparsing it."""
+    return _source_reference(item, _normalise_evidence_ids(item.evidence_ids), _media_type(item))
+
+
 def _source_reference(
     item: DeepSourceRouteCollectedItem,
     evidence_ids: tuple[str, ...],

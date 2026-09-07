@@ -283,6 +283,13 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
         return path
 
     monkeypatch.setattr(pipeline, "write_application_service_model_artifact", persist)
+    def persist_provenance(root, shallow, html, javascript):
+        assert shallow is shallow_followups
+        assert html is html_routes
+        assert javascript is javascript_routes
+        return _write_paths(root, pipeline.SHALLOW_JSON, pipeline.EXTRACTION_JSON)
+
+    monkeypatch.setattr(pipeline, "write_deep_provenance_artifacts", persist_provenance)
     runners = pipeline._step_runners(context, None)
     _message, collection_paths, _updates = runners["PIPELINE-STEP-010D"]()
 

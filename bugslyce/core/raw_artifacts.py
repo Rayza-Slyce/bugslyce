@@ -64,14 +64,6 @@ class _ArtifactContext:
     strict_nmap_runtime_provenance: bool = False
 
 
-_STRICT_NMAP_RUNTIME_MANIFEST_PROFILES = frozenset(
-    {
-        "bug-bounty-policy-tcp",
-        "bug-bounty-policy-tcp-plus-services",
-    }
-)
-
-
 def assemble_raw_artifacts(
     input_dir: Path,
     manifest: ReconManifest | None,
@@ -221,7 +213,6 @@ def _artifact_contexts(input_dir: Path, manifest: ReconManifest | None) -> list[
         strict_nmap_runtime_provenance = (
             manifest.schema_version == "1.0"
             and manifest.created_by == "bugslyce-nmap-discover"
-            and manifest.profile in _STRICT_NMAP_RUNTIME_MANIFEST_PROFILES
         )
         return [
             _ArtifactContext(
