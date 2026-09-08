@@ -546,7 +546,7 @@ class InternalHTTPExecutor:
         allow_query_strings: bool = False,
         additional_headers: tuple[tuple[str, str], ...] = (),
     ) -> InternalHTTPResponse:
-        """Return a received exchange when only its cross-origin hop is refused."""
+        """Return a received exchange for one narrowly supported redirect refusal."""
 
         return self._request(
             url,
@@ -649,7 +649,26 @@ class InternalHTTPExecutor:
                     ),
                 )
             if destination in visited:
-                raise HTTPRedirectRefused("redirect_loop")
+                if not retain_refused_redirect:
+                    raise HTTPRedirectRefused("redirect_loop")
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=current_url,
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    body=response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects),
+                    refused_redirect=HTTPRedirectRefusal(
+                        status_code=response.status_code,
+                        source_url=current_url,
+                        destination_url=destination,
+                        reason="redirect_loop",
+                    ),
+                )
             if len(redirects) >= self.configuration.maximum_redirect_hops:
                 raise HTTPRedirectRefused("redirect_hop_limit")
             redirect_decision = self._require_programme_scope(

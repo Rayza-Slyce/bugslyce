@@ -790,7 +790,11 @@ def _artifact_line(candidate_url: str, response) -> str:
         if response.refused_redirect is not None
         else response.final_url
     )
-    redirect = f" [--> {redirect_target}]" if redirect_target != candidate_url else ""
+    redirect = (
+        f" [--> {redirect_target}]"
+        if response.refused_redirect is not None or redirect_target != candidate_url
+        else ""
+    )
     return (
         f"{path} (Status: {response.status_code}) "
         f"[Size: {len(response.body)}]{redirect}\n"

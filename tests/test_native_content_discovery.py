@@ -1302,6 +1302,69 @@ def test_query_refused_first_hop_is_compared_and_later_native_candidate_continue
     executor.close()
 
 
+def test_redirect_loop_candidate_is_retained_and_later_native_candidate_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("loop", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    first_url = "https://app.example.test/loop"
+    second_url = "https://app.example.test/loop-two"
+
+    def respond(url: str):
+        if url == first_url:
+            return 302, (("Location", "/loop-two"),), b"first redirect"
+        if url == second_url:
+            return 302, (("Location", "/loop"),), b"loop refusal response"
+        return 404, b"conventional negative"
+
+    progress = []
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "native-output",
+        token_factory=iter(("one", "two", "three")).__next__,
+        progress_callback=progress.append,
+    )
+
+    assert [request.url for request in transport.requests] == [
+        "https://app.example.test/.bugslyce-negative-one",
+        "https://app.example.test/.bugslyce-negative-two",
+        "https://app.example.test/.bugslyce-negative-three",
+        first_url,
+        second_url,
+        "https://app.example.test/later-negative",
+    ]
+    origin_result = result.origin_results[0]
+    assert origin_result.suppressed_candidate_count == 1
+    assert origin_result.retained_candidate_count == 1
+    assert [event.completed for event in progress] == [0, 1, 2]
+    assert progress[-1].total == 2
+    output = result.artifacts[0].path.read_text(encoding="utf-8")
+    assert "/loop (Status: 302)" in output
+    assert f"[--> {first_url}]" in output
+    assert "/later-negative" not in output
+    executor.close()
+
+
 def test_true_native_baseline_refusal_persists_structured_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -1151,6 +1151,47 @@ def test_opt_in_retained_refusal_operation_still_follows_permitted_redirects() -
     )
 
 
+def test_opt_in_retains_redirect_loop_exchange_without_retransmitting_visited_hop() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    first_url = "https://example.test/one"
+    second_url = "https://example.test/two"
+    transport = _RecordingPeerBoundTransport(
+        [
+            _response(302, (("Location", "/two"),), body=b"first redirect"),
+            _response(302, (("Location", "/one"),), body=b"loop refusal response"),
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    response = executor.request_retaining_refused_redirect(first_url)
+
+    assert [request.url for request in transport.requests] == [first_url, second_url]
+    assert executor.total_request_attempts == 2
+    assert response.status_code == 302
+    assert response.headers == (("Location", "/one"),)
+    assert response.body == b"loop refusal response"
+    assert response.final_url == second_url
+    assert response.redirects == (
+        http_enforcement_module.HTTPRedirectHop(
+            status_code=302,
+            source_url=first_url,
+            destination_url=second_url,
+        ),
+    )
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=second_url,
+        destination_url=first_url,
+        reason="redirect_loop",
+    )
+
+
 def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> None:
     policy = _programme_scope_policy(
         (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
