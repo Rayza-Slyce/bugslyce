@@ -837,6 +837,15 @@ def _write_new_artifact(path: Path, content: str) -> None:
 def _artifact_line(candidate_url: str, response) -> str:
     parsed = urlparse(candidate_url)
     path = parsed.path or "/"
+    if (
+        response.refused_redirect is not None
+        and response.refused_redirect.destination_url is None
+    ):
+        redirect = f" [redirect refused: {response.refused_redirect.reason}]"
+        return (
+            f"{path} (Status: {response.status_code}) "
+            f"[Size: {len(response.body)}]{redirect}\n"
+        )
     redirect_target = (
         response.refused_redirect.destination_url
         if response.refused_redirect is not None

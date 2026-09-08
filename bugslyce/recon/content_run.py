@@ -142,7 +142,7 @@ class ContentBaselineObservation:
     body_sha256: str | None
     final_url: str | None
     redirect_hops: tuple[tuple[int, str], ...]
-    refused_redirect: tuple[int, str, str, str] | None
+    refused_redirect: tuple[int, str, str | None, str] | None
     failure_reason: str | None
 
     @classmethod
@@ -196,7 +196,7 @@ ContentComparisonSignature = tuple[
     str,
     str,
     tuple[tuple[int, str], ...],
-    tuple[int, str, str, str] | None,
+    tuple[int, str, str | None, str] | None,
 ]
 
 

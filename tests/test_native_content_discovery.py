@@ -1284,6 +1284,174 @@ def test_cross_origin_first_hop_redirect_is_compared_without_destination_transmi
     executor.close()
 
 
+@pytest.mark.parametrize(
+    "malformed_headers",
+    (
+        pytest.param((), id="missing-location"),
+        pytest.param(
+            (("Location", "/first"), ("Location", "/second")),
+            id="duplicate-location",
+        ),
+    ),
+)
+def test_malformed_redirect_location_candidate_does_not_prevent_later_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_headers: tuple[tuple[str, str], ...],
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("malformed", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = "https://app.example.test/malformed"
+    later_url = "https://app.example.test/later-negative"
+    expected_before_refusal = [
+        "https://app.example.test/.bugslyce-negative-one",
+        "https://app.example.test/.bugslyce-negative-two",
+        "https://app.example.test/.bugslyce-negative-three",
+        candidate_url,
+    ]
+
+    def respond(url: str):
+        if url == candidate_url:
+            return 302, malformed_headers, b"malformed redirect response"
+        return 404, b"conventional negative"
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPRedirectRefused as exc:
+            assert exc.reason == "malformed_location"
+            assert [request.url for request in transport.requests] == (
+                expected_before_refusal
+            )
+            assert all(request.url != later_url for request in transport.requests)
+            assert [event.completed for event in progress] == [0]
+            baseline_path = output_dir / "content_discovery_baseline.json"
+            assert baseline_path.is_file()
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            assert baseline["origins"][0]["completed_observations"] == 3
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            *expected_before_refusal,
+            later_url,
+        ]
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 1
+        assert [event.completed for event in progress] == [0, 1, 2]
+        assert progress[-1].total == 2
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/malformed (Status: 302)" in output
+        assert "[redirect refused: malformed_location]" in output
+        assert "[--> None]" not in output
+        assert "/later-negative" not in output
+    finally:
+        executor.close()
+
+
+def test_stable_malformed_redirect_baseline_is_serialized_and_compared_safely(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("same-malformed", "different-malformed"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+
+    def respond(url: str):
+        body = (
+            b"different malformed response"
+            if url.endswith("/different-malformed")
+            else b"stable malformed response"
+        )
+        return 302, (), body
+
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        respond,
+    )
+    try:
+        result = module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=tmp_path / "native-output",
+            token_factory=iter(("one", "two", "three")).__next__,
+        )
+
+        assert len(transport.requests) == 5
+        origin_result = result.origin_results[0]
+        assert origin_result.baseline_decision.classification == "stable_redirect_fallback"
+        assert origin_result.baseline_decision.selected_policy == (
+            "internal_exact_body_comparator"
+        )
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 1
+        baseline = json.loads(
+            result.baseline_artifact_path.read_text(encoding="utf-8")
+        )
+        observations = baseline["origins"][0]["observations"]
+        assert all(item["observation_status"] == "complete" for item in observations)
+        assert all(item["terminal_http_status"] == 302 for item in observations)
+        assert all(
+            item["refused_redirect"]
+            == {
+                "status_code": 302,
+                "source_url": item["request_url"],
+                "destination_url": None,
+                "reason": "malformed_location",
+            }
+            for item in observations
+        )
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/same-malformed" not in output
+        assert "/different-malformed (Status: 302)" in output
+        assert "[redirect refused: malformed_location]" in output
+        assert "[--> None]" not in output
+    finally:
+        executor.close()
+
+
 def test_query_refused_first_hop_is_compared_and_later_native_candidate_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

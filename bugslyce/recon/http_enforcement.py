@@ -186,11 +186,15 @@ class HTTPRedirectHop:
 
 @dataclass(frozen=True)
 class HTTPRedirectRefusal:
-    """One received redirect response whose destination was not transmitted."""
+    """One received redirect response whose destination was not transmitted.
+
+    ``destination_url`` is absent only when malformed redirect metadata did not
+    yield one safely resolved canonical destination.
+    """
 
     status_code: int
     source_url: str
-    destination_url: str
+    destination_url: str | None
     reason: str
 
 
@@ -616,7 +620,29 @@ class InternalHTTPExecutor:
                     redirects=tuple(redirects),
                 )
 
-            location = _redirect_location(response.headers)
+            try:
+                location = _redirect_location(response.headers)
+            except HTTPRedirectRefused as exc:
+                if not retain_refused_redirect or exc.reason != "malformed_location":
+                    raise
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=current_url,
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    body=response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects),
+                    refused_redirect=HTTPRedirectRefusal(
+                        status_code=response.status_code,
+                        source_url=current_url,
+                        destination_url=None,
+                        reason=exc.reason,
+                    ),
+                )
             try:
                 destination = self._redirect_destination(
                     current_url,

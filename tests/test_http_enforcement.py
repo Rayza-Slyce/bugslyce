@@ -1039,6 +1039,12 @@ def test_opt_in_retains_refused_cross_origin_exchange_without_transmitting_desti
             False,
             "unsupported_redirect",
         ),
+        (
+            "",
+            ("https://example.test",),
+            False,
+            "malformed_location",
+        ),
     ),
 )
 def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
@@ -1070,6 +1076,64 @@ def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
         "https://example.test/start"
     ]
     assert executor.total_request_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "headers",
+    (
+        pytest.param((), id="missing-location"),
+        pytest.param(
+            (("Location", "/first"), ("Location", "/second")),
+            id="duplicate-location",
+        ),
+    ),
+)
+def test_opt_in_retains_malformed_location_cardinality_without_inventing_destination(
+    headers: tuple[tuple[str, str], ...],
+) -> None:
+    source_url = "https://example.test/start"
+    intermediate_url = "https://example.test/intermediate"
+    responses = [
+        _response(302, (("Location", "/intermediate"),), body=b"accepted redirect"),
+        _response(302, headers, body=b"malformed redirect response"),
+    ]
+
+    strict_transport = _RecordingTransport(responses)
+    strict = InternalHTTPExecutor(_configuration(), transport=strict_transport)
+    with pytest.raises(HTTPRedirectRefused, match="malformed_location") as exc_info:
+        strict.request(source_url)
+    assert exc_info.value.reason == "malformed_location"
+    assert [request.url for request in strict_transport.requests] == [
+        source_url,
+        intermediate_url,
+    ]
+
+    retained_transport = _RecordingTransport(responses)
+    retained = InternalHTTPExecutor(_configuration(), transport=retained_transport)
+    response = retained.request_retaining_refused_redirect(source_url)
+
+    assert [request.url for request in retained_transport.requests] == [
+        source_url,
+        intermediate_url,
+    ]
+    assert response.requested_url == source_url
+    assert response.final_url == intermediate_url
+    assert response.status_code == 302
+    assert response.headers == headers
+    assert response.body == b"malformed redirect response"
+    assert response.redirects == (
+        http_enforcement_module.HTTPRedirectHop(
+            status_code=302,
+            source_url=source_url,
+            destination_url=intermediate_url,
+        ),
+    )
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=intermediate_url,
+        destination_url=None,
+        reason="malformed_location",
+    )
 
 
 def test_opt_in_retains_query_refused_first_hop_without_transmitting_destination() -> None:
