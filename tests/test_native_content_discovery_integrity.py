@@ -407,7 +407,7 @@ def test_scheme_distinct_origins_complete_to_distinct_native_artifacts(
     assert len(transport.requests) == 8
 
 
-def test_later_origin_failure_leaves_no_final_artifact_and_retry_succeeds(
+def test_later_origin_failure_preserves_baseline_and_retry_requires_fresh_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -448,6 +448,7 @@ def test_later_origin_failure_leaves_no_final_artifact_and_retry_succeeds(
 
     assert len(failing_transport.requests) == 8
     assert tuple(output.glob("content-discovery-internal-*.txt")) == ()
+    assert (output / "content_discovery_baseline.json").is_file()
 
     retry_executor, retry_transport = _native_executor(
         module,
@@ -457,6 +458,17 @@ def test_later_origin_failure_leaves_no_final_artifact_and_retry_succeeds(
         lambda url: (404, b"negative") if ".bugslyce-negative-" in url else (200, b"hit"),
     )
     try:
+        with pytest.raises(ValueError, match="artefact path already exists"):
+            _run(
+                module,
+                runtime,
+                state,
+                orchestration,
+                plan,
+                retry_executor,
+                output,
+            )
+        assert retry_transport.requests == []
         result = _run(
             module,
             runtime,
@@ -464,7 +476,7 @@ def test_later_origin_failure_leaves_no_final_artifact_and_retry_succeeds(
             orchestration,
             plan,
             retry_executor,
-            output,
+            tmp_path / "retry-output",
         )
     finally:
         retry_executor.close()

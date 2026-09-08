@@ -736,6 +736,9 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
     assert "/missing" not in output
     assert not artifact.path.name.startswith("gobuster")
     assert [event.completed for event in progress] == [0, 1, 2]
+    baseline = json.loads(result.baseline_artifact_path.read_text(encoding="utf-8"))
+    assert baseline["origins"][0]["baseline_equivalent_candidate_count"] == 1
+    assert baseline["origins"][0]["retained_candidate_count"] == 1
     executor.close()
 
 
@@ -1049,7 +1052,7 @@ def test_native_progress_callback_failure_remains_hard_before_collection(
     executor.close()
 
 
-def test_native_progress_does_not_report_completion_after_request_failure(
+def test_native_candidate_failure_preserves_baseline_without_reporting_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1059,7 +1062,7 @@ def test_native_progress_does_not_report_completion_after_request_failure(
         tuple(f"candidate-{index}" for index in range(5)),
     )
     runtime = _runtime(tmp_path / "runtime")
-    state = _state(runtime)
+    state = _child_state(runtime)
     orchestration = build_programme_orchestration_plan(runtime, state)
     module = _native_module()
     plan = module.build_native_content_discovery_plan(
@@ -1068,22 +1071,29 @@ def test_native_progress_does_not_report_completion_after_request_failure(
         orchestration,
         profile=PROFILE,
         limits=module.NativeContentDiscoveryLimits(
-            maximum_total_candidate_requests=5,
+            maximum_total_candidate_requests=10,
             maximum_candidate_requests_per_origin=5,
         ),
     )
+    planned_origins = tuple(
+        dict.fromkeys(request.canonical_origin for request in plan.requests)
+    )
+
+    unstable_bodies = iter((b"a" * 64, b"b" * 64, b"c" * 64))
 
     def respond(url: str) -> tuple[int, bytes]:
         if url.endswith("/candidate-2"):
             raise OSError("synthetic transport failure")
         if ".bugslyce-negative-" in url:
+            if "api.example.test" in url:
+                return 403, next(unstable_bodies)
             return 404, url.encode("utf-8")
         return 404, b"candidate response"
 
     progress = []
     executor, _transport = _executor(
         runtime,
-        ("https://app.example.test",),
+        planned_origins,
         respond,
     )
     with pytest.raises(HTTPTransportFailure, match="transport_error"):
@@ -1094,13 +1104,45 @@ def test_native_progress_does_not_report_completion_after_request_failure(
             plan,
             http_executor=executor,
             output_dir=tmp_path / "failed-progress",
-            token_factory=iter(("one", "two", "three")).__next__,
+            token_factory=iter(
+                ("one", "two", "three", "four", "five", "six")
+            ).__next__,
             progress_callback=progress.append,
         )
 
     assert progress
     assert progress[-1].completed < progress[-1].total
     assert all(event.completed != event.total for event in progress)
+    baseline_path = tmp_path / "failed-progress" / "content_discovery_baseline.json"
+    assert baseline_path.is_file()
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert payload["created_by"] == "bugslyce-native-content-baseline"
+    assert [item["origin"].removesuffix("/") for item in payload["origins"]] == list(
+        planned_origins
+    )
+    by_origin = {
+        item["origin"].removesuffix("/"): item for item in payload["origins"]
+    }
+    assert by_origin["https://app.example.test"]["classification"] == (
+        "conventional_negative"
+    )
+    assert by_origin["https://app.example.test"]["selected_policy"] == (
+        "native_conventional_negative"
+    )
+    assert by_origin["https://api.example.test"]["classification"] == "unstable"
+    assert by_origin["https://api.example.test"]["selected_policy"] == "refuse"
+    assert "varied in status, length, body hash" in by_origin[
+        "https://api.example.test"
+    ]["failure_or_instability_reason"].lower()
+    assert all(item["completed_observations"] == 3 for item in payload["origins"])
+    assert all(
+        item["baseline_equivalent_candidate_count"] == 0
+        for item in payload["origins"]
+    )
+    assert all(item["retained_candidate_count"] == 0 for item in payload["origins"])
+    assert tuple(
+        (tmp_path / "failed-progress").glob("content-discovery-internal-*.txt")
+    ) == ()
     executor.close()
 
 

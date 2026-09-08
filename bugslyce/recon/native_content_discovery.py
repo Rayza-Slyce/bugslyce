@@ -33,6 +33,7 @@ from bugslyce.recon.content_run import (
     MAX_INTERNAL_COMPARATOR_CANDIDATES,
     ContentBaselineDecision,
     collect_content_discovery_baseline,
+    render_content_discovery_baseline_artifact,
     response_comparison_signature,
     write_content_discovery_baseline_artifact,
 )
@@ -540,6 +541,75 @@ def _execute_native_plan(
             baseline_decisions,
         )
 
+    staged_baseline = _stage_new_artifact(
+        output_transaction.baseline_artifact_path,
+        render_content_discovery_baseline_artifact(
+            baseline_decisions,
+            created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
+        ),
+    )
+    try:
+        origin_results, retained_content = _collect_native_candidates(
+            requests_by_origin,
+            baselines,
+            executor,
+            progress_callback=progress_callback,
+        )
+    except BaseException as exc:
+        try:
+            _publish_staged_artifacts((staged_baseline,))
+        except (OSError, ValueError) as persistence_error:
+            exc.add_note(
+                "Native baseline persistence also failed: "
+                f"{type(persistence_error).__name__}: {persistence_error}"
+            )
+        raise
+    else:
+        _remove_temporary_artifact(staged_baseline.temporary_path)
+
+    _commit_new_artifacts(
+        (
+            (
+                output_transaction.baseline_artifact_path,
+                render_content_discovery_baseline_artifact(
+                    tuple(result.baseline_decision for result in origin_results),
+                    created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
+                ),
+            ),
+            *tuple(
+                (target.path, retained_content[target.canonical_origin])
+                for target in output_transaction.targets
+                if target.canonical_origin in retained_content
+            ),
+        )
+    )
+    artifacts = tuple(
+        NativeContentDiscoveryArtifact(
+            artifact_type=INTERNAL_COMPARATOR_ARTIFACT_TYPE,
+            canonical_origin=target.canonical_origin,
+            profile=plan.profile,
+            selection_reason=PROFILE_WORDLIST_SELECTION_REASON,
+            path=target.path,
+        )
+        for target in output_transaction.targets
+        if target.canonical_origin in retained_content
+    )
+
+    return NativeContentDiscoveryResult(
+        external_commands_started=0,
+        origin_results=tuple(origin_results),
+        artifacts=artifacts,
+        baseline_artifact_path=output_transaction.baseline_artifact_path,
+    )
+
+
+def _collect_native_candidates(
+    requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]],
+    baselines: dict[str, ContentBaselineDecision],
+    executor: InternalHTTPExecutor,
+    *,
+    progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
+) -> tuple[list[NativeContentDiscoveryOriginResult], dict[str, str]]:
     origin_results: list[NativeContentDiscoveryOriginResult] = []
     retained_content: dict[str, str] = {}
     for origin, requests in requests_by_origin.items():
@@ -602,36 +672,7 @@ def _execute_native_plan(
                 retained_candidate_count=retained,
             )
         )
-    write_content_discovery_baseline_artifact(
-        output_transaction.baseline_artifact_path,
-        tuple(result.baseline_decision for result in origin_results),
-        created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
-    )
-    _commit_new_artifacts(
-        tuple(
-            (target.path, retained_content[target.canonical_origin])
-            for target in output_transaction.targets
-            if target.canonical_origin in retained_content
-        )
-    )
-    artifacts = tuple(
-        NativeContentDiscoveryArtifact(
-            artifact_type=INTERNAL_COMPARATOR_ARTIFACT_TYPE,
-            canonical_origin=target.canonical_origin,
-            profile=plan.profile,
-            selection_reason=PROFILE_WORDLIST_SELECTION_REASON,
-            path=target.path,
-        )
-        for target in output_transaction.targets
-        if target.canonical_origin in retained_content
-    )
-
-    return NativeContentDiscoveryResult(
-        external_commands_started=0,
-        origin_results=tuple(origin_results),
-        artifacts=artifacts,
-        baseline_artifact_path=output_transaction.baseline_artifact_path,
-    )
+    return origin_results, retained_content
 
 
 def _emit_native_progress(
@@ -705,10 +746,21 @@ def _probe_output_directory(destination: Path) -> None:
 
 def _commit_new_artifacts(items: tuple[tuple[Path, str], ...]) -> None:
     staged: list[_StagedNativeArtifact] = []
-    created: list[_StagedNativeArtifact] = []
     try:
         for path, content in items:
             staged.append(_stage_new_artifact(path, content))
+    except BaseException:
+        for artifact in staged:
+            _remove_temporary_artifact(artifact.temporary_path)
+        raise
+    _publish_staged_artifacts(tuple(staged))
+
+
+def _publish_staged_artifacts(
+    staged: tuple[_StagedNativeArtifact, ...],
+) -> None:
+    created: list[_StagedNativeArtifact] = []
+    try:
         for artifact in staged:
             try:
                 os.link(

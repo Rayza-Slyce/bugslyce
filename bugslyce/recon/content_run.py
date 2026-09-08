@@ -1106,6 +1106,20 @@ def write_content_discovery_baseline_artifact(
     *,
     created_by: str = LEGACY_CONTENT_BASELINE_CREATED_BY,
 ) -> None:
+    path.write_text(
+        render_content_discovery_baseline_artifact(
+            decisions,
+            created_by=created_by,
+        ),
+        encoding="utf-8",
+    )
+
+
+def render_content_discovery_baseline_artifact(
+    decisions: tuple[ContentBaselineDecision, ...],
+    *,
+    created_by: str = LEGACY_CONTENT_BASELINE_CREATED_BY,
+) -> str:
     if not isinstance(created_by, str) or _TOKEN_PATTERN.fullmatch(created_by) is None:
         raise ValueError("Content baseline producer must be a non-blank token.")
     payload = {
@@ -1114,10 +1128,7 @@ def write_content_discovery_baseline_artifact(
         "required_observations_per_origin": BASELINE_REQUEST_COUNT,
         "origins": [_baseline_decision_payload(decision) for decision in decisions],
     }
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _baseline_decision_payload(decision: ContentBaselineDecision) -> dict[str, object]:
