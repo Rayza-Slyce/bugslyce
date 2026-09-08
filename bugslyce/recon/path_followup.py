@@ -259,6 +259,14 @@ def _discovered_origins(project_state: ProjectState, target: str) -> set[str]:
 def _is_concrete_relative_path(value: str) -> bool:
     if not value.startswith("/") or value.startswith("//") or value.startswith("/\\"):
         return False
+    if any(
+        character.isspace()
+        or character in "<>"
+        or ord(character) < 32
+        or ord(character) == 127
+        for character in value
+    ):
+        return False
     parsed = urlparse(value)
     if parsed.scheme or parsed.netloc or parsed.fragment:
         return False

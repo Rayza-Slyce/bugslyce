@@ -271,6 +271,38 @@ def test_robots_parser_extracts_generic_directives(tmp_path: Path) -> None:
     assert any(artifact.value == "CUSTOM_CRAWLER_PLACEHOLDER" for artifact in artifacts)
 
 
+def test_robots_parser_uses_first_path_token_from_html_contaminated_directive(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "robots-bookstore.txt"
+    source.write_text("User-agent: *\nDisallow: /api </p>\n", encoding="utf-8")
+
+    artifacts = parse_robots(source, "http://example.test/robots.txt")
+    disallow_values = [
+        artifact.value
+        for artifact in artifacts
+        if artifact.artifact_type == "disallow_rule"
+    ]
+
+    assert disallow_values == ["/api"]
+    assert "/api </p>" not in disallow_values
+
+
+def test_robots_parser_preserves_percent_encoded_space_in_path_token(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "robots-encoded-space.txt"
+    source.write_text("User-agent: *\nAllow: /public%20files note\n", encoding="utf-8")
+
+    artifacts = parse_robots(source, "http://example.test/robots.txt")
+
+    assert [
+        artifact.value
+        for artifact in artifacts
+        if artifact.artifact_type == "allow_rule"
+    ] == ["/public%20files"]
+
+
 def test_html_parser_extracts_metadata_and_conservative_artifacts(tmp_path: Path) -> None:
     source = tmp_path / "saved-page.html"
     source.write_text(

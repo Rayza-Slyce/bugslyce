@@ -9,6 +9,7 @@ import subprocess
 
 import pytest
 
+import bugslyce.recon.path_followup as path_followup_module
 from bugslyce.core.models import ReconCommandResult
 from bugslyce.core.project import build_project_state
 from bugslyce.recon.path_followup import (
@@ -42,6 +43,31 @@ def test_path_followup_discovers_only_evidence_derived_same_origin_paths(
     assert all("example.org" not in url for url in urls)
     assert all("#" not in url for url in urls)
     assert all(not url.endswith("/robots.txt") for url in urls)
+
+
+def test_bookstore_html_contaminated_robots_rule_yields_clean_same_origin_path(
+    tmp_path: Path,
+) -> None:
+    input_dir, _scope = _http_metadata_directory(tmp_path, include_paths=False)
+    (input_dir / "robots-10.10.10.10-65524.txt").write_text(
+        "User-agent: *\nDisallow: /api </p>\n",
+        encoding="utf-8",
+    )
+    state = build_project_state(input_dir)
+
+    assert discover_same_origin_followup_urls(state, "10.10.10.10") == [
+        "http://10.10.10.10:65524/api"
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ("/api </p>", "/api\tvalue", "/api\x00value", "/api<value", "/api>value"),
+)
+def test_contaminated_relative_path_is_not_eligible_for_live_followup(
+    value: str,
+) -> None:
+    assert path_followup_module._is_concrete_relative_path(value) is False
 
 
 def test_path_followup_preserves_hostname_target_for_parenthesized_nmap_peer(

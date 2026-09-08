@@ -74,8 +74,16 @@ def _parse_directive(line: str) -> tuple[str, str] | None:
         artifact_type = "sitemap_rule"
     else:
         return None
-    if artifact_type in {"allow_rule", "disallow_rule"} and not value:
-        return None
+    if artifact_type in {"allow_rule", "disallow_rule"}:
+        tokens = value.split()
+        if not tokens:
+            return None
+        value = tokens[0]
+        if any(
+            character in "<>\ufffd" or ord(character) < 32 or ord(character) == 127
+            for character in value
+        ):
+            return None
     return artifact_type, value
 
 
