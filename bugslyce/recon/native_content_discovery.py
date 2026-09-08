@@ -526,7 +526,7 @@ def _execute_native_plan(
             raise ValueError("Native content discovery baseline is unsupported.")
         baselines[origin] = baseline
     baseline_decisions = tuple(baselines.values())
-    if any(
+    if baseline_decisions and all(
         decision.selected_policy == BASELINE_POLICY_REFUSE
         for decision in baseline_decisions
     ):
@@ -545,6 +545,16 @@ def _execute_native_plan(
     for origin, requests in requests_by_origin.items():
         progress_started = time.monotonic()
         baseline = baselines[origin]
+        if baseline.selected_policy == BASELINE_POLICY_REFUSE:
+            origin_results.append(
+                NativeContentDiscoveryOriginResult(
+                    canonical_origin=origin,
+                    baseline_decision=baseline,
+                    suppressed_candidate_count=0,
+                    retained_candidate_count=0,
+                )
+            )
+            continue
         suppressed = 0
         retained = 0
         retained_lines: list[str] = []
@@ -601,6 +611,7 @@ def _execute_native_plan(
         tuple(
             (target.path, retained_content[target.canonical_origin])
             for target in output_transaction.targets
+            if target.canonical_origin in retained_content
         )
     )
     artifacts = tuple(
@@ -612,6 +623,7 @@ def _execute_native_plan(
             path=target.path,
         )
         for target in output_transaction.targets
+        if target.canonical_origin in retained_content
     )
 
     return NativeContentDiscoveryResult(

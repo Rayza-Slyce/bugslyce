@@ -58,6 +58,7 @@ from bugslyce.recon.content_plan import (
     write_content_discovery_plan,
 )
 from bugslyce.recon.content_run import (
+    BASELINE_POLICY_REFUSE,
     ContentDiscoveryExecutionIncomplete,
     load_content_discovery_plan,
     write_content_discovery_execution_result,
@@ -2282,8 +2283,18 @@ def _step_runners(
             context["wp4_programme_orchestration"] = programme_orchestration
         else:
             context.pop("wp4_programme_orchestration", None)
+        refused_origin_count = sum(
+            item.baseline_decision.selected_policy == BASELINE_POLICY_REFUSE
+            for item in getattr(native_result, "origin_results", ())
+        )
+        completion = (
+            f" completed with {refused_origin_count} refused origin"
+            f"{'s' if refused_origin_count != 1 else ''}"
+            if refused_origin_count
+            else " completed"
+        )
         return (
-            f"BugSlyce-native {root_plan.profile} content discovery completed.",
+            f"BugSlyce-native {root_plan.profile} content discovery{completion}.",
             [str(path) for path in artifact_paths],
             {},
         )

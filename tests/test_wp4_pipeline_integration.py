@@ -42,6 +42,7 @@ from bugslyce.recon.native_content_discovery import (
     NativeContentDiscoveryArtifact,
     NativeContentDiscoveryBaselineRefused,
     NativeContentDiscoveryLimits,
+    NativeContentDiscoveryOriginResult,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryRequest,
     NativeContentDiscoveryResult,
@@ -407,9 +408,42 @@ def test_pipeline_content_execution_uses_runtime_less_native_adapter_without_pro
     baseline_path = Path(runtime.project.output_dir) / "content_discovery_baseline.json"
     artifact_path.write_text("/health (Status: 200) [Size: 2]\n", encoding="utf-8")
     baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    usable_baseline = ContentBaselineDecision(
+        origin="https://app.example.test/",
+        classification="conventional_negative",
+        selected_policy="native_conventional_negative",
+        required_observations=3,
+        completed_observations=3,
+        observations=(),
+        failure_or_instability_reason=None,
+        limitations=(),
+    )
+    refused_baseline = ContentBaselineDecision(
+        origin="http://app.example.test:8080/",
+        classification="unstable",
+        selected_policy="refuse",
+        required_observations=3,
+        completed_observations=3,
+        observations=(),
+        failure_or_instability_reason="Synthetic unstable baseline.",
+        limitations=("No discovery was attempted for this origin.",),
+    )
     root_result = NativeContentDiscoveryResult(
         external_commands_started=0,
-        origin_results=(),
+        origin_results=(
+            NativeContentDiscoveryOriginResult(
+                canonical_origin="https://app.example.test",
+                baseline_decision=usable_baseline,
+                suppressed_candidate_count=0,
+                retained_candidate_count=1,
+            ),
+            NativeContentDiscoveryOriginResult(
+                canonical_origin="http://app.example.test:8080",
+                baseline_decision=refused_baseline,
+                suppressed_candidate_count=0,
+                retained_candidate_count=0,
+            ),
+        ),
         artifacts=(
             NativeContentDiscoveryArtifact(
                 artifact_type="content_discovery_internal",
@@ -472,6 +506,7 @@ def test_pipeline_content_execution_uses_runtime_less_native_adapter_without_pro
     assert context["wp4_root_result"] is root_result
     assert "wp4_programme_orchestration" not in context
     assert "native" in message.lower()
+    assert "completed with 1 refused origin" in message.lower()
 
 
 @pytest.mark.parametrize("engagement_context", (BUG_BOUNTY_CONTEXT, UNKNOWN_CONTEXT))

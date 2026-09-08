@@ -880,6 +880,131 @@ def test_native_multi_origin_elapsed_is_candidate_time_for_named_origin(
     executor.close()
 
 
+def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(
+        runtime,
+        discovered_paths=(
+            DiscoveredPath(
+                url="https://app.example.test/http-root",
+                status_code=301,
+                content_length=0,
+                redirect_location="http://app.example.test/",
+                source="raw/http-root.txt",
+                evidence_ids=["EVID-HTTP-0001"],
+                tags=[],
+            ),
+            DiscoveredPath(
+                url="https://app.example.test/http-8080-root",
+                status_code=301,
+                content_length=0,
+                redirect_location="http://app.example.test:8080/",
+                source="raw/http-8080-root.txt",
+                evidence_ids=["EVID-HTTP-0002"],
+                tags=[],
+            ),
+        ),
+    )
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(3, 1),
+    )
+    unstable_bodies = iter(
+        (
+            b"a" * 5482,
+            b"b" * 5482,
+            b"c" * 5482,
+        )
+    )
+
+    def respond(url: str) -> tuple[int, bytes]:
+        origin = http_origin_from_url(url)
+        assert origin is not None
+        if ".bugslyce-negative-" in url:
+            if origin.origin_url == "http://app.example.test:8080":
+                return 403, next(unstable_bodies)
+            return 404, url.encode("utf-8")
+        return 200, f"retained {origin.origin_url}".encode("utf-8")
+
+    origins = tuple(dict.fromkeys(request.canonical_origin for request in plan.requests))
+    executor, transport = _executor(runtime, origins, respond)
+    progress = []
+
+    result = module.run_native_content_discovery(
+        runtime,
+        state,
+        orchestration,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "multi-origin-output",
+        token_factory=iter(
+            ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+        ).__next__,
+        progress_callback=progress.append,
+    )
+
+    by_origin = {item.canonical_origin: item for item in result.origin_results}
+    refused = by_origin["http://app.example.test:8080"]
+    assert refused.baseline_decision.classification == "unstable"
+    assert refused.baseline_decision.selected_policy == "refuse"
+    assert refused.suppressed_candidate_count == 0
+    assert refused.retained_candidate_count == 0
+    assert "varied in status, length, body hash" in (
+        refused.baseline_decision.failure_or_instability_reason or ""
+    ).lower()
+    assert {
+        item.canonical_origin
+        for item in result.origin_results
+        if item.baseline_decision.selected_policy != "refuse"
+    } == {"http://app.example.test", "https://app.example.test"}
+    assert {artifact.canonical_origin for artifact in result.artifacts} == {
+        "http://app.example.test",
+        "https://app.example.test",
+    }
+    candidate_origins = [
+        http_origin_from_url(request.url).origin_url
+        for request in transport.requests
+        if ".bugslyce-negative-" not in request.url
+    ]
+    assert candidate_origins == [
+        "http://app.example.test",
+        "https://app.example.test",
+    ]
+    assert [
+        event.completed
+        for event in progress
+        if event.origin == "http://app.example.test:8080"
+    ] == [0]
+    baseline = json.loads(result.baseline_artifact_path.read_text(encoding="utf-8"))
+    assert [item["origin"] for item in baseline["origins"]] == [
+        "http://app.example.test/",
+        "http://app.example.test:8080/",
+        "https://app.example.test/",
+    ]
+    refused_payload = baseline["origins"][1]
+    assert refused_payload["selected_policy"] == "refuse"
+    assert {item["terminal_http_status"] for item in refused_payload["observations"]} == {
+        403
+    }
+    assert {item["response_bytes"] for item in refused_payload["observations"]} == {
+        5482
+    }
+    assert len(
+        {item["body_sha256"] for item in refused_payload["observations"]}
+    ) == 3
+    assert not any("8080" in artifact.path.name for artifact in result.artifacts)
+    executor.close()
+
+
 def test_native_progress_callback_failure_remains_hard_before_collection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
