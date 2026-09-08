@@ -1034,10 +1034,10 @@ def test_opt_in_retains_refused_cross_origin_exchange_without_transmitting_desti
     ("location", "approved_origins", "allow_query_strings", "reason"),
     (
         (
-            "http://example.test/landing",
-            ("http://example.test", "https://example.test"),
+            "ftp://example.test/landing",
+            ("https://example.test",),
             False,
-            "https_downgrade",
+            "unsupported_redirect",
         ),
     ),
 )
@@ -1112,6 +1112,60 @@ def test_opt_in_retains_query_refused_first_hop_without_transmitting_destination
         transport=strict_transport,
     )
     with pytest.raises(HTTPRedirectRefused, match="redirect_query_not_allowed"):
+        strict.request(source_url)
+    assert [request.url for request in strict_transport.requests] == [source_url]
+
+
+def test_opt_in_retains_https_downgrade_exchange_without_transmitting_destination() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    source_url = "https://example.test/start"
+    destination = "http://example.test/landing"
+    retained_transport = _RecordingPeerBoundTransport(
+        [
+            _response(
+                302,
+                (("Location", destination),),
+                body=b"downgrade redirect response",
+            )
+        ]
+    )
+    retained = InternalHTTPExecutor(
+        _configuration(
+            approved_origins=("http://example.test", "https://example.test")
+        ),
+        programme_scope_policy=policy,
+        transport=retained_transport,
+    )
+
+    response = retained.request_retaining_refused_redirect(source_url)
+
+    assert [request.url for request in retained_transport.requests] == [source_url]
+    assert retained.total_request_attempts == 1
+    assert response.status_code == 302
+    assert response.headers == (("Location", destination),)
+    assert response.body == b"downgrade redirect response"
+    assert response.final_url == source_url
+    assert response.redirects == ()
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=source_url,
+        destination_url=destination,
+        reason="https_downgrade",
+    )
+
+    strict_transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", destination),))]
+    )
+    strict = InternalHTTPExecutor(
+        _configuration(
+            approved_origins=("http://example.test", "https://example.test")
+        ),
+        programme_scope_policy=policy,
+        transport=strict_transport,
+    )
+    with pytest.raises(HTTPRedirectRefused, match="https_downgrade"):
         strict.request(source_url)
     assert [request.url for request in strict_transport.requests] == [source_url]
 

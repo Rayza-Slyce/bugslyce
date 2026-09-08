@@ -625,6 +625,7 @@ class InternalHTTPExecutor:
                 )
             except HTTPRedirectRefused as exc:
                 if not retain_refused_redirect or exc.reason not in {
+                    "https_downgrade",
                     "origin_not_approved",
                     "redirect_query_not_allowed",
                 }:
