@@ -156,7 +156,7 @@ def test_current_project_runtime_does_not_probe_or_require_gobuster(monkeypatch,
     assert "gobuster" not in runtime.capabilities
 
 
-def test_current_content_stage_fails_closed_without_runtime_instead_of_legacy_fallback(
+def test_unknown_context_content_stage_fails_closed_without_runtime_instead_of_legacy_fallback(
     tmp_path: Path,
 ) -> None:
     runners = _step_runners(

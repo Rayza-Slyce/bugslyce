@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,13 @@ from bugslyce.core.engagement_policy import (
     IDENTIFICATION_NONE,
     build_bug_bounty_policy,
 )
-from bugslyce.core.models import DiscoveredPath, ProjectState
+from bugslyce.core.engagement_context import (
+    BUG_BOUNTY_CONTEXT,
+    CTF_LAB_CONTEXT,
+    INTERNAL_AUTHORISED_CONTEXT,
+    UNKNOWN_CONTEXT,
+)
+from bugslyce.core.models import DiscoveredPath, HTTPService, ProjectState, ReconManifest
 from bugslyce.core.programme_scope import (
     ACTION_INCLUDE,
     OUTCOME_ALLOWED,
@@ -162,6 +169,275 @@ def _state(
         generated_at=FIXED_TIME,
         engagement_context="bug_bounty",
     )
+
+
+def _runtime_less_state(
+    tmp_path: Path,
+    engagement_context: str,
+    *,
+    manifest_target: str = "app.example.test",
+) -> tuple[ProjectState, Path]:
+    scope = tmp_path / "scope.md"
+    scope.write_text(
+        "# Authorised synthetic scope\n\n## In Scope\n\n- app.example.test\n",
+        encoding="utf-8",
+    )
+    state = ProjectState(
+        project_name="runtime-less-native",
+        input_dir=str(tmp_path),
+        processed_files=[],
+        scope_summary="Synthetic explicit scope",
+        assets=[],
+        http_services=[
+            HTTPService(
+                url="https://app.example.test/observed",
+                hostname="app.example.test",
+                status_code=200,
+                title=None,
+                technologies=[],
+                content_length=2,
+                evidence_ids=["EVID-HTTP-0001"],
+                tags=[],
+            ),
+            HTTPService(
+                url="https://unrelated.example.test/",
+                hostname="unrelated.example.test",
+                status_code=200,
+                title=None,
+                technologies=[],
+                content_length=2,
+                evidence_ids=["EVID-HTTP-0002"],
+                tags=[],
+            ),
+        ],
+        endpoints=[],
+        port_services=[],
+        http_artifacts=[],
+        discovered_paths=[],
+        recon_summary=None,
+        recon_manifest=ReconManifest(
+            schema_version="1.0",
+            target=manifest_target,
+            artifacts=[],
+        ),
+        evidence=[],
+        warnings=[],
+        generated_at=FIXED_TIME,
+        engagement_context=engagement_context,
+    )
+    return state, scope
+
+
+@pytest.mark.parametrize(
+    "engagement_context",
+    (CTF_LAB_CONTEXT, INTERNAL_AUTHORISED_CONTEXT),
+)
+def test_runtime_less_native_plan_uses_only_target_backed_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engagement_context: str,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, engagement_context)
+    module = _native_module()
+
+    plan = module.build_runtime_less_native_content_discovery_plan(
+        state,
+        "app.example.test",
+        scope,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(10, 10),
+    )
+
+    assert tuple(request.canonical_origin for request in plan.requests) == (
+        "https://app.example.test",
+    )
+    assert tuple(request.url for request in plan.requests) == (
+        "https://app.example.test/admin",
+    )
+
+
+@pytest.mark.parametrize("engagement_context", (BUG_BOUNTY_CONTEXT, UNKNOWN_CONTEXT))
+def test_runtime_less_native_entry_refuses_unapproved_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engagement_context: str,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, engagement_context)
+    module = _native_module()
+
+    with pytest.raises(ValueError, match="[Rr]untime-less native content discovery"):
+        module.build_runtime_less_native_content_discovery_plan(
+            state,
+            "app.example.test",
+            scope,
+            profile=PROFILE,
+            limits=module.NativeContentDiscoveryLimits(10, 10),
+        )
+
+
+def test_runtime_less_native_entry_refuses_manifest_target_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(
+        tmp_path,
+        CTF_LAB_CONTEXT,
+        manifest_target="other.example.test",
+    )
+    module = _native_module()
+
+    with pytest.raises(ValueError, match="manifest target"):
+        module.build_runtime_less_native_content_discovery_plan(
+            state,
+            "app.example.test",
+            scope,
+            profile=PROFILE,
+            limits=module.NativeContentDiscoveryLimits(10, 10),
+        )
+
+
+def test_runtime_less_native_entry_revalidates_target_against_scope_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, CTF_LAB_CONTEXT)
+    scope.write_text(
+        "# Authorised synthetic scope\n\n## In Scope\n\n- other.example.test\n",
+        encoding="utf-8",
+    )
+    module = _native_module()
+
+    with pytest.raises(ValueError, match="not explicitly listed"):
+        module.build_runtime_less_native_content_discovery_plan(
+            state,
+            "app.example.test",
+            scope,
+            profile=PROFILE,
+            limits=module.NativeContentDiscoveryLimits(10, 10),
+        )
+
+
+def test_runtime_less_native_entry_refuses_origins_not_backed_by_current_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, CTF_LAB_CONTEXT)
+    state = replace(state, http_services=[])
+    module = _native_module()
+
+    with pytest.raises(ValueError, match="target-backed HTTP origin"):
+        module.build_runtime_less_native_content_discovery_plan(
+            state,
+            "app.example.test",
+            scope,
+            profile=PROFILE,
+            limits=module.NativeContentDiscoveryLimits(10, 10),
+        )
+
+
+def test_runtime_less_native_execution_refuses_plan_origin_not_backed_by_current_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, CTF_LAB_CONTEXT)
+    module = _native_module()
+    plan = module.build_runtime_less_native_content_discovery_plan(
+        state,
+        "app.example.test",
+        scope,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(10, 10),
+    )
+    forged = replace(
+        plan,
+        requests=(
+            replace(
+                plan.requests[0],
+                url="https://unrelated.example.test/admin",
+                canonical_origin="https://unrelated.example.test",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="request binding is not canonical"):
+        module.run_runtime_less_native_content_discovery(
+            state,
+            "app.example.test",
+            scope,
+            forged,
+            output_dir=tmp_path / "native-output",
+        )
+
+
+def test_runtime_less_native_execution_is_bounded_and_starts_no_external_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("first", "second", "third"))
+    state, scope = _runtime_less_state(tmp_path, CTF_LAB_CONTEXT)
+    module = _native_module()
+    limits = module.NativeContentDiscoveryLimits(2, 2)
+    plan = module.build_runtime_less_native_content_discovery_plan(
+        state,
+        "app.example.test",
+        scope,
+        profile=PROFILE,
+        limits=limits,
+    )
+    transport = _ResponseTransport(lambda url: (404, url.encode("utf-8")))
+    executor = InternalHTTPExecutor(None, transport=transport)
+
+    result = module.run_runtime_less_native_content_discovery(
+        state,
+        "app.example.test",
+        scope,
+        plan,
+        http_executor=executor,
+        output_dir=tmp_path / "native-output",
+        token_factory=iter(("one", "two", "three")).__next__,
+    )
+
+    assert result.external_commands_started == 0
+    assert plan.candidate_requests_planned == 2
+    assert len(transport.requests) == 5
+    assert all(
+        request.url.startswith("https://app.example.test/")
+        for request in transport.requests
+    )
+    executor.close()
+
+
+def test_runtime_less_native_execution_rejects_programme_configured_executor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("admin",))
+    state, scope = _runtime_less_state(tmp_path, INTERNAL_AUTHORISED_CONTEXT)
+    module = _native_module()
+    plan = module.build_runtime_less_native_content_discovery_plan(
+        state,
+        "app.example.test",
+        scope,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(10, 10),
+    )
+    strict_runtime = _runtime(tmp_path / "strict-runtime")
+
+    with pytest.raises(ValueError, match="HTTP executor is not canonical"):
+        module.run_runtime_less_native_content_discovery(
+            state,
+            "app.example.test",
+            scope,
+            plan,
+            http_executor=strict_runtime.http_executor,
+            output_dir=tmp_path / "native-output",
+        )
 
 
 def _child_state(runtime) -> ProjectState:

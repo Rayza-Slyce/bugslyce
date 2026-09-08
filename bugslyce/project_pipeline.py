@@ -14,7 +14,11 @@ from pathlib import Path
 import textwrap
 from typing import Callable, TextIO
 
-from bugslyce.core.engagement_context import BUG_BOUNTY_CONTEXT
+from bugslyce.core.engagement_context import (
+    BUG_BOUNTY_CONTEXT,
+    CTF_LAB_CONTEXT,
+    INTERNAL_AUTHORISED_CONTEXT,
+)
 from bugslyce.core.engagement_policy import READINESS_FUTURE_ENFORCEMENT
 from bugslyce.core.models import ProjectState
 from bugslyce.core.project import build_project_state
@@ -167,7 +171,9 @@ from bugslyce.recon.native_content_discovery import (
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryResult,
     build_native_content_discovery_plan,
+    build_runtime_less_native_content_discovery_plan,
     run_native_content_discovery,
+    run_runtime_less_native_content_discovery,
 )
 from bugslyce.recon.programme_orchestration import (
     ProgrammeOrchestrationPlan,
@@ -2206,34 +2212,59 @@ def _step_runners(
         )
 
     def content_run():
-        if project_runtime is None:
-            raise ValueError(
-                "Current project content discovery requires a bound project runtime."
-            )
         project_state = build_project_state(output_dir)
         if not isinstance(project_state, ProjectState):
             raise ValueError(
                 "Current project content discovery requires validated ProjectState evidence."
             )
-        programme_orchestration = build_programme_orchestration_plan(
-            project_runtime,
-            project_state,
-        )
-        root_plan = build_native_content_discovery_plan(
-            project_runtime,
-            project_state,
-            programme_orchestration,
-            profile=_content_discovery_profile_for_pipeline(profile),
-            limits=_native_content_discovery_limits_for_pipeline(profile),
-        )
-        try:
-            native_result = run_native_content_discovery(
+        programme_orchestration = None
+        if project_runtime is not None:
+            programme_orchestration = build_programme_orchestration_plan(
+                project_runtime,
+                project_state,
+            )
+            root_plan = build_native_content_discovery_plan(
                 project_runtime,
                 project_state,
                 programme_orchestration,
-                root_plan,
-                output_dir=output_dir,
-                progress_callback=gobuster_progress_callback,
+                profile=_content_discovery_profile_for_pipeline(profile),
+                limits=_native_content_discovery_limits_for_pipeline(profile),
+            )
+        elif project_state.engagement_context in {
+            CTF_LAB_CONTEXT,
+            INTERNAL_AUTHORISED_CONTEXT,
+        }:
+            root_plan = build_runtime_less_native_content_discovery_plan(
+                project_state,
+                target,
+                scope_file,
+                profile=_content_discovery_profile_for_pipeline(profile),
+                limits=_native_content_discovery_limits_for_pipeline(profile),
+            )
+        else:
+            raise ValueError(
+                "Current bug-bounty or unknown-context content discovery requires "
+                "a bound project runtime."
+            )
+        try:
+            native_result = (
+                run_native_content_discovery(
+                    project_runtime,
+                    project_state,
+                    programme_orchestration,
+                    root_plan,
+                    output_dir=output_dir,
+                    progress_callback=gobuster_progress_callback,
+                )
+                if project_runtime is not None
+                else run_runtime_less_native_content_discovery(
+                    project_state,
+                    target,
+                    scope_file,
+                    root_plan,
+                    output_dir=output_dir,
+                    progress_callback=gobuster_progress_callback,
+                )
             )
         except NativeContentDiscoveryBaselineRefused as exc:
             _register_native_content_discovery_baseline_artifact(
@@ -2247,7 +2278,10 @@ def _step_runners(
         )
         context["wp4_root_plan"] = root_plan
         context["wp4_root_result"] = native_result
-        context["wp4_programme_orchestration"] = programme_orchestration
+        if programme_orchestration is not None:
+            context["wp4_programme_orchestration"] = programme_orchestration
+        else:
+            context.pop("wp4_programme_orchestration", None)
         return (
             f"BugSlyce-native {root_plan.profile} content discovery completed.",
             [str(path) for path in artifact_paths],

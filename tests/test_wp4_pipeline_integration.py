@@ -17,6 +17,12 @@ from bugslyce.recon.content_plan import (
     STANDARD_BOUNDED_CORE_PROFILE,
 )
 from bugslyce.core.project import build_project_state as build_real_project_state
+from bugslyce.core.engagement_context import (
+    BUG_BOUNTY_CONTEXT,
+    CTF_LAB_CONTEXT,
+    INTERNAL_AUTHORISED_CONTEXT,
+    UNKNOWN_CONTEXT,
+)
 from bugslyce.recon.content_followup import select_content_followup_urls
 from bugslyce.recon.content_run import ContentBaselineDecision
 from bugslyce.recon.deep_html_route_extraction import (
@@ -369,6 +375,127 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         "profile_wordlist",
         "wp4a_native",
     ]
+
+
+@pytest.mark.parametrize(
+    "engagement_context",
+    (CTF_LAB_CONTEXT, INTERNAL_AUTHORISED_CONTEXT),
+)
+def test_pipeline_content_execution_uses_runtime_less_native_adapter_without_programme_orchestration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engagement_context: str,
+) -> None:
+    runtime = _runtime(tmp_path / "runtime")
+    state = replace(_state_with_evidence(runtime), engagement_context=engagement_context)
+    context = _pipeline_context(tmp_path, runtime)
+    context["project_runtime"] = None
+    manifest_path = Path(runtime.project.output_dir) / "recon_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": runtime.project.target,
+                "artifacts": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    root_plan = _root_plan()
+    artifact_path = Path(runtime.project.output_dir) / "content-discovery-internal.txt"
+    baseline_path = Path(runtime.project.output_dir) / "content_discovery_baseline.json"
+    artifact_path.write_text("/health (Status: 200) [Size: 2]\n", encoding="utf-8")
+    baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    root_result = NativeContentDiscoveryResult(
+        external_commands_started=0,
+        origin_results=(),
+        artifacts=(
+            NativeContentDiscoveryArtifact(
+                artifact_type="content_discovery_internal",
+                canonical_origin="https://app.example.test",
+                profile=root_plan.profile,
+                selection_reason="profile_wordlist",
+                path=artifact_path,
+            ),
+        ),
+        baseline_artifact_path=baseline_path,
+    )
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(pipeline, "build_project_state", lambda _path: state)
+    monkeypatch.setattr(
+        pipeline,
+        "build_programme_orchestration_plan",
+        lambda *_args, **_kwargs: pytest.fail(
+            "runtime-less content must not fabricate programme orchestration"
+        ),
+    )
+
+    def build_adapter(actual_state, target, scope_file, *, profile, limits):
+        observed["build"] = (actual_state, target, scope_file, profile, limits)
+        return root_plan
+
+    def run_adapter(actual_state, target, scope_file, plan, **kwargs):
+        observed["run"] = (actual_state, target, scope_file, plan, kwargs)
+        return root_result
+
+    monkeypatch.setattr(
+        pipeline,
+        "build_runtime_less_native_content_discovery_plan",
+        build_adapter,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_runtime_less_native_content_discovery",
+        run_adapter,
+        raising=False,
+    )
+
+    message, _paths, _updates = pipeline._step_runners(context, None)[
+        "PIPELINE-STEP-007"
+    ]()
+
+    assert observed["build"][:4] == (
+        state,
+        runtime.project.target,
+        Path(runtime.project.scope_file),
+        pipeline.DEEP_BOUNDED_CORE_PROFILE,
+    )
+    assert observed["run"][:4] == (
+        state,
+        runtime.project.target,
+        Path(runtime.project.scope_file),
+        root_plan,
+    )
+    assert context["wp4_root_plan"] is root_plan
+    assert context["wp4_root_result"] is root_result
+    assert "wp4_programme_orchestration" not in context
+    assert "native" in message.lower()
+
+
+@pytest.mark.parametrize("engagement_context", (BUG_BOUNTY_CONTEXT, UNKNOWN_CONTEXT))
+def test_pipeline_content_execution_without_runtime_fails_closed_for_unapproved_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engagement_context: str,
+) -> None:
+    runtime = _runtime(tmp_path / "runtime")
+    state = replace(_state_with_evidence(runtime), engagement_context=engagement_context)
+    context = _pipeline_context(tmp_path, runtime)
+    context["project_runtime"] = None
+    monkeypatch.setattr(pipeline, "build_project_state", lambda _path: state)
+    monkeypatch.setattr(
+        pipeline,
+        "build_runtime_less_native_content_discovery_plan",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bug-bounty and unknown contexts must not enter the runtime-less adapter"
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="requires a bound project runtime"):
+        pipeline._step_runners(context, None)["PIPELINE-STEP-007"]()
 
 
 @pytest.mark.parametrize("cached_root", (True, False), ids=("after-native", "resume"))

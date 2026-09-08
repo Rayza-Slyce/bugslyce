@@ -11,8 +11,15 @@ import time
 from typing import Callable
 from urllib.parse import urljoin, urlparse
 
+from bugslyce.core.engagement_context import (
+    CTF_LAB_CONTEXT,
+    INTERNAL_AUTHORISED_CONTEXT,
+)
 from bugslyce.core.models import ProjectState
-from bugslyce.recon.content_plan import get_content_discovery_profile
+from bugslyce.recon.content_plan import (
+    discover_content_plan_origins,
+    get_content_discovery_profile,
+)
 from bugslyce.recon.content_run import (
     BASELINE_ARTIFACT_NAME,
     BASELINE_CLASSIFICATION_CONVENTIONAL,
@@ -36,6 +43,7 @@ from bugslyce.recon.http_enforcement import (
     internal_http_executors_share_enforcement_state,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
 from bugslyce.recon.programme_orchestration import (
     ProgrammeOrchestrationPlan,
     build_programme_orchestration_http_executor,
@@ -248,6 +256,53 @@ def build_native_content_discovery_plan(
         orchestration_plan,
         project_state=project_state,
     )
+    return _build_native_content_discovery_plan_for_origins(
+        tuple(item.canonical_origin for item in bound_plan.http_work_items),
+        profile=profile,
+        limits=limits,
+    )
+
+
+def build_runtime_less_native_content_discovery_plan(
+    project_state: ProjectState,
+    target: str,
+    scope_file: Path,
+    *,
+    profile: str,
+    limits: NativeContentDiscoveryLimits,
+) -> NativeContentDiscoveryPlan:
+    """Build a bounded native plan for an authorised non-bounty project."""
+
+    canonical_target = _require_runtime_less_project_binding(
+        project_state,
+        target,
+        scope_file,
+    )
+    origins = tuple(discover_content_plan_origins(project_state, canonical_target))
+    if not origins:
+        raise ValueError(
+            "Runtime-less native content discovery requires a target-backed HTTP origin."
+        )
+    canonical_origins = tuple(
+        origin_identity.origin_url
+        for origin in origins
+        if (origin_identity := http_origin_from_url(origin)) is not None
+    )
+    if len(canonical_origins) != len(origins):
+        raise ValueError("Runtime-less native content discovery origin is invalid.")
+    return _build_native_content_discovery_plan_for_origins(
+        canonical_origins,
+        profile=profile,
+        limits=limits,
+    )
+
+
+def _build_native_content_discovery_plan_for_origins(
+    origins: tuple[str, ...],
+    *,
+    profile: str,
+    limits: NativeContentDiscoveryLimits,
+) -> NativeContentDiscoveryPlan:
     if not isinstance(limits, NativeContentDiscoveryLimits):
         raise ValueError("Native content discovery limits are invalid.")
     profile_definition = get_content_discovery_profile(profile)
@@ -255,10 +310,9 @@ def build_native_content_discovery_plan(
 
     planned: list[NativeContentDiscoveryRequest] = []
     total = 0
-    for work_item in bound_plan.http_work_items:
+    for origin in origins:
         if total >= limits.maximum_total_candidate_requests:
             break
-        origin = work_item.canonical_origin
         seen_urls: set[str] = set()
         per_origin = 0
         for entry in entries:
@@ -289,6 +343,90 @@ def build_native_content_discovery_plan(
         candidate_requests_planned=len(planned),
         requests=tuple(planned),
     )
+
+
+def run_runtime_less_native_content_discovery(
+    project_state: ProjectState,
+    target: str,
+    scope_file: Path,
+    plan: NativeContentDiscoveryPlan,
+    *,
+    http_executor: InternalHTTPExecutor | None = None,
+    output_dir: Path,
+    token_factory=None,
+    progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None = None,
+) -> NativeContentDiscoveryResult:
+    """Execute a canonical bounded plan for an authorised non-bounty project."""
+
+    if not isinstance(plan, NativeContentDiscoveryPlan):
+        raise ValueError("Runtime-less native content discovery plan is not canonical.")
+    expected_plan = build_runtime_less_native_content_discovery_plan(
+        project_state,
+        target,
+        scope_file,
+        profile=plan.profile,
+        limits=plan.limits,
+    )
+    if plan != expected_plan:
+        raise ValueError(
+            "Runtime-less native content discovery plan or request binding is not canonical."
+        )
+    owns_executor = http_executor is None
+    executor = http_executor or InternalHTTPExecutor(None)
+    try:
+        _require_runtime_less_compatible_executor(executor)
+        output_transaction = _prepare_output_transaction(plan, output_dir)
+        return _execute_native_plan(
+            plan,
+            executor,
+            output_transaction=output_transaction,
+            token_factory=token_factory,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if owns_executor:
+            executor.close()
+
+
+def _require_runtime_less_project_binding(
+    project_state: ProjectState,
+    target: str,
+    scope_file: Path,
+) -> str:
+    if not isinstance(project_state, ProjectState):
+        raise ValueError(
+            "Runtime-less native content discovery requires validated ProjectState evidence."
+        )
+    if project_state.engagement_context not in {
+        CTF_LAB_CONTEXT,
+        INTERNAL_AUTHORISED_CONTEXT,
+    }:
+        raise ValueError(
+            "Runtime-less native content discovery is limited to CTF/lab and "
+            "internal-authorised projects."
+        )
+    canonical_target = validate_explicit_nmap_target_scope(target, scope_file)
+    manifest = project_state.recon_manifest
+    if manifest is None or manifest.target != canonical_target:
+        raise ValueError(
+            "Runtime-less native content discovery manifest target is not canonical."
+        )
+    return canonical_target
+
+
+def _require_runtime_less_compatible_executor(executor: object) -> None:
+    if not isinstance(executor, InternalHTTPExecutor):
+        raise ValueError(
+            "Runtime-less native content discovery requires InternalHTTPExecutor."
+        )
+    if executor.configuration is not None or getattr(
+        executor,
+        "_programme_scope_policy",
+        None,
+    ) is not None:
+        raise ValueError(
+            "Runtime-less native content discovery HTTP executor is not canonical."
+        )
 
 
 def run_native_content_discovery(
