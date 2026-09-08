@@ -1246,6 +1246,66 @@ def test_opt_in_retains_redirect_loop_exchange_without_retransmitting_visited_ho
     )
 
 
+def test_opt_in_retains_redirect_hop_limit_exchange_without_transmitting_destination() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    first_url = "https://example.test/one"
+    accepted_url = "https://example.test/two"
+    refused_destination = "https://example.test/three"
+    transport = _RecordingPeerBoundTransport(
+        [
+            _response(302, (("Location", "/two"),), body=b"first redirect"),
+            _response(
+                302,
+                (("Location", "/three"),),
+                body=b"hop-limit refusal response",
+            ),
+        ]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(maximum_redirect_hops=1),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    try:
+        response = executor.request_retaining_refused_redirect(first_url)
+    except HTTPRedirectRefused as exc:
+        assert exc.reason == "redirect_hop_limit"
+        assert [request.url for request in transport.requests] == [
+            first_url,
+            accepted_url,
+        ]
+        assert all(
+            request.url != refused_destination for request in transport.requests
+        )
+        raise
+
+    assert [request.url for request in transport.requests] == [
+        first_url,
+        accepted_url,
+    ]
+    assert executor.total_request_attempts == 2
+    assert response.status_code == 302
+    assert response.headers == (("Location", "/three"),)
+    assert response.body == b"hop-limit refusal response"
+    assert response.final_url == accepted_url
+    assert response.redirects == (
+        http_enforcement_module.HTTPRedirectHop(
+            status_code=302,
+            source_url=first_url,
+            destination_url=accepted_url,
+        ),
+    )
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=accepted_url,
+        destination_url=refused_destination,
+        reason="redirect_hop_limit",
+    )
+
+
 def test_scoped_http_to_https_upgrade_retains_existing_origin_requirements() -> None:
     policy = _programme_scope_policy(
         (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)

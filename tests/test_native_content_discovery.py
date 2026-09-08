@@ -46,6 +46,7 @@ from bugslyce.recon.content_plan import (
 )
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.http_enforcement import (
+    HTTPRedirectRefused,
     HTTPTransportFailure,
     HTTPTransportResponse,
     InternalHTTPExecutor,
@@ -1405,6 +1406,100 @@ def test_redirect_loop_candidate_is_retained_and_later_native_candidate_continue
     assert f"[--> {first_url}]" in output
     assert "/later-negative" not in output
     executor.close()
+
+
+def test_redirect_hop_limit_candidate_is_retained_and_later_candidate_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("hop-limit", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = "https://app.example.test/hop-limit"
+    hop_limit = runtime.http_executor.configuration.maximum_redirect_hops
+    accepted_urls = tuple(
+        f"https://app.example.test/hop-{index}"
+        for index in range(1, hop_limit + 1)
+    )
+    refused_destination = "https://app.example.test/over-limit"
+    redirect_sources = (candidate_url, *accepted_urls)
+    redirect_destinations = (*accepted_urls, refused_destination)
+    redirects = dict(zip(redirect_sources, redirect_destinations, strict=True))
+    expected_before_refusal = [
+        "https://app.example.test/.bugslyce-negative-one",
+        "https://app.example.test/.bugslyce-negative-two",
+        "https://app.example.test/.bugslyce-negative-three",
+        *redirect_sources,
+    ]
+
+    def respond(url: str):
+        destination = redirects.get(url)
+        if destination is not None:
+            return (
+                302,
+                (("Location", destination),),
+                f"redirect response for {url}".encode("utf-8"),
+            )
+        return 404, b"conventional negative"
+
+    progress = []
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPRedirectRefused as exc:
+            assert exc.reason == "redirect_hop_limit"
+            assert [request.url for request in transport.requests] == (
+                expected_before_refusal
+            )
+            assert all(
+                request.url != refused_destination for request in transport.requests
+            )
+            assert all(
+                request.url != "https://app.example.test/later-negative"
+                for request in transport.requests
+            )
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            *expected_before_refusal,
+            "https://app.example.test/later-negative",
+        ]
+        assert all(
+            request.url != refused_destination for request in transport.requests
+        )
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 1
+        assert [event.completed for event in progress] == [0, 1, 2]
+        assert progress[-1].total == 2
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/hop-limit (Status: 302)" in output
+        assert f"[--> {refused_destination}]" in output
+        assert "/later-negative" not in output
+    finally:
+        executor.close()
 
 
 def test_https_downgrade_candidate_is_retained_and_later_native_candidate_continues(

@@ -671,7 +671,26 @@ class InternalHTTPExecutor:
                     ),
                 )
             if len(redirects) >= self.configuration.maximum_redirect_hops:
-                raise HTTPRedirectRefused("redirect_hop_limit")
+                if not retain_refused_redirect:
+                    raise HTTPRedirectRefused("redirect_hop_limit")
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=current_url,
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    body=response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects),
+                    refused_redirect=HTTPRedirectRefusal(
+                        status_code=response.status_code,
+                        source_url=current_url,
+                        destination_url=destination,
+                        reason="redirect_hop_limit",
+                    ),
+                )
             redirect_decision = self._require_programme_scope(
                 destination,
                 stage="redirect",
