@@ -40,6 +40,7 @@ from bugslyce.recon.content_run import (
 )
 from bugslyce.recon.http_enforcement import (
     HTTPTransportFailure,
+    ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
     build_http_enforcement_configuration,
@@ -62,12 +63,13 @@ NATIVE_CONTENT_BASELINE_CREATED_BY = "bugslyce-native-content-baseline"
 NATIVE_CONTENT_COVERAGE_ARTIFACT_NAME = "content_discovery_native_coverage.json"
 NATIVE_CONTENT_COVERAGE_CREATED_BY = "bugslyce-native-content-coverage"
 NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION = "1.0"
-ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES = frozenset(
-    {"timeout", "transport_error"}
+ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES = (
+    ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
 )
 MAXIMUM_NATIVE_CANDIDATE_REQUESTS = MAX_INTERNAL_COMPARATOR_CANDIDATES
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
 _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN = 20
+_NATIVE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,32 @@ class NativeContentDiscoveryCandidateFailure:
 
 
 @dataclass(frozen=True)
+class NativeContentDiscoveryRedirectFollowupFailure:
+    """One candidate response whose permitted redirect follow-up failed."""
+
+    request_url: str
+    source_url: str
+    destination_url: str
+    status_code: int
+    category: str
+
+    def __post_init__(self) -> None:
+        if any(
+            http_origin_from_url(value) is None
+            for value in (self.request_url, self.source_url, self.destination_url)
+        ):
+            raise ValueError("Native redirect follow-up failure URL is invalid.")
+        if (
+            isinstance(self.status_code, bool)
+            or not isinstance(self.status_code, int)
+            or self.status_code not in _NATIVE_REDIRECT_STATUSES
+        ):
+            raise ValueError("Native redirect follow-up failure status is invalid.")
+        if self.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
+            raise ValueError("Native redirect follow-up failure category is invalid.")
+
+
+@dataclass(frozen=True)
 class NativeContentDiscoveryOriginResult:
     """One origin's truthful baseline and candidate disposition."""
 
@@ -192,6 +220,10 @@ class NativeContentDiscoveryOriginResult:
     suppressed_candidate_count: int
     retained_candidate_count: int
     failed_candidates: tuple[NativeContentDiscoveryCandidateFailure, ...] = ()
+    redirect_followup_failures: tuple[
+        NativeContentDiscoveryRedirectFollowupFailure,
+        ...,
+    ] = ()
 
     def __post_init__(self) -> None:
         origin = http_origin_from_url(self.canonical_origin)
@@ -219,10 +251,35 @@ class NativeContentDiscoveryOriginResult:
             )
         ):
             raise ValueError("Native origin result candidate failures are invalid.")
+        if (
+            not isinstance(self.redirect_followup_failures, tuple)
+            or any(
+                not isinstance(
+                    item,
+                    NativeContentDiscoveryRedirectFollowupFailure,
+                )
+                for item in self.redirect_followup_failures
+            )
+            or len(
+                {item.request_url for item in self.redirect_followup_failures}
+            )
+            != len(self.redirect_followup_failures)
+            or any(
+                http_origin_from_url(item.request_url) != origin
+                for item in self.redirect_followup_failures
+            )
+        ):
+            raise ValueError(
+                "Native origin result redirect follow-up failures are invalid."
+            )
 
     @property
     def failed_candidate_count(self) -> int:
         return len(self.failed_candidates)
+
+    @property
+    def redirect_followup_failure_count(self) -> int:
+        return len(self.redirect_followup_failures)
 
 
 @dataclass(frozen=True)
@@ -692,6 +749,9 @@ def _collect_native_candidates(
         suppressed = 0
         retained = 0
         failed_candidates: list[NativeContentDiscoveryCandidateFailure] = []
+        redirect_followup_failures: list[
+            NativeContentDiscoveryRedirectFollowupFailure
+        ] = []
         retained_lines: list[str] = []
         progress_interval = max(
             1,
@@ -707,6 +767,7 @@ def _collect_native_candidates(
                     timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
                     maximum_response_bytes=BASELINE_MAXIMUM_RESPONSE_BYTES,
                     allow_query_strings=False,
+                    retain_redirect_followup_failure=True,
                 )
             except HTTPTransportFailure as exc:
                 if exc.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
@@ -718,6 +779,17 @@ def _collect_native_candidates(
                     )
                 )
             else:
+                followup_failure = response.redirect_followup_failure
+                if followup_failure is not None:
+                    redirect_followup_failures.append(
+                        NativeContentDiscoveryRedirectFollowupFailure(
+                            request_url=request.url,
+                            source_url=followup_failure.source_url,
+                            destination_url=followup_failure.destination_url,
+                            status_code=response.status_code,
+                            category=followup_failure.category,
+                        )
+                    )
                 if _matches_negative_baseline(baseline, response):
                     suppressed += 1
                 else:
@@ -747,6 +819,7 @@ def _collect_native_candidates(
                 suppressed_candidate_count=suppressed,
                 retained_candidate_count=retained,
                 failed_candidates=tuple(failed_candidates),
+                redirect_followup_failures=tuple(redirect_followup_failures),
             )
         )
     return origin_results, retained_content
@@ -774,6 +847,7 @@ def render_native_content_discovery_coverage_artifact(
     total_attempted = 0
     total_observed = 0
     total_failed = 0
+    total_redirect_followup_failed = 0
     total_unattempted = 0
     for result in origin_results:
         planned_requests = planned_by_origin[result.canonical_origin]
@@ -784,6 +858,21 @@ def render_native_content_discovery_coverage_artifact(
         ):
             raise ValueError(
                 "Native content discovery failure is not backed by its canonical plan."
+            )
+        if any(
+            failure.request_url not in planned_urls
+            for failure in result.redirect_followup_failures
+        ):
+            raise ValueError(
+                "Native redirect follow-up failure is not backed by its canonical plan."
+            )
+        if {
+            failure.request_url for failure in result.failed_candidates
+        }.intersection(
+            failure.request_url for failure in result.redirect_followup_failures
+        ):
+            raise ValueError(
+                "Native candidate cannot be both response-less and response-observed."
             )
         planned = len(planned_requests)
         failed = result.failed_candidate_count
@@ -799,6 +888,10 @@ def render_native_content_discovery_coverage_artifact(
             and attempted != 0
         ):
             raise ValueError("Refused native origin contains attempted candidates.")
+        if result.redirect_followup_failure_count > observed:
+            raise ValueError(
+                "Native redirect follow-up failures exceed observed responses."
+            )
         origin_payloads.append(
             {
                 "canonical_origin": result.canonical_origin,
@@ -809,6 +902,9 @@ def render_native_content_discovery_coverage_artifact(
                 "suppressed_candidate_count": result.suppressed_candidate_count,
                 "retained_candidate_count": result.retained_candidate_count,
                 "failed_candidate_count": failed,
+                "redirect_followup_failure_count": (
+                    result.redirect_followup_failure_count
+                ),
                 "candidate_requests_unattempted": unattempted,
                 "failed_candidates": [
                     {
@@ -817,11 +913,22 @@ def render_native_content_discovery_coverage_artifact(
                     }
                     for failure in result.failed_candidates
                 ],
+                "redirect_followup_failures": [
+                    {
+                        "request_url": failure.request_url,
+                        "source_url": failure.source_url,
+                        "destination_url": failure.destination_url,
+                        "status_code": failure.status_code,
+                        "category": failure.category,
+                    }
+                    for failure in result.redirect_followup_failures
+                ],
             }
         )
         total_attempted += attempted
         total_observed += observed
         total_failed += failed
+        total_redirect_followup_failed += result.redirect_followup_failure_count
         total_unattempted += unattempted
 
     payload = {
@@ -832,6 +939,7 @@ def render_native_content_discovery_coverage_artifact(
         "candidate_requests_attempted": total_attempted,
         "candidate_responses_observed": total_observed,
         "failed_candidate_count": total_failed,
+        "redirect_followup_failure_count": total_redirect_followup_failed,
         "candidate_requests_unattempted": total_unattempted,
         "origins": origin_payloads,
     }
@@ -1008,6 +1116,14 @@ def _write_new_artifact(path: Path, content: str) -> None:
 def _artifact_line(candidate_url: str, response) -> str:
     parsed = urlparse(candidate_url)
     path = parsed.path or "/"
+    if response.redirect_followup_failure is not None:
+        failure = response.redirect_followup_failure
+        return (
+            f"{path} (Status: {response.status_code}) "
+            f"[Size: {len(response.body)}] "
+            f"[redirect follow-up failed: {failure.category} "
+            f"--> {failure.destination_url}]\n"
+        )
     if (
         response.refused_redirect is not None
         and response.refused_redirect.destination_url is None

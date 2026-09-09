@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import ssl
 from dataclasses import replace
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from bugslyce.recon.content_plan import (
 )
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.http_enforcement import (
+    HTTPRateRejected,
     HTTPRedirectRefused,
     HTTPTransportFailure,
     HTTPTransportResponse,
@@ -88,7 +90,12 @@ def _capabilities():
     }
 
 
-def _runtime(tmp_path: Path, *, origin: str = "https://app.example.test/"):
+def _runtime(
+    tmp_path: Path,
+    *,
+    origin: str = "https://app.example.test/",
+    origins: tuple[str, ...] | None = None,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
     scope = tmp_path / "scope.md"
     scope.write_text("# Authorised synthetic scope\n", encoding="utf-8")
@@ -143,7 +150,7 @@ def _runtime(tmp_path: Path, *, origin: str = "https://app.example.test/"):
         capabilities=_capabilities(),
         ipv4_resolver=lambda _host, _port: ("192.0.2.44",),
     )
-    runtime.bind_http_origins((origin,))
+    runtime.bind_http_origins(origins or (origin,))
     return runtime
 
 
@@ -506,6 +513,66 @@ def _executor(runtime, origins: tuple[str, ...], responder):
     return executor, transport
 
 
+class _ConnectFailureSocket:
+    def settimeout(self, _timeout: int) -> None:
+        pass
+
+    def connect(self, _address) -> None:
+        raise OSError("PRIVATE-CONNECT-DETAIL")
+
+    def close(self) -> None:
+        pass
+
+
+class _EnvironmentFailureTransport(PeerBoundHTTPTransport):
+    def __init__(self, failure_url: str, category: str, responder=None) -> None:
+        self.failure_url = failure_url
+        self.category = category
+        self.responder = responder or (
+            lambda _url: HTTPTransportResponse(
+                status_code=404,
+                headers=(),
+                body=b"negative",
+            )
+        )
+        self.requests = []
+        self.insecure_connection_created = False
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if request.url != self.failure_url:
+            return self.responder(request.url)
+        module = importlib.import_module("bugslyce.recon.http_enforcement")
+        if self.category == "connect_error":
+            module._connect_selected_ipv4(
+                request.selected_ipv4,
+                443,
+                request.timeout_seconds,
+                socket_factory=lambda _family, _kind, _protocol: _ConnectFailureSocket(),
+            )
+        elif self.category == "tls_error":
+            def fail_context():
+                raise ssl.SSLError("PRIVATE-TLS-DETAIL")
+
+            PeerBoundHTTPTransport(ssl_context_factory=fail_context)(request)
+        elif self.category == "tls_configuration_error":
+            class InsecureContext:
+                verify_mode = ssl.CERT_NONE
+                check_hostname = False
+
+            def unexpected_https_connection(*_args, **_kwargs):
+                self.insecure_connection_created = True
+                raise AssertionError("insecure TLS context reached HTTPS connection")
+
+            PeerBoundHTTPTransport(
+                ssl_context_factory=InsecureContext,
+                https_connection_factory=unexpected_https_connection,
+            )(request)
+        else:
+            raise AssertionError("unsupported synthetic environment category")
+        raise AssertionError("environment failure path unexpectedly returned")
+
+
 def test_native_http_context_is_sealed_to_exact_programme_work_items_without_runtime_mutation(
     tmp_path: Path,
 ) -> None:
@@ -644,7 +711,7 @@ def test_native_root_contract_rejects_invalid_limits_depth_and_escaping_urls() -
     with pytest.raises(ValueError, match="category"):
         module.NativeContentDiscoveryCandidateFailure(
             request_url="https://app.example.test/admin",
-            category="tls_error",
+            category="tls_configuration_error",
         )
 
 
@@ -757,6 +824,7 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         "candidate_requests_attempted": 2,
         "candidate_responses_observed": 2,
         "failed_candidate_count": 0,
+        "redirect_followup_failure_count": 0,
         "candidate_requests_unattempted": 0,
         "origins": [
             {
@@ -768,8 +836,10 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
                 "suppressed_candidate_count": 1,
                 "retained_candidate_count": 1,
                 "failed_candidate_count": 0,
+                "redirect_followup_failure_count": 0,
                 "candidate_requests_unattempted": 0,
                 "failed_candidates": [],
+                "redirect_followup_failures": [],
             }
         ],
     }
@@ -1146,7 +1216,7 @@ def test_native_progress_callback_failure_remains_hard_before_collection(
     executor.close()
 
 
-def test_unapproved_native_candidate_failure_preserves_baseline_without_reporting_completion(
+def test_hard_native_candidate_failure_preserves_baseline_without_reporting_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1177,7 +1247,7 @@ def test_unapproved_native_candidate_failure_preserves_baseline_without_reportin
 
     def respond(url: str) -> tuple[int, bytes]:
         if url.endswith("/candidate-2"):
-            raise HTTPTransportFailure("tls_error")
+            raise HTTPTransportFailure("invalid_resolver_result")
         if ".bugslyce-negative-" in url:
             if "api.example.test" in url:
                 return 403, next(unstable_bodies)
@@ -1190,7 +1260,7 @@ def test_unapproved_native_candidate_failure_preserves_baseline_without_reportin
         planned_origins,
         respond,
     )
-    with pytest.raises(HTTPTransportFailure, match="tls_error"):
+    with pytest.raises(HTTPTransportFailure, match="invalid_resolver_result"):
         module.run_native_content_discovery(
             runtime,
             state,
@@ -1348,17 +1418,19 @@ def test_native_candidate_transport_failure_does_not_prevent_later_candidate(
                 "candidate_requests_attempted": 2,
                 "candidate_responses_observed": 1,
                 "suppressed_candidate_count": 1,
-                "retained_candidate_count": 0,
-                "failed_candidate_count": 1,
-                "candidate_requests_unattempted": 0,
+                    "retained_candidate_count": 0,
+                    "failed_candidate_count": 1,
+                    "redirect_followup_failure_count": 0,
+                    "candidate_requests_unattempted": 0,
                 "failed_candidates": [
                     {
                         "request_url": failing_url,
                         "category": expected_category,
-                    }
-                ],
-            }
-        ]
+                        }
+                    ],
+                    "redirect_followup_failures": [],
+                }
+            ]
         assert "synthetic candidate timeout" not in coverage_text
         assert "synthetic candidate transport error" not in coverage_text
         baseline = json.loads(
@@ -1372,6 +1444,411 @@ def test_native_candidate_transport_failure_does_not_prevent_later_candidate(
         retained_output = result.artifacts[0].path.read_text(encoding="utf-8")
         assert "/transport-failure" not in retained_output
         assert expected_category not in retained_output
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    "category",
+    ("dns_error", "no_usable_ipv4", "connect_error", "tls_error"),
+)
+def test_native_candidate_environment_failure_does_not_prevent_later_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    category: str,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("environment-failure", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    failing_url = "https://app.example.test/environment-failure"
+    later_url = "https://app.example.test/later-negative"
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (404, b"conventional negative"),
+    )
+    if category in {"dns_error", "no_usable_ipv4"}:
+        resolver_calls = 0
+
+        def resolver(_hostname: str, _port: int) -> tuple[str, ...]:
+            nonlocal resolver_calls
+            resolver_calls += 1
+            if resolver_calls == 4:
+                if category == "dns_error":
+                    raise OSError("PRIVATE-RESOLVER-DETAIL")
+                return ()
+            return ("192.0.2.44",)
+
+        runtime.http_executor._ipv4_resolver = resolver
+        executor._ipv4_resolver = resolver
+    else:
+        transport = _EnvironmentFailureTransport(failing_url, category)
+        executor.transport = transport
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPTransportFailure as exc:
+            assert exc.category == category
+            assert [request.url for request in transport.requests] == [
+                "https://app.example.test/.bugslyce-negative-one",
+                "https://app.example.test/.bugslyce-negative-two",
+                "https://app.example.test/.bugslyce-negative-three",
+                *(
+                    [failing_url]
+                    if category in {"connect_error", "tls_error"}
+                    else []
+                ),
+            ]
+            assert all(request.url != later_url for request in transport.requests)
+            assert [event.completed for event in progress] == [0]
+            assert (output_dir / "content_discovery_baseline.json").is_file()
+            assert not (output_dir / "content_discovery_native_coverage.json").exists()
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            "https://app.example.test/.bugslyce-negative-one",
+            "https://app.example.test/.bugslyce-negative-two",
+            "https://app.example.test/.bugslyce-negative-three",
+            *(
+                [failing_url]
+                if category in {"connect_error", "tls_error"}
+                else []
+            ),
+            later_url,
+        ]
+        assert [event.completed for event in progress] == [0, 1, 2]
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 0
+        assert origin_result.failed_candidate_count == 1
+        assert origin_result.failed_candidates == (
+            module.NativeContentDiscoveryCandidateFailure(
+                request_url=failing_url,
+                category=category,
+            ),
+        )
+        coverage_text = result.coverage_artifact_path.read_text(encoding="utf-8")
+        coverage = json.loads(coverage_text)
+        assert coverage["candidate_requests_planned"] == 2
+        assert coverage["candidate_requests_attempted"] == 2
+        assert coverage["candidate_responses_observed"] == 1
+        assert coverage["failed_candidate_count"] == 1
+        assert coverage["candidate_requests_unattempted"] == 0
+        assert coverage["origins"][0]["failed_candidates"] == [
+            {"request_url": failing_url, "category": category}
+        ]
+        assert "PRIVATE-" not in coverage_text
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/environment-failure" not in output
+        assert category not in output
+        assert "/later-negative" not in output
+    finally:
+        executor.close()
+
+
+def test_native_candidate_insecure_tls_context_remains_hard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("insecure-tls-context", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    failing_url = "https://app.example.test/insecure-tls-context"
+    later_url = "https://app.example.test/later-negative"
+    executor, _base_transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (404, b"conventional negative"),
+    )
+    transport = _EnvironmentFailureTransport(
+        failing_url,
+        "tls_configuration_error",
+    )
+    executor.transport = transport
+    progress = []
+    output_dir = tmp_path / "native-output"
+    try:
+        with pytest.raises(HTTPTransportFailure) as exc_info:
+            module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+
+        assert exc_info.value.category == "tls_configuration_error"
+        assert [request.url for request in transport.requests] == [
+            "https://app.example.test/.bugslyce-negative-one",
+            "https://app.example.test/.bugslyce-negative-two",
+            "https://app.example.test/.bugslyce-negative-three",
+            failing_url,
+        ]
+        assert later_url not in [request.url for request in transport.requests]
+        assert not transport.insecure_connection_created
+        assert [event.completed for event in progress] == [0]
+        assert (output_dir / "content_discovery_baseline.json").is_file()
+        assert not (output_dir / "content_discovery_native_coverage.json").exists()
+        assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+    finally:
+        executor.close()
+
+
+def test_native_environment_failure_during_baseline_remains_origin_refusal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=1,
+            maximum_candidate_requests_per_origin=1,
+        ),
+    )
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (404, b"must not be reached"),
+    )
+
+    def resolver(_hostname: str, _port: int) -> tuple[str, ...]:
+        raise OSError("PRIVATE-BASELINE-RESOLVER-DETAIL")
+
+    runtime.http_executor._ipv4_resolver = resolver
+    executor._ipv4_resolver = resolver
+    output_dir = tmp_path / "native-output"
+    try:
+        with pytest.raises(module.NativeContentDiscoveryBaselineRefused) as exc_info:
+            module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+
+        decision = exc_info.value.decisions[0]
+        assert decision.classification == "failed"
+        assert decision.selected_policy == "refuse"
+        assert decision.completed_observations == 0
+        assert all(
+            item.failure_reason == "transport_failure:dns_error"
+            for item in decision.observations
+        )
+        assert transport.requests == []
+        payload_text = exc_info.value.baseline_artifact_path.read_text(encoding="utf-8")
+        assert "PRIVATE-BASELINE-RESOLVER-DETAIL" not in payload_text
+        assert not (output_dir / "content_discovery_native_coverage.json").exists()
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "category"),
+    (
+        pytest.param("resolver", "dns_error", id="redirect-resolver"),
+        pytest.param("exchange", "tls_error", id="redirect-exchange"),
+    ),
+)
+def test_redirect_followup_environment_failure_retains_source_response_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    category: str,
+) -> None:
+    _install_profile(
+        monkeypatch,
+        tmp_path,
+        ("redirect-environment-failure", "later-negative"),
+    )
+    source_origin = "http://app.example.test"
+    destination_origin = "https://app.example.test"
+    runtime = _runtime(
+        tmp_path / "runtime",
+        origins=(f"{source_origin}/", f"{destination_origin}/"),
+    )
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=4,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = f"{source_origin}/redirect-environment-failure"
+    destination_url = f"{destination_origin}/permitted-followup"
+    later_url = f"{source_origin}/later-negative"
+
+    def response_for(url: str) -> HTTPTransportResponse:
+        if url == candidate_url:
+            return HTTPTransportResponse(
+                status_code=302,
+                headers=(("Location", destination_url),),
+                body=b"permitted redirect response",
+            )
+        return HTTPTransportResponse(
+            status_code=404,
+            headers=(),
+            body=b"conventional negative",
+        )
+
+    executor, base_transport = _executor(
+        runtime,
+        (source_origin, destination_origin),
+        lambda url: (
+            (302, (("Location", destination_url),), b"permitted redirect response")
+            if url == candidate_url
+            else (404, b"conventional negative")
+        ),
+    )
+    resolver_calls = 0
+    if failure_stage == "resolver":
+        def resolver(_hostname: str, _port: int) -> tuple[str, ...]:
+            nonlocal resolver_calls
+            resolver_calls += 1
+            if resolver_calls == 8:
+                raise OSError("PRIVATE-REDIRECT-RESOLVER-DETAIL")
+            return ("192.0.2.44",)
+
+        runtime.http_executor._ipv4_resolver = resolver
+        executor._ipv4_resolver = resolver
+        transport = base_transport
+    else:
+        transport = _EnvironmentFailureTransport(
+            destination_url,
+            category,
+            response_for,
+        )
+        executor.transport = transport
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three", "four", "five", "six")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPTransportFailure as exc:
+            assert exc.category == category
+            transmitted = [request.url for request in transport.requests]
+            assert candidate_url in transmitted
+            assert (destination_url in transmitted) == (
+                failure_stage == "exchange"
+            )
+            assert later_url not in transmitted
+            assert (output_dir / "content_discovery_baseline.json").is_file()
+            assert not (output_dir / "content_discovery_native_coverage.json").exists()
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        transmitted = [request.url for request in transport.requests]
+        assert candidate_url in transmitted
+        assert (destination_url in transmitted) == (failure_stage == "exchange")
+        assert later_url in transmitted
+        source_result = next(
+            item for item in result.origin_results if item.canonical_origin == source_origin
+        )
+        assert source_result.suppressed_candidate_count == 1
+        assert source_result.retained_candidate_count == 1
+        assert source_result.failed_candidate_count == 0
+        assert source_result.redirect_followup_failure_count == 1
+        followup_failure = source_result.redirect_followup_failures[0]
+        assert followup_failure.request_url == candidate_url
+        assert followup_failure.source_url == candidate_url
+        assert followup_failure.destination_url == destination_url
+        assert followup_failure.status_code == 302
+        assert followup_failure.category == category
+        coverage_text = result.coverage_artifact_path.read_text(encoding="utf-8")
+        coverage = json.loads(coverage_text)
+        assert coverage["candidate_requests_planned"] == 4
+        assert coverage["candidate_requests_attempted"] == 4
+        assert coverage["candidate_responses_observed"] == 4
+        assert coverage["failed_candidate_count"] == 0
+        assert coverage["redirect_followup_failure_count"] == 1
+        assert coverage["candidate_requests_unattempted"] == 0
+        assert coverage["origins"][0]["redirect_followup_failures"] == [
+            {
+                "request_url": candidate_url,
+                "source_url": candidate_url,
+                "destination_url": destination_url,
+                "status_code": 302,
+                "category": category,
+            }
+        ]
+        assert "PRIVATE-" not in coverage_text
+        source_artifact = next(
+            item.path
+            for item in result.artifacts
+            if item.canonical_origin == source_origin
+        ).read_text(encoding="utf-8")
+        assert "/redirect-environment-failure (Status: 302)" in source_artifact
+        assert (
+            f"[redirect follow-up failed: {category} --> {destination_url}]"
+            in source_artifact
+        )
+        assert "/later-negative" not in source_artifact
     finally:
         executor.close()
 
@@ -1740,6 +2217,291 @@ def test_query_refused_first_hop_is_compared_and_later_native_candidate_continue
     assert f"[--> {query_destination}]" in output
     assert "/later-negative" not in output
     executor.close()
+
+
+def test_unsupported_redirect_candidate_is_retained_and_later_candidate_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("unsupported", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = "https://app.example.test/unsupported"
+    refused_destination = "ftp://app.example.test/archive"
+    later_url = "https://app.example.test/later-negative"
+    expected_before_refusal = [
+        "https://app.example.test/.bugslyce-negative-one",
+        "https://app.example.test/.bugslyce-negative-two",
+        "https://app.example.test/.bugslyce-negative-three",
+        candidate_url,
+    ]
+
+    def respond(url: str):
+        if url == candidate_url:
+            return (
+                302,
+                (("Location", refused_destination),),
+                b"unsupported redirect response",
+            )
+        return 404, b"conventional negative"
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPRedirectRefused as exc:
+            assert exc.reason == "unsupported_redirect"
+            assert [request.url for request in transport.requests] == (
+                expected_before_refusal
+            )
+            assert all(
+                request.url != refused_destination for request in transport.requests
+            )
+            assert all(request.url != later_url for request in transport.requests)
+            assert [event.completed for event in progress] == [0]
+            baseline_path = output_dir / "content_discovery_baseline.json"
+            assert baseline_path.is_file()
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            assert baseline["origins"][0]["completed_observations"] == 3
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            *expected_before_refusal,
+            later_url,
+        ]
+        assert all(request.url != refused_destination for request in transport.requests)
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 1
+        assert origin_result.failed_candidate_count == 0
+        assert [event.completed for event in progress] == [0, 1, 2]
+        assert progress[-1].total == 2
+        coverage = json.loads(
+            result.coverage_artifact_path.read_text(encoding="utf-8")
+        )
+        assert coverage["candidate_requests_planned"] == 2
+        assert coverage["candidate_requests_attempted"] == 2
+        assert coverage["candidate_responses_observed"] == 2
+        assert coverage["failed_candidate_count"] == 0
+        assert coverage["candidate_requests_unattempted"] == 0
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/unsupported (Status: 302)" in output
+        assert "[redirect refused: unsupported_redirect]" in output
+        assert refused_destination not in output
+        assert "/later-negative" not in output
+    finally:
+        executor.close()
+
+
+def test_terminal_rate_rejection_remains_fatal_at_native_candidate_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("rate-limited", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = "https://app.example.test/rate-limited"
+    later_url = "https://app.example.test/later-negative"
+
+    def respond(url: str):
+        if url == candidate_url:
+            return 429, (("Retry-After", "17"),), b"rate limited"
+        return 404, b"conventional negative"
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    try:
+        with pytest.raises(HTTPRateRejected) as exc_info:
+            module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.retry_after == "17"
+        assert [request.url for request in transport.requests] == [
+            "https://app.example.test/.bugslyce-negative-one",
+            "https://app.example.test/.bugslyce-negative-two",
+            "https://app.example.test/.bugslyce-negative-three",
+            candidate_url,
+        ]
+        assert all(request.url != later_url for request in transport.requests)
+        assert [event.completed for event in progress] == [0]
+        assert (output_dir / "content_discovery_baseline.json").is_file()
+        assert not (output_dir / "content_discovery_native_coverage.json").exists()
+        assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+        with pytest.raises(HTTPRateRejected) as terminal_exc:
+            executor.request(later_url)
+        assert terminal_exc.value.retry_after == "17"
+        assert len(transport.requests) == 4
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    (
+        "origin",
+        "candidate_name",
+        "location",
+        "reason",
+        "expected_destination",
+    ),
+    (
+        pytest.param(
+            "https://app.example.test",
+            "malformed-single-location",
+            " https://app.example.test/unsafe",
+            "malformed_location",
+            None,
+            id="malformed-single-location",
+        ),
+        pytest.param(
+            "http://app.example.test",
+            "unapproved-upgrade",
+            "https://app.example.test/secure",
+            "http_upgrade_not_approved",
+            "https://app.example.test/secure",
+            id="http-upgrade-not-approved",
+        ),
+    ),
+)
+def test_response_bearing_redirect_refusal_candidate_continues_later_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    origin: str,
+    candidate_name: str,
+    location: str,
+    reason: str,
+    expected_destination: str | None,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, (candidate_name, "later-negative"))
+    runtime = _runtime(tmp_path / "runtime", origin=f"{origin}/")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    candidate_url = f"{origin}/{candidate_name}"
+    later_url = f"{origin}/later-negative"
+    expected_before_refusal = [
+        f"{origin}/.bugslyce-negative-one",
+        f"{origin}/.bugslyce-negative-two",
+        f"{origin}/.bugslyce-negative-three",
+        candidate_url,
+    ]
+
+    def respond(url: str):
+        if url == candidate_url:
+            return 302, (("Location", location),), b"refused redirect response"
+        return 404, b"conventional negative"
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    executor, transport = _executor(runtime, (origin,), respond)
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPRedirectRefused as exc:
+            assert exc.reason == reason
+            assert [request.url for request in transport.requests] == (
+                expected_before_refusal
+            )
+            assert all(request.url != location for request in transport.requests)
+            assert all(request.url != later_url for request in transport.requests)
+            assert [event.completed for event in progress] == [0]
+            assert (output_dir / "content_discovery_baseline.json").is_file()
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            *expected_before_refusal,
+            later_url,
+        ]
+        assert all(request.url != location for request in transport.requests)
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 1
+        assert origin_result.failed_candidate_count == 0
+        assert [event.completed for event in progress] == [0, 1, 2]
+        assert progress[-1].total == 2
+        coverage = json.loads(
+            result.coverage_artifact_path.read_text(encoding="utf-8")
+        )
+        assert coverage["candidate_requests_planned"] == 2
+        assert coverage["candidate_requests_attempted"] == 2
+        assert coverage["candidate_responses_observed"] == 2
+        assert coverage["failed_candidate_count"] == 0
+        assert coverage["candidate_requests_unattempted"] == 0
+        output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert f"/{candidate_name} (Status: 302)" in output
+        if expected_destination is None:
+            assert f"[redirect refused: {reason}]" in output
+            assert location not in output
+        else:
+            assert f"[--> {expected_destination}]" in output
+        assert "/later-negative" not in output
+    finally:
+        executor.close()
 
 
 def test_redirect_loop_candidate_is_retained_and_later_native_candidate_continues(

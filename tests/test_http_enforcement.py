@@ -1030,52 +1030,133 @@ def test_opt_in_retains_refused_cross_origin_exchange_without_transmitting_desti
     )
 
 
-@pytest.mark.parametrize(
-    ("location", "approved_origins", "allow_query_strings", "reason"),
-    (
-        (
-            "ftp://example.test/landing",
-            ("https://example.test",),
-            False,
-            "unsupported_redirect",
-        ),
-        (
-            "",
-            ("https://example.test",),
-            False,
-            "malformed_location",
-        ),
-    ),
-)
-def test_opt_in_does_not_retain_other_redirect_refusal_reasons(
-    location: str,
-    approved_origins: tuple[str, ...],
-    allow_query_strings: bool,
-    reason: str,
-) -> None:
+def test_opt_in_retains_unsupported_redirect_without_inventing_destination() -> None:
     policy = _programme_scope_policy(
         (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
     )
+    source_url = "https://example.test/start"
+    unsupported_location = "ftp://example.test/archive"
     transport = _RecordingPeerBoundTransport(
-        [_response(302, (("Location", location),))]
+        [
+            _response(
+                302,
+                (("Location", unsupported_location),),
+                body=b"unsupported redirect response",
+            )
+        ]
     )
     executor = InternalHTTPExecutor(
-        _configuration(approved_origins=approved_origins),
+        _configuration(approved_origins=("https://example.test",)),
         programme_scope_policy=policy,
         transport=transport,
     )
 
-    with pytest.raises(HTTPRedirectRefused, match=reason) as exc_info:
-        executor.request_retaining_refused_redirect(
-            "https://example.test/start",
-            allow_query_strings=allow_query_strings,
-        )
+    response = executor.request_retaining_refused_redirect(source_url)
 
-    assert exc_info.value.reason == reason
-    assert [request.url for request in transport.requests] == [
-        "https://example.test/start"
-    ]
+    assert [request.url for request in transport.requests] == [source_url]
     assert executor.total_request_attempts == 1
+    assert response.requested_url == source_url
+    assert response.final_url == source_url
+    assert response.status_code == 302
+    assert response.headers == (("Location", unsupported_location),)
+    assert response.body == b"unsupported redirect response"
+    assert response.redirects == ()
+    assert response.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=source_url,
+        destination_url=None,
+        reason="unsupported_redirect",
+    )
+
+
+def test_opt_in_retains_malformed_single_location_without_inventing_destination() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    source_url = "https://example.test/start"
+    malformed_location = " https://example.test/unsafe"
+    response = _response(
+        302,
+        (("Location", malformed_location),),
+        body=b"malformed redirect response",
+    )
+    retained_transport = _RecordingPeerBoundTransport([response])
+    retained = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://example.test",)),
+        programme_scope_policy=policy,
+        transport=retained_transport,
+    )
+
+    result = retained.request_retaining_refused_redirect(source_url)
+
+    assert [request.url for request in retained_transport.requests] == [source_url]
+    assert result.requested_url == source_url
+    assert result.final_url == source_url
+    assert result.status_code == 302
+    assert result.headers == (("Location", malformed_location),)
+    assert result.body == b"malformed redirect response"
+    assert result.redirects == ()
+    assert result.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=302,
+        source_url=source_url,
+        destination_url=None,
+        reason="malformed_location",
+    )
+
+    strict_transport = _RecordingPeerBoundTransport([response])
+    strict = InternalHTTPExecutor(
+        _configuration(approved_origins=("https://example.test",)),
+        programme_scope_policy=policy,
+        transport=strict_transport,
+    )
+    with pytest.raises(HTTPRedirectRefused, match="malformed_location"):
+        strict.request(source_url)
+    assert [request.url for request in strict_transport.requests] == [source_url]
+
+
+def test_opt_in_retains_unapproved_http_upgrade_without_transmitting_destination() -> None:
+    policy = _programme_scope_policy(
+        (("example", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    source_url = "http://example.test/start"
+    destination = "https://example.test/secure"
+    response = _response(
+        301,
+        (("Location", destination),),
+        body=b"unapproved upgrade response",
+    )
+    retained_transport = _RecordingPeerBoundTransport([response])
+    retained = InternalHTTPExecutor(
+        _configuration(approved_origins=("http://example.test",)),
+        programme_scope_policy=policy,
+        transport=retained_transport,
+    )
+
+    result = retained.request_retaining_refused_redirect(source_url)
+
+    assert [request.url for request in retained_transport.requests] == [source_url]
+    assert result.requested_url == source_url
+    assert result.final_url == source_url
+    assert result.status_code == 301
+    assert result.headers == (("Location", destination),)
+    assert result.body == b"unapproved upgrade response"
+    assert result.redirects == ()
+    assert result.refused_redirect == http_enforcement_module.HTTPRedirectRefusal(
+        status_code=301,
+        source_url=source_url,
+        destination_url=destination,
+        reason="http_upgrade_not_approved",
+    )
+
+    strict_transport = _RecordingPeerBoundTransport([response])
+    strict = InternalHTTPExecutor(
+        _configuration(approved_origins=("http://example.test",)),
+        programme_scope_policy=policy,
+        transport=strict_transport,
+    )
+    with pytest.raises(HTTPRedirectRefused, match="http_upgrade_not_approved"):
+        strict.request(source_url)
+    assert [request.url for request in strict_transport.requests] == [source_url]
 
 
 @pytest.mark.parametrize(
@@ -1999,6 +2080,39 @@ def test_peer_bound_https_transport_maps_tls_failure_without_http_request() -> N
     assert exc_info.value.category == "tls_error"
     assert "PRIVATE-TLS-DETAIL-3281" not in str(exc_info.value)
     assert not any(event[0] == "request" for event in events)
+
+
+def test_peer_bound_https_transport_rejects_insecure_context_without_connection() -> None:
+    events: list[tuple[object, ...]] = []
+
+    class InsecureContext:
+        verify_mode = ssl.CERT_NONE
+        check_hostname = False
+
+    def unexpected_connection(*_args, **_kwargs):
+        events.append(("https_connection",))
+        raise AssertionError("insecure TLS context reached HTTPS connection")
+
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        https_connection_factory=unexpected_connection,
+        ssl_context_factory=InsecureContext,
+    )
+    policy = _programme_scope_policy_with_fixture_peer(
+        (("host", ACTION_INCLUDE, RULE_EXACT_HOSTNAME, "example.test"),)
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=lambda _host, _port: ("192.0.2.3",),
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        executor.request("https://example.test/")
+
+    assert exc_info.value.category == "tls_configuration_error"
+    assert events == []
+    assert executor.total_request_attempts == 1
 
 
 def test_https_ipv4_literal_is_used_as_certificate_identity() -> None:

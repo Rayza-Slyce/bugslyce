@@ -60,6 +60,28 @@ MAXIMUM_RETRY_AFTER_CHARS = 128
 MAXIMUM_SLEEP_CHUNK_SECONDS = 60
 MAXIMUM_TERMINAL_POLL_SECONDS = Decimal("0.1")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_RETAINED_REDIRECT_REFUSALS_WITH_DESTINATION = frozenset(
+    {
+        "http_upgrade_not_approved",
+        "https_downgrade",
+        "origin_not_approved",
+        "redirect_query_not_allowed",
+    }
+)
+_RETAINED_REDIRECT_REFUSALS_WITHOUT_DESTINATION = frozenset(
+    {"malformed_location", "unsupported_redirect"}
+)
+ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES = frozenset(
+    {
+        "connect_error",
+        "dns_error",
+        "no_usable_ipv4",
+        "timeout",
+        "tls_error",
+        "transport_error",
+    }
+)
+TLS_CONFIGURATION_FAILURE_CATEGORY = "tls_configuration_error"
 _HTTP_FIELD_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PEER_BOUND_TRANSPORT_REQUIRED = (
     "Programme-scoped internal HTTP requires a peer-bound transport."
@@ -199,6 +221,15 @@ class HTTPRedirectRefusal:
 
 
 @dataclass(frozen=True)
+class HTTPRedirectFollowupFailure:
+    """One permitted redirect destination attempted without an HTTP response."""
+
+    source_url: str
+    destination_url: str
+    category: str
+
+
+@dataclass(frozen=True)
 class InternalHTTPResponse:
     """Structured response from the central internal execution boundary."""
 
@@ -210,6 +241,7 @@ class InternalHTTPResponse:
     elapsed_seconds: float
     redirects: tuple[HTTPRedirectHop, ...]
     refused_redirect: HTTPRedirectRefusal | None = None
+    redirect_followup_failure: HTTPRedirectFollowupFailure | None = None
 
 
 class HTTPTransport(Protocol):
@@ -538,6 +570,7 @@ class InternalHTTPExecutor:
             allow_query_strings=allow_query_strings,
             additional_headers=additional_headers,
             retain_refused_redirect=False,
+            retain_redirect_followup_failure=False,
         )
 
     def request_retaining_refused_redirect(
@@ -549,6 +582,7 @@ class InternalHTTPExecutor:
         maximum_response_bytes: int = 1_000_000,
         allow_query_strings: bool = False,
         additional_headers: tuple[tuple[str, str], ...] = (),
+        retain_redirect_followup_failure: bool = False,
     ) -> InternalHTTPResponse:
         """Return a received exchange for one narrowly supported redirect refusal."""
 
@@ -560,6 +594,7 @@ class InternalHTTPExecutor:
             allow_query_strings=allow_query_strings,
             additional_headers=additional_headers,
             retain_refused_redirect=True,
+            retain_redirect_followup_failure=retain_redirect_followup_failure,
         )
 
     def _request(
@@ -572,9 +607,12 @@ class InternalHTTPExecutor:
         allow_query_strings: bool,
         additional_headers: tuple[tuple[str, str], ...],
         retain_refused_redirect: bool,
+        retain_redirect_followup_failure: bool,
     ) -> InternalHTTPResponse:
         """Execute one bounded request under the selected redirect disposition."""
 
+        if not isinstance(retain_redirect_followup_failure, bool):
+            raise ValueError("Internal HTTP redirect follow-up disposition is invalid.")
         method = _validate_request_shape(
             url,
             method,
@@ -590,19 +628,55 @@ class InternalHTTPExecutor:
         current_url = url
         visited = {current_url}
         redirects: list[HTTPRedirectHop] = []
+        pending_redirect_response: tuple[
+            str,
+            str,
+            HTTPTransportResponse,
+        ] | None = None
         started = _monotonic_decimal(self._monotonic)
 
         while True:
-            response = self._execute_exchange(
-                HTTPTransportRequest(
-                    url=current_url,
-                    method=method,
-                    headers=headers,
-                    timeout_seconds=timeout_seconds,
-                    maximum_response_bytes=maximum_response_bytes,
-                    selected_ipv4=selected_ipv4,
+            try:
+                response = self._execute_exchange(
+                    HTTPTransportRequest(
+                        url=current_url,
+                        method=method,
+                        headers=headers,
+                        timeout_seconds=timeout_seconds,
+                        maximum_response_bytes=maximum_response_bytes,
+                        selected_ipv4=selected_ipv4,
+                    )
                 )
-            )
+            except HTTPTransportFailure as exc:
+                if (
+                    not retain_refused_redirect
+                    or not retain_redirect_followup_failure
+                    or pending_redirect_response is None
+                    or exc.category
+                    not in ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
+                ):
+                    raise
+                source_url, destination_url, source_response = (
+                    pending_redirect_response
+                )
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=source_url,
+                    status_code=source_response.status_code,
+                    headers=source_response.headers,
+                    body=source_response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects[:-1]),
+                    redirect_followup_failure=HTTPRedirectFollowupFailure(
+                        source_url=source_url,
+                        destination_url=destination_url,
+                        category=exc.category,
+                    ),
+                )
+            pending_redirect_response = None
             if (
                 response.status_code not in _REDIRECT_STATUSES
                 or self.configuration is None
@@ -650,13 +724,14 @@ class InternalHTTPExecutor:
                     allow_query_strings=allow_query_strings,
                 )
             except HTTPRedirectRefused as exc:
-                if not retain_refused_redirect or exc.reason not in {
-                    "https_downgrade",
-                    "origin_not_approved",
-                    "redirect_query_not_allowed",
-                }:
+                if not retain_refused_redirect:
                     raise
-                destination = _resolve_redirect_location(current_url, location)
+                if exc.reason in _RETAINED_REDIRECT_REFUSALS_WITHOUT_DESTINATION:
+                    destination = None
+                elif exc.reason in _RETAINED_REDIRECT_REFUSALS_WITH_DESTINATION:
+                    destination = _resolve_redirect_location(current_url, location)
+                else:
+                    raise
                 return InternalHTTPResponse(
                     requested_url=requested_url,
                     final_url=current_url,
@@ -721,9 +796,35 @@ class InternalHTTPExecutor:
                 destination,
                 stage="redirect",
             )
-            redirect_ipv4 = self._select_programme_scope_peer(
-                redirect_decision,
-            )
+            try:
+                redirect_ipv4 = self._select_programme_scope_peer(
+                    redirect_decision,
+                )
+            except HTTPTransportFailure as exc:
+                if (
+                    not retain_refused_redirect
+                    or not retain_redirect_followup_failure
+                    or exc.category
+                    not in ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
+                ):
+                    raise
+                return InternalHTTPResponse(
+                    requested_url=requested_url,
+                    final_url=current_url,
+                    status_code=response.status_code,
+                    headers=response.headers,
+                    body=response.body,
+                    elapsed_seconds=max(
+                        0.0,
+                        float(_monotonic_decimal(self._monotonic) - started),
+                    ),
+                    redirects=tuple(redirects),
+                    redirect_followup_failure=HTTPRedirectFollowupFailure(
+                        source_url=current_url,
+                        destination_url=destination,
+                        category=exc.category,
+                    ),
+                )
             redirects.append(
                 HTTPRedirectHop(
                     status_code=response.status_code,
@@ -732,6 +833,7 @@ class InternalHTTPExecutor:
                 )
             )
             visited.add(destination)
+            pending_redirect_response = (current_url, destination, response)
             current_url = destination
             selected_ipv4 = redirect_ipv4
 
@@ -1253,7 +1355,7 @@ class PeerBoundHTTPTransport:
                     context.verify_mode != ssl.CERT_REQUIRED
                     or context.check_hostname is not True
                 ):
-                    raise HTTPTransportFailure("tls_error")
+                    raise HTTPTransportFailure(TLS_CONFIGURATION_FAILURE_CATEGORY)
                 context.set_alpn_protocols(["http/1.1"])
                 if context.post_handshake_auth is not None:
                     context.post_handshake_auth = True

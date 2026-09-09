@@ -2312,17 +2312,28 @@ def _step_runners(
             item.failed_candidate_count
             for item in getattr(native_result, "origin_results", ())
         )
-        if failed_candidate_count:
+        redirect_followup_failure_count = sum(
+            getattr(item, "redirect_followup_failure_count", 0)
+            for item in getattr(native_result, "origin_results", ())
+        )
+        if failed_candidate_count or redirect_followup_failure_count:
             warnings = []
             if refused_origin_count:
                 warnings.append(
                     f"{refused_origin_count} refused origin"
                     f"{'s' if refused_origin_count != 1 else ''}"
                 )
-            warnings.append(
-                f"{failed_candidate_count} response-less candidate transport "
-                f"failure{'s' if failed_candidate_count != 1 else ''} recorded"
-            )
+            if failed_candidate_count:
+                warnings.append(
+                    f"{failed_candidate_count} response-less candidate transport "
+                    f"failure{'s' if failed_candidate_count != 1 else ''} recorded"
+                )
+            if redirect_followup_failure_count:
+                warnings.append(
+                    f"{redirect_followup_failure_count} candidate redirect follow-up "
+                    f"transport failure"
+                    f"{'s' if redirect_followup_failure_count != 1 else ''} recorded"
+                )
             completion = " completed with warnings: " + "; ".join(warnings)
         elif refused_origin_count:
             completion = (
@@ -2833,8 +2844,8 @@ def _register_native_content_discovery_coverage_artifact(
             "type": "content_discovery_coverage",
             "file": coverage_path.name,
             "description": (
-                "BugSlyce-native candidate execution coverage and response-less "
-                "failure provenance"
+                "BugSlyce-native candidate execution coverage and bounded "
+                "transport-failure provenance"
             ),
             "tags": ["native_coverage", "wp4a_native"],
         },

@@ -422,7 +422,7 @@ def test_later_origin_failure_preserves_baseline_and_retry_requires_fresh_output
             return 404, b"negative"
         if url == "https://api.example.test/admin":
             return 200, b"first origin"
-        raise OSError("synthetic later-origin failure")
+        raise HTTPTransportFailure("invalid_resolver_result")
 
     output = tmp_path / "output"
     failing_executor, failing_transport = _native_executor(
@@ -433,7 +433,7 @@ def test_later_origin_failure_preserves_baseline_and_retry_requires_fresh_output
         fail_later,
     )
     try:
-        with pytest.raises(HTTPTransportFailure, match="transport_error"):
+        with pytest.raises(HTTPTransportFailure, match="invalid_resolver_result"):
             _run(
                 module,
                 runtime,

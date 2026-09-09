@@ -3427,9 +3427,33 @@ def test_pipeline_records_noop_followups_and_continues(
     assert "export" in calls
 
 
+@pytest.mark.parametrize(
+    ("response_less_count", "redirect_followup_count", "expected_warning"),
+    (
+        (
+            1,
+            0,
+            "1 response-less candidate transport failure recorded",
+        ),
+        (
+            0,
+            1,
+            "1 candidate redirect follow-up transport failure recorded",
+        ),
+        (
+            1,
+            1,
+            "1 response-less candidate transport failure recorded; "
+            "1 candidate redirect follow-up transport failure recorded",
+        ),
+    ),
+)
 def test_pipeline_records_native_transport_coverage_warning_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    response_less_count: int,
+    redirect_followup_count: int,
+    expected_warning: str,
 ) -> None:
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
@@ -3443,7 +3467,8 @@ def test_pipeline_records_native_transport_coverage_warning_and_continues(
                     baseline_decision=SimpleNamespace(
                         selected_policy="native_conventional_negative"
                     ),
-                    failed_candidate_count=1,
+                    failed_candidate_count=response_less_count,
+                    redirect_followup_failure_count=redirect_followup_count,
                 ),
             )
         )
@@ -3464,7 +3489,7 @@ def test_pipeline_records_native_transport_coverage_warning_and_continues(
     assert steps["PIPELINE-STEP-007"].status == "completed"
     assert steps["PIPELINE-STEP-007"].message == (
         "BugSlyce-native deep-bounded-core content discovery completed with "
-        "warnings: 1 response-less candidate transport failure recorded."
+        f"warnings: {expected_warning}."
     )
     assert steps["PIPELINE-STEP-008"].status == "completed"
     assert calls.index("native-content-run") < calls.index("content-followup")
