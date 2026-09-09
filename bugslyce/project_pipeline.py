@@ -133,6 +133,7 @@ from bugslyce.recon.evidence_pack_closure import (
     EvidencePackReference,
     evidence_pack_references_from_deep_models,
 )
+from bugslyce.recon.http_enforcement import InternalHTTPExecutionError
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.http_metadata import (
     run_http_metadata_workflow,
@@ -877,6 +878,26 @@ def run_project_pipeline(
                 )
                 deferred_failure_diagnostic = diagnostic
                 continue
+            raise ProjectPipelineFailed(diagnostic, result) from exc
+        except InternalHTTPExecutionError as exc:
+            diagnostic = format_exception_diagnostic(exc)
+            result = _failed_result(
+                result,
+                index,
+                started_step,
+                diagnostic,
+                clock,
+            )
+            _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
+            result = _reconcile_failed_pipeline_outputs(
+                result,
+                project_file,
+                scope_file,
+                context,
+                clock,
+                preserve_canonical_pipeline_metadata,
+            )
+            _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(diagnostic, result) from exc
         except (ValueError, OSError) as exc:
             diagnostic = format_exception_diagnostic(exc)

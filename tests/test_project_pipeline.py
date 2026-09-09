@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,6 +93,13 @@ from bugslyce.recon.collection_confidence import (
 from bugslyce.recon.path_followup import PathFollowupNoWork
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.evidence_pack_closure import validate_evidence_pack_root
+from bugslyce.recon.http_enforcement import (
+    HTTPEnforcementConfiguration,
+    HTTPRateRejected,
+    HTTPTransportResponse,
+    InternalHTTPExecutor,
+)
+from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.project_runtime import build_bug_bounty_project_runtime
 from bugslyce.recon.status import build_recon_status, render_recon_status_markdown
 from bugslyce.reports.analysis_coverage import (
@@ -4165,6 +4173,127 @@ def test_deep_content_failure_continues_independent_deep_and_local_steps(
         guidance[1]
     )
     assert "remains classified as failed" in guidance[2]
+
+
+def test_terminal_internal_http_failure_uses_normal_failed_step_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    transmitted_urls: list[str] = []
+    source_url = "https://example.test/candidate"
+    retry_after = "17"
+    private_body = b"PRIVATE-RATE-LIMIT-BODY-9173"
+    origin = http_origin_from_url("https://example.test")
+    assert origin is not None
+
+    def transport(request):
+        transmitted_urls.append(request.url)
+        return HTTPTransportResponse(
+            status_code=429,
+            headers=(("Retry-After", retry_after),),
+            body=private_body,
+        )
+
+    executor = InternalHTTPExecutor(
+        HTTPEnforcementConfiguration(
+            maximum_request_starts_per_second=Decimal("1000"),
+            maximum_concurrent_requests=1,
+            user_agent="BugSlyce-Pipeline-Rate-Test/1.0",
+            identification_headers=(),
+            approved_origins=(origin,),
+        ),
+        transport=transport,
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(_context, *_args, **_kwargs):
+        def run(step_id: str):
+            def runner():
+                calls.append(step_id)
+                if step_id == "PIPELINE-STEP-007":
+                    executor.request(source_url)
+                return f"{step_id} completed.", [], {}
+
+            return runner
+
+        return {
+            step.step_id: run(step.step_id)
+            for step in _pending_steps(DEEP_PIPELINE_PROFILE)
+        }
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+    except HTTPRateRejected as exc:
+        assert exc.status_code == 429
+        assert exc.retry_after == retry_after
+        assert str(exc) == (
+            "The target returned HTTP 429; internal HTTP collection stopped. "
+            "Retry-After: 17."
+        )
+        assert private_body.decode("ascii") not in str(exc)
+        assert transmitted_urls == [source_url]
+        with pytest.raises(HTTPRateRejected) as terminal_exc:
+            executor.request("https://example.test/later")
+        assert terminal_exc.value.status_code == 429
+        assert terminal_exc.value.retry_after == retry_after
+        assert transmitted_urls == [source_url]
+        assert calls[-1] == "PIPELINE-STEP-007"
+        assert "PIPELINE-STEP-008" not in calls
+
+        checkpoint_path = output_dir / PIPELINE_JSON_FILENAME
+        assert checkpoint_path.is_file()
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        steps = {step["step_id"]: step for step in checkpoint["steps"]}
+        assert checkpoint["final_status"] == "running"
+        assert checkpoint["failed_step"] is None
+        assert steps["PIPELINE-STEP-007"]["status"] == "running"
+        assert steps["PIPELINE-STEP-007"]["message"] == ""
+        assert steps["PIPELINE-STEP-008"]["status"] == "pending"
+        raise
+    except ProjectPipelineFailed as exc:
+        assert isinstance(exc.__cause__, HTTPRateRejected)
+        result = exc.result
+        steps = {step.step_id: step for step in result.steps}
+        assert result.final_status == "failed"
+        assert result.failed_step == "PIPELINE-STEP-007"
+        assert steps["PIPELINE-STEP-007"].status == "failed"
+        assert steps["PIPELINE-STEP-007"].message == (
+            "The target returned HTTP 429; internal HTTP collection stopped. "
+            "Retry-After: 17."
+        )
+        assert steps["PIPELINE-STEP-008"].status == "pending"
+        assert "PIPELINE-STEP-008" not in calls
+        checkpoint = json.loads(
+            (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+        )
+        checkpoint_steps = {
+            step["step_id"]: step for step in checkpoint["steps"]
+        }
+        assert checkpoint["final_status"] == "failed"
+        assert checkpoint["failed_step"] == "PIPELINE-STEP-007"
+        assert checkpoint_steps["PIPELINE-STEP-007"]["status"] == "failed"
+        assert checkpoint_steps["PIPELINE-STEP-008"]["status"] == "pending"
+        assert transmitted_urls == [source_url]
+        with pytest.raises(HTTPRateRejected):
+            executor.request("https://example.test/later")
+        assert transmitted_urls == [source_url]
+    else:
+        pytest.fail("Terminal internal HTTP failure did not stop the pipeline.")
 
 
 def test_native_baseline_refusal_artifact_is_retained_in_pipeline_failure_provenance(
