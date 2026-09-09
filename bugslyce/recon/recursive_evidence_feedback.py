@@ -46,7 +46,6 @@ from bugslyce.recon.javascript_semantic_context import (
     ROUTE_CONFIGURATION,
 )
 from bugslyce.recon.native_content_discovery import (
-    MAXIMUM_NATIVE_CANDIDATE_REQUESTS,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryRequest,
     build_native_content_discovery_http_executor,
@@ -85,6 +84,7 @@ REASON_SCOPE_UNKNOWN = "programme_scope_unknown"
 REASON_UNMATERIALISED_ORIGIN = "unmaterialised_origin"
 REASON_PER_ORIGIN_LIMIT = "per_origin_limit_exceeded"
 REASON_TOTAL_LIMIT = "total_request_limit_exceeded"
+MAXIMUM_RECURSIVE_EVIDENCE_FEEDBACK_REQUESTS = 4_096
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,9 @@ class RecursiveEvidenceFeedbackLimits:
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
-                or not 1 <= value <= MAXIMUM_NATIVE_CANDIDATE_REQUESTS
+                or not 1
+                <= value
+                <= MAXIMUM_RECURSIVE_EVIDENCE_FEEDBACK_REQUESTS
             ):
                 raise ValueError("Recursive evidence feedback request budget is invalid.")
         if (

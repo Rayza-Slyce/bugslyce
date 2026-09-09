@@ -31,7 +31,6 @@ from bugslyce.recon.content_run import (
     BASELINE_REQUEST_COUNT,
     BASELINE_REQUEST_TIMEOUT_SECONDS,
     INTERNAL_COMPARATOR_ARTIFACT_TYPE,
-    MAX_INTERNAL_COMPARATOR_CANDIDATES,
     ContentBaselineDecision,
     collect_content_discovery_baseline,
     render_content_discovery_baseline_artifact,
@@ -66,7 +65,9 @@ NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION = "1.0"
 ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES = (
     ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
 )
-MAXIMUM_NATIVE_CANDIDATE_REQUESTS = MAX_INTERNAL_COMPARATOR_CANDIDATES
+MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS = 35_060
+MAXIMUM_NATIVE_CANDIDATE_REQUESTS_PER_ORIGIN = 4_096
+MAXIMUM_NATIVE_WORDLIST_ENTRIES = 4_096
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
 _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN = 20
 _NATIVE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -80,16 +81,22 @@ class NativeContentDiscoveryLimits:
     maximum_candidate_requests_per_origin: int
 
     def __post_init__(self) -> None:
-        for value in (
-            self.maximum_total_candidate_requests,
-            self.maximum_candidate_requests_per_origin,
+        if (
+            isinstance(self.maximum_total_candidate_requests, bool)
+            or not isinstance(self.maximum_total_candidate_requests, int)
+            or not 1
+            <= self.maximum_total_candidate_requests
+            <= MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS
         ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 1 <= value <= MAXIMUM_NATIVE_CANDIDATE_REQUESTS
-            ):
-                raise ValueError("Native content discovery request budget is invalid.")
+            raise ValueError("Native content discovery total request budget is invalid.")
+        if (
+            isinstance(self.maximum_candidate_requests_per_origin, bool)
+            or not isinstance(self.maximum_candidate_requests_per_origin, int)
+            or not 1
+            <= self.maximum_candidate_requests_per_origin
+            <= MAXIMUM_NATIVE_CANDIDATE_REQUESTS_PER_ORIGIN
+        ):
+            raise ValueError("Native content discovery per-origin budget is invalid.")
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,35 @@ class NativeContentDiscoveryRequest:
 
 
 @dataclass(frozen=True)
+class NativeContentDiscoveryOriginAllocation:
+    """One origin's eligible capacity and fair share of the total budget."""
+
+    canonical_origin: str
+    candidate_requests_eligible: int
+    candidate_requests_planned: int
+
+    def __post_init__(self) -> None:
+        origin = http_origin_from_url(self.canonical_origin)
+        if origin is None or origin.origin_url != self.canonical_origin:
+            raise ValueError("Native content discovery allocation origin is invalid.")
+        if (
+            isinstance(self.candidate_requests_eligible, bool)
+            or not isinstance(self.candidate_requests_eligible, int)
+            or self.candidate_requests_eligible < 0
+            or isinstance(self.candidate_requests_planned, bool)
+            or not isinstance(self.candidate_requests_planned, int)
+            or not 0
+            <= self.candidate_requests_planned
+            <= self.candidate_requests_eligible
+        ):
+            raise ValueError("Native content discovery allocation count is invalid.")
+
+    @property
+    def candidate_requests_omitted_by_total_limit(self) -> int:
+        return self.candidate_requests_eligible - self.candidate_requests_planned
+
+
+@dataclass(frozen=True)
 class NativeContentDiscoveryPlan:
     """Immutable deterministic root-request plan for one approved profile."""
 
@@ -136,6 +172,7 @@ class NativeContentDiscoveryPlan:
     baseline_requests_per_origin: int
     candidate_requests_planned: int
     requests: tuple[NativeContentDiscoveryRequest, ...]
+    origin_allocations: tuple[NativeContentDiscoveryOriginAllocation, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.profile, str) or not self.profile:
@@ -158,6 +195,54 @@ class NativeContentDiscoveryPlan:
             )
         ):
             raise ValueError("Native content discovery requests are invalid.")
+        if (
+            not isinstance(self.origin_allocations, tuple)
+            or any(
+                not isinstance(item, NativeContentDiscoveryOriginAllocation)
+                for item in self.origin_allocations
+            )
+            or (not self.origin_allocations and self.candidate_requests_planned != 0)
+        ):
+            raise ValueError("Native content discovery origin allocations are invalid.")
+        allocation_origins = tuple(
+            item.canonical_origin for item in self.origin_allocations
+        )
+        if len(set(allocation_origins)) != len(allocation_origins):
+            raise ValueError("Native content discovery allocation origins are invalid.")
+        request_counts = {origin: 0 for origin in allocation_origins}
+        for request in self.requests:
+            if request.canonical_origin not in request_counts:
+                raise ValueError(
+                    "Native content discovery request has no origin allocation."
+                )
+            request_counts[request.canonical_origin] += 1
+        if any(
+            request_counts[item.canonical_origin] != item.candidate_requests_planned
+            for item in self.origin_allocations
+        ):
+            raise ValueError("Native content discovery allocation does not match requests.")
+        if (
+            sum(item.candidate_requests_planned for item in self.origin_allocations)
+            != self.candidate_requests_planned
+            or self.candidate_requests_planned
+            > self.limits.maximum_total_candidate_requests
+            or any(
+                item.candidate_requests_eligible
+                > self.limits.maximum_candidate_requests_per_origin
+                for item in self.origin_allocations
+            )
+        ):
+            raise ValueError("Native content discovery allocation exceeds its limits.")
+
+    @property
+    def candidate_requests_eligible(self) -> int:
+        return sum(
+            item.candidate_requests_eligible for item in self.origin_allocations
+        )
+
+    @property
+    def candidate_requests_omitted_by_total_limit(self) -> int:
+        return self.candidate_requests_eligible - self.candidate_requests_planned
 
 
 @dataclass(frozen=True)
@@ -422,22 +507,53 @@ def _build_native_content_discovery_plan_for_origins(
     profile_definition = get_content_discovery_profile(profile)
     entries = _load_profile_entries(profile_definition.wordlist)
 
-    planned: list[NativeContentDiscoveryRequest] = []
-    total = 0
+    eligible_urls_by_origin: list[tuple[str, tuple[str, ...]]] = []
     for origin in origins:
-        if total >= limits.maximum_total_candidate_requests:
-            break
         seen_urls: set[str] = set()
-        per_origin = 0
+        eligible_urls: list[str] = []
         for entry in entries:
             candidate_url = _profile_candidate_url(origin, entry)
             if candidate_url in seen_urls:
                 continue
             seen_urls.add(candidate_url)
-            if per_origin >= limits.maximum_candidate_requests_per_origin:
+            if len(eligible_urls) >= limits.maximum_candidate_requests_per_origin:
                 break
-            if total >= limits.maximum_total_candidate_requests:
+            eligible_urls.append(candidate_url)
+        eligible_urls_by_origin.append((origin, tuple(eligible_urls)))
+
+    planned_counts = [0] * len(eligible_urls_by_origin)
+    remaining = min(
+        limits.maximum_total_candidate_requests,
+        sum(len(urls) for _origin, urls in eligible_urls_by_origin),
+    )
+    while remaining:
+        allocated_this_round = False
+        for index, (_origin, urls) in enumerate(eligible_urls_by_origin):
+            if planned_counts[index] >= len(urls):
+                continue
+            planned_counts[index] += 1
+            remaining -= 1
+            allocated_this_round = True
+            if remaining == 0:
                 break
+        if not allocated_this_round:
+            raise ValueError("Native content discovery allocation could not progress.")
+
+    planned: list[NativeContentDiscoveryRequest] = []
+    allocations: list[NativeContentDiscoveryOriginAllocation] = []
+    for (origin, eligible_urls), planned_count in zip(
+        eligible_urls_by_origin,
+        planned_counts,
+        strict=True,
+    ):
+        allocations.append(
+            NativeContentDiscoveryOriginAllocation(
+                canonical_origin=origin,
+                candidate_requests_eligible=len(eligible_urls),
+                candidate_requests_planned=planned_count,
+            )
+        )
+        for candidate_url in eligible_urls[:planned_count]:
             planned.append(
                 NativeContentDiscoveryRequest(
                     url=candidate_url,
@@ -447,8 +563,6 @@ def _build_native_content_discovery_plan_for_origins(
                     evidence_ids=(),
                 )
             )
-            per_origin += 1
-            total += 1
 
     return NativeContentDiscoveryPlan(
         profile=profile_definition.name,
@@ -456,6 +570,7 @@ def _build_native_content_discovery_plan_for_origins(
         baseline_requests_per_origin=BASELINE_REQUEST_COUNT,
         candidate_requests_planned=len(planned),
         requests=tuple(planned),
+        origin_allocations=tuple(allocations),
     )
 
 
@@ -605,9 +720,11 @@ def _execute_native_plan(
     token_factory,
     progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
 ) -> NativeContentDiscoveryResult:
-    requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {}
+    requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {
+        allocation.canonical_origin: [] for allocation in plan.origin_allocations
+    }
     for request in plan.requests:
-        requests_by_origin.setdefault(request.canonical_origin, []).append(request)
+        requests_by_origin[request.canonical_origin].append(request)
 
     baselines: dict[str, ContentBaselineDecision] = {}
     for origin in requests_by_origin:
@@ -833,9 +950,11 @@ def render_native_content_discovery_coverage_artifact(
 
     if not isinstance(plan, NativeContentDiscoveryPlan):
         raise ValueError("Native content discovery coverage plan is invalid.")
-    planned_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {}
+    planned_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {
+        allocation.canonical_origin: [] for allocation in plan.origin_allocations
+    }
     for request in plan.requests:
-        planned_by_origin.setdefault(request.canonical_origin, []).append(request)
+        planned_by_origin[request.canonical_origin].append(request)
     if (
         not isinstance(origin_results, tuple)
         or tuple(item.canonical_origin for item in origin_results)
@@ -849,7 +968,13 @@ def render_native_content_discovery_coverage_artifact(
     total_failed = 0
     total_redirect_followup_failed = 0
     total_unattempted = 0
+    total_eligible = 0
+    total_omitted_by_total_limit = 0
+    allocations_by_origin = {
+        item.canonical_origin: item for item in plan.origin_allocations
+    }
     for result in origin_results:
+        allocation = allocations_by_origin[result.canonical_origin]
         planned_requests = planned_by_origin[result.canonical_origin]
         planned_urls = {request.url for request in planned_requests}
         if any(
@@ -896,7 +1021,11 @@ def render_native_content_discovery_coverage_artifact(
             {
                 "canonical_origin": result.canonical_origin,
                 "selected_baseline_policy": result.baseline_decision.selected_policy,
+                "candidate_requests_eligible": allocation.candidate_requests_eligible,
                 "candidate_requests_planned": planned,
+                "candidate_requests_omitted_by_total_limit": (
+                    allocation.candidate_requests_omitted_by_total_limit
+                ),
                 "candidate_requests_attempted": attempted,
                 "candidate_responses_observed": observed,
                 "suppressed_candidate_count": result.suppressed_candidate_count,
@@ -930,12 +1059,20 @@ def render_native_content_discovery_coverage_artifact(
         total_failed += failed
         total_redirect_followup_failed += result.redirect_followup_failure_count
         total_unattempted += unattempted
+        total_eligible += allocation.candidate_requests_eligible
+        total_omitted_by_total_limit += (
+            allocation.candidate_requests_omitted_by_total_limit
+        )
 
     payload = {
         "schema_version": NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION,
         "created_by": NATIVE_CONTENT_COVERAGE_CREATED_BY,
         "profile": plan.profile,
+        "candidate_requests_eligible": plan.candidate_requests_eligible,
         "candidate_requests_planned": plan.candidate_requests_planned,
+        "candidate_requests_omitted_by_total_limit": (
+            plan.candidate_requests_omitted_by_total_limit
+        ),
         "candidate_requests_attempted": total_attempted,
         "candidate_responses_observed": total_observed,
         "failed_candidate_count": total_failed,
@@ -945,6 +1082,14 @@ def render_native_content_discovery_coverage_artifact(
     }
     if total_attempted + total_unattempted != plan.candidate_requests_planned:
         raise ValueError("Native content discovery aggregate coverage is invalid.")
+    if (
+        total_eligible != plan.candidate_requests_eligible
+        or total_omitted_by_total_limit
+        != plan.candidate_requests_omitted_by_total_limit
+        or total_eligible
+        != plan.candidate_requests_planned + total_omitted_by_total_limit
+    ):
+        raise ValueError("Native content discovery planning coverage is invalid.")
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
@@ -1178,7 +1323,7 @@ def _load_profile_entries(wordlist: Path) -> tuple[str, ...]:
         )
     except (OSError, UnicodeError):
         raise ValueError("Approved native content discovery wordlist is unreadable.") from None
-    if not entries or len(entries) > MAXIMUM_NATIVE_CANDIDATE_REQUESTS:
+    if not entries or len(entries) > MAXIMUM_NATIVE_WORDLIST_ENTRIES:
         raise ValueError("Approved native content discovery wordlist exceeds bounds.")
     return entries
 

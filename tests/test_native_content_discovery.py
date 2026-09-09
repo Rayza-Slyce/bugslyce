@@ -371,6 +371,12 @@ def test_runtime_less_native_execution_refuses_plan_origin_not_backed_by_current
                 canonical_origin="https://unrelated.example.test",
             ),
         ),
+        origin_allocations=(
+            replace(
+                plan.origin_allocations[0],
+                canonical_origin="https://unrelated.example.test",
+            ),
+        ),
     )
 
     with pytest.raises(ValueError, match="request binding is not canonical"):
@@ -660,7 +666,9 @@ def test_native_root_plan_has_explicit_budgets_metadata_and_deduplicates_before_
     assert first == second
     assert first.limits == limits
     assert first.baseline_requests_per_origin == 3
+    assert first.candidate_requests_eligible == 2
     assert first.candidate_requests_planned == 2
+    assert first.candidate_requests_omitted_by_total_limit == 0
     assert tuple(request.url for request in first.requests) == (
         "https://app.example.test/health",
         "https://app.example.test/admin",
@@ -669,6 +677,76 @@ def test_native_root_plan_has_explicit_budgets_metadata_and_deduplicates_before_
     assert all(request.depth == 0 for request in first.requests)
     assert all(request.selection_reason == "profile_wordlist" for request in first.requests)
     assert all(request.evidence_ids == () for request in first.requests)
+
+
+def test_native_root_plan_allocates_truncated_total_fairly_across_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("one", "two", "three"))
+    module = _native_module()
+    origins = tuple(f"https://app-{index:02d}.example.test" for index in range(3))
+
+    plan = module._build_native_content_discovery_plan_for_origins(
+        origins,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=5,
+            maximum_candidate_requests_per_origin=3,
+        ),
+    )
+
+    planned_counts = tuple(
+        sum(request.canonical_origin == origin for request in plan.requests)
+        for origin in origins
+    )
+    assert planned_counts == (2, 2, 1)
+    assert max(planned_counts) - min(planned_counts) <= 1
+    assert plan.candidate_requests_eligible == 9
+    assert plan.candidate_requests_omitted_by_total_limit == 4
+
+
+def test_native_root_plan_fills_twenty_origins_and_fairly_caps_later_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("one", "two", "three"))
+    module = _native_module()
+    twenty_origins = tuple(
+        f"https://app-{index:02d}.example.test" for index in range(20)
+    )
+    full_plan = module._build_native_content_discovery_plan_for_origins(
+        twenty_origins,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=60,
+            maximum_candidate_requests_per_origin=3,
+        ),
+    )
+    assert tuple(
+        sum(request.canonical_origin == origin for request in full_plan.requests)
+        for origin in twenty_origins
+    ) == (3,) * 20
+
+    twenty_one_origins = (
+        *twenty_origins,
+        "https://app-20.example.test",
+    )
+    capped_plan = module._build_native_content_discovery_plan_for_origins(
+        twenty_one_origins,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=60,
+            maximum_candidate_requests_per_origin=3,
+        ),
+    )
+    capped_counts = tuple(
+        sum(request.canonical_origin == origin for request in capped_plan.requests)
+        for origin in twenty_one_origins
+    )
+    assert sum(capped_counts) == 60
+    assert capped_counts == (3,) * 18 + (2,) * 3
+    assert max(capped_counts) - min(capped_counts) <= 1
 
 
 def test_native_root_contract_rejects_invalid_limits_depth_and_escaping_urls() -> None:
@@ -683,6 +761,16 @@ def test_native_root_contract_rejects_invalid_limits_depth_and_escaping_urls() -
         module.NativeContentDiscoveryLimits(
             maximum_total_candidate_requests=1,
             maximum_candidate_requests_per_origin=0,
+        )
+    with pytest.raises(ValueError, match="budget|limit"):
+        module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=35_061,
+            maximum_candidate_requests_per_origin=1,
+        )
+    with pytest.raises(ValueError, match="budget|limit"):
+        module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=1,
+            maximum_candidate_requests_per_origin=4_097,
         )
     with pytest.raises(ValueError, match="depth"):
         module.NativeContentDiscoveryRequest(
@@ -820,7 +908,9 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         "schema_version": "1.0",
         "created_by": "bugslyce-native-content-coverage",
         "profile": PROFILE,
+        "candidate_requests_eligible": 2,
         "candidate_requests_planned": 2,
+        "candidate_requests_omitted_by_total_limit": 0,
         "candidate_requests_attempted": 2,
         "candidate_responses_observed": 2,
         "failed_candidate_count": 0,
@@ -830,7 +920,9 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
             {
                 "canonical_origin": "https://app.example.test",
                 "selected_baseline_policy": "native_conventional_negative",
+                "candidate_requests_eligible": 2,
                 "candidate_requests_planned": 2,
+                "candidate_requests_omitted_by_total_limit": 0,
                 "candidate_requests_attempted": 2,
                 "candidate_responses_observed": 2,
                 "suppressed_candidate_count": 1,
@@ -1033,7 +1125,7 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    _install_profile(monkeypatch, tmp_path, ("candidate-one", "candidate-two"))
     runtime = _runtime(tmp_path / "runtime")
     state = _state(
         runtime,
@@ -1065,7 +1157,7 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
         state,
         orchestration,
         profile=PROFILE,
-        limits=module.NativeContentDiscoveryLimits(3, 1),
+        limits=module.NativeContentDiscoveryLimits(4, 2),
     )
     unstable_bodies = iter(
         (
@@ -1126,6 +1218,7 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
     ]
     assert candidate_origins == [
         "http://app.example.test",
+        "http://app.example.test",
         "https://app.example.test",
     ]
     assert [
@@ -1152,18 +1245,32 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
     ) == 3
     assert not any("8080" in artifact.path.name for artifact in result.artifacts)
     coverage = json.loads(result.coverage_artifact_path.read_text(encoding="utf-8"))
-    assert coverage["candidate_requests_planned"] == 3
-    assert coverage["candidate_requests_attempted"] == 2
-    assert coverage["candidate_responses_observed"] == 2
+    assert coverage["candidate_requests_eligible"] == 6
+    assert coverage["candidate_requests_planned"] == 4
+    assert coverage["candidate_requests_omitted_by_total_limit"] == 2
+    assert coverage["candidate_requests_attempted"] == 3
+    assert coverage["candidate_responses_observed"] == 3
     assert coverage["failed_candidate_count"] == 0
     assert coverage["candidate_requests_unattempted"] == 1
+    assert coverage["candidate_requests_eligible"] == (
+        coverage["candidate_requests_planned"]
+        + coverage["candidate_requests_omitted_by_total_limit"]
+    )
+    assert all(
+        item["candidate_requests_eligible"]
+        == item["candidate_requests_planned"]
+        + item["candidate_requests_omitted_by_total_limit"]
+        for item in coverage["origins"]
+    )
     refused_coverage = next(
         item
         for item in coverage["origins"]
         if item["canonical_origin"] == "http://app.example.test:8080"
     )
     assert refused_coverage["selected_baseline_policy"] == "refuse"
+    assert refused_coverage["candidate_requests_eligible"] == 2
     assert refused_coverage["candidate_requests_planned"] == 1
+    assert refused_coverage["candidate_requests_omitted_by_total_limit"] == 1
     assert refused_coverage["candidate_requests_attempted"] == 0
     assert refused_coverage["candidate_responses_observed"] == 0
     assert refused_coverage["failed_candidate_count"] == 0
@@ -1414,7 +1521,9 @@ def test_native_candidate_transport_failure_does_not_prevent_later_candidate(
             {
                 "canonical_origin": "https://app.example.test",
                 "selected_baseline_policy": "native_conventional_negative",
+                "candidate_requests_eligible": 2,
                 "candidate_requests_planned": 2,
+                "candidate_requests_omitted_by_total_limit": 0,
                 "candidate_requests_attempted": 2,
                 "candidate_responses_observed": 1,
                 "suppressed_candidate_count": 1,

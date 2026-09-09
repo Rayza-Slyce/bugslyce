@@ -42,6 +42,7 @@ from bugslyce.recon.native_content_discovery import (
     NativeContentDiscoveryArtifact,
     NativeContentDiscoveryBaselineRefused,
     NativeContentDiscoveryLimits,
+    NativeContentDiscoveryOriginAllocation,
     NativeContentDiscoveryOriginResult,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryRequest,
@@ -256,6 +257,13 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
                     evidence_ids=(),
                 ),
             ),
+            origin_allocations=(
+                NativeContentDiscoveryOriginAllocation(
+                    canonical_origin="https://app.example.test",
+                    candidate_requests_eligible=1,
+                    candidate_requests_planned=1,
+                ),
+            ),
         )
         observed["root_plan"] = plan
         return plan
@@ -327,7 +335,7 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
     limits = build_inputs[4]
     assert isinstance(limits, NativeContentDiscoveryLimits)
     assert limits.maximum_candidate_requests_per_origin == per_origin_limit
-    assert limits.maximum_total_candidate_requests == 4096
+    assert limits.maximum_total_candidate_requests == 35_060
     assert build_inputs[:4] == (
         runtime,
         state,

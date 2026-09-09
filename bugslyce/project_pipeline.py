@@ -168,6 +168,7 @@ from bugslyce.recon.path_followup import (
     write_path_followup_execution_result,
 )
 from bugslyce.recon.native_content_discovery import (
+    MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS,
     NativeContentDiscoveryBaselineRefused,
     NativeContentDiscoveryLimits,
     NativeContentDiscoveryPlan,
@@ -1945,7 +1946,7 @@ def _content_discovery_profile_for_pipeline(profile: str) -> str:
     return CONTENT_DISCOVERY_TINY_PROFILE
 
 
-_NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT = 4096
+_NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT = MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS
 _NATIVE_PER_ORIGIN_LIMIT_BY_CONTENT_PROFILE = {
     CONTENT_DISCOVERY_TINY_PROFILE: 25,
     STANDARD_BOUNDED_CORE_PROFILE: 220,

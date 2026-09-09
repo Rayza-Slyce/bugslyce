@@ -57,6 +57,8 @@ def test_comparator_budget_is_deterministic_and_capped_at_two_hours() -> None:
     assert calculate_content_comparator_runtime_budget(1753, Decimal("2")) == 2690
     assert calculate_content_comparator_runtime_budget(1753, Decimal("2")) == 2690
     assert calculate_content_comparator_runtime_budget(4096, Decimal("0.1")) == 7200
+    with pytest.raises(ValueError, match="outside bounds"):
+        calculate_content_comparator_runtime_budget(4097, Decimal("1"))
 
 
 def test_variable_body_conventional_404_selects_gobuster() -> None:

@@ -31,6 +31,7 @@ from bugslyce.recon.http_enforcement import (
 )
 from bugslyce.recon.native_content_discovery import (
     NativeContentDiscoveryLimits,
+    NativeContentDiscoveryOriginAllocation,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryRequest,
 )
@@ -188,6 +189,18 @@ def _root_plan(*urls: str) -> NativeContentDiscoveryPlan:
         baseline_requests_per_origin=3,
         candidate_requests_planned=len(requests),
         requests=requests,
+        origin_allocations=tuple(
+            NativeContentDiscoveryOriginAllocation(
+                canonical_origin=origin,
+                candidate_requests_eligible=sum(
+                    request.canonical_origin == origin for request in requests
+                ),
+                candidate_requests_planned=sum(
+                    request.canonical_origin == origin for request in requests
+                ),
+            )
+            for origin in dict.fromkeys(request.canonical_origin for request in requests)
+        ),
     )
 
 
