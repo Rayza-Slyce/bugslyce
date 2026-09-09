@@ -14,6 +14,8 @@ SUPPORTED_ARTIFACT_TYPES = {
     "nmap",
     "gobuster",
     "content_discovery_internal",
+    "content_discovery_coverage",
+    "content_discovery_baseline",
     "http_headers",
     "robots",
     "html",

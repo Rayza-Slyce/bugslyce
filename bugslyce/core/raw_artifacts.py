@@ -25,6 +25,10 @@ from bugslyce.core.models import (
 )
 from bugslyce.core.normalise import dedupe_preserve_order, normalise_hostname, normalise_url
 from bugslyce.core.programme_scope import canonicalise_hostname
+from bugslyce.parsers.content_discovery import (
+    native_content_discovery_outcome_context,
+    parse_content_discovery,
+)
 from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
@@ -130,8 +134,22 @@ def assemble_raw_artifacts(
                 host_tags,
                 endpoint_tags,
             )
-        elif context.type in {"gobuster", "content_discovery_internal"}:
+        elif context.type == "gobuster":
             _assemble_gobuster(
+                context,
+                default_host,
+                evidence,
+                asset_evidence,
+                asset_sources,
+                endpoint_records,
+                endpoint_order,
+                discovered_paths,
+                processed_files,
+                warnings,
+                endpoint_tags,
+            )
+        elif context.type == "content_discovery_internal":
+            _assemble_native_content_discovery(
                 context,
                 default_host,
                 evidence,
@@ -554,6 +572,63 @@ def _assemble_gobuster(
         record.evidence_ids = [evidence_id]
         record.tags = dedupe_preserve_order(
             [
+                *_discovered_path_tags(record.url, record.status_code, endpoint_tags),
+                *_metadata_tags(context.metadata),
+            ]
+        )
+        discovered_paths.append(record)
+        host = normalise_hostname(urlparse(record.url).hostname or "")
+        if host:
+            _link_asset(asset_evidence, asset_sources, host, evidence_id, record.source)
+            _merge_endpoint_from_url(
+                endpoint_records,
+                endpoint_order,
+                record.url,
+                evidence_id,
+                endpoint_tags,
+                record.tags,
+            )
+
+
+def _assemble_native_content_discovery(
+    context: _ArtifactContext,
+    default_host: str | None,
+    evidence: list[Evidence],
+    asset_evidence: dict[str, list[str]],
+    asset_sources: dict[str, list[str]],
+    endpoint_records: dict[str, Endpoint],
+    endpoint_order: list[str],
+    discovered_paths: list[DiscoveredPath],
+    processed_files: list[str],
+    warnings: list[str],
+    endpoint_tags: Callable[[str, list[str]], list[str]],
+) -> None:
+    base_url = _context_url(context, default_host, "content_discovery_internal")
+    records = _parse_present(
+        context.path,
+        lambda path: parse_content_discovery(path, base_url),
+        processed_files,
+        warnings,
+    )
+    for record in records:
+        evidence_id = _append_evidence(
+            evidence,
+            "PATH",
+            record.source,
+            "discovered_path",
+            record.url,
+            {
+                "status_code": record.status_code,
+                "content_length": record.content_length,
+                "redirect_location": record.redirect_location,
+                **native_content_discovery_outcome_context(record.tags),
+                **_manifest_context(context.metadata),
+            },
+        )
+        record.evidence_ids = [evidence_id]
+        record.tags = dedupe_preserve_order(
+            [
+                *record.tags,
                 *_discovered_path_tags(record.url, record.status_code, endpoint_tags),
                 *_metadata_tags(context.metadata),
             ]

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from bugslyce.parsers.content_discovery import parse_content_discovery
 from bugslyce.parsers.gobuster import parse_gobuster
 from bugslyce.parsers.html import parse_html
 from bugslyce.parsers.http_headers import parse_http_headers
@@ -223,6 +226,89 @@ def test_gobuster_parser_extracts_varied_paths_status_size_and_redirect(tmp_path
     assert records[0].content_length == 415
     assert records[1].redirect_location == "https://app.example-bounty.test/archive/"
     assert records[2].status_code == 404
+
+
+def test_native_content_discovery_parser_extracts_current_records_and_safe_redirect_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "content-discovery-internal.txt"
+    source.write_text(
+        "\n".join(
+            [
+                "/privacy (Status: 307) [Size: 1000001] [redirect refused: unsupported_redirect]",
+                "/terms (Status: 307) [Size: 1000001] [redirect refused: malformed_location]",
+                "/archive (Status: 302) [Size: 0] [--> https://app.example.test/archive/]",
+                "/login (Status: 200) [Size: 42]",
+                "/redirect (Status: 302) [Size: 0] [redirect follow-up failed: tls_error --> https://cdn.example.test/login]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    records = parse_content_discovery(source, "https://app.example.test/")
+
+    assert [
+        (record.url, record.status_code, record.content_length, record.redirect_location)
+        for record in records
+    ] == [
+        ("https://app.example.test/privacy", 307, 1000001, None),
+        ("https://app.example.test/terms", 307, 1000001, None),
+        ("https://app.example.test/archive", 302, 0, "https://app.example.test/archive/"),
+        ("https://app.example.test/login", 200, 42, None),
+        ("https://app.example.test/redirect", 302, 0, "https://cdn.example.test/login"),
+    ]
+    assert records[0].tags == [
+        "native_redirect_refused",
+        "native_redirect_refused_unsupported_redirect",
+    ]
+    assert records[1].tags == [
+        "native_redirect_refused",
+        "native_redirect_refused_malformed_location",
+    ]
+    assert records[2].tags == []
+    assert records[3].tags == []
+    assert records[4].tags == [
+        "native_redirect_followup_failed",
+        "native_redirect_followup_failed_tls_error",
+    ]
+
+
+@pytest.mark.parametrize(
+    "category",
+    ("connect_error", "dns_error", "no_usable_ipv4", "timeout", "tls_error", "transport_error"),
+)
+def test_native_content_discovery_parser_tags_each_owned_followup_failure_category(
+    tmp_path: Path,
+    category: str,
+) -> None:
+    source = tmp_path / "content-discovery-internal.txt"
+    source.write_text(
+        "/redirect (Status: 302) [Size: 0] "
+        f"[redirect follow-up failed: {category} --> https://cdn.example.test/login]\n",
+        encoding="utf-8",
+    )
+
+    records = parse_content_discovery(source, "https://app.example.test/")
+
+    assert len(records) == 1
+    assert records[0].redirect_location == "https://cdn.example.test/login"
+    assert records[0].tags == [
+        "native_redirect_followup_failed",
+        f"native_redirect_followup_failed_{category}",
+    ]
+
+
+def test_native_content_discovery_parser_rejects_malformed_current_line(tmp_path: Path) -> None:
+    source = tmp_path / "content-discovery-internal.txt"
+    source.write_text(
+        "/privacy (Status: 307) [Size: 1000001] [redirect refused: arbitrary trailing text]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="malformed native content-discovery line"):
+        records = parse_content_discovery(source, "https://app.example.test/")
+
+    assert records == []
 
 
 def test_http_header_parser_extracts_final_response_block(tmp_path: Path) -> None:

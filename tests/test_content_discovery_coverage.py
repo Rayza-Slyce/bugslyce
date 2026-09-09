@@ -273,7 +273,7 @@ def test_deep_pipeline_carries_sitemap_redirect_body_into_offline_reviews(
     assert any(
         path.url == "http://10.10.10.10/sitemap"
         and path.status_code == 301
-        and path.redirect_location == "/sitemap/"
+        and path.redirect_location == "http://10.10.10.10/sitemap/"
         for path in discovered
     )
     assert any(path.url == "http://10.10.10.10/sitemap/" for path in discovered)
@@ -527,7 +527,7 @@ def _write_sitemap_native_content_discovery(
 ) -> NativeContentDiscoveryResult:
     artifact = output_dir / "content-discovery-internal-http-10.10.10.10-80-root.txt"
     artifact.write_text(
-        "sitemap (Status: 301) [Size: 0] [--> /sitemap/]\n",
+        "/sitemap (Status: 301) [Size: 0] [--> http://10.10.10.10/sitemap/]\n",
         encoding="utf-8",
     )
     baseline = output_dir / "content_discovery_baseline.json"
