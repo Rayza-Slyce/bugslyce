@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 import os
 from pathlib import Path
 import stat
@@ -38,6 +39,7 @@ from bugslyce.recon.content_run import (
     write_content_discovery_baseline_artifact,
 )
 from bugslyce.recon.http_enforcement import (
+    HTTPTransportFailure,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
     build_http_enforcement_configuration,
@@ -57,6 +59,12 @@ from bugslyce.recon.runner import ContentDiscoveryProgressEvent
 PROFILE_WORDLIST_SELECTION_REASON = "profile_wordlist"
 NATIVE_CONVENTIONAL_NEGATIVE_POLICY = "native_conventional_negative"
 NATIVE_CONTENT_BASELINE_CREATED_BY = "bugslyce-native-content-baseline"
+NATIVE_CONTENT_COVERAGE_ARTIFACT_NAME = "content_discovery_native_coverage.json"
+NATIVE_CONTENT_COVERAGE_CREATED_BY = "bugslyce-native-content-coverage"
+NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION = "1.0"
+ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES = frozenset(
+    {"timeout", "transport_error"}
+)
 MAXIMUM_NATIVE_CANDIDATE_REQUESTS = MAX_INTERNAL_COMPARATOR_CANDIDATES
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
 _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN = 20
@@ -162,6 +170,20 @@ class NativeContentDiscoveryArtifact:
 
 
 @dataclass(frozen=True)
+class NativeContentDiscoveryCandidateFailure:
+    """One attempted candidate for which no HTTP response was obtained."""
+
+    request_url: str
+    category: str
+
+    def __post_init__(self) -> None:
+        if http_origin_from_url(self.request_url) is None:
+            raise ValueError("Native candidate failure request URL is invalid.")
+        if self.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
+            raise ValueError("Native candidate failure category is invalid.")
+
+
+@dataclass(frozen=True)
 class NativeContentDiscoveryOriginResult:
     """One origin's truthful baseline and candidate disposition."""
 
@@ -169,6 +191,38 @@ class NativeContentDiscoveryOriginResult:
     baseline_decision: ContentBaselineDecision
     suppressed_candidate_count: int
     retained_candidate_count: int
+    failed_candidates: tuple[NativeContentDiscoveryCandidateFailure, ...] = ()
+
+    def __post_init__(self) -> None:
+        origin = http_origin_from_url(self.canonical_origin)
+        if origin is None or origin.origin_url != self.canonical_origin:
+            raise ValueError("Native origin result canonical origin is invalid.")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (
+                self.suppressed_candidate_count,
+                self.retained_candidate_count,
+            )
+        ):
+            raise ValueError("Native origin result candidate counts are invalid.")
+        if (
+            not isinstance(self.failed_candidates, tuple)
+            or any(
+                not isinstance(item, NativeContentDiscoveryCandidateFailure)
+                for item in self.failed_candidates
+            )
+            or len({item.request_url for item in self.failed_candidates})
+            != len(self.failed_candidates)
+            or any(
+                http_origin_from_url(item.request_url) != origin
+                for item in self.failed_candidates
+            )
+        ):
+            raise ValueError("Native origin result candidate failures are invalid.")
+
+    @property
+    def failed_candidate_count(self) -> int:
+        return len(self.failed_candidates)
 
 
 @dataclass(frozen=True)
@@ -179,6 +233,7 @@ class NativeContentDiscoveryResult:
     origin_results: tuple[NativeContentDiscoveryOriginResult, ...]
     artifacts: tuple[NativeContentDiscoveryArtifact, ...]
     baseline_artifact_path: Path
+    coverage_artifact_path: Path
 
 
 class NativeContentDiscoveryBaselineRefused(ValueError):
@@ -218,6 +273,7 @@ class _NativeOutputTransaction:
     destination: Path
     targets: tuple[_NativeArtifactTarget, ...]
     baseline_artifact_path: Path
+    coverage_artifact_path: Path
 
 
 @dataclass(frozen=True)
@@ -576,6 +632,13 @@ def _execute_native_plan(
                     created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
                 ),
             ),
+            (
+                output_transaction.coverage_artifact_path,
+                render_native_content_discovery_coverage_artifact(
+                    plan,
+                    tuple(origin_results),
+                ),
+            ),
             *tuple(
                 (target.path, retained_content[target.canonical_origin])
                 for target in output_transaction.targets
@@ -600,6 +663,7 @@ def _execute_native_plan(
         origin_results=tuple(origin_results),
         artifacts=artifacts,
         baseline_artifact_path=output_transaction.baseline_artifact_path,
+        coverage_artifact_path=output_transaction.coverage_artifact_path,
     )
 
 
@@ -627,6 +691,7 @@ def _collect_native_candidates(
             continue
         suppressed = 0
         retained = 0
+        failed_candidates: list[NativeContentDiscoveryCandidateFailure] = []
         retained_lines: list[str] = []
         progress_interval = max(
             1,
@@ -635,19 +700,30 @@ def _collect_native_candidates(
         )
         next_progress_completed = progress_interval
         for request in requests:
-            response = executor.request_retaining_refused_redirect(
-                request.url,
-                method="GET",
-                timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
-                maximum_response_bytes=BASELINE_MAXIMUM_RESPONSE_BYTES,
-                allow_query_strings=False,
-            )
-            if _matches_negative_baseline(baseline, response):
-                suppressed += 1
+            try:
+                response = executor.request_retaining_refused_redirect(
+                    request.url,
+                    method="GET",
+                    timeout_seconds=BASELINE_REQUEST_TIMEOUT_SECONDS,
+                    maximum_response_bytes=BASELINE_MAXIMUM_RESPONSE_BYTES,
+                    allow_query_strings=False,
+                )
+            except HTTPTransportFailure as exc:
+                if exc.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
+                    raise
+                failed_candidates.append(
+                    NativeContentDiscoveryCandidateFailure(
+                        request_url=request.url,
+                        category=exc.category,
+                    )
+                )
             else:
-                retained += 1
-                retained_lines.append(_artifact_line(request.url, response))
-            completed = suppressed + retained
+                if _matches_negative_baseline(baseline, response):
+                    suppressed += 1
+                else:
+                    retained += 1
+                    retained_lines.append(_artifact_line(request.url, response))
+            completed = suppressed + retained + len(failed_candidates)
             if completed >= next_progress_completed or completed == len(requests):
                 _emit_native_progress(
                     progress_callback,
@@ -670,9 +746,98 @@ def _collect_native_candidates(
                 baseline_decision=updated_baseline,
                 suppressed_candidate_count=suppressed,
                 retained_candidate_count=retained,
+                failed_candidates=tuple(failed_candidates),
             )
         )
     return origin_results, retained_content
+
+
+def render_native_content_discovery_coverage_artifact(
+    plan: NativeContentDiscoveryPlan,
+    origin_results: tuple[NativeContentDiscoveryOriginResult, ...],
+) -> str:
+    """Render deterministic candidate coverage and response-less failures."""
+
+    if not isinstance(plan, NativeContentDiscoveryPlan):
+        raise ValueError("Native content discovery coverage plan is invalid.")
+    planned_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {}
+    for request in plan.requests:
+        planned_by_origin.setdefault(request.canonical_origin, []).append(request)
+    if (
+        not isinstance(origin_results, tuple)
+        or tuple(item.canonical_origin for item in origin_results)
+        != tuple(planned_by_origin)
+    ):
+        raise ValueError("Native content discovery coverage origins are invalid.")
+
+    origin_payloads: list[dict[str, object]] = []
+    total_attempted = 0
+    total_observed = 0
+    total_failed = 0
+    total_unattempted = 0
+    for result in origin_results:
+        planned_requests = planned_by_origin[result.canonical_origin]
+        planned_urls = {request.url for request in planned_requests}
+        if any(
+            failure.request_url not in planned_urls
+            for failure in result.failed_candidates
+        ):
+            raise ValueError(
+                "Native content discovery failure is not backed by its canonical plan."
+            )
+        planned = len(planned_requests)
+        failed = result.failed_candidate_count
+        observed = (
+            result.suppressed_candidate_count + result.retained_candidate_count
+        )
+        attempted = observed + failed
+        unattempted = planned - attempted
+        if unattempted < 0:
+            raise ValueError("Native content discovery coverage counts are invalid.")
+        if (
+            result.baseline_decision.selected_policy == BASELINE_POLICY_REFUSE
+            and attempted != 0
+        ):
+            raise ValueError("Refused native origin contains attempted candidates.")
+        origin_payloads.append(
+            {
+                "canonical_origin": result.canonical_origin,
+                "selected_baseline_policy": result.baseline_decision.selected_policy,
+                "candidate_requests_planned": planned,
+                "candidate_requests_attempted": attempted,
+                "candidate_responses_observed": observed,
+                "suppressed_candidate_count": result.suppressed_candidate_count,
+                "retained_candidate_count": result.retained_candidate_count,
+                "failed_candidate_count": failed,
+                "candidate_requests_unattempted": unattempted,
+                "failed_candidates": [
+                    {
+                        "request_url": failure.request_url,
+                        "category": failure.category,
+                    }
+                    for failure in result.failed_candidates
+                ],
+            }
+        )
+        total_attempted += attempted
+        total_observed += observed
+        total_failed += failed
+        total_unattempted += unattempted
+
+    payload = {
+        "schema_version": NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION,
+        "created_by": NATIVE_CONTENT_COVERAGE_CREATED_BY,
+        "profile": plan.profile,
+        "candidate_requests_planned": plan.candidate_requests_planned,
+        "candidate_requests_attempted": total_attempted,
+        "candidate_responses_observed": total_observed,
+        "failed_candidate_count": total_failed,
+        "candidate_requests_unattempted": total_unattempted,
+        "origins": origin_payloads,
+    }
+    if total_attempted + total_unattempted != plan.candidate_requests_planned:
+        raise ValueError("Native content discovery aggregate coverage is invalid.")
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _emit_native_progress(
@@ -710,7 +875,12 @@ def _prepare_output_transaction(
         for origin in origins
     )
     baseline_artifact_path = destination / BASELINE_ARTIFACT_NAME
-    paths = (*tuple(target.path for target in targets), baseline_artifact_path)
+    coverage_artifact_path = destination / NATIVE_CONTENT_COVERAGE_ARTIFACT_NAME
+    paths = (
+        *tuple(target.path for target in targets),
+        baseline_artifact_path,
+        coverage_artifact_path,
+    )
     if len(set(paths)) != len(paths):
         raise ValueError("Native content discovery artefact identities collide.")
     for path in paths:
@@ -728,6 +898,7 @@ def _prepare_output_transaction(
         destination=destination,
         targets=targets,
         baseline_artifact_path=baseline_artifact_path,
+        coverage_artifact_path=coverage_artifact_path,
     )
 
 

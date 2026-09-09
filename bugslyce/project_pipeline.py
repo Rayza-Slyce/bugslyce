@@ -2308,12 +2308,29 @@ def _step_runners(
             item.baseline_decision.selected_policy == BASELINE_POLICY_REFUSE
             for item in getattr(native_result, "origin_results", ())
         )
-        completion = (
-            f" completed with {refused_origin_count} refused origin"
-            f"{'s' if refused_origin_count != 1 else ''}"
-            if refused_origin_count
-            else " completed"
+        failed_candidate_count = sum(
+            item.failed_candidate_count
+            for item in getattr(native_result, "origin_results", ())
         )
+        if failed_candidate_count:
+            warnings = []
+            if refused_origin_count:
+                warnings.append(
+                    f"{refused_origin_count} refused origin"
+                    f"{'s' if refused_origin_count != 1 else ''}"
+                )
+            warnings.append(
+                f"{failed_candidate_count} response-less candidate transport "
+                f"failure{'s' if failed_candidate_count != 1 else ''} recorded"
+            )
+            completion = " completed with warnings: " + "; ".join(warnings)
+        elif refused_origin_count:
+            completion = (
+                f" completed with {refused_origin_count} refused origin"
+                f"{'s' if refused_origin_count != 1 else ''}"
+            )
+        else:
+            completion = " completed"
         return (
             f"BugSlyce-native {root_plan.profile} content discovery{completion}.",
             [str(path) for path in artifact_paths],
@@ -2761,12 +2778,72 @@ def _register_native_content_discovery_artifacts(
             encoding="utf-8",
         )
     registered_paths.append(
+        _register_native_content_discovery_coverage_artifact(
+            output_dir,
+            result.coverage_artifact_path,
+        )
+    )
+    registered_paths.append(
         _register_native_content_discovery_baseline_artifact(
             output_dir,
             result.baseline_artifact_path,
         )
     )
     return tuple(registered_paths)
+
+
+def _register_native_content_discovery_coverage_artifact(
+    output_dir: Path,
+    coverage_artifact_path: Path,
+) -> Path:
+    if coverage_artifact_path.is_symlink():
+        raise ValueError(
+            "Native content discovery coverage artefact is not a regular file."
+        )
+    coverage_path = coverage_artifact_path.resolve(strict=True)
+    output_root = output_dir.resolve()
+    try:
+        coverage_path.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError(
+            "Native content discovery coverage artefact escapes the project "
+            "output directory."
+        ) from exc
+    if not coverage_path.is_file():
+        raise ValueError(
+            "Native content discovery coverage artefact is not a regular file."
+        )
+
+    manifest_path = output_dir / "recon_manifest.json"
+    manifest = _load_json_object(manifest_path, "recon manifest")
+    existing = manifest.get("artifacts")
+    if not isinstance(existing, list):
+        raise ValueError("Recon manifest artefacts must be a list.")
+    if any(
+        isinstance(artifact, dict) and artifact.get("file") == coverage_path.name
+        for artifact in existing
+    ):
+        raise ValueError(
+            "Native content discovery coverage artefact is already registered."
+        )
+    payload = dict(manifest)
+    payload["artifacts"] = [
+        *existing,
+        {
+            "type": "content_discovery_coverage",
+            "file": coverage_path.name,
+            "description": (
+                "BugSlyce-native candidate execution coverage and response-less "
+                "failure provenance"
+            ),
+            "tags": ["native_coverage", "wp4a_native"],
+        },
+    ]
+    manifest_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return coverage_path
 
 
 def _register_native_content_discovery_baseline_artifact(

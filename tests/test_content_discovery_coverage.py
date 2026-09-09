@@ -531,7 +531,9 @@ def _write_sitemap_native_content_discovery(
         encoding="utf-8",
     )
     baseline = output_dir / "content_discovery_baseline.json"
+    coverage = output_dir / "content_discovery_native_coverage.json"
     baseline.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    coverage.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
     return NativeContentDiscoveryResult(
         external_commands_started=0,
         origin_results=(),
@@ -545,6 +547,7 @@ def _write_sitemap_native_content_discovery(
             ),
         ),
         baseline_artifact_path=baseline,
+        coverage_artifact_path=coverage,
     )
 
 

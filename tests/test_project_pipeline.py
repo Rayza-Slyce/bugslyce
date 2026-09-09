@@ -3427,6 +3427,50 @@ def test_pipeline_records_noop_followups_and_continues(
     assert "export" in calls
 
 
+def test_pipeline_records_native_transport_coverage_warning_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_file, output_dir = _fresh_project(tmp_path)
+    calls: list[str] = []
+    _patch_successful_pipeline(monkeypatch, output_dir, calls)
+
+    def native_content_run(*_args, **_kwargs):
+        calls.append("native-content-run")
+        return SimpleNamespace(
+            origin_results=(
+                SimpleNamespace(
+                    baseline_decision=SimpleNamespace(
+                        selected_policy="native_conventional_negative"
+                    ),
+                    failed_candidate_count=1,
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.run_native_content_discovery",
+        native_content_run,
+    )
+
+    result = run_project_pipeline(
+        project_file,
+        NORMAL_PIPELINE_PROFILE,
+        clock=lambda: FIXED_TIME,
+    )
+
+    steps = {step.step_id: step for step in result.steps}
+    assert result.final_status == "completed"
+    assert steps["PIPELINE-STEP-007"].status == "completed"
+    assert steps["PIPELINE-STEP-007"].message == (
+        "BugSlyce-native deep-bounded-core content discovery completed with "
+        "warnings: 1 response-less candidate transport failure recorded."
+    )
+    assert steps["PIPELINE-STEP-008"].status == "completed"
+    assert calls.index("native-content-run") < calls.index("content-followup")
+    assert "export" in calls
+
+
 def test_pipeline_native_followup_noop_flows_to_body_fetch_noop(
     tmp_path: Path,
     monkeypatch,

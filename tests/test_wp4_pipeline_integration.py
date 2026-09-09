@@ -283,8 +283,10 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
             "content-discovery-internal-https-app.example.test-443-root.txt"
         )
         baseline_path = output_dir / "content_discovery_baseline.json"
+        coverage_path = output_dir / "content_discovery_native_coverage.json"
         artifact_path.write_text("/health (Status: 200) [Size: 2]\n", encoding="utf-8")
         baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+        coverage_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
         result = NativeContentDiscoveryResult(
             external_commands_started=0,
             origin_results=(),
@@ -298,6 +300,7 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
                 ),
             ),
             baseline_artifact_path=baseline_path,
+            coverage_artifact_path=coverage_path,
         )
         observed["root_result"] = result
         return result
@@ -345,16 +348,26 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
     assert context["wp4_root_result"] is observed["root_result"]
     assert context["wp4_programme_orchestration"] is orchestration
     assert "native" in message.lower()
-    assert len(output_paths) == 2
-    assert Path(output_paths[1]).name == "content_discovery_baseline.json"
+    assert len(output_paths) == 3
+    assert Path(output_paths[1]).name == "content_discovery_native_coverage.json"
+    assert Path(output_paths[2]).name == "content_discovery_baseline.json"
     assert observed["root_result"].external_commands_started == 0
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["artifacts"][-2] == {
+    assert manifest["artifacts"][-3] == {
         "type": "content_discovery_internal",
         "file": Path(output_paths[0]).name,
         "base_url": "https://app.example.test",
         "description": "BugSlyce-native bounded root content discovery",
         "tags": ["profile_wordlist", "wp4a_native"],
+    }
+    assert manifest["artifacts"][-2] == {
+        "type": "content_discovery_coverage",
+        "file": "content_discovery_native_coverage.json",
+        "description": (
+            "BugSlyce-native candidate execution coverage and response-less "
+            "failure provenance"
+        ),
+        "tags": ["native_coverage", "wp4a_native"],
     }
     assert manifest["artifacts"][-1] == {
         "type": "content_discovery_baseline",
@@ -406,8 +419,12 @@ def test_pipeline_content_execution_uses_runtime_less_native_adapter_without_pro
     root_plan = _root_plan()
     artifact_path = Path(runtime.project.output_dir) / "content-discovery-internal.txt"
     baseline_path = Path(runtime.project.output_dir) / "content_discovery_baseline.json"
+    coverage_path = (
+        Path(runtime.project.output_dir) / "content_discovery_native_coverage.json"
+    )
     artifact_path.write_text("/health (Status: 200) [Size: 2]\n", encoding="utf-8")
     baseline_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+    coverage_path.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
     usable_baseline = ContentBaselineDecision(
         origin="https://app.example.test/",
         classification="conventional_negative",
@@ -454,6 +471,7 @@ def test_pipeline_content_execution_uses_runtime_less_native_adapter_without_pro
             ),
         ),
         baseline_artifact_path=baseline_path,
+        coverage_artifact_path=coverage_path,
     )
     observed: dict[str, object] = {}
     monkeypatch.setattr(pipeline, "build_project_state", lambda _path: state)

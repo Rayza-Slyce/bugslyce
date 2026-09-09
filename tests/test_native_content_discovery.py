@@ -641,6 +641,11 @@ def test_native_root_contract_rejects_invalid_limits_depth_and_escaping_urls() -
             selection_reason="profile_wordlist",
             evidence_ids=(),
         )
+    with pytest.raises(ValueError, match="category"):
+        module.NativeContentDiscoveryCandidateFailure(
+            request_url="https://app.example.test/admin",
+            category="tls_error",
+        )
 
 
 def test_native_plan_rejects_programme_plan_from_a_different_runtime(
@@ -740,6 +745,76 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
     baseline = json.loads(result.baseline_artifact_path.read_text(encoding="utf-8"))
     assert baseline["origins"][0]["baseline_equivalent_candidate_count"] == 1
     assert baseline["origins"][0]["retained_candidate_count"] == 1
+    coverage = json.loads(result.coverage_artifact_path.read_text(encoding="utf-8"))
+    assert result.coverage_artifact_path.name == (
+        "content_discovery_native_coverage.json"
+    )
+    assert coverage == {
+        "schema_version": "1.0",
+        "created_by": "bugslyce-native-content-coverage",
+        "profile": PROFILE,
+        "candidate_requests_planned": 2,
+        "candidate_requests_attempted": 2,
+        "candidate_responses_observed": 2,
+        "failed_candidate_count": 0,
+        "candidate_requests_unattempted": 0,
+        "origins": [
+            {
+                "canonical_origin": "https://app.example.test",
+                "selected_baseline_policy": "native_conventional_negative",
+                "candidate_requests_planned": 2,
+                "candidate_requests_attempted": 2,
+                "candidate_responses_observed": 2,
+                "suppressed_candidate_count": 1,
+                "retained_candidate_count": 1,
+                "failed_candidate_count": 0,
+                "candidate_requests_unattempted": 0,
+                "failed_candidates": [],
+            }
+        ],
+    }
+    executor.close()
+
+
+def test_native_output_transaction_refuses_preexisting_coverage_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(1, 1),
+    )
+    output_dir = tmp_path / "native-output"
+    output_dir.mkdir()
+    coverage_path = output_dir / "content_discovery_native_coverage.json"
+    coverage_path.write_text("do not replace\n", encoding="utf-8")
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (404, b"unused"),
+    )
+
+    with pytest.raises(ValueError, match="artefact path already exists"):
+        module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=output_dir,
+        )
+
+    assert transport.requests == []
+    assert coverage_path.read_text(encoding="utf-8") == "do not replace\n"
+    assert not (output_dir / "content_discovery_baseline.json").exists()
     executor.close()
 
 
@@ -1006,6 +1081,24 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
         {item["body_sha256"] for item in refused_payload["observations"]}
     ) == 3
     assert not any("8080" in artifact.path.name for artifact in result.artifacts)
+    coverage = json.loads(result.coverage_artifact_path.read_text(encoding="utf-8"))
+    assert coverage["candidate_requests_planned"] == 3
+    assert coverage["candidate_requests_attempted"] == 2
+    assert coverage["candidate_responses_observed"] == 2
+    assert coverage["failed_candidate_count"] == 0
+    assert coverage["candidate_requests_unattempted"] == 1
+    refused_coverage = next(
+        item
+        for item in coverage["origins"]
+        if item["canonical_origin"] == "http://app.example.test:8080"
+    )
+    assert refused_coverage["selected_baseline_policy"] == "refuse"
+    assert refused_coverage["candidate_requests_planned"] == 1
+    assert refused_coverage["candidate_requests_attempted"] == 0
+    assert refused_coverage["candidate_responses_observed"] == 0
+    assert refused_coverage["failed_candidate_count"] == 0
+    assert refused_coverage["candidate_requests_unattempted"] == 1
+    assert refused_coverage["failed_candidates"] == []
     executor.close()
 
 
@@ -1053,7 +1146,7 @@ def test_native_progress_callback_failure_remains_hard_before_collection(
     executor.close()
 
 
-def test_native_candidate_failure_preserves_baseline_without_reporting_completion(
+def test_unapproved_native_candidate_failure_preserves_baseline_without_reporting_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1084,7 +1177,7 @@ def test_native_candidate_failure_preserves_baseline_without_reporting_completio
 
     def respond(url: str) -> tuple[int, bytes]:
         if url.endswith("/candidate-2"):
-            raise OSError("synthetic transport failure")
+            raise HTTPTransportFailure("tls_error")
         if ".bugslyce-negative-" in url:
             if "api.example.test" in url:
                 return 403, next(unstable_bodies)
@@ -1097,7 +1190,7 @@ def test_native_candidate_failure_preserves_baseline_without_reporting_completio
         planned_origins,
         respond,
     )
-    with pytest.raises(HTTPTransportFailure, match="transport_error"):
+    with pytest.raises(HTTPTransportFailure, match="tls_error"):
         module.run_native_content_discovery(
             runtime,
             state,
@@ -1145,6 +1238,142 @@ def test_native_candidate_failure_preserves_baseline_without_reporting_completio
         (tmp_path / "failed-progress").glob("content-discovery-internal-*.txt")
     ) == ()
     executor.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_category"),
+    (
+        pytest.param("timeout", "timeout", id="timeout"),
+        pytest.param("oserror", "transport_error", id="transport-error"),
+    ),
+)
+def test_native_candidate_transport_failure_does_not_prevent_later_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+    expected_category: str,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("transport-failure", "later-negative"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(
+            maximum_total_candidate_requests=2,
+            maximum_candidate_requests_per_origin=2,
+        ),
+    )
+    failing_url = "https://app.example.test/transport-failure"
+    later_url = "https://app.example.test/later-negative"
+    expected_before_failure = [
+        "https://app.example.test/.bugslyce-negative-one",
+        "https://app.example.test/.bugslyce-negative-two",
+        "https://app.example.test/.bugslyce-negative-three",
+        failing_url,
+    ]
+
+    def respond(url: str):
+        if url == failing_url:
+            if failure_kind == "timeout":
+                raise TimeoutError("synthetic candidate timeout")
+            raise OSError("synthetic candidate transport error")
+        return 404, b"conventional negative"
+
+    progress = []
+    output_dir = tmp_path / "native-output"
+    executor, transport = _executor(runtime, ("https://app.example.test",), respond)
+    try:
+        try:
+            result = module.run_native_content_discovery(
+                runtime,
+                state,
+                orchestration,
+                plan,
+                http_executor=executor,
+                output_dir=output_dir,
+                token_factory=iter(("one", "two", "three")).__next__,
+                progress_callback=progress.append,
+            )
+        except HTTPTransportFailure as exc:
+            assert exc.category == expected_category
+            assert [request.url for request in transport.requests] == (
+                expected_before_failure
+            )
+            assert all(request.url != later_url for request in transport.requests)
+            assert [event.completed for event in progress] == [0]
+            baseline_path = output_dir / "content_discovery_baseline.json"
+            assert baseline_path.is_file()
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            origin = baseline["origins"][0]
+            assert origin["completed_observations"] == 3
+            assert origin["classification"] == "conventional_negative"
+            assert origin["baseline_equivalent_candidate_count"] == 0
+            assert origin["retained_candidate_count"] == 0
+            assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+            raise
+
+        assert [request.url for request in transport.requests] == [
+            *expected_before_failure,
+            later_url,
+        ]
+        assert [event.completed for event in progress] == [0, 1, 2]
+        assert progress[-1].total == 2
+        origin_result = result.origin_results[0]
+        assert origin_result.suppressed_candidate_count == 1
+        assert origin_result.retained_candidate_count == 0
+        assert origin_result.failed_candidate_count == 1
+        assert origin_result.failed_candidates == (
+            module.NativeContentDiscoveryCandidateFailure(
+                request_url=failing_url,
+                category=expected_category,
+            ),
+        )
+        coverage_text = result.coverage_artifact_path.read_text(encoding="utf-8")
+        coverage = json.loads(coverage_text)
+        assert coverage["candidate_requests_planned"] == 2
+        assert coverage["candidate_requests_attempted"] == 2
+        assert coverage["candidate_responses_observed"] == 1
+        assert coverage["failed_candidate_count"] == 1
+        assert coverage["candidate_requests_unattempted"] == 0
+        assert coverage["origins"] == [
+            {
+                "canonical_origin": "https://app.example.test",
+                "selected_baseline_policy": "native_conventional_negative",
+                "candidate_requests_planned": 2,
+                "candidate_requests_attempted": 2,
+                "candidate_responses_observed": 1,
+                "suppressed_candidate_count": 1,
+                "retained_candidate_count": 0,
+                "failed_candidate_count": 1,
+                "candidate_requests_unattempted": 0,
+                "failed_candidates": [
+                    {
+                        "request_url": failing_url,
+                        "category": expected_category,
+                    }
+                ],
+            }
+        ]
+        assert "synthetic candidate timeout" not in coverage_text
+        assert "synthetic candidate transport error" not in coverage_text
+        baseline = json.loads(
+            result.baseline_artifact_path.read_text(encoding="utf-8")
+        )
+        baseline_origin = baseline["origins"][0]
+        assert baseline_origin["baseline_equivalent_candidate_count"] == 1
+        assert baseline_origin["retained_candidate_count"] == 0
+        assert "failed_candidates" not in baseline_origin
+        assert "failed_candidate_count" not in baseline_origin
+        retained_output = result.artifacts[0].path.read_text(encoding="utf-8")
+        assert "/transport-failure" not in retained_output
+        assert expected_category not in retained_output
+    finally:
+        executor.close()
 
 
 def test_stable_fallback_native_execution_uses_exact_response_signature(
