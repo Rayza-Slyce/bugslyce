@@ -12,6 +12,9 @@ from bugslyce.recon.http_enforcement import (
     HTTPExecutorClosed,
     HTTPProgrammeScopeRefused,
     HTTPRateRejected,
+    HTTPReceivedResponse,
+    HTTPResponseCapture,
+    HTTPTransportFailure,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
@@ -43,7 +46,7 @@ class _RecordingTransport(PeerBoundHTTPTransport):
         if self._clock is not None:
             self.starts.append(self._clock.now)
         status, body = self._responder(request.url)
-        return HTTPTransportResponse(status_code=status, headers=(), body=body)
+        return _complete_response(status, body)
 
 
 class _AggregateBlockingTransport(PeerBoundHTTPTransport):
@@ -63,7 +66,23 @@ class _AggregateBlockingTransport(PeerBoundHTTPTransport):
             raise AssertionError("test transport release was not signalled")
         with self._tracker["lock"]:
             self._tracker["active"] -= 1
-        return HTTPTransportResponse(status_code=200, headers=(), body=b"ok")
+        return _complete_response(200, b"ok")
+
+
+def _complete_response(status: int, body: bytes) -> HTTPTransportResponse:
+    return HTTPTransportResponse(
+        status_code=status,
+        headers=(),
+        body=body,
+        capture=HTTPResponseCapture(
+            body=body,
+            body_capture_state="complete",
+            body_incomplete_reason=None,
+            headers=(),
+            headers_capture_state="complete",
+            headers_incomplete_reason=None,
+        ),
+    )
 
 
 def _shared_view(parent: InternalHTTPExecutor, origins: tuple[str, ...]):
@@ -203,6 +222,51 @@ def test_http_429_terminal_state_is_shared_in_both_directions(
 
     assert len(rejecting_transport.requests) == 1
     assert blocked_transport.requests == []
+
+
+def test_post_header_429_failure_shares_terminal_state_without_private_snapshot(
+    tmp_path,
+) -> None:
+    _runtime_value, _clock, strict, sibling, _strict_transport, sibling_transport = (
+        _contexts(tmp_path)
+    )
+
+    class PostHeader429Transport(PeerBoundHTTPTransport):
+        def __init__(self) -> None:
+            self.requests = []
+
+        def __call__(self, request):
+            self.requests.append(request)
+            capture = HTTPResponseCapture(
+                body=None,
+                body_capture_state="incomplete",
+                body_incomplete_reason="body_read_error",
+                headers=(("Retry-After", "7"),),
+                headers_capture_state="complete",
+                headers_incomplete_reason=None,
+            )
+            raise HTTPTransportFailure(
+                "timeout",
+                HTTPReceivedResponse(request.url, 429, capture),
+            )
+
+    rejecting_transport = PostHeader429Transport()
+    strict.transport = rejecting_transport
+    try:
+        with pytest.raises(HTTPRateRejected) as first:
+            strict.request("https://app.example.test/reject")
+        with pytest.raises(HTTPRateRejected) as second:
+            sibling.request("https://api.example.test/blocked")
+    finally:
+        sibling.close()
+        strict.close()
+
+    assert first.value.retry_after == "7"
+    assert first.value.received_response is not None
+    assert second.value.retry_after == "7"
+    assert second.value.received_response is None
+    assert len(rejecting_transport.requests) == 1
+    assert sibling_transport.requests == []
 
 
 def test_closing_temporary_executor_view_is_handle_local(

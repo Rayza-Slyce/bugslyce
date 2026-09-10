@@ -66,6 +66,7 @@ from bugslyce.recon.http_enforcement import (
     HTTPRateRejected,
     HTTPRedirectRefused,
     HTTPTransportFailure,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     build_http_enforcement_configuration,
@@ -158,7 +159,19 @@ class _Transport:
 
     def __call__(self, _request):
         self.starts.append(self.clock.now)
-        return HTTPTransportResponse(200, (), b"ok")
+        return HTTPTransportResponse(
+            status_code=200,
+            headers=(),
+            body=b"ok",
+            capture=HTTPResponseCapture(
+                body=b"ok",
+                body_capture_state="complete",
+                body_incomplete_reason=None,
+                headers=(),
+                headers_capture_state="complete",
+                headers_incomplete_reason=None,
+            ),
+        )
 
 
 class _ProcessRunner:
@@ -280,7 +293,19 @@ class _DelayedInternalTransport:
         self.starts.append(self.clock.now)
         self.clock.now += next(self.delays)
         self.arrivals.append(self.clock.now)
-        return HTTPTransportResponse(200, (), b"ok")
+        return HTTPTransportResponse(
+            status_code=200,
+            headers=(),
+            body=b"ok",
+            capture=HTTPResponseCapture(
+                body=b"ok",
+                body_capture_state="complete",
+                body_incomplete_reason=None,
+                headers=(),
+                headers_capture_state="complete",
+                headers_incomplete_reason=None,
+            ),
+        )
 
 
 def test_curl_and_internal_http_share_one_steady_limiter(tmp_path: Path) -> None:

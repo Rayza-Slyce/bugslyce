@@ -42,6 +42,7 @@ from bugslyce.project_session import (
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.http_enforcement import (
     HTTPRedirectRefused,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     PeerBoundHTTPTransport,
     internal_http_executors_share_enforcement_state,
@@ -150,6 +151,14 @@ def _response(
         status_code=status_code,
         headers=headers,
         body=body,
+        capture=HTTPResponseCapture(
+            body=body,
+            body_capture_state="complete",
+            body_incomplete_reason=None,
+            headers=headers,
+            headers_capture_state="complete",
+            headers_incomplete_reason=None,
+        ),
     )
 
 

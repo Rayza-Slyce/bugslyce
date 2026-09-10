@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 from decimal import Decimal
+from http.client import HTTPResponse, IncompleteRead
+import io
 import math
 import os
 from pathlib import Path
@@ -10,6 +13,7 @@ import re
 import socket
 import ssl
 import threading
+from urllib.error import HTTPError
 from urllib.request import ProxyHandler
 
 import pytest
@@ -54,6 +58,7 @@ from bugslyce.recon.http_enforcement import (
     HTTPExecutorClosed,
     HTTPRateRejected,
     HTTPRedirectRefused,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     HTTPTransportFailure,
     InternalHTTPExecutor,
@@ -2899,8 +2904,26 @@ def test_internal_completion_barrier_preserves_target_observable_spacing() -> No
 @pytest.mark.parametrize(
     ("response", "error", "raises"),
     (
-        (HTTPTransportResponse(200, (), b"ok"), None, None),
-        (HTTPTransportResponse(404, (), b"ok"), None, None),
+        (
+            HTTPTransportResponse(
+                200,
+                (),
+                b"ok",
+                HTTPResponseCapture(b"ok", "complete", None, (), "complete", None),
+            ),
+            None,
+            None,
+        ),
+        (
+            HTTPTransportResponse(
+                404,
+                (),
+                b"ok",
+                HTTPResponseCapture(b"ok", "complete", None, (), "complete", None),
+            ),
+            None,
+            None,
+        ),
         (None, TimeoutError("timeout"), HTTPTransportFailure),
         (None, OSError("transport error"), HTTPTransportFailure),
         (None, RuntimeError("transport failure"), RuntimeError),
@@ -3732,4 +3755,754 @@ def _response(
     *,
     body: bytes = b"ok",
 ) -> HTTPTransportResponse:
-    return HTTPTransportResponse(status_code=status, headers=headers, body=body)
+    return HTTPTransportResponse(
+        status_code=status,
+        headers=headers,
+        body=body,
+        capture=HTTPResponseCapture(
+            body=body,
+            body_capture_state="complete",
+            body_incomplete_reason=None,
+            headers=headers,
+            headers_capture_state="complete",
+            headers_incomplete_reason=None,
+        ),
+    )
+
+
+class _RawResponseSocket:
+    def __init__(self, raw_response: bytes) -> None:
+        self._raw_response = raw_response
+
+    def makefile(self, _mode: str):
+        return io.BytesIO(self._raw_response)
+
+
+class _RawHTTPConnection:
+    response_class = HTTPResponse
+
+    def __init__(self, raw_response: bytes, events: list[tuple[object, ...]]) -> None:
+        self.raw_response = raw_response
+        self.events = events
+        self._create_connection = None
+        self.method = "GET"
+
+    def request(self, method: str, target: str, *, headers: dict[str, str]) -> None:
+        assert self._create_connection is not None
+        peer = self._create_connection(("example.test", 80), 5, None)
+        self.events.append(("request", method, target, headers, peer))
+        self.method = method
+
+    def getresponse(self):
+        response = self.response_class(
+            _RawResponseSocket(self.raw_response),
+            method=self.method,
+        )
+        response.begin()
+        return response
+
+    def close(self) -> None:
+        self.events.append(("connection_close",))
+
+
+def _raw_peer_transport(raw_response: bytes):
+    events: list[tuple[object, ...]] = []
+    peer_socket = _PeerSocket("192.0.2.3", events)
+
+    def connection_factory(_host: str, _port: int, *, timeout: int):
+        assert timeout == 5
+        return _RawHTTPConnection(raw_response, events)
+
+    return (
+        http_enforcement_module.PeerBoundHTTPTransport(
+            socket_factory=lambda *_args: peer_socket,
+            http_connection_factory=connection_factory,
+        ),
+        events,
+    )
+
+
+def _transport_request(*, maximum_response_bytes: int = 4, method: str = "GET"):
+    return http_enforcement_module.HTTPTransportRequest(
+        url="http://example.test/resource",
+        method=method,
+        headers=(),
+        timeout_seconds=5,
+        maximum_response_bytes=maximum_response_bytes,
+        selected_ipv4="192.0.2.3",
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_response", "method", "expected_body"),
+    (
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata", "GET", b"data"),
+        (
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            b"4\r\ndata\r\n0\r\n\r\n",
+            "GET",
+            b"data",
+        ),
+        (b"HTTP/1.1 204 No Content\r\nContent-Length: 9\r\n\r\nignored", "GET", b""),
+        (b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata", "GET", b"data"),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata", "HEAD", b""),
+    ),
+)
+def test_builtin_transport_establishes_complete_body_capture(
+    raw_response: bytes,
+    method: str,
+    expected_body: bytes,
+) -> None:
+    transport, _events = _raw_peer_transport(raw_response)
+
+    response = transport(
+        _transport_request(maximum_response_bytes=8, method=method)
+    )
+
+    assert response.body == expected_body
+    assert response.capture.body == expected_body
+    assert response.capture.body_capture_state == "complete"
+    assert response.capture.body_incomplete_reason is None
+
+
+def test_builtin_transport_distinguishes_truncation_and_premature_eof() -> None:
+    truncated_transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef"
+    )
+    premature_transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabc"
+    )
+
+    truncated = truncated_transport(_transport_request(maximum_response_bytes=4))
+    premature = premature_transport(_transport_request(maximum_response_bytes=4))
+
+    assert truncated.body == b"abcde"
+    assert truncated.capture.body == b"abcd"
+    assert truncated.capture.body_capture_state == "truncated"
+    assert premature.body == b"abc"
+    assert premature.capture.body == b"abc"
+    assert premature.capture.body_capture_state == "incomplete"
+    assert premature.capture.body_incomplete_reason == "premature_eof"
+
+
+@pytest.mark.parametrize("partial", (b"", b"part"))
+def test_post_header_body_failure_retains_received_response_snapshot(
+    partial: bytes,
+) -> None:
+    class FailingResponse(_HTTPClientResponse):
+        status = 200
+        headers = {"Content-Type": "text/plain"}
+
+        def read(self, _limit: int) -> bytes:
+            raise IncompleteRead(partial, 4)
+
+    events: list[tuple[object, ...]] = []
+    connection = _HTTPClientConnection(
+        "example.test",
+        80,
+        timeout=5,
+        events=events,
+        response=FailingResponse(),
+    )
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=lambda *_args: _PeerSocket("192.0.2.3", events),
+        http_connection_factory=lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(HTTPTransportFailure) as raised:
+        transport(_transport_request())
+
+    snapshot = raised.value.received_response
+    assert snapshot is not None
+    assert snapshot.request_url == "http://example.test/resource"
+    assert snapshot.status_code == 200
+    assert snapshot.capture.body == (partial or None)
+    assert snapshot.capture.body_capture_state == "incomplete"
+    assert snapshot.capture.body_incomplete_reason == "premature_eof"
+
+
+def test_transport_header_evidence_retains_whole_bounded_prefix() -> None:
+    headers = tuple((f"X-{index}", "v") for index in range(101))
+
+    class HeaderResponse(_HTTPClientResponse):
+        status = 200
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.headers = dict(headers)
+
+    events: list[tuple[object, ...]] = []
+    connection = _HTTPClientConnection(
+        "example.test", 80, timeout=5, events=events, response=HeaderResponse()
+    )
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=lambda *_args: _PeerSocket("192.0.2.3", events),
+        http_connection_factory=lambda *_args, **_kwargs: connection,
+    )
+
+    response = transport(_transport_request(maximum_response_bytes=20))
+
+    assert response.headers == headers
+    assert response.capture.headers == headers[:100]
+    assert response.capture.headers_capture_state == "incomplete"
+    assert response.capture.headers_incomplete_reason == "response_header_limit"
+
+
+def test_transport_header_byte_limit_stops_without_slicing_or_resuming() -> None:
+    fitting = ("A", "x" * 65_535)
+    overflow = ("B", "y")
+    later = ("C", "z")
+
+    captured, state, reason = http_enforcement_module._retain_response_headers(
+        (fitting, overflow, later)
+    )
+
+    assert captured == (fitting,)
+    assert state == "incomplete"
+    assert reason == "response_header_limit"
+
+
+def test_injected_transport_must_supply_consistent_capture_provenance() -> None:
+    executor = InternalHTTPExecutor(
+        None,
+        transport=lambda _request: HTTPTransportResponse(200, (), b"ok"),
+    )
+
+    with pytest.raises(ValueError, match="capture provenance"):
+        executor.request("http://example.test/")
+
+
+def test_received_429_body_failure_sets_terminal_state_and_retains_snapshot() -> None:
+    class RejectingResponse(_HTTPClientResponse):
+        status = 429
+        headers = {"Retry-After": "5"}
+
+        def read(self, _limit: int) -> bytes:
+            raise TimeoutError("private body timeout")
+
+    events: list[tuple[object, ...]] = []
+    connection = _HTTPClientConnection(
+        "example.test", 80, timeout=5, events=events, response=RejectingResponse()
+    )
+    transport = http_enforcement_module.PeerBoundHTTPTransport(
+        socket_factory=lambda *_args: _PeerSocket("192.0.2.3", events),
+        http_connection_factory=lambda *_args, **_kwargs: connection,
+    )
+    def selected_transport(request):
+        return transport(
+            http_enforcement_module.HTTPTransportRequest(
+                url=request.url,
+                method=request.method,
+                headers=request.headers,
+                timeout_seconds=request.timeout_seconds,
+                maximum_response_bytes=request.maximum_response_bytes,
+                selected_ipv4="192.0.2.3",
+            )
+        )
+
+    executor = InternalHTTPExecutor(
+        _configuration(
+            rate="100000",
+            approved_origins=("http://example.test",),
+        ),
+        transport=selected_transport,
+    )
+
+    with pytest.raises(HTTPRateRejected) as first:
+        executor.request("http://example.test/resource", maximum_response_bytes=4)
+    with pytest.raises(HTTPRateRejected) as second:
+        executor.request("http://example.test/blocked")
+
+    assert first.value.received_response is not None
+    assert first.value.received_response.status_code == 429
+    assert second.value.received_response is None
+    assert executor.total_request_attempts == 1
+
+
+def test_repeated_100_continue_framing_is_cumulatively_bounded() -> None:
+    raw = b"HTTP/1.1 100 Continue\r\n\r\n" * 51
+    raw += b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    transport, _events = _raw_peer_transport(raw)
+
+    with pytest.raises(HTTPTransportFailure, match="transport_error"):
+        transport(_transport_request())
+
+
+def test_non_100_informational_status_retains_standard_library_treatment() -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n"
+    )
+
+    response = transport(_transport_request())
+
+    assert response.status_code == 103
+    assert response.capture.body_capture_state == "complete"
+
+
+def test_chunked_trailers_are_bounded_and_report_omission() -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"4\r\ndata\r\n0\r\nX-Trailer: value\r\n\r\n"
+    )
+    response = transport(_transport_request())
+
+    assert response.body == b"data"
+    assert response.capture.body_capture_state == "complete"
+    assert response.capture.headers_capture_state == "incomplete"
+    assert response.capture.headers_incomplete_reason == "trailers_omitted"
+
+    line_boundary = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+    line_boundary += b"X: y\r\n" * 99 + b"\r\n"
+    boundary_transport, _events = _raw_peer_transport(line_boundary)
+    boundary = boundary_transport(_transport_request())
+    assert boundary.capture.headers_incomplete_reason == "trailers_omitted"
+
+    trailer_line = b"X: " + b"a" * (65_536 - 2 - 5) + b"\r\n"
+    assert len(trailer_line + b"\r\n") == 65_536
+    byte_boundary = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+    byte_boundary += trailer_line + b"\r\n"
+    boundary_transport, _events = _raw_peer_transport(byte_boundary)
+    boundary = boundary_transport(_transport_request())
+    assert boundary.capture.headers_incomplete_reason == "trailers_omitted"
+
+    excessive = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+    excessive += b"X: y\r\n" * 100 + b"\r\n"
+    excessive_transport, _events = _raw_peer_transport(excessive)
+    with pytest.raises(HTTPTransportFailure) as raised:
+        excessive_transport(_transport_request())
+    assert raised.value.received_response is not None
+    assert raised.value.received_response.capture.body_capture_state == "incomplete"
+    assert raised.value.received_response.capture.body_incomplete_reason == "trailer_limit"
+
+    excessive_bytes = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+    excessive_bytes += trailer_line[:-2] + b"a\r\n\r\n"
+    excessive_transport, _events = _raw_peer_transport(excessive_bytes)
+    with pytest.raises(HTTPTransportFailure) as raised:
+        excessive_transport(_transport_request())
+    assert raised.value.received_response.capture.body_incomplete_reason == "trailer_limit"
+
+
+def test_response_header_capture_boundaries_use_pairs_and_utf8_bytes() -> None:
+    hundred = tuple((f"X-{index}", "") for index in range(100))
+    assert http_enforcement_module._retain_response_headers(hundred) == (
+        hundred,
+        "complete",
+        None,
+    )
+    retained, state, reason = http_enforcement_module._retain_response_headers(
+        hundred + (("overflow", ""),)
+    )
+    assert retained == hundred
+    assert state == "incomplete"
+    assert reason == "response_header_limit"
+
+    exact_utf8 = (("A", "é" * 32_767 + "x"),)
+    assert sum(len(value.encode("utf-8")) for value in exact_utf8[0]) == 65_536
+    assert http_enforcement_module._retain_response_headers(exact_utf8) == (
+        exact_utf8,
+        "complete",
+        None,
+    )
+    retained, state, reason = http_enforcement_module._retain_response_headers(
+        (("A", "é" * 32_768),)
+    )
+    assert retained == ()
+    assert state == "incomplete"
+    assert reason == "response_header_limit"
+    with pytest.raises(ValueError, match="invalid headers"):
+        http_enforcement_module._retain_response_headers((("X", "\ud800"),))
+
+
+def test_transport_capture_model_rejects_contradictory_supplied_provenance() -> None:
+    with pytest.raises(ValueError, match="reason"):
+        HTTPResponseCapture(b"x", "incomplete", "private arbitrary text", (), "complete", None)
+    with pytest.raises(ValueError, match="contradictory"):
+        HTTPResponseCapture(None, "complete", None, (), "complete", None)
+    with pytest.raises(ValueError, match="header capture"):
+        HTTPResponseCapture(b"x", "complete", None, (), "incomplete", None)
+
+    incomplete = HTTPResponseCapture(
+        None,
+        "incomplete",
+        "body_read_error",
+        (),
+        "complete",
+        None,
+    )
+    executor = InternalHTTPExecutor(
+        None,
+        transport=lambda _request: HTTPTransportResponse(200, (), b"", incomplete),
+    )
+    response = executor.request("http://example.test/")
+    assert response.body == b""
+    assert response.capture == incomplete
+
+    contradictory = HTTPResponseCapture(
+        b"x",
+        "complete",
+        None,
+        (),
+        "complete",
+        None,
+    )
+    executor = InternalHTTPExecutor(
+        None,
+        transport=lambda _request: HTTPTransportResponse(200, (), b"different", contradictory),
+    )
+    with pytest.raises(ValueError, match="contradictory"):
+        executor.request("http://example.test/")
+
+    valid = HTTPResponseCapture(b"ok", "complete", None, (), "complete", None)
+    for invalid in (
+        HTTPTransportResponse(99, (), b"ok", valid),
+        HTTPTransportResponse(200, [], b"ok", valid),
+        HTTPTransportResponse(200, (("X", object()),), b"ok", valid),
+    ):
+        executor = InternalHTTPExecutor(None, transport=lambda _request, value=invalid: value)
+        with pytest.raises(ValueError):
+            executor.request("http://example.test/")
+
+
+def test_informational_framing_accepts_exact_line_and_byte_boundaries() -> None:
+    exactly_hundred_lines = b"HTTP/1.1 100 Continue\r\n\r\n" * 50
+    exactly_hundred_lines += b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    transport, _events = _raw_peer_transport(exactly_hundred_lines)
+    assert transport(_transport_request()).status_code == 200
+
+    status = b"HTTP/1.1 100 Continue\r\n"
+    blank = b"\r\n"
+    header = b"X: " + b"a" * (65_536 - len(status) - len(blank) - 5) + b"\r\n"
+    assert len(status + header + blank) == 65_536
+    exact_bytes = status + header + blank
+    exact_bytes += b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    transport, _events = _raw_peer_transport(exact_bytes)
+    assert transport(_transport_request()).status_code == 200
+
+    over_bytes = status + header[:-2] + b"a\r\n" + blank
+    over_bytes += b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    transport, _events = _raw_peer_transport(over_bytes)
+    with pytest.raises(HTTPTransportFailure):
+        transport(_transport_request())
+
+
+def test_urllib_transport_uses_the_same_capture_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = _RecordingOpener()
+    monkeypatch.setattr(http_enforcement_module, "build_opener", lambda *_handlers: opener)
+    transport = UrllibHTTPTransport()
+
+    result = transport(
+        http_enforcement_module.HTTPTransportRequest(
+            url="http://example.test/",
+            method="GET",
+            headers=(),
+            timeout_seconds=5,
+            maximum_response_bytes=2,
+        )
+    )
+
+    assert result.body == b"dir"
+    assert result.capture.body == b"di"
+    assert result.capture.body_capture_state == "truncated"
+
+
+@pytest.mark.parametrize(
+    ("content_length", "expected_state", "expected_reason"),
+    ((8, "incomplete", "premature_eof"), (3, "complete", None)),
+)
+def test_urllib_http_error_preserves_wrapped_response_framing_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    content_length: int,
+    expected_state: str,
+    expected_reason: str | None,
+) -> None:
+    raw = (
+        b"HTTP/1.1 403 Forbidden\r\nContent-Length: "
+        + str(content_length).encode("ascii")
+        + b"\r\n\r\nabc"
+    )
+    received = http_enforcement_module._BoundedHTTPResponse(
+        _RawResponseSocket(raw),
+        method="GET",
+    )
+    received.begin()
+    error = HTTPError(
+        "http://example.test/resource",
+        403,
+        "Forbidden",
+        received.headers,
+        received,
+    )
+    opener = _RecordingOpener(error=error)
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "build_opener",
+        lambda *_handlers: opener,
+    )
+
+    result = UrllibHTTPTransport()(
+        _transport_request(maximum_response_bytes=10)
+    )
+
+    assert result.status_code == 403
+    assert result.body == b"abc"
+    assert result.capture.body == b"abc"
+    assert result.capture.body_capture_state == expected_state
+    assert result.capture.body_incomplete_reason == expected_reason
+
+
+@pytest.mark.parametrize("trailer", (b"", b"X-Trailer: value\r\n"))
+def test_chunked_trailer_eof_preserves_success_with_incomplete_provenance(
+    trailer: bytes,
+) -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"4\r\ndata\r\n0\r\n" + trailer
+    )
+
+    response = transport(_transport_request())
+
+    assert response.body == b"data"
+    assert response.capture.body == b"data"
+    assert response.capture.body_capture_state == "incomplete"
+    assert response.capture.body_incomplete_reason == "framing_error"
+    assert response.capture.headers_capture_state == "incomplete"
+    assert (
+        response.capture.headers_incomplete_reason
+        == "trailer_framing_error"
+    )
+
+
+def test_injected_failure_snapshot_is_validated_against_request_bound() -> None:
+    capture = HTTPResponseCapture(
+        b"oversized",
+        "incomplete",
+        "body_read_error",
+        (),
+        "complete",
+        None,
+    )
+
+    def transport(request):
+        raise HTTPTransportFailure(
+            "timeout",
+            http_enforcement_module.HTTPReceivedResponse(
+                request.url,
+                200,
+                capture,
+            ),
+        )
+
+    executor = InternalHTTPExecutor(None, transport=transport)
+
+    with pytest.raises(ValueError, match="capture provenance"):
+        executor.request(
+            "http://example.test/resource",
+            maximum_response_bytes=4,
+        )
+
+
+def test_incomplete_zero_byte_capture_requires_absent_body_evidence() -> None:
+    with pytest.raises(ValueError, match="contradictory"):
+        HTTPResponseCapture(
+            b"",
+            "incomplete",
+            "body_read_error",
+            (),
+            "complete",
+            None,
+        )
+
+
+def test_full_compatibility_headers_are_validated_after_capture_overflow() -> None:
+    retained = tuple((f"X-{index}", "v") for index in range(100))
+    headers = retained + (("overflow", "v"), ("invalid", "\ud800"))
+    capture = HTTPResponseCapture(
+        b"ok",
+        "complete",
+        None,
+        retained,
+        "incomplete",
+        "response_header_limit",
+    )
+    executor = InternalHTTPExecutor(
+        None,
+        transport=lambda _request: HTTPTransportResponse(
+            200,
+            headers,
+            b"ok",
+            capture,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="invalid headers"):
+        executor.request("http://example.test/resource")
+
+
+def test_bounded_body_capture_tracks_length_without_rescanning_prior_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OneByteChunks(http_enforcement_module._BoundedHTTPResponse):
+        trailers_omitted = False
+        trailer_limit_exceeded = False
+        length = 0
+
+        def __init__(self, count: int) -> None:
+            self.remaining = count
+
+        def read1(self, _limit: int) -> bytes:
+            if self.remaining == 0:
+                return b""
+            self.remaining -= 1
+            return b"x"
+
+    inspected_lengths = 0
+    real_sum = builtins.sum
+
+    def counting_sum(values, start=0):
+        nonlocal inspected_lengths
+        materialised = list(values)
+        inspected_lengths += len(materialised)
+        return real_sum(materialised, start)
+
+    monkeypatch.setattr(builtins, "sum", counting_sum)
+    maximum = 255
+
+    body, capture = http_enforcement_module._read_response_body(
+        OneByteChunks(maximum + 1),
+        _transport_request(maximum_response_bytes=maximum),
+        200,
+        (),
+    )
+
+    assert body == b"x" * (maximum + 1)
+    assert capture.body == b"x" * maximum
+    assert capture.body_capture_state == "truncated"
+    assert inspected_lengths <= maximum + 1
+
+
+@pytest.mark.parametrize(
+    ("captured_body", "expected_exception"),
+    ((b"x", ValueError), (b"abcd", HTTPTransportFailure)),
+)
+def test_injected_failure_snapshot_truncation_must_match_request_bound(
+    captured_body: bytes,
+    expected_exception: type[BaseException],
+) -> None:
+    capture = HTTPResponseCapture(
+        captured_body,
+        "truncated",
+        None,
+        (),
+        "complete",
+        None,
+    )
+
+    def transport(request):
+        raise HTTPTransportFailure(
+            "timeout",
+            http_enforcement_module.HTTPReceivedResponse(
+                request.url,
+                200,
+                capture,
+            ),
+        )
+
+    executor = InternalHTTPExecutor(None, transport=transport)
+
+    with pytest.raises(expected_exception):
+        executor.request(
+            "http://example.test/resource",
+            maximum_response_bytes=4,
+        )
+
+
+def test_truncated_chunked_body_marks_trailers_unobserved() -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"6\r\nabcdef\r\n0\r\nX-Trailer: value\r\n\r\n"
+    )
+
+    response = transport(_transport_request(maximum_response_bytes=4))
+
+    assert response.body == b"abcde"
+    assert response.capture.body == b"abcd"
+    assert response.capture.body_capture_state == "truncated"
+    assert response.capture.headers_capture_state == "incomplete"
+    assert response.capture.headers_incomplete_reason == "trailers_unobserved"
+
+
+def test_chunked_body_failure_before_trailers_marks_headers_incomplete() -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"6\r\nabc"
+    )
+
+    with pytest.raises(HTTPTransportFailure) as raised:
+        transport(_transport_request(maximum_response_bytes=4))
+
+    snapshot = raised.value.received_response
+    assert snapshot is not None
+    assert snapshot.capture.body == b"abc"
+    assert snapshot.capture.body_capture_state == "incomplete"
+    assert snapshot.capture.headers_capture_state == "incomplete"
+    assert snapshot.capture.headers_incomplete_reason == "trailers_unobserved"
+
+
+@pytest.mark.parametrize(
+    ("trailer", "expected_header_state", "expected_header_reason"),
+    (
+        (b"", "complete", None),
+        (b"X-Trailer: value\r\n", "incomplete", "trailers_omitted"),
+    ),
+)
+def test_completed_chunked_trailer_observation_remains_truthful(
+    trailer: bytes,
+    expected_header_state: str,
+    expected_header_reason: str | None,
+) -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"4\r\ndata\r\n0\r\n" + trailer + b"\r\n"
+    )
+
+    response = transport(_transport_request())
+
+    assert response.capture.body_capture_state == "complete"
+    assert response.capture.headers_capture_state == expected_header_state
+    assert response.capture.headers_incomplete_reason == expected_header_reason
+
+
+def test_head_chunked_metadata_does_not_claim_unobserved_trailers() -> None:
+    transport, _events = _raw_peer_transport(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+        b"X-Test: value\r\n\r\n"
+    )
+
+    response = transport(_transport_request(method="HEAD"))
+
+    assert response.status_code == 200
+    assert response.body == b""
+    assert response.capture.body_capture_state == "complete"
+    assert response.capture.body_incomplete_reason is None
+    assert response.capture.headers_capture_state == "complete"
+    assert response.capture.headers_incomplete_reason is None
+
+
+def test_header_limit_and_unobserved_chunked_trailers_are_both_retained() -> None:
+    headers = tuple((f"X-{index}", "value") for index in range(101))
+
+    capture = http_enforcement_module._capture_with_headers(
+        b"abcd",
+        "truncated",
+        None,
+        headers,
+        trailers_unobserved=True,
+    )
+
+    assert capture.headers_capture_state == "incomplete"
+    assert (
+        capture.headers_incomplete_reason
+        == "response_header_limit_and_trailers_unobserved"
+    )

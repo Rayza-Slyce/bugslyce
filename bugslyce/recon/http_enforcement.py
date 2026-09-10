@@ -5,7 +5,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
-from http.client import HTTPConnection, HTTPException, HTTPSConnection
+from http.client import (
+    HTTPConnection,
+    HTTPException,
+    HTTPResponse,
+    HTTPSConnection,
+    IncompleteRead,
+    LineTooLong,
+)
 import ipaddress
 import math
 import re
@@ -18,7 +25,14 @@ from typing import Callable, Iterator, Protocol
 import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import (
+    HTTPHandler,
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from bugslyce.core.engagement_policy import (
     AUTOMATION_PERMITTED,
@@ -59,6 +73,12 @@ MAXIMUM_REDIRECT_HOPS = 10
 MAXIMUM_RETRY_AFTER_CHARS = 128
 MAXIMUM_SLEEP_CHUNK_SECONDS = 60
 MAXIMUM_TERMINAL_POLL_SECONDS = Decimal("0.1")
+MAXIMUM_RETAINED_RESPONSE_HEADER_PAIRS = 100
+MAXIMUM_RETAINED_RESPONSE_HEADER_BYTES = 65_536
+MAXIMUM_INFORMATIONAL_FRAMING_LINES = 100
+MAXIMUM_INFORMATIONAL_FRAMING_BYTES = 65_536
+MAXIMUM_TRAILER_FRAMING_LINES = 100
+MAXIMUM_TRAILER_FRAMING_BYTES = 65_536
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _RETAINED_REDIRECT_REFUSALS_WITH_DESTINATION = frozenset(
     {
@@ -85,6 +105,23 @@ TLS_CONFIGURATION_FAILURE_CATEGORY = "tls_configuration_error"
 _HTTP_FIELD_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PEER_BOUND_TRANSPORT_REQUIRED = (
     "Programme-scoped internal HTTP requires a peer-bound transport."
+)
+_CAPTURE_STATES = frozenset({"complete", "truncated", "incomplete"})
+_BODY_INCOMPLETE_REASONS = frozenset(
+    {"body_read_error", "framing_error", "premature_eof", "trailer_limit"}
+)
+_HEADER_INCOMPLETE_REASONS = frozenset(
+    {
+        "response_header_limit",
+        "response_header_limit_and_trailer_framing_error",
+        "response_header_limit_and_trailer_limit",
+        "response_header_limit_and_trailers_omitted",
+        "response_header_limit_and_trailers_unobserved",
+        "trailer_framing_error",
+        "trailer_limit",
+        "trailers_omitted",
+        "trailers_unobserved",
+    }
 )
 
 Monotonic = Callable[[], float]
@@ -189,12 +226,71 @@ class HTTPTransportRequest:
 
 
 @dataclass(frozen=True)
+class HTTPResponseCapture:
+    """Transport-established bounded evidence for one received response."""
+
+    body: bytes | None
+    body_capture_state: str
+    body_incomplete_reason: str | None
+    headers: tuple[tuple[str, str], ...]
+    headers_capture_state: str
+    headers_incomplete_reason: str | None
+
+    def __post_init__(self) -> None:
+        if self.body is not None and not isinstance(self.body, bytes):
+            raise ValueError("Internal HTTP body capture is invalid.")
+        if self.body_capture_state not in _CAPTURE_STATES:
+            raise ValueError("Internal HTTP body capture state is invalid.")
+        if self.body_capture_state == "incomplete":
+            if self.body_incomplete_reason not in _BODY_INCOMPLETE_REASONS:
+                raise ValueError("Internal HTTP body capture reason is invalid.")
+        elif self.body_incomplete_reason is not None:
+            raise ValueError("Internal HTTP body capture reason is contradictory.")
+        if self.body is None and self.body_capture_state != "incomplete":
+            raise ValueError("Internal HTTP body capture is contradictory.")
+        if self.body == b"" and self.body_capture_state == "incomplete":
+            raise ValueError("Internal HTTP body capture is contradictory.")
+        retained, state, reason = _retain_response_headers(self.headers)
+        if retained != self.headers or state != "complete" or reason is not None:
+            raise ValueError("Internal HTTP retained response headers are invalid.")
+        if self.headers_capture_state == "complete":
+            if self.headers_incomplete_reason is not None:
+                raise ValueError("Internal HTTP header capture is contradictory.")
+        elif self.headers_capture_state == "incomplete":
+            if self.headers_incomplete_reason not in _HEADER_INCOMPLETE_REASONS:
+                raise ValueError("Internal HTTP header capture reason is invalid.")
+        else:
+            raise ValueError("Internal HTTP header capture state is invalid.")
+
+
+@dataclass(frozen=True)
+class HTTPReceivedResponse:
+    """One immutable response snapshot retained after a strict failure."""
+
+    request_url: str
+    status_code: int
+    capture: HTTPResponseCapture
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request_url, str) or not self.request_url:
+            raise ValueError("Internal HTTP received-response URL is invalid.")
+        if (
+            isinstance(self.status_code, bool)
+            or not isinstance(self.status_code, int)
+            or not 100 <= self.status_code <= 599
+            or not isinstance(self.capture, HTTPResponseCapture)
+        ):
+            raise ValueError("Internal HTTP received response is invalid.")
+
+
+@dataclass(frozen=True)
 class HTTPTransportResponse:
     """One response returned by an injected single-exchange transport."""
 
     status_code: int
     headers: tuple[tuple[str, str], ...]
     body: bytes
+    capture: HTTPResponseCapture | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +338,7 @@ class InternalHTTPResponse:
     redirects: tuple[HTTPRedirectHop, ...]
     refused_redirect: HTTPRedirectRefusal | None = None
     redirect_followup_failure: HTTPRedirectFollowupFailure | None = None
+    capture: HTTPResponseCapture | None = None
 
 
 class HTTPTransport(Protocol):
@@ -297,9 +394,14 @@ class HTTPProgrammeScopeRefused(InternalHTTPExecutionError):
 class HTTPRateRejected(InternalHTTPExecutionError):
     """Typed stage-stop signal for an HTTP 429 response."""
 
-    def __init__(self, retry_after: str) -> None:
+    def __init__(
+        self,
+        retry_after: str,
+        received_response: HTTPReceivedResponse | None = None,
+    ) -> None:
         self.status_code = 429
         self.retry_after = retry_after
+        self.received_response = received_response
         super().__init__(
             "The target returned HTTP 429; internal HTTP collection stopped. "
             f"Retry-After: {retry_after}."
@@ -309,8 +411,13 @@ class HTTPRateRejected(InternalHTTPExecutionError):
 class HTTPTransportFailure(InternalHTTPExecutionError):
     """Typed redacted transport failure for collector evidence."""
 
-    def __init__(self, category: str) -> None:
+    def __init__(
+        self,
+        category: str,
+        received_response: HTTPReceivedResponse | None = None,
+    ) -> None:
         self.category = category
+        self.received_response = received_response
         super().__init__(f"Internal HTTP transport failed: {category}.")
 
 
@@ -445,14 +552,16 @@ class _SharedHTTPEnforcementState:
     ) -> HTTPRateRejected:
         with self.state_lock:
             if self.rate_rejection is None:
-                self.rate_rejection = rejection
-            else:
-                rejection = self.rate_rejection
+                self.rate_rejection = HTTPRateRejected(rejection.retry_after)
+            retry_after = self.rate_rejection.retry_after
             wake_events = tuple(self._handle_wake_events)
         self.terminal_event.set()
         for event in wake_events:
             event.set()
-        return rejection
+        return HTTPRateRejected(
+            retry_after,
+            received_response=rejection.received_response,
+        )
 
 
 class InternalHTTPExecutor:
@@ -675,6 +784,7 @@ class InternalHTTPExecutor:
                         destination_url=destination_url,
                         category=exc.category,
                     ),
+                    capture=source_response.capture,
                 )
             pending_redirect_response = None
             if (
@@ -692,6 +802,7 @@ class InternalHTTPExecutor:
                         float(_monotonic_decimal(self._monotonic) - started),
                     ),
                     redirects=tuple(redirects),
+                    capture=response.capture,
                 )
 
             try:
@@ -716,6 +827,7 @@ class InternalHTTPExecutor:
                         destination_url=None,
                         reason=exc.reason,
                     ),
+                    capture=response.capture,
                 )
             try:
                 destination = self._redirect_destination(
@@ -749,6 +861,7 @@ class InternalHTTPExecutor:
                         destination_url=destination,
                         reason=exc.reason,
                     ),
+                    capture=response.capture,
                 )
             if destination in visited:
                 if not retain_refused_redirect:
@@ -770,6 +883,7 @@ class InternalHTTPExecutor:
                         destination_url=destination,
                         reason="redirect_loop",
                     ),
+                    capture=response.capture,
                 )
             if len(redirects) >= self.configuration.maximum_redirect_hops:
                 if not retain_refused_redirect:
@@ -791,6 +905,7 @@ class InternalHTTPExecutor:
                         destination_url=destination,
                         reason="redirect_hop_limit",
                     ),
+                    capture=response.capture,
                 )
             redirect_decision = self._require_programme_scope(
                 destination,
@@ -824,6 +939,7 @@ class InternalHTTPExecutor:
                         destination_url=destination,
                         category=exc.category,
                     ),
+                    capture=response.capture,
                 )
             redirects.append(
                 HTTPRedirectHop(
@@ -906,6 +1022,26 @@ class InternalHTTPExecutor:
             try:
                 transport_invoked = True
                 raw_response = self.transport(request)
+            except HTTPTransportFailure as exc:
+                received = exc.received_response
+                if received is not None:
+                    try:
+                        _validate_received_response(received, request)
+                    except ValueError as validation_error:
+                        raise validation_error from exc
+                if (
+                    self.configuration is not None
+                    and received is not None
+                    and received.status_code == 429
+                ):
+                    rejection = HTTPRateRejected(
+                        _safe_retry_after(received.capture.headers),
+                        received_response=received,
+                    )
+                    raise self._shared_enforcement_state.record_rate_rejection(
+                        rejection
+                    ) from exc
+                raise
             except TimeoutError:
                 if self.configuration is None:
                     raise
@@ -915,9 +1051,16 @@ class InternalHTTPExecutor:
                     raise
                 raise HTTPTransportFailure("transport_error") from None
             else:
-                response = _validate_transport_response(raw_response)
+                response = _validate_transport_response(raw_response, request)
                 if self.configuration is not None and response.status_code == 429:
-                    rejection = HTTPRateRejected(_safe_retry_after(response.headers))
+                    rejection = HTTPRateRejected(
+                        _safe_retry_after(response.headers),
+                        received_response=HTTPReceivedResponse(
+                            request.url,
+                            response.status_code,
+                            response.capture,
+                        ),
+                    )
                     raise self._shared_enforcement_state.record_rate_rejection(
                         rejection
                     )
@@ -1304,6 +1447,375 @@ def _connect_selected_ipv4(
         raise
 
 
+class _InformationalFramingReader:
+    """Count skipped 100-response framing while delegating all body reads."""
+
+    def __init__(self, raw) -> None:  # noqa: ANN001
+        self._raw = raw
+        self._expect_status = True
+        self._in_continue_headers = False
+        self._finished = False
+        self._lines = 0
+        self._bytes = 0
+
+    def readline(self, limit: int = -1) -> bytes:
+        line = self._raw.readline(limit)
+        if self._finished:
+            return line
+        count = False
+        if self._expect_status:
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[1] == b"100":
+                count = True
+                self._expect_status = False
+                self._in_continue_headers = True
+            else:
+                self._finished = True
+        elif self._in_continue_headers:
+            count = True
+            if line in (b"\r\n", b"\n"):
+                self._expect_status = True
+                self._in_continue_headers = False
+        if count:
+            self._lines += 1
+            self._bytes += len(line)
+            if (
+                self._lines > MAXIMUM_INFORMATIONAL_FRAMING_LINES
+                or self._bytes > MAXIMUM_INFORMATIONAL_FRAMING_BYTES
+            ):
+                raise HTTPException("Informational response framing limit exceeded.")
+        return line
+
+    def __getattr__(self, name: str):
+        return getattr(self._raw, name)
+
+
+class _BoundedHTTPResponse(HTTPResponse):
+    """Standard HTTP response with bounded skipped framing provenance."""
+
+    trailers_omitted = False
+    trailer_framing_incomplete = False
+    trailer_limit_exceeded = False
+    trailer_section_reached = False
+
+    def begin(self) -> None:
+        self.trailers_omitted = False
+        self.trailer_framing_incomplete = False
+        self.trailer_limit_exceeded = False
+        self.trailer_section_reached = False
+        if self.headers is None and not isinstance(
+            self.fp, _InformationalFramingReader
+        ):
+            self.fp = _InformationalFramingReader(self.fp)
+        super().begin()
+
+    def _read_and_discard_trailer(self) -> None:
+        self.trailer_section_reached = True
+        lines = 0
+        raw_bytes = 0
+        nonempty = False
+        while True:
+            line = self.fp.readline(65_537)
+            if len(line) > 65_536:
+                self.trailer_limit_exceeded = True
+                raise LineTooLong("trailer line")
+            lines += 1
+            raw_bytes += len(line)
+            if (
+                lines > MAXIMUM_TRAILER_FRAMING_LINES
+                or raw_bytes > MAXIMUM_TRAILER_FRAMING_BYTES
+            ):
+                self.trailer_limit_exceeded = True
+                raise HTTPException("Chunked trailer framing limit exceeded.")
+            if line in (b"\r\n", b"\n"):
+                self.trailers_omitted = nonempty
+                return
+            if not line:
+                self.trailers_omitted = nonempty
+                self.trailer_framing_incomplete = True
+                return
+            nonempty = True
+
+
+class _BoundedHTTPConnection(HTTPConnection):
+    response_class = _BoundedHTTPResponse
+
+
+class _BoundedHTTPSConnection(HTTPSConnection):
+    response_class = _BoundedHTTPResponse
+
+
+class _BoundedHTTPHandler(HTTPHandler):
+    def http_open(self, request):  # noqa: ANN001
+        return self.do_open(_BoundedHTTPConnection, request)
+
+
+class _BoundedHTTPSHandler(HTTPSHandler):
+    def https_open(self, request):  # noqa: ANN001
+        return self.do_open(
+            _BoundedHTTPSConnection,
+            request,
+            context=self._context,
+        )
+
+
+def _retain_response_headers(
+    headers: tuple[tuple[str, str], ...],
+) -> tuple[tuple[tuple[str, str], ...], str, str | None]:
+    if not isinstance(headers, tuple):
+        raise ValueError("Internal HTTP transport returned invalid headers.")
+    retained: list[tuple[str, str]] = []
+    used_bytes = 0
+    overflowed = False
+    for item in headers:
+        if (
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not all(isinstance(value, str) for value in item)
+        ):
+            raise ValueError("Internal HTTP transport returned invalid headers.")
+        try:
+            item_bytes = sum(len(value.encode("utf-8")) for value in item)
+        except UnicodeEncodeError:
+            raise ValueError("Internal HTTP transport returned invalid headers.") from None
+        if overflowed:
+            continue
+        if (
+            len(retained) >= MAXIMUM_RETAINED_RESPONSE_HEADER_PAIRS
+            or used_bytes + item_bytes > MAXIMUM_RETAINED_RESPONSE_HEADER_BYTES
+        ):
+            overflowed = True
+            continue
+        retained.append(item)
+        used_bytes += item_bytes
+    if overflowed:
+        return tuple(retained), "incomplete", "response_header_limit"
+    return tuple(retained), "complete", None
+
+
+def _response_headers(response) -> tuple[tuple[str, str], ...]:  # noqa: ANN001
+    try:
+        headers = tuple(response.headers.items())
+    except (AttributeError, TypeError):
+        raise ValueError("Internal HTTP transport returned invalid headers.") from None
+    _retain_response_headers(headers)
+    return headers
+
+
+def _capture_with_headers(
+    body: bytes | None,
+    body_state: str,
+    body_reason: str | None,
+    headers: tuple[tuple[str, str], ...],
+    *,
+    trailers_omitted: bool = False,
+    trailers_unobserved: bool = False,
+    trailer_framing_incomplete: bool = False,
+    trailer_failure: bool = False,
+) -> HTTPResponseCapture:
+    retained, header_state, header_reason = _retain_response_headers(headers)
+    if trailer_failure:
+        header_state = "incomplete"
+        header_reason = (
+            "response_header_limit_and_trailer_limit"
+            if header_reason == "response_header_limit"
+            else "trailer_limit"
+        )
+    elif trailer_framing_incomplete:
+        header_state = "incomplete"
+        header_reason = (
+            "response_header_limit_and_trailer_framing_error"
+            if header_reason == "response_header_limit"
+            else "trailer_framing_error"
+        )
+    elif trailers_unobserved:
+        header_state = "incomplete"
+        header_reason = (
+            "response_header_limit_and_trailers_unobserved"
+            if header_reason == "response_header_limit"
+            else "trailers_unobserved"
+        )
+    elif trailers_omitted:
+        if header_state == "complete":
+            header_state = "incomplete"
+            header_reason = "trailers_omitted"
+        else:
+            header_reason = "response_header_limit_and_trailers_omitted"
+    return HTTPResponseCapture(
+        body=body,
+        body_capture_state=body_state,
+        body_incomplete_reason=body_reason,
+        headers=retained,
+        headers_capture_state=header_state,
+        headers_incomplete_reason=header_reason,
+    )
+
+
+def _chunked_trailers_unobserved(response: object | None) -> bool:
+    return bool(
+        isinstance(response, _BoundedHTTPResponse)
+        and getattr(response, "chunked", False)
+        and getattr(response, "length", None) != 0
+        and not getattr(response, "trailer_section_reached", False)
+    )
+
+
+def _body_failure(
+    request: HTTPTransportRequest,
+    status: int,
+    headers: tuple[tuple[str, str], ...],
+    category: str,
+    body: bytes,
+    reason: str,
+    *,
+    response=None,  # noqa: ANN001
+) -> HTTPTransportFailure:
+    captured = body[: request.maximum_response_bytes]
+    capture = _capture_with_headers(
+        captured or None,
+        "incomplete",
+        reason,
+        headers,
+        trailer_failure=bool(
+            response is not None
+            and getattr(response, "trailer_limit_exceeded", False)
+        ),
+        trailers_unobserved=_chunked_trailers_unobserved(response),
+    )
+    return HTTPTransportFailure(
+        category,
+        HTTPReceivedResponse(request.url, status, capture),
+    )
+
+
+def _read_response_body(
+    response,  # noqa: ANN001
+    request: HTTPTransportRequest,
+    status: int,
+    headers: tuple[tuple[str, str], ...],
+) -> tuple[bytes, HTTPResponseCapture]:
+    maximum = request.maximum_response_bytes
+    chunks: list[bytes] = []
+    captured_bytes = 0
+    try:
+        if isinstance(response, _BoundedHTTPResponse):
+            while captured_bytes < maximum + 1:
+                remaining = maximum + 1 - captured_bytes
+                chunk = response.read1(remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                captured_bytes += len(chunk)
+        else:
+            chunks.append(response.read(maximum + 1))
+    except IncompleteRead as exc:
+        partial = exc.partial if isinstance(exc.partial, bytes) else b""
+        raise _body_failure(
+            request,
+            status,
+            headers,
+            "transport_error",
+            b"".join(chunks) + partial,
+            "premature_eof",
+            response=response,
+        ) from None
+    except TimeoutError:
+        raise _body_failure(
+            request,
+            status,
+            headers,
+            "timeout",
+            b"".join(chunks),
+            "body_read_error",
+            response=response,
+        ) from None
+    except ssl.SSLError:
+        raise _body_failure(
+            request,
+            status,
+            headers,
+            "tls_error",
+            b"".join(chunks),
+            "body_read_error",
+            response=response,
+        ) from None
+    except (HTTPException, OSError):
+        trailer_failure = getattr(response, "trailer_limit_exceeded", False)
+        raise _body_failure(
+            request,
+            status,
+            headers,
+            "transport_error",
+            b"".join(chunks),
+            "trailer_limit" if trailer_failure else "framing_error",
+            response=response,
+        ) from None
+    body = b"".join(chunks)
+    if len(body) > maximum:
+        capture = _capture_with_headers(
+            body[:maximum],
+            "truncated",
+            None,
+            headers,
+            trailers_omitted=getattr(response, "trailers_omitted", False),
+            trailers_unobserved=_chunked_trailers_unobserved(response),
+            trailer_framing_incomplete=getattr(
+                response,
+                "trailer_framing_incomplete",
+                False,
+            ),
+        )
+    else:
+        incomplete = bool(
+            isinstance(response, _BoundedHTTPResponse)
+            and (
+                response.length not in (None, 0)
+                or getattr(response, "trailer_framing_incomplete", False)
+            )
+        )
+        capture = _capture_with_headers(
+            body or None if incomplete else body,
+            "incomplete" if incomplete else "complete",
+            (
+                "framing_error"
+                if getattr(response, "trailer_framing_incomplete", False)
+                else "premature_eof"
+            )
+            if incomplete
+            else None,
+            headers,
+            trailers_omitted=getattr(response, "trailers_omitted", False),
+            trailers_unobserved=_chunked_trailers_unobserved(response),
+            trailer_framing_incomplete=getattr(
+                response,
+                "trailer_framing_incomplete",
+                False,
+            ),
+        )
+    return body, capture
+
+
+def _transport_response_from_received(
+    response,  # noqa: ANN001
+    request: HTTPTransportRequest,
+) -> HTTPTransportResponse:
+    status = _response_status(response)
+    headers = _response_headers(response)
+    framing_response = response
+    if isinstance(response, HTTPError) and isinstance(
+        response.fp,
+        _BoundedHTTPResponse,
+    ):
+        framing_response = response.fp
+    body, capture = _read_response_body(
+        framing_response,
+        request,
+        status,
+        headers,
+    )
+    return HTTPTransportResponse(status, headers, body, capture)
+
+
 class PeerBoundHTTPTransport:
     """Single-exchange HTTP/1.1 transport bound to one pre-approved IPv4 peer."""
 
@@ -1375,6 +1887,7 @@ class PeerBoundHTTPTransport:
                 effective_port,
                 timeout=request.timeout_seconds,
             )
+        connection.response_class = _BoundedHTTPResponse
 
         def create_peer_connection(
             _address,
@@ -1393,11 +1906,7 @@ class PeerBoundHTTPTransport:
         try:
             connection.request(request.method, target, headers=headers)
             response = connection.getresponse()
-            body = response.read(request.maximum_response_bytes + 1)
-            response_headers = tuple(
-                (str(name), str(value)) for name, value in response.headers.items()
-            )
-            status = response.status
+            result = _transport_response_from_received(response, request)
         except TimeoutError:
             raise
         except HTTPTransportFailure:
@@ -1410,19 +1919,21 @@ class PeerBoundHTTPTransport:
             if response is not None:
                 response.close()
             connection.close()
-        return HTTPTransportResponse(
-            status_code=status,
-            headers=response_headers,
-            body=body,
-        )
+        return result
 
 
 class UrllibHTTPTransport:
     """Standard-library single-exchange transport with redirects disabled."""
 
     def __init__(self, *, direct_only: bool = False) -> None:
+        self._direct_only = direct_only
         self._opener = (
-            build_opener(ProxyHandler({}), _NoRedirectHandler)
+            build_opener(
+                ProxyHandler({}),
+                _NoRedirectHandler(),
+                _BoundedHTTPHandler(),
+                _BoundedHTTPSHandler(),
+            )
             if direct_only
             else None
         )
@@ -1436,23 +1947,23 @@ class UrllibHTTPTransport:
         opener = (
             self._opener
             if self._opener is not None
-            else build_opener(_NoRedirectHandler)
+            else build_opener(
+                _NoRedirectHandler(),
+                _BoundedHTTPHandler(),
+                _BoundedHTTPSHandler(),
+            )
         )
         try:
             response = opener.open(urllib_request, timeout=request.timeout_seconds)
         except HTTPError as error:
             response = error
         try:
-            body = response.read(request.maximum_response_bytes + 1)
-            headers = tuple(
-                (str(name), str(value)) for name, value in response.headers.items()
-            )
-            status = _response_status(response)
+            result = _transport_response_from_received(response, request)
         finally:
             close = getattr(response, "close", None)
             if close is not None:
                 close()
-        return HTTPTransportResponse(status_code=status, headers=headers, body=body)
+        return result
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -1652,7 +2163,10 @@ def _validate_request_shape(
     return normalised_method
 
 
-def _validate_transport_response(response: object) -> HTTPTransportResponse:
+def _validate_transport_response(
+    response: object,
+    request: HTTPTransportRequest,
+) -> HTTPTransportResponse:
     if not isinstance(response, HTTPTransportResponse):
         raise ValueError("Internal HTTP transport returned an invalid response.")
     if (
@@ -1661,16 +2175,82 @@ def _validate_transport_response(response: object) -> HTTPTransportResponse:
         or not 100 <= response.status_code <= 599
     ):
         raise ValueError("Internal HTTP transport returned an invalid status.")
-    if not isinstance(response.body, bytes):
+    if (
+        not isinstance(response.body, bytes)
+        or len(response.body) > request.maximum_response_bytes + 1
+    ):
         raise ValueError("Internal HTTP transport returned an invalid body.")
-    for item in response.headers:
-        if (
-            not isinstance(item, tuple)
-            or len(item) != 2
-            or not all(isinstance(value, str) for value in item)
-        ):
-            raise ValueError("Internal HTTP transport returned invalid headers.")
+    if not isinstance(response.headers, tuple):
+        raise ValueError("Internal HTTP transport returned invalid headers.")
+    _retain_response_headers(response.headers)
+    capture = response.capture
+    if not isinstance(capture, HTTPResponseCapture):
+        raise ValueError("Internal HTTP transport omitted capture provenance.")
+    if capture.headers_capture_state == "complete":
+        if capture.headers != response.headers:
+            raise ValueError("Internal HTTP transport returned contradictory capture provenance.")
+    elif response.headers[: len(capture.headers)] != capture.headers:
+        raise ValueError("Internal HTTP transport returned contradictory capture provenance.")
+    if capture.body_capture_state == "complete":
+        valid_body = (
+            capture.body == response.body
+            and len(response.body) <= request.maximum_response_bytes
+        )
+    elif capture.body_capture_state == "truncated":
+        valid_body = (
+            isinstance(capture.body, bytes)
+            and len(capture.body) == request.maximum_response_bytes
+            and len(response.body) == request.maximum_response_bytes + 1
+            and response.body.startswith(capture.body)
+        )
+    else:
+        valid_body = (
+            (capture.body is None and response.body == b"")
+            or capture.body == response.body
+        ) and len(response.body) <= request.maximum_response_bytes
+    if not valid_body:
+        raise ValueError("Internal HTTP transport returned contradictory capture provenance.")
     return response
+
+
+def _validate_received_response(
+    received: object,
+    request: HTTPTransportRequest,
+) -> HTTPReceivedResponse:
+    if not isinstance(received, HTTPReceivedResponse):
+        raise ValueError(
+            "Internal HTTP transport returned invalid received-response provenance."
+        )
+    if received.request_url != request.url:
+        raise ValueError(
+            "Internal HTTP transport returned mismatched response provenance."
+        )
+    body = received.capture.body
+    state = received.capture.body_capture_state
+    if state == "complete":
+        valid_body = (
+            isinstance(body, bytes)
+            and len(body) <= request.maximum_response_bytes
+        )
+    elif state == "truncated":
+        valid_body = (
+            isinstance(body, bytes)
+            and len(body) == request.maximum_response_bytes
+        )
+    else:
+        valid_body = (
+            body is None
+            or (
+                isinstance(body, bytes)
+                and bool(body)
+                and len(body) <= request.maximum_response_bytes
+            )
+        )
+    if not valid_body:
+        raise ValueError(
+            "Internal HTTP transport returned contradictory capture provenance."
+        )
+    return received
 
 
 def _redirect_location(headers: tuple[tuple[str, str], ...]) -> str:

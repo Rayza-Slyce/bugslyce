@@ -25,6 +25,7 @@ from bugslyce.recon.deep_metadata_collector import (
 )
 from bugslyce.recon.http_enforcement import (
     HTTPEnforcementConfiguration,
+    HTTPResponseCapture,
     HTTPTransportResponse,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
@@ -167,8 +168,12 @@ def test_redirects_are_not_automatically_followed(monkeypatch) -> None:
     assert response.status_code == 302
     assert response.final_url == "http://example.test/login"
     assert response.headers == (("location", "http://other.test/"),)
-    assert len(captured_handlers) == 1
-    handler = captured_handlers[0]()
+    assert [handler.__class__.__name__ for handler in captured_handlers] == [
+        "_NoRedirectHandler",
+        "_BoundedHTTPHandler",
+        "_BoundedHTTPSHandler",
+    ]
+    handler = captured_handlers[0]
     assert handler.redirect_request(None, None, 302, "Found", {}, "http://other.test/") is None
 
 
@@ -219,8 +224,8 @@ def test_single_operator_recon_mode_invariant() -> None:
 
 def test_policy_aware_adapter_preserves_followed_redirect_evidence() -> None:
     responses = [
-        HTTPTransportResponse(302, (("Location", "/next"),), b""),
-        HTTPTransportResponse(200, (), b"done"),
+        _complete_transport_response(302, (("Location", "/next"),), b""),
+        _complete_transport_response(200, (), b"done"),
     ]
 
     def transport(_request):
@@ -245,6 +250,19 @@ def test_policy_aware_adapter_preserves_followed_redirect_evidence() -> None:
     assert response.final_url == "https://example.test/next"
     assert response.redirects[0].source_url == "https://example.test/start"
     assert response.redirects[0].destination_url == "https://example.test/next"
+
+
+def _complete_transport_response(
+    status: int,
+    headers: tuple[tuple[str, str], ...],
+    body: bytes,
+) -> HTTPTransportResponse:
+    return HTTPTransportResponse(
+        status,
+        headers,
+        body,
+        HTTPResponseCapture(body, "complete", None, headers, "complete", None),
+    )
 
 
 def _install_fake_opener(monkeypatch, opener: "_FakeOpener") -> None:

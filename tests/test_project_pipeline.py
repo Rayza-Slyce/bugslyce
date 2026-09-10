@@ -96,6 +96,7 @@ from bugslyce.recon.evidence_pack_closure import validate_evidence_pack_root
 from bugslyce.recon.http_enforcement import (
     HTTPEnforcementConfiguration,
     HTTPRateRejected,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     InternalHTTPExecutor,
 )
@@ -4259,10 +4260,19 @@ def test_terminal_internal_http_failure_uses_normal_failed_step_checkpoint(
 
     def transport(request):
         transmitted_urls.append(request.url)
+        headers = (("Retry-After", retry_after),)
         return HTTPTransportResponse(
             status_code=429,
-            headers=(("Retry-After", retry_after),),
+            headers=headers,
             body=private_body,
+            capture=HTTPResponseCapture(
+                body=private_body,
+                body_capture_state="complete",
+                body_incomplete_reason=None,
+                headers=headers,
+                headers_capture_state="complete",
+                headers_incomplete_reason=None,
+            ),
         )
 
     executor = InternalHTTPExecutor(

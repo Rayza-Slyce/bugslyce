@@ -50,6 +50,7 @@ from bugslyce.recon.http_enforcement import (
     HTTPRateRejected,
     HTTPRedirectRefused,
     HTTPTransportFailure,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
@@ -491,6 +492,26 @@ def _install_profile(
     )
 
 
+def _complete_transport_response(
+    status_code: int,
+    headers: tuple[tuple[str, str], ...],
+    body: bytes,
+) -> HTTPTransportResponse:
+    return HTTPTransportResponse(
+        status_code=status_code,
+        headers=headers,
+        body=body,
+        capture=HTTPResponseCapture(
+            body=body,
+            body_capture_state="complete",
+            body_incomplete_reason=None,
+            headers=headers,
+            headers_capture_state="complete",
+            headers_incomplete_reason=None,
+        ),
+    )
+
+
 class _ResponseTransport(PeerBoundHTTPTransport):
     def __init__(self, responder) -> None:
         self.responder = responder
@@ -504,7 +525,7 @@ class _ResponseTransport(PeerBoundHTTPTransport):
             headers = ()
         else:
             status, headers, body = response
-        return HTTPTransportResponse(status_code=status, headers=headers, body=body)
+        return _complete_transport_response(status, headers, body)
 
 
 def _executor(runtime, origins: tuple[str, ...], responder):
@@ -535,11 +556,7 @@ class _EnvironmentFailureTransport(PeerBoundHTTPTransport):
         self.failure_url = failure_url
         self.category = category
         self.responder = responder or (
-            lambda _url: HTTPTransportResponse(
-                status_code=404,
-                headers=(),
-                body=b"negative",
-            )
+            lambda _url: _complete_transport_response(404, (), b"negative")
         )
         self.requests = []
         self.insecure_connection_created = False
@@ -1845,15 +1862,15 @@ def test_redirect_followup_environment_failure_retains_source_response_and_conti
 
     def response_for(url: str) -> HTTPTransportResponse:
         if url == candidate_url:
-            return HTTPTransportResponse(
-                status_code=302,
-                headers=(("Location", destination_url),),
-                body=b"permitted redirect response",
+            return _complete_transport_response(
+                302,
+                (("Location", destination_url),),
+                b"permitted redirect response",
             )
-        return HTTPTransportResponse(
-            status_code=404,
-            headers=(),
-            body=b"conventional negative",
+        return _complete_transport_response(
+            404,
+            (),
+            b"conventional negative",
         )
 
     executor, base_transport = _executor(

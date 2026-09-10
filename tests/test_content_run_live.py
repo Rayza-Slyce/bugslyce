@@ -67,6 +67,7 @@ from bugslyce.recon.http_enforcement import (
     HTTPExecutorClosed,
     HTTPTransportFailure,
     HTTPTransportRequest,
+    HTTPResponseCapture,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     InternalHTTPResponse,
@@ -1826,10 +1827,19 @@ class _RecordingPeerBoundTransport(PeerBoundHTTPTransport):
 
     def __call__(self, request: HTTPTransportRequest) -> HTTPTransportResponse:
         self.requests.append(request)
+        body = f"missing: {request.url}".encode()
         return HTTPTransportResponse(
             status_code=404,
             headers=(),
-            body=f"missing: {request.url}".encode(),
+            body=body,
+            capture=HTTPResponseCapture(
+                body=body,
+                body_capture_state="complete",
+                body_incomplete_reason=None,
+                headers=(),
+                headers_capture_state="complete",
+                headers_incomplete_reason=None,
+            ),
         )
 
 
