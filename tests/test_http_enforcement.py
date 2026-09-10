@@ -3242,6 +3242,251 @@ def test_redirect_loop_and_hop_cap_are_refused() -> None:
         hop_executor.request("https://example.test/one")
 
 
+def test_redirect_terminal_success_retains_ordered_received_exchanges() -> None:
+    first_url = "https://example.test/start"
+    second_url = "https://example.test/second"
+    transport = _RecordingTransport(
+        [
+            _response(302, (("Location", "/second"),), body=b"redirect"),
+            _response(200, body=b"terminal"),
+        ]
+    )
+    response = InternalHTTPExecutor(_configuration(), transport=transport).request(
+        first_url
+    )
+
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in response.received_exchanges
+    ] == [
+        (first_url, 302, b"redirect"),
+        (second_url, 200, b"terminal"),
+    ]
+
+
+def test_redirect_then_transport_failure_retains_prior_received_exchange() -> None:
+    first_url = "https://example.test/start"
+    second_url = "https://example.test/path"
+    first_response = _response(
+        302,
+        (("Location", second_url),),
+        body=b"redirect",
+    )
+    requests = []
+
+    def transport(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return first_response
+        raise HTTPTransportFailure("dns_error")
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+    )
+
+    with pytest.raises(HTTPTransportFailure, match="dns_error") as raised:
+        executor.request(first_url)
+
+    assert [request.url for request in requests] == [first_url, second_url]
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(first_url, 302, b"redirect")]
+
+
+def test_retained_redirect_followup_response_failure_keeps_destination_exchange() -> None:
+    first_url = "https://example.test/start"
+    second_url = "https://example.test/second"
+    first_response = _response(
+        302,
+        (("Location", "/second"),),
+        body=b"redirect",
+    )
+    failed_response = _response(
+        503,
+        (("X-Test", "received-before-failure"),),
+        body=b"partial",
+    )
+    failed_received = http_enforcement_module.HTTPReceivedResponse(
+        second_url,
+        failed_response.status_code,
+        failed_response.capture,
+    )
+    requests = []
+
+    def transport(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return first_response
+        raise HTTPTransportFailure("timeout", failed_received)
+
+    response = InternalHTTPExecutor(
+        _configuration(),
+        transport=transport,
+    ).request_retaining_refused_redirect(
+        first_url,
+        retain_redirect_followup_failure=True,
+    )
+
+    assert [request.url for request in requests] == [first_url, second_url]
+    assert response.redirect_followup_failure is not None
+    assert response.redirect_followup_failure.category == "timeout"
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in response.received_exchanges
+    ] == [
+        (first_url, 302, b"redirect"),
+        (second_url, 503, b"partial"),
+    ]
+
+
+def test_multihop_redirect_refusal_retains_all_received_exchanges() -> None:
+    first_url = "https://example.test/start"
+    second_url = "https://example.test/second"
+    transport = _RecordingTransport(
+        [
+            _response(302, (("Location", "/second"),), body=b"first"),
+            _response(
+                302,
+                (("Location", "ftp://example.test/refused"),),
+                body=b"refusal",
+            ),
+        ]
+    )
+    executor = InternalHTTPExecutor(_configuration(), transport=transport)
+
+    with pytest.raises(HTTPRedirectRefused, match="unsupported_redirect") as raised:
+        executor.request(first_url)
+
+    assert [request.url for request in transport.requests] == [first_url, second_url]
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(first_url, 302, b"first"), (second_url, 302, b"refusal")]
+
+
+def test_redirect_loop_refusal_retains_all_received_exchanges() -> None:
+    first_url = "https://example.test/one"
+    second_url = "https://example.test/two"
+    transport = _RecordingTransport(
+        [
+            _response(302, (("Location", "/two"),), body=b"first"),
+            _response(302, (("Location", "/one"),), body=b"loop"),
+        ]
+    )
+    executor = InternalHTTPExecutor(_configuration(), transport=transport)
+
+    with pytest.raises(HTTPRedirectRefused, match="redirect_loop") as raised:
+        executor.request(first_url)
+
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(first_url, 302, b"first"), (second_url, 302, b"loop")]
+
+
+def test_redirect_then_429_retains_caller_ordered_received_exchanges() -> None:
+    first_url = "https://example.test/start"
+    second_url = "https://example.test/limited"
+    transport = _RecordingTransport(
+        [
+            _response(302, (("Location", "/limited"),), body=b"redirect"),
+            _response(429, (("Retry-After", "5"),), body=b"limited"),
+        ]
+    )
+    executor = InternalHTTPExecutor(_configuration(), transport=transport)
+
+    with pytest.raises(HTTPRateRejected) as raised:
+        executor.request(first_url)
+
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(first_url, 302, b"redirect"), (second_url, 429, b"limited")]
+
+
+def test_maximum_redirect_chain_retains_at_most_eleven_received_exchanges() -> None:
+    start_url = "https://example.test/0"
+    responses = [
+        _response(302, (("Location", f"/{index}"),), body=str(index).encode())
+        for index in range(1, 11)
+    ]
+    responses.append(_response(200, body=b"terminal"))
+    transport = _RecordingTransport(responses)
+    response = InternalHTTPExecutor(
+        _configuration(maximum_redirect_hops=10),
+        transport=transport,
+    ).request(start_url)
+
+    assert len(response.received_exchanges) == 11
+    assert [item.request_url for item in response.received_exchanges] == [
+        f"https://example.test/{index}" for index in range(11)
+    ]
+
+
+def test_redirect_scope_refusal_retains_received_source_exchange() -> None:
+    policy = _programme_scope_policy(
+        (("start", ACTION_INCLUDE, RULE_EXACT_HTTP_URL, "https://example.test/start"),)
+    )
+    source_url = "https://example.test/start"
+    transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", "/refused"),), body=b"source")]
+    )
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as raised:
+        executor.request(source_url)
+
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(source_url, 302, b"source")]
+
+
+def test_redirect_resolved_peer_refusal_retains_received_source_exchange() -> None:
+    source_url = "https://example.test/start"
+    destination_url = "https://example.test/second"
+    policy = _programme_scope_policy_with_fixture_peer(
+        (
+            ("start", ACTION_INCLUDE, RULE_EXACT_HTTP_URL, source_url),
+            ("second", ACTION_INCLUDE, RULE_EXACT_HTTP_URL, destination_url),
+        )
+    )
+    transport = _RecordingPeerBoundTransport(
+        [_response(302, (("Location", "/second"),), body=b"source")]
+    )
+    resolver_calls = []
+
+    def resolver(hostname, port):
+        resolver_calls.append((hostname, port))
+        if len(resolver_calls) == 1:
+            return ("192.0.2.3",)
+        return ("198.51.100.7",)
+
+    executor = InternalHTTPExecutor(
+        _configuration(),
+        programme_scope_policy=policy,
+        transport=transport,
+        ipv4_resolver=resolver,
+    )
+
+    with pytest.raises(http_enforcement_module.HTTPProgrammeScopeRefused) as raised:
+        executor.request(source_url)
+
+    assert raised.value.stage == "resolved_peer"
+    assert len(resolver_calls) == 2
+    assert [request.url for request in transport.requests] == [source_url]
+    assert [
+        (item.request_url, item.status_code, item.capture.body)
+        for item in raised.value.received_exchanges
+    ] == [(source_url, 302, b"source")]
+
+
 def test_429_stops_executor_without_sleeping_retry_after() -> None:
     clock = _FakeTime()
     transport = _RecordingTransport(

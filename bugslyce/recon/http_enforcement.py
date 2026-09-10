@@ -70,6 +70,7 @@ from bugslyce.recon.user_agent import built_in_user_agent
 REDIRECT_SAME_ORIGIN = "same_origin_only"
 DEFAULT_MAXIMUM_REDIRECT_HOPS = 5
 MAXIMUM_REDIRECT_HOPS = 10
+MAXIMUM_RECEIVED_HTTP_EXCHANGES = MAXIMUM_REDIRECT_HOPS + 1
 MAXIMUM_RETRY_AFTER_CHARS = 128
 MAXIMUM_SLEEP_CHUNK_SECONDS = 60
 MAXIMUM_TERMINAL_POLL_SECONDS = Decimal("0.1")
@@ -283,6 +284,18 @@ class HTTPReceivedResponse:
             raise ValueError("Internal HTTP received response is invalid.")
 
 
+def _validate_received_exchanges(
+    received_exchanges: tuple[HTTPReceivedResponse, ...],
+) -> tuple[HTTPReceivedResponse, ...]:
+    if (
+        not isinstance(received_exchanges, tuple)
+        or len(received_exchanges) > MAXIMUM_RECEIVED_HTTP_EXCHANGES
+        or not all(isinstance(item, HTTPReceivedResponse) for item in received_exchanges)
+    ):
+        raise ValueError("Internal HTTP received exchanges are invalid.")
+    return received_exchanges
+
+
 @dataclass(frozen=True)
 class HTTPTransportResponse:
     """One response returned by an injected single-exchange transport."""
@@ -339,6 +352,10 @@ class InternalHTTPResponse:
     refused_redirect: HTTPRedirectRefusal | None = None
     redirect_followup_failure: HTTPRedirectFollowupFailure | None = None
     capture: HTTPResponseCapture | None = None
+    received_exchanges: tuple[HTTPReceivedResponse, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_received_exchanges(self.received_exchanges)
 
 
 class HTTPTransport(Protocol):
@@ -361,15 +378,25 @@ class HTTPExecutorClosed(InternalHTTPExecutionError):
 class HTTPRedirectRefused(InternalHTTPExecutionError):
     """Raised before transmission when a redirect is not policy-permitted."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(
+        self,
+        reason: str,
+        received_exchanges: tuple[HTTPReceivedResponse, ...] = (),
+    ) -> None:
         self.reason = reason
+        self.received_exchanges = _validate_received_exchanges(received_exchanges)
         super().__init__(f"Internal HTTP redirect refused: {reason}.")
 
 
 class HTTPProgrammeScopeRefused(InternalHTTPExecutionError):
     """Raised before transmission when a logical URL or resolved peer is refused."""
 
-    def __init__(self, stage: str, decision: ScopeDecision) -> None:
+    def __init__(
+        self,
+        stage: str,
+        decision: ScopeDecision,
+        received_exchanges: tuple[HTTPReceivedResponse, ...] = (),
+    ) -> None:
         if stage not in {"initial", "redirect", "resolved_peer"}:
             raise ValueError("Programme scope refusal stage is invalid.")
         if not isinstance(decision, ScopeDecision) or decision.outcome == OUTCOME_ALLOWED:
@@ -377,6 +404,8 @@ class HTTPProgrammeScopeRefused(InternalHTTPExecutionError):
         self.stage = stage
         self.reason_code = decision.reason_code
         self.operator_safe_explanation = decision.operator_safe_explanation
+        self._decision = decision
+        self.received_exchanges = _validate_received_exchanges(received_exchanges)
         super().__init__(
             "Internal HTTP programme scope refused "
             f"at {stage}: {self.reason_code}. {self.operator_safe_explanation}"
@@ -398,10 +427,12 @@ class HTTPRateRejected(InternalHTTPExecutionError):
         self,
         retry_after: str,
         received_response: HTTPReceivedResponse | None = None,
+        received_exchanges: tuple[HTTPReceivedResponse, ...] = (),
     ) -> None:
         self.status_code = 429
         self.retry_after = retry_after
         self.received_response = received_response
+        self.received_exchanges = _validate_received_exchanges(received_exchanges)
         super().__init__(
             "The target returned HTTP 429; internal HTTP collection stopped. "
             f"Retry-After: {retry_after}."
@@ -415,10 +446,62 @@ class HTTPTransportFailure(InternalHTTPExecutionError):
         self,
         category: str,
         received_response: HTTPReceivedResponse | None = None,
+        received_exchanges: tuple[HTTPReceivedResponse, ...] = (),
     ) -> None:
         self.category = category
         self.received_response = received_response
+        self.received_exchanges = _validate_received_exchanges(received_exchanges)
         super().__init__(f"Internal HTTP transport failed: {category}.")
+
+
+def _received_exchange_from_response(
+    request_url: str,
+    response: HTTPTransportResponse,
+) -> HTTPReceivedResponse:
+    if not isinstance(response.capture, HTTPResponseCapture):
+        raise ValueError("Internal HTTP transport omitted capture provenance.")
+    return HTTPReceivedResponse(request_url, response.status_code, response.capture)
+
+
+def _append_received_exchange(
+    received_exchanges: list[HTTPReceivedResponse],
+    received: HTTPReceivedResponse,
+) -> None:
+    if len(received_exchanges) >= MAXIMUM_RECEIVED_HTTP_EXCHANGES:
+        raise ValueError("Internal HTTP received exchange limit is exceeded.")
+    received_exchanges.append(received)
+
+
+def _transport_failure_with_received_exchanges(
+    failure: HTTPTransportFailure,
+    received_exchanges: tuple[HTTPReceivedResponse, ...],
+) -> HTTPTransportFailure:
+    if failure.received_exchanges:
+        raise ValueError("Internal HTTP transport returned invalid received exchanges.")
+    exchanges = list(received_exchanges)
+    if failure.received_response is not None:
+        _append_received_exchange(exchanges, failure.received_response)
+    return HTTPTransportFailure(
+        failure.category,
+        failure.received_response,
+        tuple(exchanges),
+    )
+
+
+def _rate_rejection_with_received_exchanges(
+    rejection: HTTPRateRejected,
+    received_exchanges: tuple[HTTPReceivedResponse, ...],
+) -> HTTPRateRejected:
+    if rejection.received_exchanges:
+        raise ValueError("Internal HTTP rate rejection returned invalid received exchanges.")
+    exchanges = list(received_exchanges)
+    if rejection.received_response is not None:
+        _append_received_exchange(exchanges, rejection.received_response)
+    return HTTPRateRejected(
+        rejection.retry_after,
+        rejection.received_response,
+        tuple(exchanges),
+    )
 
 
 class SteadyRequestStartLimiter:
@@ -737,6 +820,7 @@ class InternalHTTPExecutor:
         current_url = url
         visited = {current_url}
         redirects: list[HTTPRedirectHop] = []
+        received_exchanges: list[HTTPReceivedResponse] = []
         pending_redirect_response: tuple[
             str,
             str,
@@ -757,14 +841,18 @@ class InternalHTTPExecutor:
                     )
                 )
             except HTTPTransportFailure as exc:
+                enriched_failure = _transport_failure_with_received_exchanges(
+                    exc,
+                    tuple(received_exchanges),
+                )
                 if (
                     not retain_refused_redirect
                     or not retain_redirect_followup_failure
                     or pending_redirect_response is None
-                    or exc.category
+                    or enriched_failure.category
                     not in ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
                 ):
-                    raise
+                    raise enriched_failure from exc
                 source_url, destination_url, source_response = (
                     pending_redirect_response
                 )
@@ -782,11 +870,21 @@ class InternalHTTPExecutor:
                     redirect_followup_failure=HTTPRedirectFollowupFailure(
                         source_url=source_url,
                         destination_url=destination_url,
-                        category=exc.category,
+                        category=enriched_failure.category,
                     ),
                     capture=source_response.capture,
+                    received_exchanges=enriched_failure.received_exchanges,
                 )
+            except HTTPRateRejected as exc:
+                raise _rate_rejection_with_received_exchanges(
+                    exc,
+                    tuple(received_exchanges),
+                ) from exc
             pending_redirect_response = None
+            _append_received_exchange(
+                received_exchanges,
+                _received_exchange_from_response(current_url, response),
+            )
             if (
                 response.status_code not in _REDIRECT_STATUSES
                 or self.configuration is None
@@ -803,13 +901,17 @@ class InternalHTTPExecutor:
                     ),
                     redirects=tuple(redirects),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
 
             try:
                 location = _redirect_location(response.headers)
             except HTTPRedirectRefused as exc:
                 if not retain_refused_redirect or exc.reason != "malformed_location":
-                    raise
+                    raise HTTPRedirectRefused(
+                        exc.reason,
+                        tuple(received_exchanges),
+                    ) from exc
                 return InternalHTTPResponse(
                     requested_url=requested_url,
                     final_url=current_url,
@@ -828,6 +930,7 @@ class InternalHTTPExecutor:
                         reason=exc.reason,
                     ),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
             try:
                 destination = self._redirect_destination(
@@ -837,7 +940,10 @@ class InternalHTTPExecutor:
                 )
             except HTTPRedirectRefused as exc:
                 if not retain_refused_redirect:
-                    raise
+                    raise HTTPRedirectRefused(
+                        exc.reason,
+                        tuple(received_exchanges),
+                    ) from exc
                 if exc.reason in _RETAINED_REDIRECT_REFUSALS_WITHOUT_DESTINATION:
                     destination = None
                 elif exc.reason in _RETAINED_REDIRECT_REFUSALS_WITH_DESTINATION:
@@ -862,10 +968,14 @@ class InternalHTTPExecutor:
                         reason=exc.reason,
                     ),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
             if destination in visited:
                 if not retain_refused_redirect:
-                    raise HTTPRedirectRefused("redirect_loop")
+                    raise HTTPRedirectRefused(
+                        "redirect_loop",
+                        tuple(received_exchanges),
+                    )
                 return InternalHTTPResponse(
                     requested_url=requested_url,
                     final_url=current_url,
@@ -884,10 +994,14 @@ class InternalHTTPExecutor:
                         reason="redirect_loop",
                     ),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
             if len(redirects) >= self.configuration.maximum_redirect_hops:
                 if not retain_refused_redirect:
-                    raise HTTPRedirectRefused("redirect_hop_limit")
+                    raise HTTPRedirectRefused(
+                        "redirect_hop_limit",
+                        tuple(received_exchanges),
+                    )
                 return InternalHTTPResponse(
                     requested_url=requested_url,
                     final_url=current_url,
@@ -906,15 +1020,29 @@ class InternalHTTPExecutor:
                         reason="redirect_hop_limit",
                     ),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
-            redirect_decision = self._require_programme_scope(
-                destination,
-                stage="redirect",
-            )
+            try:
+                redirect_decision = self._require_programme_scope(
+                    destination,
+                    stage="redirect",
+                )
+            except HTTPProgrammeScopeRefused as exc:
+                raise HTTPProgrammeScopeRefused(
+                    exc.stage,
+                    exc._decision,
+                    tuple(received_exchanges),
+                ) from exc
             try:
                 redirect_ipv4 = self._select_programme_scope_peer(
                     redirect_decision,
                 )
+            except HTTPProgrammeScopeRefused as exc:
+                raise HTTPProgrammeScopeRefused(
+                    exc.stage,
+                    exc._decision,
+                    tuple(received_exchanges),
+                ) from exc
             except HTTPTransportFailure as exc:
                 if (
                     not retain_refused_redirect
@@ -922,7 +1050,10 @@ class InternalHTTPExecutor:
                     or exc.category
                     not in ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
                 ):
-                    raise
+                    raise _transport_failure_with_received_exchanges(
+                        exc,
+                        tuple(received_exchanges),
+                    ) from exc
                 return InternalHTTPResponse(
                     requested_url=requested_url,
                     final_url=current_url,
@@ -940,6 +1071,7 @@ class InternalHTTPExecutor:
                         category=exc.category,
                     ),
                     capture=response.capture,
+                    received_exchanges=tuple(received_exchanges),
                 )
             redirects.append(
                 HTTPRedirectHop(
