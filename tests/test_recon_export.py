@@ -12,6 +12,7 @@ import zipfile
 import pytest
 
 from bugslyce.recon import export as export_module
+import bugslyce.recon.evidence_pack_closure as closure_module
 from bugslyce.cli import main
 from bugslyce.core.models import DiscoveredPath, Evidence, HTTPArtifact, ProjectState
 from bugslyce.recon.evidence_pack_closure import (
@@ -31,6 +32,12 @@ from bugslyce.recon.deep_metadata_collection_export import (
 )
 from bugslyce.recon.deep_metadata_collector import DeepMetadataCollectionResult
 from bugslyce.recon.export import export_recon_evidence_pack
+from bugslyce.recon.native_observation_store import (
+    NativeCandidateObservation,
+    NativeObservationStore,
+    NativeReceivedExchange,
+    validate_native_observation_store,
+)
 from bugslyce.reports.analysis_coverage import (
     ANALYSIS_COVERAGE_FILENAME,
     AnalysisCoverageExecutionEvidence,
@@ -4470,6 +4477,230 @@ def _set_metadata_field(path: Path, key: str, value: object) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload[key] = value
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+_NATIVE_OBSERVATION_STORE_ROOT = "native-observations"
+
+
+def _publish_native_observation_store(
+    input_dir: Path,
+    *,
+    state: str,
+    orphan_body: bytes | None = None,
+) -> tuple[Path, bytes]:
+    root = input_dir / _NATIVE_OBSERVATION_STORE_ROOT
+    store = NativeObservationStore(
+        root,
+        1024,
+        metadata_byte_allowance=10_000_000,
+    )
+    body = b"exact shared native body\x00"
+    references = []
+    for _index in range(2):
+        reservation = store.reserve_body_bytes(len(body))
+        references.append(store.commit_body(reservation, body))
+    for index, path in enumerate(("first", "second")):
+        request_url = f"https://app.example.test/{path}"
+        reference = references[index]
+        exchange = NativeReceivedExchange(
+            request_url=request_url,
+            status_code=200,
+            headers=(("Content-Type", "application/octet-stream"),),
+            capture_state="complete",
+            captured_bytes=len(body),
+            body_sha256=reference.sha256,
+            body=reference,
+        )
+        observation = NativeCandidateObservation(
+            candidate_index=index,
+            request_url=request_url,
+            exchanges=(exchange,),
+        )
+        store.publish_observation(
+            observation,
+            store.reserve_candidate_metadata(index, maximum_redirect_hops=0),
+        )
+    if orphan_body is not None:
+        orphan_reservation = store.reserve_body_bytes(len(orphan_body))
+        store.commit_body(orphan_reservation, orphan_body)
+    store.publish_index(state)
+    return root, body
+
+
+def _export_and_extract_native_store(
+    tmp_path: Path,
+    *,
+    state: str,
+) -> tuple[Path, Path, Path, bytes]:
+    input_dir = _export_input(tmp_path)
+    source_root, body = _publish_native_observation_store(input_dir, state=state)
+    output_path = tmp_path / "native-store-pack.zip"
+    export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
+    extracted = tmp_path / "native-store-extracted"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+    return source_root, extracted / _NATIVE_OBSERVATION_STORE_ROOT, extracted, body
+
+
+def test_native_observation_store_complete_round_trip_is_portable(
+    tmp_path: Path,
+) -> None:
+    source_root, extracted_root, extracted, body = _export_and_extract_native_store(
+        tmp_path,
+        state="complete",
+    )
+
+    source = validate_native_observation_store(source_root)
+    packed = validate_native_observation_store(extracted_root)
+    assert packed == source
+    assert packed.store_state == "complete"
+    assert packed.observation_count == 2
+    assert packed.observation_indices == (0, 1)
+    assert packed.response_bytes_captured == len(body) * 2
+    body_paths = list((extracted_root / "bodies" / "sha256").iterdir())
+    assert len(body_paths) == 1
+    assert body_paths[0].read_bytes() == body
+    assert closure_module.NATIVE_OBSERVATION_STORE_PROJECT_PATH == (
+        _NATIVE_OBSERVATION_STORE_ROOT
+    )
+
+    closure = json.loads(
+        (extracted / REFERENCE_CLOSURE_FILENAME).read_text(encoding="utf-8")
+    )
+    native_records = [
+        record
+        for record in closure["references"]
+        if any(
+            owner["owner_kind"] == "native_observation_store"
+            for owner in record["owners"]
+        )
+    ]
+    expected_members = {
+        f"{_NATIVE_OBSERVATION_STORE_ROOT}/index.json",
+        f"{_NATIVE_OBSERVATION_STORE_ROOT}/observations/00000000.json",
+        f"{_NATIVE_OBSERVATION_STORE_ROOT}/observations/00000001.json",
+        f"{_NATIVE_OBSERVATION_STORE_ROOT}/bodies/sha256/{body_paths[0].name}",
+    }
+    assert {record["portable_path"] for record in native_records} == expected_members
+    for portable_path in sorted(expected_members):
+        store_relative = Path(portable_path).relative_to(
+            _NATIVE_OBSERVATION_STORE_ROOT
+        )
+        assert (source_root / store_relative).read_bytes() == (
+            extracted / portable_path
+        ).read_bytes()
+    export_manifest = json.loads(
+        (extracted / "bugslyce_export_manifest.json").read_text(encoding="utf-8")
+    )
+    assert expected_members <= set(export_manifest["files_included"])
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_native_observation_store_partial_round_trip_preserves_state(
+    tmp_path: Path,
+) -> None:
+    source_root, extracted_root, extracted, _body = _export_and_extract_native_store(
+        tmp_path,
+        state="partial",
+    )
+
+    assert validate_native_observation_store(source_root).store_state == "partial"
+    assert validate_native_observation_store(extracted_root).store_state == "partial"
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_native_observation_store_partial_round_trip_preserves_orphan_body(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    orphan_body = b"durable orphan body from interrupted publication\x00"
+    source_root, _body = _publish_native_observation_store(
+        input_dir,
+        state="partial",
+        orphan_body=orphan_body,
+    )
+    output_path = tmp_path / "partial-orphan-native-store-pack.zip"
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+    )
+    extracted = tmp_path / "partial-orphan-native-store-extracted"
+    with zipfile.ZipFile(output_path) as archive:
+        archive.extractall(extracted)
+    extracted_root = extracted / _NATIVE_OBSERVATION_STORE_ROOT
+
+    source = validate_native_observation_store(source_root)
+    packed = validate_native_observation_store(extracted_root)
+
+    assert packed == source
+    assert packed.store_state == "partial"
+    matching_orphans = [
+        body_path
+        for body_path in (extracted_root / "bodies" / "sha256").iterdir()
+        if body_path.read_bytes() == orphan_body
+    ]
+    assert len(matching_orphans) == 1
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_missing_extracted_native_body_makes_pack_incomplete(tmp_path: Path) -> None:
+    _source, extracted_root, extracted, _body = _export_and_extract_native_store(
+        tmp_path,
+        state="complete",
+    )
+    body_path = next((extracted_root / "bodies" / "sha256").iterdir())
+    portable_body_path = body_path.relative_to(extracted).as_posix()
+    body_path.unlink()
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert portable_body_path in validation.missing_declared_member_paths
+    assert "structured_reference_discovery_failed" in (
+        validation.metadata_consistency_errors
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ("observations/00000000.json", "index.json"),
+)
+def test_tampered_native_observation_graph_makes_pack_incomplete(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    _source, extracted_root, extracted, _body = _export_and_extract_native_store(
+        tmp_path,
+        state="complete",
+    )
+    (extracted_root / relative_path).write_bytes(b"{}\n")
+
+    validation = validate_evidence_pack_root(extracted)
+
+    assert validation.validation_status == "incomplete"
+    assert "structured_reference_discovery_failed" in (
+        validation.metadata_consistency_errors
+    )
+
+
+def test_export_refuses_invalid_source_native_observation_store(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    source_root, _body = _publish_native_observation_store(
+        input_dir,
+        state="complete",
+    )
+    body_path = next((source_root / "bodies" / "sha256").iterdir())
+    body_path.write_bytes(b"corrupt")
+
+    with pytest.raises(ValueError, match="Native body object"):
+        export_recon_evidence_pack(
+            input_dir,
+            tmp_path / "invalid-native-store.zip",
+            clock=lambda: FIXED_TIME,
+        )
 
 
 def _export_input(tmp_path: Path) -> Path:

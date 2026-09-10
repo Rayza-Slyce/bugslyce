@@ -22,6 +22,7 @@ from bugslyce.recon.documentation_assertions import (
     retained_response_source_reference, retained_response_source_id,
 )
 from bugslyce.recon.http_route_relationships import build_http_redirect_relationship_edges
+from bugslyce.recon.native_observation_store import validate_native_observation_store
 
 from bugslyce.core.models import (
     DiscoveredPath,
@@ -76,6 +77,8 @@ from bugslyce.recon.http_route_relationships import (
 REFERENCE_CLOSURE_FILENAME = "bugslyce_reference_closure.json"
 REFERENCE_CLOSURE_VERSION = "1.0"
 EXPORT_MANIFEST_FILENAME = "bugslyce_export_manifest.json"
+NATIVE_OBSERVATION_STORE_PROJECT_PATH = "native-observations"
+_NATIVE_OBSERVATION_STORE_OWNER_KIND = "native_observation_store"
 CURRENT_REQUIRED_METADATA_PATHS = (
     "BUGSLYCE_EXPORT_README.md",
     EXPORT_MANIFEST_FILENAME,
@@ -131,6 +134,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "operator_brief_composition_web_context_route",
         "operator_brief_composition_web_context_relationship",
         "operator_brief_composition_source_native_subject",
+        _NATIVE_OBSERVATION_STORE_OWNER_KIND,
         "application_service_model",
         "application_service_model_a1_relation_support",
         "application_service_model_a2_assertion_support",
@@ -321,6 +325,12 @@ def discover_evidence_pack_references(
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     references.extend(
+        _native_observation_store_references(
+            root,
+            references_are_portable=False,
+        )
+    )
+    references.extend(
         _application_service_model_references(
             root,
             tuple(references),
@@ -413,6 +423,12 @@ def discover_expected_pack_references(
     references.extend(_deep_relationship_references(root))
     references.extend(_collection_confidence_references(root))
     references.extend(
+        _native_observation_store_references(
+            root,
+            references_are_portable=True,
+        )
+    )
+    references.extend(
         _application_service_model_references(
             root,
             tuple(references),
@@ -444,6 +460,41 @@ def discover_expected_pack_references(
                 item.evidence_ids,
             ),
         )
+    )
+
+
+def _native_observation_store_references(
+    root: Path,
+    *,
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    """Validate and expose exactly one portable native observation-store graph."""
+
+    store_relative = NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    store_root = root / store_relative
+    if not store_root.exists() and not store_root.is_symlink():
+        return ()
+
+    index = validate_native_observation_store(store_root)
+    member_paths = [f"{store_relative}/index.json"]
+    member_paths.extend(
+        f"{store_relative}/observations/{candidate_index:08d}.json"
+        for candidate_index in index.observation_indices
+    )
+    body_root = store_root / "bodies" / "sha256"
+    member_paths.extend(
+        f"{store_relative}/bodies/sha256/{path.name}"
+        for path in body_root.iterdir()
+        if not path.name.startswith(".")
+    )
+    return tuple(
+        EvidencePackReference(
+            portable_path=member_path,
+            owner_kind=_NATIVE_OBSERVATION_STORE_OWNER_KIND,
+            owner_id=store_relative,
+            source_path=None if references_are_portable else member_path,
+        )
+        for member_path in sorted(member_paths)
     )
 
 
