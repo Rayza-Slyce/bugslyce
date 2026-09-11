@@ -63,13 +63,14 @@ def _exchange(
     *,
     state: str = "complete",
     reason: str | None = None,
+    status_code: int = 200,
     headers: tuple[tuple[str, str], ...] = (("Content-Type", "text/plain"),),
 ) -> NativeReceivedExchange:
     reservation = store.reserve_body_bytes(max(len(body), 1))
     body_reference = store.commit_body(reservation, body)
     return NativeReceivedExchange(
         request_url=url,
-        status_code=200,
+        status_code=status_code,
         headers=headers,
         capture_state=state,
         captured_bytes=len(body),
@@ -186,6 +187,201 @@ def test_received_response_followed_by_failure_is_distinct_and_round_trips(
 
     assert store.load_observation(0) == observation
     assert store.response_bytes_captured == len(b"redirect")
+
+
+def test_refused_redirect_round_trips_with_raw_location_and_resolved_destination(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    source_url = "https://app.example.test/start"
+    raw_location = "//other.test/landing"
+    refusal = observation_store_module.NativeRedirectRefusal(
+        source_url=source_url,
+        destination_url="https://other.test/landing",
+        reason="origin_not_approved",
+    )
+    exchange = _exchange(
+        store,
+        source_url,
+        b"redirect",
+        headers=(("Location", raw_location),),
+        status_code=302,
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=source_url,
+        exchanges=(exchange,),
+        refused_redirect=refusal,
+    )
+
+    _publish(store, observation)
+    store.publish_index("complete")
+    reopened = _store(store.root, 100)
+
+    assert reopened.load_observation(0) == observation
+    assert reopened.load_observation(0).exchanges[0].headers == (
+        ("Location", raw_location),
+    )
+    assert reopened.load_observation(0).refused_redirect == refusal
+    payload = json.loads(
+        (store.root / "observations" / "00000000.json").read_text(encoding="utf-8")
+    )
+    assert payload["observation"]["refused_redirect"] == {
+        "destination_url": "https://other.test/landing",
+        "reason": "origin_not_approved",
+        "source_url": source_url,
+    }
+
+
+def test_refused_redirect_preserves_ordered_exchanges_without_transport_failure(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    first_url = "https://app.example.test/first"
+    source_url = "https://app.example.test/second"
+    first = _exchange(
+        store,
+        first_url,
+        b"first",
+        headers=(("Location", "/second"),),
+        status_code=302,
+    )
+    refused = _exchange(
+        store,
+        source_url,
+        b"second",
+        headers=(("Location", "//other.test/landing"),),
+        status_code=302,
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=first_url,
+        exchanges=(first, refused),
+        refused_redirect=observation_store_module.NativeRedirectRefusal(
+            source_url=source_url,
+            destination_url="https://other.test/landing",
+            reason="origin_not_approved",
+        ),
+    )
+
+    _publish(store, observation, maximum_redirect_hops=1)
+
+    loaded = store.load_observation(0)
+    assert [item.request_url for item in loaded.exchanges] == [first_url, source_url]
+    assert loaded.failure is None
+    assert loaded.refused_redirect is not None
+
+
+def test_non_redirect_http_status_cannot_claim_redirect_refusal(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    source_url = "https://app.example.test/redirect"
+    exchange = _exchange(
+        store,
+        source_url,
+        b"not a redirect",
+        headers=(("Location", "//other.test/landing"),),
+        status_code=304,
+    )
+
+    with pytest.raises(ValueError, match="redirect refusal"):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=source_url,
+            exchanges=(exchange,),
+            refused_redirect=observation_store_module.NativeRedirectRefusal(
+                source_url=source_url,
+                destination_url="https://other.test/landing",
+                reason="origin_not_approved",
+            ),
+        )
+
+
+def test_location_header_alone_does_not_classify_an_observation_as_refused(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(
+        store,
+        "https://app.example.test/redirect",
+        b"ordinary redirect",
+        headers=(("Location", "https://app.example.test/final"),),
+        status_code=302,
+    )
+    observation = _observation(0, exchange)
+
+    _publish(store, observation)
+
+    assert store.load_observation(0).refused_redirect is None
+
+
+def test_existing_no_refusal_payload_reloads_as_non_refused(tmp_path: Path) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/ordinary", b"ordinary")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    del payload["observation"]["refused_redirect"]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = _store(store.root, 100)
+
+    assert reopened.load_observation(0) == observation
+    assert reopened.load_observation(0).refused_redirect is None
+
+
+def test_redirect_refusal_is_distinct_from_attempt_failure(tmp_path: Path) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    source_url = "https://app.example.test/redirect"
+    exchange = _exchange(store, source_url, b"redirect", status_code=302)
+    refusal = observation_store_module.NativeRedirectRefusal(
+        source_url=source_url,
+        destination_url="https://other.test/landing",
+        reason="origin_not_approved",
+    )
+
+    with pytest.raises(ValueError, match="refusal"):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=source_url,
+            exchanges=(exchange,),
+            failure=NativeAttemptFailure("https://other.test/landing", "timeout"),
+            refused_redirect=refusal,
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    (
+        {"source_url": "https://app.example.test/redirect", "destination_url": "https://other.test/landing", "reason": "unknown_reason"},
+        {"source_url": "https://app.example.test/redirect", "destination_url": None, "reason": "origin_not_approved"},
+        {"source_url": "https://app.example.test/redirect", "destination_url": "https://other.test/landing/../unsafe", "reason": "origin_not_approved"},
+        {"source_url": "https://app.example.test/redirect", "destination_url": "https://other.test/landing", "reason": "malformed_location"},
+        {"source_url": "https://app.example.test/redirect", "reason": "origin_not_approved"},
+    ),
+)
+def test_malformed_persisted_redirect_refusal_is_rejected(
+    tmp_path: Path,
+    metadata: dict[str, object],
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(
+        store,
+        "https://app.example.test/redirect",
+        b"redirect",
+        status_code=302,
+    )
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["observation"]["refused_redirect"] = metadata
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="refusal|payload|canonical"):
+        _store(store.root, 100)
 
 
 def test_observation_and_index_json_are_deterministic(tmp_path: Path) -> None:
@@ -973,7 +1169,7 @@ def test_metadata_serialization_bounds_cover_adversarial_legal_observations(
     )
     exchange = NativeReceivedExchange(
         request_url=source_url,
-        status_code=599,
+        status_code=308,
         headers=observation_store_module._maximum_headers(),
         capture_state="incomplete",
         captured_bytes=observation_store_module.UINT64_MAXIMUM,
@@ -1011,20 +1207,35 @@ def test_metadata_serialization_bounds_cover_adversarial_legal_observations(
         store.maximum_observation_serialized_bytes(10)
         >= store.maximum_observation_serialized_bytes(0)
     )
+    maximum_outcomes = [
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (exchange,) * 11,
+            NativeAttemptFailure(failure_url, category),
+        )
+        for category in observation_store_module.ATTEMPT_FAILURE_CATEGORIES
+    ]
+    maximum_outcomes.extend(
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (exchange,) * 11,
+            refused_redirect=observation_store_module.NativeRedirectRefusal(
+                source_url=source_url,
+                destination_url=failure_url,
+                reason=reason,
+            ),
+        )
+        for reason in observation_store_module._REDIRECT_REFUSAL_REASONS_WITH_DESTINATION
+    )
     assert store.maximum_observation_serialized_bytes(10) == max(
         len(
             observation_store_module._json_bytes(
-                observation_store_module._observation_payload(
-                    NativeCandidateObservation(
-                        35_059,
-                        source_url,
-                        (exchange,) * 11,
-                        NativeAttemptFailure(failure_url, category),
-                    )
-                )
+                observation_store_module._observation_payload(observation)
             )
         )
-        for category in observation_store_module.ATTEMPT_FAILURE_CATEGORIES
+        for observation in maximum_outcomes
     )
 
 

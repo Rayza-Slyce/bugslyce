@@ -37,6 +37,30 @@ ATTEMPT_FAILURE_CATEGORIES = frozenset(
         "transport_error",
     }
 )
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+REDIRECT_REFUSAL_REASONS = frozenset(
+    {
+        "http_upgrade_not_approved",
+        "https_downgrade",
+        "malformed_location",
+        "origin_not_approved",
+        "redirect_hop_limit",
+        "redirect_loop",
+        "redirect_policy_unavailable",
+        "redirect_query_not_allowed",
+        "unsupported_redirect",
+    }
+)
+_REDIRECT_REFUSAL_REASONS_WITH_DESTINATION = frozenset(
+    {
+        "http_upgrade_not_approved",
+        "https_downgrade",
+        "origin_not_approved",
+        "redirect_hop_limit",
+        "redirect_loop",
+        "redirect_query_not_allowed",
+    }
+)
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_REASON = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OBSERVATION_NAME = re.compile(r"^(?P<index>[0-9]{8})\.json$")
@@ -136,6 +160,26 @@ class NativeReceivedExchange:
 
 
 @dataclass(frozen=True)
+class NativeRedirectRefusal:
+    """One redirect decision refusing to transmit a resolved destination."""
+
+    source_url: str
+    destination_url: str | None
+    reason: str
+
+    def __post_init__(self) -> None:
+        _require_canonical_url(self.source_url)
+        if self.reason not in REDIRECT_REFUSAL_REASONS:
+            raise ValueError("Native redirect refusal reason is invalid.")
+        if self.reason in _REDIRECT_REFUSAL_REASONS_WITH_DESTINATION:
+            if self.destination_url is None:
+                raise ValueError("Native redirect refusal destination is invalid.")
+            _require_canonical_url(self.destination_url)
+        elif self.destination_url is not None:
+            raise ValueError("Native redirect refusal destination is invalid.")
+
+
+@dataclass(frozen=True)
 class NativeAttemptFailure:
     """One safe response-less or redirect-follow-up failure disposition."""
 
@@ -159,6 +203,7 @@ class NativeCandidateObservation:
     request_url: str
     exchanges: tuple[NativeReceivedExchange, ...]
     failure: NativeAttemptFailure | None = None
+    refused_redirect: NativeRedirectRefusal | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -172,6 +217,10 @@ class NativeCandidateObservation:
             or any(not isinstance(item, NativeReceivedExchange) for item in self.exchanges)
             or len(self.exchanges) > MAXIMUM_NATIVE_OBSERVATION_EXCHANGES
             or (self.failure is not None and not isinstance(self.failure, NativeAttemptFailure))
+            or (
+                self.refused_redirect is not None
+                and not isinstance(self.refused_redirect, NativeRedirectRefusal)
+            )
         ):
             raise ValueError("Native candidate outcome is invalid.")
         if not self.exchanges:
@@ -186,6 +235,15 @@ class NativeCandidateObservation:
             and self.failure.request_url == self.exchanges[-1].request_url
         ):
             raise ValueError("Native candidate follow-up failure URL is invalid.")
+        if self.failure is not None and self.refused_redirect is not None:
+            raise ValueError("Native candidate refusal cannot be an attempt failure.")
+        if self.refused_redirect is not None:
+            if (
+                not self.exchanges
+                or self.refused_redirect.source_url != self.exchanges[-1].request_url
+                or self.exchanges[-1].status_code not in REDIRECT_STATUSES
+            ):
+                raise ValueError("Native candidate redirect refusal is invalid.")
 
 
 @dataclass(frozen=True)
@@ -1072,7 +1130,7 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
     )
     exchange = NativeReceivedExchange(
         request_url=source_url,
-        status_code=599,
+        status_code=308,
         headers=headers,
         capture_state="incomplete",
         captured_bytes=UINT64_MAXIMUM,
@@ -1093,13 +1151,39 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
             category,
         ),
     )
-    observation = NativeCandidateObservation(
+    failure_observation = NativeCandidateObservation(
         candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
         request_url=source_url,
         exchanges=(exchange,) * (maximum_redirect_hops + 1),
         failure=NativeAttemptFailure(failure_url, failure_category),
     )
-    return len(_json_bytes(_observation_payload(observation)))
+    refusal_reason = max(
+        _REDIRECT_REFUSAL_REASONS_WITH_DESTINATION,
+        key=lambda reason: (
+            len(
+                _json_bytes(
+                    _refusal_payload(
+                        NativeRedirectRefusal(source_url, failure_url, reason)
+                    )
+                )
+            ),
+            reason,
+        ),
+    )
+    refusal_observation = NativeCandidateObservation(
+        candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
+        request_url=source_url,
+        exchanges=(exchange,) * (maximum_redirect_hops + 1),
+        refused_redirect=NativeRedirectRefusal(
+            source_url=source_url,
+            destination_url=failure_url,
+            reason=refusal_reason,
+        ),
+    )
+    return max(
+        len(_json_bytes(_observation_payload(failure_observation))),
+        len(_json_bytes(_observation_payload(refusal_observation))),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -1161,6 +1245,7 @@ def _observation_payload(observation: NativeCandidateObservation) -> dict[str, o
             "candidate_index": observation.candidate_index,
             "exchanges": [_exchange_payload(item) for item in observation.exchanges],
             "failure": _failure_payload(observation.failure),
+            "refused_redirect": _refusal_payload(observation.refused_redirect),
             "request_url": observation.request_url,
         },
         "schema_version": STORE_SCHEMA_VERSION,
@@ -1198,8 +1283,20 @@ def _failure_payload(failure: NativeAttemptFailure | None) -> dict[str, str] | N
     return {"category": failure.category, "request_url": failure.request_url}
 
 
+def _refusal_payload(refusal: NativeRedirectRefusal | None) -> dict[str, str | None] | None:
+    if refusal is None:
+        return None
+    return {
+        "destination_url": refusal.destination_url,
+        "reason": refusal.reason,
+        "source_url": refusal.source_url,
+    }
+
+
 def _observation_from_payload(value: object) -> NativeCandidateObservation:
-    if not isinstance(value, dict) or set(value) != {"candidate_index", "exchanges", "failure", "request_url"}:
+    old_expected = {"candidate_index", "exchanges", "failure", "request_url"}
+    expected = old_expected | {"refused_redirect"}
+    if not isinstance(value, dict) or (set(value) != old_expected and set(value) != expected):
         raise ValueError("Native candidate observation payload is invalid.")
     raw_exchanges = value["exchanges"]
     if not isinstance(raw_exchanges, list):
@@ -1209,6 +1306,7 @@ def _observation_from_payload(value: object) -> NativeCandidateObservation:
         request_url=value["request_url"],
         exchanges=tuple(_exchange_from_payload(item) for item in raw_exchanges),
         failure=_failure_from_payload(value["failure"]),
+        refused_redirect=_refusal_from_payload(value.get("refused_redirect")),
     )
 
 
@@ -1271,6 +1369,22 @@ def _failure_from_payload(value: object) -> NativeAttemptFailure | None:
     if not isinstance(value, dict) or set(value) != {"category", "request_url"}:
         raise ValueError("Native attempt failure payload is invalid.")
     return NativeAttemptFailure(value["request_url"], value["category"])
+
+
+def _refusal_from_payload(value: object) -> NativeRedirectRefusal | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "destination_url",
+        "reason",
+        "source_url",
+    }:
+        raise ValueError("Native redirect refusal payload is invalid.")
+    return NativeRedirectRefusal(
+        source_url=value["source_url"],
+        destination_url=value["destination_url"],
+        reason=value["reason"],
+    )
 
 
 def _index_payload(
