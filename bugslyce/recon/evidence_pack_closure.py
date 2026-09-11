@@ -22,7 +22,10 @@ from bugslyce.recon.documentation_assertions import (
     retained_response_source_reference, retained_response_source_id,
 )
 from bugslyce.recon.http_route_relationships import build_http_redirect_relationship_edges
-from bugslyce.recon.native_observation_store import validate_native_observation_store
+from bugslyce.recon.native_observation_store import (
+    NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    validate_native_observation_store,
+)
 
 from bugslyce.core.models import (
     DiscoveredPath,
@@ -77,7 +80,6 @@ from bugslyce.recon.http_route_relationships import (
 REFERENCE_CLOSURE_FILENAME = "bugslyce_reference_closure.json"
 REFERENCE_CLOSURE_VERSION = "1.0"
 EXPORT_MANIFEST_FILENAME = "bugslyce_export_manifest.json"
-NATIVE_OBSERVATION_STORE_PROJECT_PATH = "native-observations"
 _NATIVE_OBSERVATION_STORE_OWNER_KIND = "native_observation_store"
 CURRENT_REQUIRED_METADATA_PATHS = (
     "BUGSLYCE_EXPORT_README.md",

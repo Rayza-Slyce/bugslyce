@@ -29,11 +29,6 @@ from bugslyce.core.programme_scope import (
     canonicalise_http_url_destination,
     validate_rule_id,
 )
-from bugslyce.recon.native_content_discovery import (
-    MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS,
-)
-
-
 LEGACY_STORE_SCHEMA_VERSION = 1
 STORE_SCHEMA_VERSION = 2
 SUPPORTED_STORE_SCHEMA_VERSIONS = frozenset(
@@ -98,13 +93,24 @@ _OBSERVATION_NAME = re.compile(r"^(?P<index>[0-9]{8})\.json$")
 _OWNED_STAGING_NAME = re.compile(
     r"^\.(?:[0-9a-f]{64}|[0-9]{8}\.json|index\.json)\.[A-Za-z0-9_]+\.tmp$"
 )
-MAXIMUM_NATIVE_OBSERVATION_CANDIDATES = MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS
+NATIVE_OBSERVATION_STORE_PROJECT_PATH = "native-observations"
+LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE = 536_870_912
+LIVE_NATIVE_OBSERVATION_METADATA_BYTE_ALLOWANCE = 134_217_728
+MAXIMUM_NATIVE_OBSERVATION_CANDIDATES = 35_060
 MAXIMUM_NATIVE_OBSERVATION_INDEX = MAXIMUM_NATIVE_OBSERVATION_CANDIDATES - 1
 MAXIMUM_NATIVE_OBSERVATION_EXCHANGES = 11
 MAXIMUM_RETAINED_HEADER_PAIRS = 100
 MAXIMUM_RETAINED_HEADER_BYTES = 65_536
 MAXIMUM_REDIRECT_HOPS_FOR_OBSERVATIONS = 10
 UINT64_MAXIMUM = (1 << 64) - 1
+
+
+class NativeObservationBodyBudgetExceeded(ValueError):
+    """Raised before capture when the durable body allowance cannot be reserved."""
+
+
+class NativeObservationMetadataBudgetExceeded(ValueError):
+    """Raised before capture when candidate metadata cannot be reserved."""
 
 
 @dataclass(frozen=True)
@@ -495,7 +501,9 @@ class NativeObservationStore:
             self._body_sizes,
         )
         if self.body_bytes_committed > self.body_byte_allowance:
-            raise ValueError("Native observation store body budget is exceeded.")
+            raise NativeObservationBodyBudgetExceeded(
+                "Native observation store body budget is exceeded."
+            )
         index_path = self.root / "index.json"
         if index_path.is_symlink():
             raise ValueError("Native observation store index is unsafe.")
@@ -575,7 +583,9 @@ class NativeObservationStore:
             + maximum_bytes
             > self.body_byte_allowance
         ):
-            raise ValueError("Native observation store body budget is exceeded.")
+            raise NativeObservationBodyBudgetExceeded(
+                "Native observation store body budget is exceeded."
+            )
         reservation = BodyReservation(
             self._reservation_owner,
             self._next_reservation,
@@ -616,7 +626,9 @@ class NativeObservationStore:
             + maximum_bytes
             > self.metadata_byte_allowance
         ):
-            raise ValueError("Native observation store metadata allowance is exceeded.")
+            raise NativeObservationMetadataBudgetExceeded(
+                "Native observation store metadata allowance is exceeded."
+            )
         reservation = CandidateMetadataReservation(
             self._metadata_reservation_owner,
             self._next_metadata_reservation,

@@ -38,12 +38,38 @@ from bugslyce.recon.content_run import (
     write_content_discovery_baseline_artifact,
 )
 from bugslyce.recon.http_enforcement import (
+    HTTPExecutorClosed,
+    HTTPProgrammeScopeRefused,
+    HTTPRateRejected,
+    HTTPReceivedResponse,
     HTTPTransportFailure,
     ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES,
+    InternalHTTPResponse,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
     build_http_enforcement_configuration,
     internal_http_executors_share_enforcement_state,
+)
+from bugslyce.recon.native_observation_store import (
+    ATTEMPT_FAILURE_CATEGORIES,
+    FATAL_HTTP_EXECUTION_STOP_CATEGORIES,
+    LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE,
+    LIVE_NATIVE_OBSERVATION_METADATA_BYTE_ALLOWANCE,
+    MAXIMUM_NATIVE_OBSERVATION_CANDIDATES,
+    NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    BodyReservation,
+    CandidateMetadataReservation,
+    NativeAttemptFailure,
+    NativeCandidateObservation,
+    NativeFatalHTTPExecutionStop,
+    NativeObservationBodyBudgetExceeded,
+    NativeObservationMetadataBudgetExceeded,
+    NativeObservationStore,
+    NativeProgrammeScopeRefusal,
+    NativeRateRejection,
+    NativeReceivedExchange,
+    NativeReceivedExchangeTerminalFailure,
+    NativeRedirectRefusal,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
 from bugslyce.recon.nmap_profiles import validate_explicit_nmap_target_scope
@@ -65,12 +91,24 @@ NATIVE_CONTENT_COVERAGE_SCHEMA_VERSION = "1.0"
 ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES = (
     ISOLATED_HTTP_ENVIRONMENT_FAILURE_CATEGORIES
 )
-MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS = 35_060
+MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS = MAXIMUM_NATIVE_OBSERVATION_CANDIDATES
 MAXIMUM_NATIVE_CANDIDATE_REQUESTS_PER_ORIGIN = 4_096
 MAXIMUM_NATIVE_WORDLIST_ENTRIES = 4_096
 MAXIMUM_NATIVE_WORDLIST_BYTES = 1_000_000
 _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN = 20
 _NATIVE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+class NativeContentDiscoveryEvidenceBudgetExhausted(RuntimeError):
+    """Raised before transmission when durable candidate evidence cannot fit."""
+
+    def __init__(self, capacity_kind: str) -> None:
+        if capacity_kind not in {"body", "metadata"}:
+            raise ValueError("Native evidence capacity kind is invalid.")
+        self.capacity_kind = capacity_kind
+        super().__init__(
+            f"Native candidate {capacity_kind} evidence capacity is exhausted."
+        )
 
 
 @dataclass(frozen=True)
@@ -426,6 +464,235 @@ class _StagedNativeArtifact:
     inode: int
 
 
+@dataclass
+class _CandidateEvidenceReservations:
+    metadata: CandidateMetadataReservation | None
+    bodies: list[BodyReservation]
+
+
+class _NativeObservationRecorder:
+    """Own pre-request reservations and the sole HTTP-to-store translation seam."""
+
+    def __init__(
+        self,
+        root: Path,
+        executor: InternalHTTPExecutor,
+    ) -> None:
+        self.store = NativeObservationStore(
+            root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+            LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE,
+            metadata_byte_allowance=LIVE_NATIVE_OBSERVATION_METADATA_BYTE_ALLOWANCE,
+        )
+        self.maximum_redirect_hops = (
+            executor.configuration.maximum_redirect_hops
+            if executor.configuration is not None
+            else 0
+        )
+
+    def reserve(self, candidate_index: int) -> _CandidateEvidenceReservations:
+        metadata: CandidateMetadataReservation | None = None
+        bodies: list[BodyReservation] = []
+        try:
+            metadata = self.store.reserve_candidate_metadata(
+                candidate_index,
+                maximum_redirect_hops=self.maximum_redirect_hops,
+            )
+            for _index in range(self.maximum_redirect_hops + 1):
+                bodies.append(
+                    self.store.reserve_body_bytes(BASELINE_MAXIMUM_RESPONSE_BYTES)
+                )
+        except NativeObservationMetadataBudgetExceeded as exc:
+            self._release_reservations(metadata, bodies)
+            raise NativeContentDiscoveryEvidenceBudgetExhausted("metadata") from exc
+        except NativeObservationBodyBudgetExceeded as exc:
+            self._release_reservations(metadata, bodies)
+            raise NativeContentDiscoveryEvidenceBudgetExhausted("body") from exc
+        except BaseException:
+            self._release_reservations(metadata, bodies)
+            raise
+        return _CandidateEvidenceReservations(metadata, bodies)
+
+    def release(self, reservations: _CandidateEvidenceReservations) -> None:
+        self._release_reservations(reservations.metadata, reservations.bodies)
+        reservations.metadata = None
+        reservations.bodies.clear()
+
+    def publish(
+        self,
+        candidate_index: int,
+        request_url: str,
+        outcome: (
+            InternalHTTPResponse
+            | HTTPTransportFailure
+            | HTTPRateRejected
+            | HTTPProgrammeScopeRefused
+        ),
+        reservations: _CandidateEvidenceReservations,
+    ) -> bool:
+        """Translate and immediately publish one representable candidate outcome."""
+
+        try:
+            return self._publish_reserved(
+                candidate_index,
+                request_url,
+                outcome,
+                reservations,
+            )
+        except BaseException:
+            self._release_body_reservations(reservations.bodies)
+            if reservations.metadata is not None:
+                try:
+                    self.store.release_candidate_metadata(reservations.metadata)
+                except ValueError:
+                    pass
+                reservations.metadata = None
+            raise
+
+    def _publish_reserved(
+        self,
+        candidate_index: int,
+        request_url: str,
+        outcome: (
+            InternalHTTPResponse
+            | HTTPTransportFailure
+            | HTTPRateRejected
+            | HTTPProgrammeScopeRefused
+        ),
+        reservations: _CandidateEvidenceReservations,
+    ) -> bool:
+
+        exchanges_source = outcome.received_exchanges
+        exchanges = self._commit_exchanges(exchanges_source, reservations.bodies)
+        failure = None
+        refused_redirect = None
+        terminal_failure = None
+        rate_rejection = None
+        programme_scope_refusal = None
+        fatal_execution_stop = None
+
+        if isinstance(outcome, InternalHTTPResponse):
+            if outcome.refused_redirect is not None:
+                refusal = outcome.refused_redirect
+                refused_redirect = NativeRedirectRefusal(
+                    refusal.source_url,
+                    refusal.destination_url,
+                    refusal.reason,
+                )
+            elif outcome.redirect_followup_failure is not None:
+                followup = outcome.redirect_followup_failure
+                if exchanges and exchanges[-1].request_url == followup.destination_url:
+                    terminal_failure = NativeReceivedExchangeTerminalFailure(
+                        followup.destination_url,
+                        followup.category,
+                    )
+                else:
+                    failure = NativeAttemptFailure(
+                        followup.destination_url,
+                        followup.category,
+                    )
+        elif isinstance(outcome, HTTPRateRejected):
+            if not exchanges:
+                self.release(reservations)
+                return False
+            rate_rejection = NativeRateRejection(
+                exchanges[-1].request_url,
+                outcome.retry_after,
+            )
+        elif isinstance(outcome, HTTPProgrammeScopeRefused):
+            programme_scope_refusal = NativeProgrammeScopeRefusal(
+                outcome.stage,
+                outcome.reason_code,
+                outcome.operator_safe_explanation,
+            )
+        elif isinstance(outcome, HTTPTransportFailure):
+            if outcome.category in FATAL_HTTP_EXECUTION_STOP_CATEGORIES:
+                if not exchanges:
+                    self.release(reservations)
+                    return False
+                fatal_execution_stop = NativeFatalHTTPExecutionStop(outcome.category)
+            elif outcome.category in ATTEMPT_FAILURE_CATEGORIES:
+                if exchanges:
+                    terminal_failure = NativeReceivedExchangeTerminalFailure(
+                        exchanges[-1].request_url,
+                        outcome.category,
+                    )
+                else:
+                    failure = NativeAttemptFailure(request_url, outcome.category)
+            else:
+                self.release(reservations)
+                return False
+
+        observation = NativeCandidateObservation(
+            candidate_index=candidate_index,
+            request_url=request_url,
+            exchanges=exchanges,
+            failure=failure,
+            refused_redirect=refused_redirect,
+            terminal_failure=terminal_failure,
+            rate_rejection=rate_rejection,
+            programme_scope_refusal=programme_scope_refusal,
+            fatal_execution_stop=fatal_execution_stop,
+        )
+        self._release_body_reservations(reservations.bodies)
+        if reservations.metadata is None:
+            raise ValueError("Native candidate metadata reservation is absent.")
+        self.store.publish_observation(observation, reservations.metadata)
+        reservations.metadata = None
+        return True
+
+    def publish_index(self, store_state: str) -> None:
+        self.store.publish_index(store_state)
+
+    def _commit_exchanges(
+        self,
+        received: tuple[HTTPReceivedResponse, ...],
+        reservations: list[BodyReservation],
+    ) -> tuple[NativeReceivedExchange, ...]:
+        converted: list[NativeReceivedExchange] = []
+        if len(received) > len(reservations):
+            raise ValueError("Native response evidence exceeds its body reservations.")
+        for item in received:
+            capture = item.capture
+            body_reference = None
+            body_sha256 = None
+            captured_bytes = 0
+            if capture.body is not None:
+                reservation = reservations.pop(0)
+                body_reference = self.store.commit_body(reservation, capture.body)
+                body_sha256 = body_reference.sha256
+                captured_bytes = body_reference.captured_bytes
+            else:
+                self.store.release_reservation(reservations.pop(0))
+            converted.append(
+                NativeReceivedExchange(
+                    request_url=item.request_url,
+                    status_code=item.status_code,
+                    headers=capture.headers,
+                    capture_state=capture.body_capture_state,
+                    captured_bytes=captured_bytes,
+                    body_sha256=body_sha256,
+                    body=body_reference,
+                    incomplete_reason=capture.body_incomplete_reason,
+                    headers_capture_state=capture.headers_capture_state,
+                    headers_incomplete_reason=capture.headers_incomplete_reason,
+                )
+            )
+        return tuple(converted)
+
+    def _release_body_reservations(self, bodies: list[BodyReservation]) -> None:
+        while bodies:
+            self.store.release_reservation(bodies.pop())
+
+    def _release_reservations(
+        self,
+        metadata: CandidateMetadataReservation | None,
+        bodies: list[BodyReservation],
+    ) -> None:
+        self._release_body_reservations(bodies)
+        if metadata is not None:
+            self.store.release_candidate_metadata(metadata)
+
+
 def build_native_content_discovery_http_executor(
     runtime: BugBountyProjectRuntime,
     project_state: ProjectState,
@@ -720,11 +987,11 @@ def _execute_native_plan(
     token_factory,
     progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
 ) -> NativeContentDiscoveryResult:
-    requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]] = {
+    requests_by_origin: dict[str, list[tuple[int, NativeContentDiscoveryRequest]]] = {
         allocation.canonical_origin: [] for allocation in plan.origin_allocations
     }
-    for request in plan.requests:
-        requests_by_origin[request.canonical_origin].append(request)
+    for candidate_index, request in enumerate(plan.requests):
+        requests_by_origin[request.canonical_origin].append((candidate_index, request))
 
     baselines: dict[str, ContentBaselineDecision] = {}
     for origin in requests_by_origin:
@@ -778,14 +1045,27 @@ def _execute_native_plan(
             created_by=NATIVE_CONTENT_BASELINE_CREATED_BY,
         ),
     )
+    observation_recorder = _NativeObservationRecorder(
+        output_transaction.destination,
+        executor,
+    )
     try:
         origin_results, retained_content = _collect_native_candidates(
             requests_by_origin,
             baselines,
             executor,
+            observation_recorder,
             progress_callback=progress_callback,
         )
+        observation_recorder.publish_index("complete")
     except BaseException as exc:
+        try:
+            observation_recorder.publish_index("partial")
+        except (OSError, ValueError) as persistence_error:
+            exc.add_note(
+                "Native observation-store partial publication also failed: "
+                f"{type(persistence_error).__name__}: {persistence_error}"
+            )
         try:
             _publish_staged_artifacts((staged_baseline,))
         except (OSError, ValueError) as persistence_error:
@@ -842,9 +1122,13 @@ def _execute_native_plan(
 
 
 def _collect_native_candidates(
-    requests_by_origin: dict[str, list[NativeContentDiscoveryRequest]],
+    requests_by_origin: dict[
+        str,
+        list[tuple[int, NativeContentDiscoveryRequest]],
+    ],
     baselines: dict[str, ContentBaselineDecision],
     executor: InternalHTTPExecutor,
+    observation_recorder: _NativeObservationRecorder,
     *,
     progress_callback: Callable[[ContentDiscoveryProgressEvent], None] | None,
 ) -> tuple[list[NativeContentDiscoveryOriginResult], dict[str, str]]:
@@ -876,7 +1160,8 @@ def _collect_native_candidates(
             // _MAXIMUM_PROGRESS_INTERVALS_PER_ORIGIN,
         )
         next_progress_completed = progress_interval
-        for request in requests:
+        for candidate_index, request in requests:
+            reservations = observation_recorder.reserve(candidate_index)
             try:
                 response = executor.request_retaining_refused_redirect(
                     request.url,
@@ -887,6 +1172,12 @@ def _collect_native_candidates(
                     retain_redirect_followup_failure=True,
                 )
             except HTTPTransportFailure as exc:
+                observation_recorder.publish(
+                    candidate_index,
+                    request.url,
+                    exc,
+                    reservations,
+                )
                 if exc.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
                     raise
                 failed_candidates.append(
@@ -895,7 +1186,27 @@ def _collect_native_candidates(
                         category=exc.category,
                     )
                 )
+            except (HTTPRateRejected, HTTPProgrammeScopeRefused) as exc:
+                observation_recorder.publish(
+                    candidate_index,
+                    request.url,
+                    exc,
+                    reservations,
+                )
+                raise
+            except HTTPExecutorClosed:
+                observation_recorder.release(reservations)
+                raise
+            except BaseException:
+                observation_recorder.release(reservations)
+                raise
             else:
+                observation_recorder.publish(
+                    candidate_index,
+                    request.url,
+                    response,
+                    reservations,
+                )
                 followup_failure = response.redirect_followup_failure
                 if followup_failure is not None:
                     redirect_followup_failures.append(

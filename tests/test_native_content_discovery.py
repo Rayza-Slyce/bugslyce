@@ -47,15 +47,23 @@ from bugslyce.recon.content_plan import (
 )
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.http_enforcement import (
+    HTTPProgrammeScopeRefused,
     HTTPRateRejected,
     HTTPRedirectRefused,
     HTTPTransportFailure,
     HTTPResponseCapture,
+    HTTPReceivedResponse,
     HTTPTransportResponse,
     InternalHTTPExecutor,
     PeerBoundHTTPTransport,
 )
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.native_observation_store import (
+    NativeObservationStore,
+    maximum_native_observation_index_bytes,
+    maximum_native_observation_serialized_bytes,
+    validate_native_observation_store,
+)
 from bugslyce.recon.modes import STANDARD_RECON_PROFILE
 from bugslyce.recon.programme_orchestration import (
     build_programme_orchestration_plan,
@@ -69,6 +77,19 @@ PROFILE = "wp4a-synthetic-root"
 
 def _native_module():
     return importlib.import_module("bugslyce.recon.native_content_discovery")
+
+
+def _load_native_observation_store(output_dir: Path, module):
+    root = output_dir / "native-observations"
+    index = validate_native_observation_store(root)
+    store = NativeObservationStore(
+        root,
+        module.LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE,
+        metadata_byte_allowance=(
+            module.LIVE_NATIVE_OBSERVATION_METADATA_BYTE_ALLOWANCE
+        ),
+    )
+    return store, index
 
 
 def _capabilities():
@@ -405,8 +426,17 @@ def test_runtime_less_native_execution_is_bounded_and_starts_no_external_command
         profile=PROFILE,
         limits=limits,
     )
-    transport = _ResponseTransport(lambda url: (404, url.encode("utf-8")))
+    duplicate_candidate_body = b"same captured candidate body"
+    transport = _ResponseTransport(
+        lambda url: (
+            404,
+            b"conventional negative"
+            if ".bugslyce-negative-" in url
+            else duplicate_candidate_body,
+        )
+    )
     executor = InternalHTTPExecutor(None, transport=transport)
+    output_dir = tmp_path / "native-output"
 
     result = module.run_runtime_less_native_content_discovery(
         state,
@@ -414,7 +444,7 @@ def test_runtime_less_native_execution_is_bounded_and_starts_no_external_command
         scope,
         plan,
         http_executor=executor,
-        output_dir=tmp_path / "native-output",
+        output_dir=output_dir,
         token_factory=iter(("one", "two", "three")).__next__,
     )
 
@@ -425,6 +455,16 @@ def test_runtime_less_native_execution_is_bounded_and_starts_no_external_command
         request.url.startswith("https://app.example.test/")
         for request in transport.requests
     )
+    store, store_index = _load_native_observation_store(output_dir, module)
+    assert store_index.store_state == "complete"
+    assert store_index.observation_indices == (0, 1)
+    first = store.load_observation(0)
+    second = store.load_observation(1)
+    assert first.request_url == plan.requests[0].url
+    assert second.request_url == plan.requests[1].url
+    assert first.exchanges[0].body_sha256 == second.exchanges[0].body_sha256
+    assert store_index.body_bytes_committed == len(duplicate_candidate_body)
+    assert store_index.metadata_observation_bytes > 0
     executor.close()
 
 
@@ -505,6 +545,29 @@ def _complete_transport_response(
             body=body,
             body_capture_state="complete",
             body_incomplete_reason=None,
+            headers=headers,
+            headers_capture_state="complete",
+            headers_incomplete_reason=None,
+        ),
+    )
+
+
+def _received_response(
+    url: str,
+    *,
+    status: int = 503,
+    body: bytes | None = b"received",
+    body_state: str = "complete",
+    body_reason: str | None = None,
+    headers: tuple[tuple[str, str], ...] = (("X-Test", "value"),),
+) -> HTTPReceivedResponse:
+    return HTTPReceivedResponse(
+        url,
+        status,
+        HTTPResponseCapture(
+            body=body,
+            body_capture_state=body_state,
+            body_incomplete_reason=body_reason,
             headers=headers,
             headers_capture_state="complete",
             headers_incomplete_reason=None,
@@ -877,13 +940,14 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         respond,
     )
     progress = []
+    output_dir = tmp_path / "native-output"
     result = module.run_native_content_discovery(
         runtime,
         state,
         orchestration,
         plan,
         http_executor=executor,
-        output_dir=tmp_path / "native-output",
+        output_dir=output_dir,
         token_factory=iter(("one", "two", "three")).__next__,
         progress_callback=progress.append,
     )
@@ -952,6 +1016,25 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
             }
         ],
     }
+    store, index = _load_native_observation_store(output_dir, module)
+    assert index.store_state == "complete"
+    assert index.observation_indices == (0, 1)
+    assert tuple(
+        store.load_observation(candidate_index).request_url
+        for candidate_index in index.observation_indices
+    ) == tuple(request.url for request in plan.requests)
+    first_observation = store.load_observation(0)
+    second_observation = store.load_observation(1)
+    assert first_observation.exchanges[0].status_code == 404
+    assert second_observation.exchanges[0].status_code == 200
+    assert store.read_body(first_observation.exchanges[0].body) == (
+        b"candidate-specific missing page"
+    )
+    assert store.read_body(second_observation.exchanges[0].body) == (
+        b"administration console"
+    )
+    assert first_observation.failure is None
+    assert second_observation.failure is None
     executor.close()
 
 
@@ -1384,6 +1467,7 @@ def test_hard_native_candidate_failure_preserves_baseline_without_reporting_comp
         planned_origins,
         respond,
     )
+    output_dir = tmp_path / "failed-progress"
     with pytest.raises(HTTPTransportFailure, match="invalid_resolver_result"):
         module.run_native_content_discovery(
             runtime,
@@ -1391,7 +1475,7 @@ def test_hard_native_candidate_failure_preserves_baseline_without_reporting_comp
             orchestration,
             plan,
             http_executor=executor,
-            output_dir=tmp_path / "failed-progress",
+            output_dir=output_dir,
             token_factory=iter(
                 ("one", "two", "three", "four", "five", "six")
             ).__next__,
@@ -1408,6 +1492,17 @@ def test_hard_native_candidate_failure_preserves_baseline_without_reporting_comp
     assert [item["origin"].removesuffix("/") for item in payload["origins"]] == list(
         planned_origins
     )
+    store, index = _load_native_observation_store(output_dir, module)
+    assert index.store_state == "partial"
+    failed_index = next(
+        index
+        for index, request in enumerate(plan.requests)
+        if request.url.endswith("/candidate-2")
+    )
+    assert failed_index not in index.observation_indices
+    assert index.observation_count == failed_index
+    assert store.outstanding_reserved_bytes == 0
+    assert store.outstanding_candidate_metadata_reserved_bytes == 0
     by_origin = {
         item["origin"].removesuffix("/"): item for item in payload["origins"]
     }
@@ -1693,6 +1788,13 @@ def test_native_candidate_environment_failure_does_not_prevent_later_candidate(
         assert "/environment-failure" not in output
         assert category not in output
         assert "/later-negative" not in output
+        store, store_index = _load_native_observation_store(output_dir, module)
+        observation = store.load_observation(0)
+        assert observation.exchanges == ()
+        assert observation.failure is not None
+        assert observation.failure.request_url == failing_url
+        assert observation.failure.category == category
+        assert store_index.store_state == "complete"
     finally:
         executor.close()
 
@@ -1756,6 +1858,11 @@ def test_native_candidate_insecure_tls_context_remains_hard(
         assert (output_dir / "content_discovery_baseline.json").is_file()
         assert not (output_dir / "content_discovery_native_coverage.json").exists()
         assert tuple(output_dir.glob("content-discovery-internal-*.txt")) == ()
+        store, store_index = _load_native_observation_store(output_dir, module)
+        assert store_index.store_state == "partial"
+        assert store_index.observation_count == 0
+        assert store.outstanding_reserved_bytes == 0
+        assert store.outstanding_candidate_metadata_reserved_bytes == 0
     finally:
         executor.close()
 
@@ -1975,6 +2082,20 @@ def test_redirect_followup_environment_failure_retains_source_response_and_conti
             in source_artifact
         )
         assert "/later-negative" not in source_artifact
+        store, store_index = _load_native_observation_store(output_dir, module)
+        candidate_index = next(
+            index
+            for index, request in enumerate(plan.requests)
+            if request.url == candidate_url
+        )
+        observation = store.load_observation(candidate_index)
+        assert tuple(
+            exchange.request_url for exchange in observation.exchanges
+        ) == (candidate_url,)
+        assert observation.failure is not None
+        assert observation.failure.request_url == destination_url
+        assert observation.failure.category == category
+        assert store_index.store_state == "complete"
     finally:
         executor.close()
 
@@ -2342,6 +2463,19 @@ def test_query_refused_first_hop_is_compared_and_later_native_candidate_continue
     assert "/query-redirect" in output
     assert f"[--> {query_destination}]" in output
     assert "/later-negative" not in output
+    store, store_index = _load_native_observation_store(
+        tmp_path / "native-output",
+        module,
+    )
+    observation = store.load_observation(0)
+    assert observation.refused_redirect is not None
+    assert observation.refused_redirect.source_url == (
+        "https://app.example.test/query-redirect"
+    )
+    assert observation.refused_redirect.destination_url == query_destination
+    assert observation.refused_redirect.reason == "redirect_query_not_allowed"
+    assert observation.failure is None
+    assert store_index.store_state == "complete"
     executor.close()
 
 
@@ -2503,6 +2637,16 @@ def test_terminal_rate_rejection_remains_fatal_at_native_candidate_boundary(
             executor.request(later_url)
         assert terminal_exc.value.retry_after == "17"
         assert len(transport.requests) == 4
+        store, index = _load_native_observation_store(output_dir, module)
+        assert index.store_state == "partial"
+        assert index.observation_indices == (0,)
+        observation = store.load_observation(0)
+        assert observation.request_url == candidate_url
+        assert observation.exchanges[-1].status_code == 429
+        assert observation.rate_rejection is not None
+        assert observation.rate_rejection.retry_after == "17"
+        assert store.outstanding_reserved_bytes == 0
+        assert store.outstanding_candidate_metadata_reserved_bytes == 0
     finally:
         executor.close()
 
@@ -2903,6 +3047,7 @@ def test_true_native_baseline_refusal_persists_structured_provenance(
     assert all(item["response_bytes"] for item in origin["observations"])
     assert all(item["body_sha256"] for item in origin["observations"])
     assert all(item["failure_reason"] is None for item in origin["observations"])
+    assert not (tmp_path / "native-output" / "native-observations").exists()
     assert "headers" not in baseline_path.read_text(encoding="utf-8").casefold()
     executor.close()
 
@@ -3068,5 +3213,405 @@ def test_native_execution_rejects_tampered_profile_root_before_any_request(
                 token_factory=iter(("one", "two", "three")).__next__,
             )
         assert transport.requests == []
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    ("capture_state", "body", "reason"),
+    (
+        pytest.param("complete", b"done", None, id="complete"),
+        pytest.param("truncated", b"abcd", None, id="truncated"),
+        pytest.param("incomplete", None, "body_read_error", id="incomplete"),
+    ),
+)
+def test_live_store_preserves_response_bearing_terminal_capture_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capture_state: str,
+    body: bytes | None,
+    reason: str | None,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(1, 1),
+    )
+    candidate_url = plan.requests[0].url
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+    )
+    original = executor.request_retaining_refused_redirect
+    candidate_calls = []
+
+    def execute(url: str, **kwargs):
+        if url != candidate_url:
+            return original(url, **kwargs)
+        candidate_calls.append(url)
+        captured = _received_response(
+            url, body=body, body_state=capture_state, body_reason=reason
+        )
+        raise HTTPTransportFailure(
+            "timeout", received_response=captured, received_exchanges=(captured,)
+        )
+
+    monkeypatch.setattr(executor, "request_retaining_refused_redirect", execute)
+    if capture_state == "truncated":
+        monkeypatch.setattr(module, "BASELINE_MAXIMUM_RESPONSE_BYTES", 4)
+    try:
+        result = module.run_native_content_discovery(
+            runtime, state, orchestration, plan, http_executor=executor,
+            output_dir=tmp_path / "native-output",
+            token_factory=iter(("one", "two", "three")).__next__,
+        )
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        observation = store.load_observation(0)
+        exchange = observation.exchanges[0]
+        assert exchange.capture_state == capture_state
+        assert exchange.incomplete_reason == reason
+        if body is None:
+            assert exchange.body is None
+        else:
+            assert store.read_body(exchange.body) == body
+        assert observation.terminal_failure is not None
+        assert observation.terminal_failure.category == "timeout"
+        assert observation.failure is None
+        assert index.store_state == "complete"
+        assert result.origin_results[0].failed_candidate_count == 1
+        assert candidate_calls == [candidate_url]
+        assert len(transport.requests) == 3
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("with_exchange", (False, True))
+def test_live_store_persists_programme_scope_refusal_before_propagation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_exchange: bool,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate", "later"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(2, 2),
+    )
+    candidate_url = plan.requests[0].url
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+    )
+    original = executor.request_retaining_refused_redirect
+    decision = evaluate_raw_scope_destination(
+        runtime.programme_scope_policy,
+        DESTINATION_HTTP_URL,
+        "https://outside.test/landing",
+    )
+    candidate_calls = []
+
+    def execute(url: str, **kwargs):
+        if url != candidate_url:
+            return original(url, **kwargs)
+        candidate_calls.append(url)
+        exchanges = (
+            (_received_response(
+                url, status=302, body=b"",
+                headers=(("Location", "https://outside.test/landing"),),
+            ),)
+            if with_exchange else ()
+        )
+        raise HTTPProgrammeScopeRefused(
+            "redirect" if with_exchange else "initial", decision, exchanges
+        )
+
+    monkeypatch.setattr(executor, "request_retaining_refused_redirect", execute)
+    try:
+        with pytest.raises(HTTPProgrammeScopeRefused):
+            module.run_native_content_discovery(
+                runtime, state, orchestration, plan, http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        observation = store.load_observation(0)
+        assert len(observation.exchanges) == int(with_exchange)
+        assert observation.programme_scope_refusal is not None
+        assert observation.programme_scope_refusal.stage == (
+            "redirect" if with_exchange else "initial"
+        )
+        assert index.store_state == "partial"
+        assert index.observation_indices == (0,)
+        assert candidate_calls == [candidate_url]
+        assert len(transport.requests) == 3
+    finally:
+        executor.close()
+
+
+def test_live_store_persists_received_redirect_before_fatal_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate", "later"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(2, 2),
+    )
+    candidate_url = plan.requests[0].url
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+    )
+    original = executor.request_retaining_refused_redirect
+    calls = []
+
+    def execute(url: str, **kwargs):
+        if url != candidate_url:
+            return original(url, **kwargs)
+        calls.append(url)
+        received = _received_response(
+            url, status=302, body=b"redirect", headers=(("Location", "/next"),)
+        )
+        raise HTTPTransportFailure(
+            "invalid_resolver_result", received_exchanges=(received,)
+        )
+
+    monkeypatch.setattr(executor, "request_retaining_refused_redirect", execute)
+    try:
+        with pytest.raises(HTTPTransportFailure, match="invalid_resolver_result"):
+            module.run_native_content_discovery(
+                runtime, state, orchestration, plan, http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        observation = store.load_observation(0)
+        assert observation.fatal_execution_stop is not None
+        assert observation.fatal_execution_stop.category == "invalid_resolver_result"
+        assert len(observation.exchanges) == 1
+        assert index.store_state == "partial"
+        assert index.observation_indices == (0,)
+        assert calls == [candidate_url]
+        assert len(transport.requests) == 3
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("capacity_kind", ("body", "metadata"))
+def test_live_store_reservation_exhaustion_stops_before_candidate_transmission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capacity_kind: str,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(1, 1),
+    )
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+    )
+    maximum_hops = executor.configuration.maximum_redirect_hops
+    if capacity_kind == "body":
+        monkeypatch.setattr(
+            module, "LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE",
+            module.BASELINE_MAXIMUM_RESPONSE_BYTES * (maximum_hops + 1) - 1,
+        )
+    else:
+        monkeypatch.setattr(
+            module, "LIVE_NATIVE_OBSERVATION_METADATA_BYTE_ALLOWANCE",
+            maximum_native_observation_index_bytes()
+            + maximum_native_observation_serialized_bytes(maximum_hops) - 1,
+        )
+    try:
+        with pytest.raises(
+            module.NativeContentDiscoveryEvidenceBudgetExhausted
+        ) as exc_info:
+            module.run_native_content_discovery(
+                runtime, state, orchestration, plan, http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+        assert exc_info.value.capacity_kind == capacity_kind
+        assert len(transport.requests) == 3
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        assert index.store_state == "partial"
+        assert index.observation_count == 0
+        assert store.outstanding_reserved_bytes == 0
+        assert store.outstanding_candidate_metadata_reserved_bytes == 0
+    finally:
+        executor.close()
+
+
+def test_prior_observation_survives_next_candidate_body_budget_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("first", "second"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(2, 2),
+    )
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",),
+        lambda url: (404, b"x" if ".bugslyce-negative-" not in url else b"no"),
+    )
+    required = module.BASELINE_MAXIMUM_RESPONSE_BYTES * (
+        executor.configuration.maximum_redirect_hops + 1
+    )
+    monkeypatch.setattr(
+        module, "LIVE_NATIVE_OBSERVATION_BODY_BYTE_ALLOWANCE", required
+    )
+    try:
+        with pytest.raises(module.NativeContentDiscoveryEvidenceBudgetExhausted):
+            module.run_native_content_discovery(
+                runtime, state, orchestration, plan, http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+        assert [request.url for request in transport.requests] == [
+            "https://app.example.test/.bugslyce-negative-one",
+            "https://app.example.test/.bugslyce-negative-two",
+            "https://app.example.test/.bugslyce-negative-three",
+            plan.requests[0].url,
+        ]
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        assert index.store_state == "partial"
+        assert index.observation_indices == (0,)
+        assert store.read_body(store.load_observation(0).exchanges[0].body) == b"x"
+    finally:
+        executor.close()
+
+
+def test_live_evidence_reservations_precede_the_only_candidate_transmission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("candidate",))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(1, 1),
+    )
+    events = []
+    instances = []
+
+    class RecordingStore(NativeObservationStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            instances.append(self)
+
+        def reserve_candidate_metadata(self, *args, **kwargs):
+            events.append("metadata")
+            return super().reserve_candidate_metadata(*args, **kwargs)
+
+        def reserve_body_bytes(self, *args, **kwargs):
+            events.append("body")
+            return super().reserve_body_bytes(*args, **kwargs)
+
+    monkeypatch.setattr(module, "NativeObservationStore", RecordingStore)
+
+    def respond(url: str):
+        if ".bugslyce-negative-" not in url:
+            events.append("candidate_transmission")
+        return 404, b"negative"
+
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), respond
+    )
+    try:
+        module.run_native_content_discovery(
+            runtime, state, orchestration, plan, http_executor=executor,
+            output_dir=tmp_path / "native-output",
+            token_factory=iter(("one", "two", "three")).__next__,
+        )
+        body_reservation_count = executor.configuration.maximum_redirect_hops + 1
+        assert events == [
+            "metadata",
+            *("body" for _index in range(body_reservation_count)),
+            "candidate_transmission",
+        ]
+        assert len(transport.requests) == 4
+        assert instances[0].outstanding_reserved_bytes == 0
+        assert instances[0].outstanding_candidate_metadata_reserved_bytes == 0
+    finally:
+        executor.close()
+
+
+def test_prior_observation_survives_next_candidate_metadata_budget_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("first", "second"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime, state, orchestration, profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(2, 2),
+    )
+
+    class ExhaustSecondMetadataReservation(NativeObservationStore):
+        def reserve_candidate_metadata(self, candidate_index, **kwargs):
+            if candidate_index == 1:
+                raise module.NativeObservationMetadataBudgetExceeded(
+                    "Native observation store metadata allowance is exceeded."
+                )
+            return super().reserve_candidate_metadata(candidate_index, **kwargs)
+
+    monkeypatch.setattr(
+        module,
+        "NativeObservationStore",
+        ExhaustSecondMetadataReservation,
+    )
+    executor, transport = _executor(
+        runtime, ("https://app.example.test",), lambda _url: (404, b"negative")
+    )
+    try:
+        with pytest.raises(
+            module.NativeContentDiscoveryEvidenceBudgetExhausted
+        ) as exc_info:
+            module.run_native_content_discovery(
+                runtime, state, orchestration, plan, http_executor=executor,
+                output_dir=tmp_path / "native-output",
+                token_factory=iter(("one", "two", "three")).__next__,
+            )
+        assert exc_info.value.capacity_kind == "metadata"
+        assert len(transport.requests) == 4
+        store, index = _load_native_observation_store(
+            tmp_path / "native-output", module
+        )
+        assert index.store_state == "partial"
+        assert index.observation_indices == (0,)
     finally:
         executor.close()
