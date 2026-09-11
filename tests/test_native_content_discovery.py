@@ -64,6 +64,7 @@ from bugslyce.recon.native_observation_store import (
     maximum_native_observation_serialized_bytes,
     validate_native_observation_store,
 )
+from bugslyce.parsers.content_discovery import parse_content_discovery
 from bugslyce.recon.modes import STANDARD_RECON_PROFILE
 from bugslyce.recon.programme_orchestration import (
     build_programme_orchestration_plan,
@@ -881,6 +882,12 @@ def test_native_root_contract_rejects_invalid_limits_depth_and_escaping_urls() -
             request_url="https://app.example.test/admin",
             category="tls_configuration_error",
         )
+    with pytest.raises(ValueError, match="provenance"):
+        module.NativeContentDiscoveryCandidateFailure(
+            request_url="https://app.example.test/admin",
+            category="timeout",
+            response_received=1,
+        )
 
 
 def test_native_plan_rejects_programme_plan_from_a_different_runtime(
@@ -994,6 +1001,7 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
         "candidate_requests_omitted_by_total_limit": 0,
         "candidate_requests_attempted": 2,
         "candidate_responses_observed": 2,
+        "uncertain_observed_candidate_count": 0,
         "failed_candidate_count": 0,
         "redirect_followup_failure_count": 0,
         "candidate_requests_unattempted": 0,
@@ -1008,6 +1016,7 @@ def test_conventional_negative_baseline_uses_native_execution_and_internal_artef
                 "candidate_responses_observed": 2,
                 "suppressed_candidate_count": 1,
                 "retained_candidate_count": 1,
+                "uncertain_observed_candidate_count": 0,
                 "failed_candidate_count": 0,
                 "redirect_followup_failure_count": 0,
                 "candidate_requests_unattempted": 0,
@@ -1273,6 +1282,8 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
         if ".bugslyce-negative-" in url:
             if origin.origin_url == "http://app.example.test:8080":
                 return 403, next(unstable_bodies)
+            if origin.origin_url == "https://app.example.test":
+                raise HTTPTransportFailure("dns_error")
             return 404, url.encode("utf-8")
         return 200, f"retained {origin.origin_url}".encode("utf-8")
 
@@ -1294,22 +1305,27 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
     )
 
     by_origin = {item.canonical_origin: item for item in result.origin_results}
-    refused = by_origin["http://app.example.test:8080"]
-    assert refused.baseline_decision.classification == "unstable"
+    uncertain = by_origin["http://app.example.test:8080"]
+    assert uncertain.baseline_decision.classification == "unstable"
+    assert uncertain.baseline_decision.selected_policy == (
+        module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+    )
+    assert uncertain.uncertain_observed_candidate_count == 1
+    assert uncertain.suppressed_candidate_count == 0
+    assert uncertain.retained_candidate_count == 0
+    refused = by_origin["https://app.example.test"]
+    assert refused.baseline_decision.classification == "failed"
     assert refused.baseline_decision.selected_policy == "refuse"
     assert refused.suppressed_candidate_count == 0
     assert refused.retained_candidate_count == 0
-    assert "varied in status, length, body hash" in (
-        refused.baseline_decision.failure_or_instability_reason or ""
-    ).lower()
     assert {
         item.canonical_origin
         for item in result.origin_results
         if item.baseline_decision.selected_policy != "refuse"
-    } == {"http://app.example.test", "https://app.example.test"}
+    } == {"http://app.example.test", "http://app.example.test:8080"}
     assert {artifact.canonical_origin for artifact in result.artifacts} == {
         "http://app.example.test",
-        "https://app.example.test",
+        "http://app.example.test:8080",
     }
     candidate_origins = [
         http_origin_from_url(request.url).origin_url
@@ -1319,31 +1335,38 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
     assert candidate_origins == [
         "http://app.example.test",
         "http://app.example.test",
-        "https://app.example.test",
+        "http://app.example.test:8080",
     ]
     assert [
         event.completed
         for event in progress
         if event.origin == "http://app.example.test:8080"
-    ] == [0]
+    ] == [0, 1]
     baseline = json.loads(result.baseline_artifact_path.read_text(encoding="utf-8"))
     assert [item["origin"] for item in baseline["origins"]] == [
         "http://app.example.test/",
         "http://app.example.test:8080/",
         "https://app.example.test/",
     ]
-    refused_payload = baseline["origins"][1]
-    assert refused_payload["selected_policy"] == "refuse"
-    assert {item["terminal_http_status"] for item in refused_payload["observations"]} == {
+    uncertain_payload = baseline["origins"][1]
+    assert uncertain_payload["selected_policy"] == (
+        module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+    )
+    assert {item["terminal_http_status"] for item in uncertain_payload["observations"]} == {
         403
     }
-    assert {item["response_bytes"] for item in refused_payload["observations"]} == {
+    assert {item["response_bytes"] for item in uncertain_payload["observations"]} == {
         5482
     }
     assert len(
-        {item["body_sha256"] for item in refused_payload["observations"]}
+        {item["body_sha256"] for item in uncertain_payload["observations"]}
     ) == 3
-    assert not any("8080" in artifact.path.name for artifact in result.artifacts)
+    refused_payload = baseline["origins"][2]
+    assert refused_payload["selected_policy"] == "refuse"
+    assert all(
+        item["observation_status"] == "failed"
+        for item in refused_payload["observations"]
+    )
     coverage = json.loads(result.coverage_artifact_path.read_text(encoding="utf-8"))
     assert coverage["candidate_requests_eligible"] == 6
     assert coverage["candidate_requests_planned"] == 4
@@ -1362,10 +1385,21 @@ def test_multi_origin_native_discovery_skips_refused_origin_and_collects_usable_
         + item["candidate_requests_omitted_by_total_limit"]
         for item in coverage["origins"]
     )
-    refused_coverage = next(
+    uncertain_coverage = next(
         item
         for item in coverage["origins"]
         if item["canonical_origin"] == "http://app.example.test:8080"
+    )
+    assert uncertain_coverage["selected_baseline_policy"] == (
+        module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+    )
+    assert uncertain_coverage["candidate_requests_attempted"] == 1
+    assert uncertain_coverage["candidate_responses_observed"] == 1
+    assert uncertain_coverage["uncertain_observed_candidate_count"] == 1
+    refused_coverage = next(
+        item
+        for item in coverage["origins"]
+        if item["canonical_origin"] == "https://app.example.test"
     )
     assert refused_coverage["selected_baseline_policy"] == "refuse"
     assert refused_coverage["candidate_requests_eligible"] == 2
@@ -1513,7 +1547,9 @@ def test_hard_native_candidate_failure_preserves_baseline_without_reporting_comp
         "native_conventional_negative"
     )
     assert by_origin["https://api.example.test"]["classification"] == "unstable"
-    assert by_origin["https://api.example.test"]["selected_policy"] == "refuse"
+    assert by_origin["https://api.example.test"]["selected_policy"] == (
+        module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+    )
     assert "varied in status, length, body hash" in by_origin[
         "https://api.example.test"
     ]["failure_or_instability_reason"].lower()
@@ -1639,19 +1675,21 @@ def test_native_candidate_transport_failure_does_not_prevent_later_candidate(
                 "candidate_requests_attempted": 2,
                 "candidate_responses_observed": 1,
                 "suppressed_candidate_count": 1,
-                    "retained_candidate_count": 0,
-                    "failed_candidate_count": 1,
-                    "redirect_followup_failure_count": 0,
-                    "candidate_requests_unattempted": 0,
+                "retained_candidate_count": 0,
+                "uncertain_observed_candidate_count": 0,
+                "failed_candidate_count": 1,
+                "redirect_followup_failure_count": 0,
+                "candidate_requests_unattempted": 0,
                 "failed_candidates": [
                     {
                         "request_url": failing_url,
                         "category": expected_category,
-                        }
-                    ],
-                    "redirect_followup_failures": [],
-                }
-            ]
+                        "response_received": False,
+                    }
+                ],
+                "redirect_followup_failures": [],
+            }
+        ]
         assert "synthetic candidate timeout" not in coverage_text
         assert "synthetic candidate transport error" not in coverage_text
         baseline = json.loads(
@@ -1781,7 +1819,11 @@ def test_native_candidate_environment_failure_does_not_prevent_later_candidate(
         assert coverage["failed_candidate_count"] == 1
         assert coverage["candidate_requests_unattempted"] == 0
         assert coverage["origins"][0]["failed_candidates"] == [
-            {"request_url": failing_url, "category": category}
+            {
+                "request_url": failing_url,
+                "category": category,
+                "response_received": False,
+            }
         ]
         assert "PRIVATE-" not in coverage_text
         output = result.artifacts[0].path.read_text(encoding="utf-8")
@@ -1794,6 +1836,7 @@ def test_native_candidate_environment_failure_does_not_prevent_later_candidate(
         assert observation.failure is not None
         assert observation.failure.request_url == failing_url
         assert observation.failure.category == category
+        assert result.origin_results[0].failed_candidates[0].response_received is False
         assert store_index.store_state == "complete"
     finally:
         executor.close()
@@ -2598,11 +2641,12 @@ def test_terminal_rate_rejection_remains_fatal_at_native_candidate_boundary(
     )
     candidate_url = "https://app.example.test/rate-limited"
     later_url = "https://app.example.test/later-negative"
+    baseline_bodies = iter((b"rate-a", b"rate-b", b"rate-c"))
 
     def respond(url: str):
         if url == candidate_url:
             return 429, (("Retry-After", "17"),), b"rate limited"
-        return 404, b"conventional negative"
+        return 403, next(baseline_bodies)
 
     progress = []
     output_dir = tmp_path / "native-output"
@@ -3015,11 +3059,13 @@ def test_true_native_baseline_refusal_persists_structured_provenance(
             maximum_candidate_requests_per_origin=1,
         ),
     )
-    bodies = iter((b"first", b"second", b"third"))
+    def fail_baseline(_url: str):
+        raise HTTPTransportFailure("timeout")
+
     executor, transport = _executor(
         runtime,
         ("https://app.example.test",),
-        lambda _url: (500, next(bodies)),
+        fail_baseline,
     )
 
     with pytest.raises(module.NativeContentDiscoveryBaselineRefused) as exc_info:
@@ -3039,17 +3085,105 @@ def test_true_native_baseline_refusal_persists_structured_provenance(
     payload = json.loads(baseline_path.read_text(encoding="utf-8"))
     assert payload["created_by"] == "bugslyce-native-content-baseline"
     origin = payload["origins"][0]
-    assert origin["classification"] == "unstable"
+    assert origin["classification"] == "failed"
     assert origin["selected_policy"] == "refuse"
-    assert origin["completed_observations"] == 3
+    assert origin["completed_observations"] == 0
     assert len(origin["generated_negative_request_urls"]) == 3
-    assert all(item["terminal_http_status"] == 500 for item in origin["observations"])
-    assert all(item["response_bytes"] for item in origin["observations"])
-    assert all(item["body_sha256"] for item in origin["observations"])
-    assert all(item["failure_reason"] is None for item in origin["observations"])
+    assert all(
+        item["terminal_http_status"] is None for item in origin["observations"]
+    )
+    assert all(item["response_bytes"] is None for item in origin["observations"])
+    assert all(item["body_sha256"] is None for item in origin["observations"])
+    assert all(item["failure_reason"] for item in origin["observations"])
     assert not (tmp_path / "native-output" / "native-observations").exists()
     assert "headers" not in baseline_path.read_text(encoding="utf-8").casefold()
     executor.close()
+
+
+def test_complete_variable_403_baseline_collects_uncertain_observations_without_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_profile(monkeypatch, tmp_path, ("denial-like", "materially-different"))
+    runtime = _runtime(tmp_path / "runtime")
+    state = _state(runtime)
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    module = _native_module()
+    plan = module.build_native_content_discovery_plan(
+        runtime,
+        state,
+        orchestration,
+        profile=PROFILE,
+        limits=module.NativeContentDiscoveryLimits(2, 2),
+    )
+    baseline_bodies = iter((b"AKAMAI-A", b"AKAMAI-B", b"AKAMAI-C"))
+    candidate_bodies = {
+        plan.requests[0].url: b"DENY-000",
+        plan.requests[1].url: b"DATA-XYZ",
+    }
+
+    def respond(url: str):
+        if ".bugslyce-negative-" in url:
+            return 403, next(baseline_bodies)
+        return 403, candidate_bodies[url]
+
+    executor, transport = _executor(
+        runtime,
+        ("https://app.example.test",),
+        respond,
+    )
+    output_dir = tmp_path / "native-output"
+    progress = []
+    try:
+        result = module.run_native_content_discovery(
+            runtime,
+            state,
+            orchestration,
+            plan,
+            http_executor=executor,
+            output_dir=output_dir,
+            token_factory=iter(("one", "two", "three")).__next__,
+            progress_callback=progress.append,
+        )
+
+        origin = result.origin_results[0]
+        assert origin.baseline_decision.classification == "unstable"
+        assert origin.baseline_decision.selected_policy == (
+            module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+        )
+        assert origin.uncertain_observed_candidate_count == 2
+        assert origin.suppressed_candidate_count == 0
+        assert origin.retained_candidate_count == 0
+        assert len(transport.requests) == 5
+        assert [event.completed for event in progress] == [0, 1, 2]
+        baseline_payload = json.loads(
+            result.baseline_artifact_path.read_text(encoding="utf-8")
+        )
+        assert baseline_payload["schema_version"] == "1.0"
+        assert baseline_payload["origins"][0]["selected_policy"] == (
+            module.NATIVE_UNCERTAIN_OBSERVATION_POLICY
+        )
+        store, index = _load_native_observation_store(output_dir, module)
+        assert index.store_state == "complete"
+        assert index.observation_indices == (0, 1)
+        assert tuple(
+            store.read_body(store.load_observation(candidate_index).exchanges[0].body)
+            for candidate_index in index.observation_indices
+        ) == (b"DENY-000", b"DATA-XYZ")
+        assert len(result.artifacts) == 1
+        assert result.artifacts[0].path.read_text(encoding="utf-8") == ""
+        assert parse_content_discovery(
+            result.artifacts[0].path,
+            "https://app.example.test/",
+        ) == []
+        coverage = json.loads(result.coverage_artifact_path.read_text(encoding="utf-8"))
+        assert coverage["candidate_requests_attempted"] == 2
+        assert coverage["candidate_responses_observed"] == 2
+        assert coverage["uncertain_observed_candidate_count"] == 2
+        assert coverage["origins"][0]["suppressed_candidate_count"] == 0
+        assert coverage["origins"][0]["retained_candidate_count"] == 0
+    finally:
+        executor.close()
 
 
 def test_native_plan_accepts_authorised_child_without_rebinding_strict_runtime(
@@ -3242,8 +3376,11 @@ def test_live_store_preserves_response_bearing_terminal_capture_states(
         limits=module.NativeContentDiscoveryLimits(1, 1),
     )
     candidate_url = plan.requests[0].url
+    baseline_bodies = iter((b"a", b"b", b"c"))
     executor, transport = _executor(
-        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (403, next(baseline_bodies)),
     )
     original = executor.request_retaining_refused_redirect
     candidate_calls = []
@@ -3284,6 +3421,20 @@ def test_live_store_preserves_response_bearing_terminal_capture_states(
         assert observation.failure is None
         assert index.store_state == "complete"
         assert result.origin_results[0].failed_candidate_count == 1
+        assert result.origin_results[0].failed_candidates[0].response_received is True
+        coverage = json.loads(
+            result.coverage_artifact_path.read_text(encoding="utf-8")
+        )
+        assert coverage["candidate_requests_attempted"] == 1
+        assert coverage["candidate_responses_observed"] == 1
+        assert coverage["failed_candidate_count"] == 1
+        assert coverage["origins"][0]["failed_candidates"] == [
+            {
+                "request_url": candidate_url,
+                "category": "timeout",
+                "response_received": True,
+            }
+        ]
         assert candidate_calls == [candidate_url]
         assert len(transport.requests) == 3
     finally:
@@ -3306,8 +3457,11 @@ def test_live_store_persists_programme_scope_refusal_before_propagation(
         limits=module.NativeContentDiscoveryLimits(2, 2),
     )
     candidate_url = plan.requests[0].url
+    baseline_bodies = iter((b"scope-a", b"scope-b", b"scope-c"))
     executor, transport = _executor(
-        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (403, next(baseline_bodies)),
     )
     original = executor.request_retaining_refused_redirect
     decision = evaluate_raw_scope_destination(
@@ -3371,8 +3525,11 @@ def test_live_store_persists_received_redirect_before_fatal_stop(
         limits=module.NativeContentDiscoveryLimits(2, 2),
     )
     candidate_url = plan.requests[0].url
+    baseline_bodies = iter((b"fatal-a", b"fatal-b", b"fatal-c"))
     executor, transport = _executor(
-        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (403, next(baseline_bodies)),
     )
     original = executor.request_retaining_refused_redirect
     calls = []
@@ -3426,8 +3583,11 @@ def test_live_store_reservation_exhaustion_stops_before_candidate_transmission(
         runtime, state, orchestration, profile=PROFILE,
         limits=module.NativeContentDiscoveryLimits(1, 1),
     )
+    baseline_bodies = iter((b"budget-a", b"budget-b", b"budget-c"))
     executor, transport = _executor(
-        runtime, ("https://app.example.test",), lambda _url: (404, b"no")
+        runtime,
+        ("https://app.example.test",),
+        lambda _url: (403, next(baseline_bodies)),
     )
     maximum_hops = executor.configuration.maximum_redirect_hops
     if capacity_kind == "body":
@@ -3476,9 +3636,17 @@ def test_prior_observation_survives_next_candidate_body_budget_stop(
         runtime, state, orchestration, profile=PROFILE,
         limits=module.NativeContentDiscoveryLimits(2, 2),
     )
+    baseline_bodies = iter((b"body-a", b"body-b", b"body-c"))
+
+    def respond(url: str):
+        if ".bugslyce-negative-" in url:
+            return 403, next(baseline_bodies)
+        return 403, b"x"
+
     executor, transport = _executor(
-        runtime, ("https://app.example.test",),
-        lambda url: (404, b"x" if ".bugslyce-negative-" not in url else b"no"),
+        runtime,
+        ("https://app.example.test",),
+        respond,
     )
     required = module.BASELINE_MAXIMUM_RESPONSE_BYTES * (
         executor.configuration.maximum_redirect_hops + 1
@@ -3594,8 +3762,17 @@ def test_prior_observation_survives_next_candidate_metadata_budget_stop(
         "NativeObservationStore",
         ExhaustSecondMetadataReservation,
     )
+    baseline_bodies = iter((b"metadata-a", b"metadata-b", b"metadata-c"))
+
+    def respond(url: str):
+        if ".bugslyce-negative-" in url:
+            return 403, next(baseline_bodies)
+        return 403, b"candidate"
+
     executor, transport = _executor(
-        runtime, ("https://app.example.test",), lambda _url: (404, b"negative")
+        runtime,
+        ("https://app.example.test",),
+        respond,
     )
     try:
         with pytest.raises(

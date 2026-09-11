@@ -189,6 +189,52 @@ class ContentBaselineObservation:
             failure_reason=reason,
         )
 
+    @classmethod
+    def incomplete_capture(
+        cls,
+        request_url: str,
+        response: InternalHTTPResponse,
+    ) -> ContentBaselineObservation:
+        """Retain supported response facts without claiming complete capture."""
+
+        if not response.received_exchanges:
+            return cls.failed(request_url, "capture_provenance_incomplete")
+        final_exchange = response.received_exchanges[-1]
+        captured_body = (
+            final_exchange.capture.body
+            if final_exchange.capture.body_capture_state == "complete"
+            else None
+        )
+        refused_redirect = response.refused_redirect
+        return cls(
+            request_url=request_url,
+            observation_status="failed",
+            terminal_http_status=final_exchange.status_code,
+            response_bytes=(
+                len(captured_body) if captured_body is not None else None
+            ),
+            body_sha256=(
+                hashlib.sha256(captured_body).hexdigest()
+                if captured_body is not None
+                else None
+            ),
+            final_url=response.final_url,
+            redirect_hops=tuple(
+                (hop.status_code, hop.destination_url) for hop in response.redirects
+            ),
+            refused_redirect=(
+                (
+                    refused_redirect.status_code,
+                    refused_redirect.source_url,
+                    refused_redirect.destination_url,
+                    refused_redirect.reason,
+                )
+                if refused_redirect is not None
+                else None
+            ),
+            failure_reason="capture_provenance_incomplete",
+        )
+
 
 ContentComparisonSignature = tuple[
     int,
@@ -240,8 +286,12 @@ def collect_content_discovery_baseline(
     *,
     token_factory: Callable[[], str] | None = None,
     retain_refused_redirect_response: bool = False,
+    require_complete_capture_provenance: bool = False,
 ) -> ContentBaselineDecision:
     """Collect exactly three bounded negative paths through the enforced executor."""
+
+    if not isinstance(require_complete_capture_provenance, bool):
+        raise ValueError("Baseline capture-provenance requirement is invalid.")
 
     request_urls = _negative_request_urls(origin, token_factory or _default_token)
     observations: list[ContentBaselineObservation] = []
@@ -267,8 +317,34 @@ def collect_content_discovery_baseline(
                 )
             )
         else:
-            observations.append(ContentBaselineObservation.complete(request_url, response))
+            if require_complete_capture_provenance and not (
+                _has_complete_capture_provenance(response)
+            ):
+                observations.append(
+                    ContentBaselineObservation.incomplete_capture(
+                        request_url,
+                        response,
+                    )
+                )
+            else:
+                observations.append(
+                    ContentBaselineObservation.complete(request_url, response)
+                )
     return classify_content_discovery_baseline(origin, tuple(observations))
+
+
+def _has_complete_capture_provenance(response: InternalHTTPResponse) -> bool:
+    """Return whether a successful response has fully captured typed evidence."""
+
+    return (
+        bool(response.received_exchanges)
+        and response.redirect_followup_failure is None
+        and all(
+            exchange.capture.body_capture_state == "complete"
+            and exchange.capture.headers_capture_state == "complete"
+            for exchange in response.received_exchanges
+        )
+    )
 
 
 def classify_content_discovery_baseline(

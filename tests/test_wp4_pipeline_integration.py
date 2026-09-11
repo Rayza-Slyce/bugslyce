@@ -372,8 +372,8 @@ def test_pipeline_content_execution_uses_native_root_plan_and_registers_internal
         "type": "content_discovery_coverage",
         "file": "content_discovery_native_coverage.json",
         "description": (
-            "BugSlyce-native candidate execution coverage and bounded "
-            "transport-failure provenance"
+            "BugSlyce-native candidate execution coverage, response observation, "
+            "uncertain accounting, and transport-failure provenance"
         ),
         "tags": ["native_coverage", "wp4a_native"],
     }

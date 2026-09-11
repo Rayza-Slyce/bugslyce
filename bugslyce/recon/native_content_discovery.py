@@ -26,6 +26,7 @@ from bugslyce.recon.content_run import (
     BASELINE_CLASSIFICATION_CONVENTIONAL,
     BASELINE_CLASSIFICATION_STABLE_FALLBACK,
     BASELINE_CLASSIFICATION_STABLE_REDIRECT,
+    BASELINE_CLASSIFICATION_UNSTABLE,
     BASELINE_MAXIMUM_RESPONSE_BYTES,
     BASELINE_POLICY_REFUSE,
     BASELINE_REQUEST_COUNT,
@@ -84,6 +85,7 @@ from bugslyce.recon.runner import ContentDiscoveryProgressEvent
 
 PROFILE_WORDLIST_SELECTION_REASON = "profile_wordlist"
 NATIVE_CONVENTIONAL_NEGATIVE_POLICY = "native_conventional_negative"
+NATIVE_UNCERTAIN_OBSERVATION_POLICY = "native_uncertain_observation"
 NATIVE_CONTENT_BASELINE_CREATED_BY = "bugslyce-native-content-baseline"
 NATIVE_CONTENT_COVERAGE_ARTIFACT_NAME = "content_discovery_native_coverage.json"
 NATIVE_CONTENT_COVERAGE_CREATED_BY = "bugslyce-native-content-coverage"
@@ -296,16 +298,19 @@ class NativeContentDiscoveryArtifact:
 
 @dataclass(frozen=True)
 class NativeContentDiscoveryCandidateFailure:
-    """One attempted candidate for which no HTTP response was obtained."""
+    """One isolated candidate failure, with explicit response provenance."""
 
     request_url: str
     category: str
+    response_received: bool = False
 
     def __post_init__(self) -> None:
         if http_origin_from_url(self.request_url) is None:
             raise ValueError("Native candidate failure request URL is invalid.")
         if self.category not in ISOLATED_CANDIDATE_TRANSPORT_FAILURE_CATEGORIES:
             raise ValueError("Native candidate failure category is invalid.")
+        if not isinstance(self.response_received, bool):
+            raise ValueError("Native candidate failure response provenance is invalid.")
 
 
 @dataclass(frozen=True)
@@ -347,6 +352,7 @@ class NativeContentDiscoveryOriginResult:
         NativeContentDiscoveryRedirectFollowupFailure,
         ...,
     ] = ()
+    uncertain_observed_candidate_count: int = 0
 
     def __post_init__(self) -> None:
         origin = http_origin_from_url(self.canonical_origin)
@@ -357,9 +363,19 @@ class NativeContentDiscoveryOriginResult:
             for value in (
                 self.suppressed_candidate_count,
                 self.retained_candidate_count,
+                self.uncertain_observed_candidate_count,
             )
         ):
             raise ValueError("Native origin result candidate counts are invalid.")
+        if self.baseline_decision.selected_policy == NATIVE_UNCERTAIN_OBSERVATION_POLICY:
+            if self.suppressed_candidate_count or self.retained_candidate_count:
+                raise ValueError(
+                    "Uncertain native observations cannot be suppressed or promoted."
+                )
+        elif self.uncertain_observed_candidate_count:
+            raise ValueError(
+                "Certain native policy contains uncertain candidate observations."
+            )
         if (
             not isinstance(self.failed_candidates, tuple)
             or any(
@@ -1008,11 +1024,30 @@ def _execute_native_plan(
             executor,
             token_factory=token_factory,
             retain_refused_redirect_response=True,
+            require_complete_capture_provenance=True,
         )
         if baseline.classification == BASELINE_CLASSIFICATION_CONVENTIONAL:
             baseline = replace(
                 baseline,
                 selected_policy=NATIVE_CONVENTIONAL_NEGATIVE_POLICY,
+            )
+        elif (
+            baseline.classification == BASELINE_CLASSIFICATION_UNSTABLE
+            and baseline.completed_observations == baseline.required_observations
+            and baseline.comparison_signature is None
+            and all(
+                observation.refused_redirect is None
+                for observation in baseline.observations
+            )
+        ):
+            baseline = replace(
+                baseline,
+                selected_policy=NATIVE_UNCERTAIN_OBSERVATION_POLICY,
+                limitations=(
+                    "Complete candidate responses are retained as observations "
+                    "without trusted negative-baseline equivalence or "
+                    "discovered-resource promotion.",
+                ),
             )
         elif (
             baseline.selected_policy != BASELINE_POLICY_REFUSE
@@ -1149,6 +1184,7 @@ def _collect_native_candidates(
             continue
         suppressed = 0
         retained = 0
+        uncertain_observed = 0
         failed_candidates: list[NativeContentDiscoveryCandidateFailure] = []
         redirect_followup_failures: list[
             NativeContentDiscoveryRedirectFollowupFailure
@@ -1184,6 +1220,7 @@ def _collect_native_candidates(
                     NativeContentDiscoveryCandidateFailure(
                         request_url=request.url,
                         category=exc.category,
+                        response_received=bool(exc.received_exchanges),
                     )
                 )
             except (HTTPRateRejected, HTTPProgrammeScopeRefused) as exc:
@@ -1218,12 +1255,19 @@ def _collect_native_candidates(
                             category=followup_failure.category,
                         )
                     )
-                if _matches_negative_baseline(baseline, response):
+                if baseline.selected_policy == NATIVE_UNCERTAIN_OBSERVATION_POLICY:
+                    uncertain_observed += 1
+                elif _matches_negative_baseline(baseline, response):
                     suppressed += 1
                 else:
                     retained += 1
                     retained_lines.append(_artifact_line(request.url, response))
-            completed = suppressed + retained + len(failed_candidates)
+            completed = (
+                suppressed
+                + retained
+                + uncertain_observed
+                + len(failed_candidates)
+            )
             if completed >= next_progress_completed or completed == len(requests):
                 _emit_native_progress(
                     progress_callback,
@@ -1248,6 +1292,7 @@ def _collect_native_candidates(
                 retained_candidate_count=retained,
                 failed_candidates=tuple(failed_candidates),
                 redirect_followup_failures=tuple(redirect_followup_failures),
+                uncertain_observed_candidate_count=uncertain_observed,
             )
         )
     return origin_results, retained_content
@@ -1257,7 +1302,7 @@ def render_native_content_discovery_coverage_artifact(
     plan: NativeContentDiscoveryPlan,
     origin_results: tuple[NativeContentDiscoveryOriginResult, ...],
 ) -> str:
-    """Render deterministic candidate coverage and response-less failures."""
+    """Render deterministic candidate coverage and failure provenance."""
 
     if not isinstance(plan, NativeContentDiscoveryPlan):
         raise ValueError("Native content discovery coverage plan is invalid.")
@@ -1312,10 +1357,21 @@ def render_native_content_discovery_coverage_artifact(
             )
         planned = len(planned_requests)
         failed = result.failed_candidate_count
-        observed = (
-            result.suppressed_candidate_count + result.retained_candidate_count
+        response_bearing_failures = sum(
+            failure.response_received for failure in result.failed_candidates
         )
-        attempted = observed + failed
+        observed = (
+            result.suppressed_candidate_count
+            + result.retained_candidate_count
+            + result.uncertain_observed_candidate_count
+            + response_bearing_failures
+        )
+        attempted = (
+            result.suppressed_candidate_count
+            + result.retained_candidate_count
+            + result.uncertain_observed_candidate_count
+            + failed
+        )
         unattempted = planned - attempted
         if unattempted < 0:
             raise ValueError("Native content discovery coverage counts are invalid.")
@@ -1341,6 +1397,9 @@ def render_native_content_discovery_coverage_artifact(
                 "candidate_responses_observed": observed,
                 "suppressed_candidate_count": result.suppressed_candidate_count,
                 "retained_candidate_count": result.retained_candidate_count,
+                "uncertain_observed_candidate_count": (
+                    result.uncertain_observed_candidate_count
+                ),
                 "failed_candidate_count": failed,
                 "redirect_followup_failure_count": (
                     result.redirect_followup_failure_count
@@ -1350,6 +1409,7 @@ def render_native_content_discovery_coverage_artifact(
                     {
                         "request_url": failure.request_url,
                         "category": failure.category,
+                        "response_received": failure.response_received,
                     }
                     for failure in result.failed_candidates
                 ],
@@ -1386,6 +1446,9 @@ def render_native_content_discovery_coverage_artifact(
         ),
         "candidate_requests_attempted": total_attempted,
         "candidate_responses_observed": total_observed,
+        "uncertain_observed_candidate_count": sum(
+            result.uncertain_observed_candidate_count for result in origin_results
+        ),
         "failed_candidate_count": total_failed,
         "redirect_followup_failure_count": total_redirect_followup_failed,
         "candidate_requests_unattempted": total_unattempted,
@@ -1692,6 +1755,8 @@ def _require_compatible_executor(
 
 
 def _matches_negative_baseline(baseline, response) -> bool:
+    if baseline.selected_policy == NATIVE_UNCERTAIN_OBSERVATION_POLICY:
+        raise ValueError("Uncertain native baseline has no trusted comparator.")
     if baseline.classification == BASELINE_CLASSIFICATION_CONVENTIONAL:
         statuses = {
             observation.terminal_http_status

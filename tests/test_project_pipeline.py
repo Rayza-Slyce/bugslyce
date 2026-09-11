@@ -58,6 +58,7 @@ from bugslyce.project_pipeline import (
     _body_fetch_warning_message,
     _deep_operator_summary_leads,
     _pending_steps,
+    _register_native_content_discovery_coverage_artifact,
     _step_runners,
     _validate_readiness,
     format_exception_diagnostic,
@@ -3429,20 +3430,34 @@ def test_pipeline_records_noop_followups_and_continues(
 
 
 @pytest.mark.parametrize(
-    ("response_less_count", "redirect_followup_count", "expected_warning"),
+    (
+        "response_less_count",
+        "response_bearing_count",
+        "redirect_followup_count",
+        "expected_warning",
+    ),
     (
         (
             1,
+            0,
             0,
             "1 response-less candidate transport failure recorded",
         ),
         (
             0,
             1,
+            0,
+            "1 response-bearing candidate transport failure recorded",
+        ),
+        (
+            0,
+            0,
+            1,
             "1 candidate redirect follow-up transport failure recorded",
         ),
         (
             1,
+            0,
             1,
             "1 response-less candidate transport failure recorded; "
             "1 candidate redirect follow-up transport failure recorded",
@@ -3453,6 +3468,7 @@ def test_pipeline_records_native_transport_coverage_warning_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     response_less_count: int,
+    response_bearing_count: int,
     redirect_followup_count: int,
     expected_warning: str,
 ) -> None:
@@ -3468,7 +3484,17 @@ def test_pipeline_records_native_transport_coverage_warning_and_continues(
                     baseline_decision=SimpleNamespace(
                         selected_policy="native_conventional_negative"
                     ),
-                    failed_candidate_count=response_less_count,
+                    failed_candidate_count=(
+                        response_less_count + response_bearing_count
+                    ),
+                    failed_candidates=tuple(
+                        SimpleNamespace(response_received=False)
+                        for _index in range(response_less_count)
+                    )
+                    + tuple(
+                        SimpleNamespace(response_received=True)
+                        for _index in range(response_bearing_count)
+                    ),
                     redirect_followup_failure_count=redirect_followup_count,
                 ),
             )
@@ -3495,6 +3521,30 @@ def test_pipeline_records_native_transport_coverage_warning_and_continues(
     assert steps["PIPELINE-STEP-008"].status == "completed"
     assert calls.index("native-content-run") < calls.index("content-followup")
     assert "export" in calls
+
+
+def test_native_coverage_registration_describes_observations_and_failures(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "recon_manifest.json"
+    manifest_path.write_text('{"artifacts": []}\n', encoding="utf-8")
+    coverage_path = tmp_path / "content_discovery_native_coverage.json"
+    coverage_path.write_text("{}\n", encoding="utf-8")
+
+    _register_native_content_discovery_coverage_artifact(tmp_path, coverage_path)
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["artifacts"] == [
+        {
+            "type": "content_discovery_coverage",
+            "file": coverage_path.name,
+            "description": (
+                "BugSlyce-native candidate execution coverage, response "
+                "observation, uncertain accounting, and transport-failure provenance"
+            ),
+            "tags": ["native_coverage", "wp4a_native"],
+        }
+    ]
 
 
 def test_pipeline_native_followup_noop_flows_to_body_fetch_noop(
@@ -4460,6 +4510,73 @@ def test_native_baseline_refusal_artifact_is_retained_in_pipeline_failure_proven
         item for item in persisted["steps"] if item["step_id"] == "PIPELINE-STEP-007"
     )
     assert persisted_step["output_paths"] == [str(baseline_path)]
+
+
+def test_native_evidence_budget_exhaustion_persists_failed_pipeline_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce.recon.native_content_discovery import (
+        NativeContentDiscoveryEvidenceBudgetExhausted,
+    )
+
+    project_file, output_dir = _fresh_project(tmp_path)
+    exhaustion = NativeContentDiscoveryEvidenceBudgetExhausted("body")
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_doctor_report",
+        lambda: _doctor(),
+    )
+
+    def step_runners(*_args, **_kwargs):
+        runners = {
+            step_id: (lambda step_id=step_id: (f"{step_id} complete", [], {}))
+            for step_id in (
+                "PIPELINE-STEP-001",
+                "PIPELINE-STEP-002",
+                "PIPELINE-STEP-003",
+                "PIPELINE-STEP-003S",
+                "PIPELINE-STEP-004",
+                "PIPELINE-STEP-005",
+                "PIPELINE-STEP-006",
+                "PIPELINE-STEP-007",
+                "PIPELINE-STEP-008",
+                "PIPELINE-STEP-009",
+                "PIPELINE-STEP-010D",
+                "PIPELINE-STEP-011D",
+                "PIPELINE-STEP-010",
+                "PIPELINE-STEP-011",
+                "PIPELINE-STEP-012",
+            )
+        }
+        runners["PIPELINE-STEP-007"] = lambda: (_ for _ in ()).throw(exhaustion)
+        return runners
+
+    monkeypatch.setattr("bugslyce.project_pipeline._step_runners", step_runners)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline._refresh_final_pipeline_outputs",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(ProjectPipelineFailed) as exc_info:
+        run_project_pipeline(
+            project_file,
+            DEEP_PIPELINE_PROFILE,
+            clock=lambda: FIXED_TIME,
+        )
+
+    step = next(
+        item
+        for item in exc_info.value.result.steps
+        if item.step_id == "PIPELINE-STEP-007"
+    )
+    assert step.status == "failed"
+    persisted = json.loads(
+        (output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    persisted_step = next(
+        item for item in persisted["steps"] if item["step_id"] == "PIPELINE-STEP-007"
+    )
+    assert persisted_step["status"] == "failed"
 
 
 def test_deep_content_failure_continuation_runs_real_local_outputs_and_export(

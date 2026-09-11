@@ -170,6 +170,7 @@ from bugslyce.recon.path_followup import (
 from bugslyce.recon.native_content_discovery import (
     MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS,
     NativeContentDiscoveryBaselineRefused,
+    NativeContentDiscoveryEvidenceBudgetExhausted,
     NativeContentDiscoveryLimits,
     NativeContentDiscoveryPlan,
     NativeContentDiscoveryResult,
@@ -900,7 +901,11 @@ def run_project_pipeline(
             )
             _emit(progress_callback, f"[{position}/{total_steps}] {step.name} failed")
             raise ProjectPipelineFailed(diagnostic, result) from exc
-        except (ValueError, OSError) as exc:
+        except (
+            NativeContentDiscoveryEvidenceBudgetExhausted,
+            ValueError,
+            OSError,
+        ) as exc:
             diagnostic = format_exception_diagnostic(exc)
             result = _failed_result(
                 result,
@@ -2313,6 +2318,14 @@ def _step_runners(
             item.failed_candidate_count
             for item in getattr(native_result, "origin_results", ())
         )
+        response_bearing_failure_count = sum(
+            failure.response_received
+            for item in getattr(native_result, "origin_results", ())
+            for failure in getattr(item, "failed_candidates", ())
+        )
+        response_less_failure_count = (
+            failed_candidate_count - response_bearing_failure_count
+        )
         redirect_followup_failure_count = sum(
             getattr(item, "redirect_followup_failure_count", 0)
             for item in getattr(native_result, "origin_results", ())
@@ -2324,10 +2337,16 @@ def _step_runners(
                     f"{refused_origin_count} refused origin"
                     f"{'s' if refused_origin_count != 1 else ''}"
                 )
-            if failed_candidate_count:
+            if response_less_failure_count:
                 warnings.append(
-                    f"{failed_candidate_count} response-less candidate transport "
-                    f"failure{'s' if failed_candidate_count != 1 else ''} recorded"
+                    f"{response_less_failure_count} response-less candidate transport "
+                    f"failure{'s' if response_less_failure_count != 1 else ''} recorded"
+                )
+            if response_bearing_failure_count:
+                warnings.append(
+                    f"{response_bearing_failure_count} response-bearing candidate "
+                    "transport failure"
+                    f"{'s' if response_bearing_failure_count != 1 else ''} recorded"
                 )
             if redirect_followup_failure_count:
                 warnings.append(
@@ -2845,8 +2864,8 @@ def _register_native_content_discovery_coverage_artifact(
             "type": "content_discovery_coverage",
             "file": coverage_path.name,
             "description": (
-                "BugSlyce-native candidate execution coverage and bounded "
-                "transport-failure provenance"
+                "BugSlyce-native candidate execution coverage, response "
+                "observation, uncertain accounting, and transport-failure provenance"
             ),
             "tags": ["native_coverage", "wp4a_native"],
         },

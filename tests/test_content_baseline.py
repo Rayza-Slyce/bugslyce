@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
 
 import pytest
 
@@ -21,7 +22,12 @@ from bugslyce.recon.content_run import (
     collect_content_discovery_baseline,
     response_comparison_signature,
 )
-from bugslyce.recon.http_enforcement import HTTPRedirectHop, InternalHTTPResponse
+from bugslyce.recon.http_enforcement import (
+    HTTPRedirectHop,
+    HTTPReceivedResponse,
+    HTTPResponseCapture,
+    InternalHTTPResponse,
+)
 from bugslyce.recon.http_enforcement import InternalHTTPExecutionError
 
 
@@ -364,6 +370,112 @@ def test_failed_collection_still_makes_only_three_required_observations() -> Non
     assert len(executor.urls) == 3
 
 
+@pytest.mark.parametrize(
+    "case",
+    (
+        "missing-provenance",
+        "truncated-body",
+        "incomplete-headers",
+        "incomplete-body",
+    ),
+)
+def test_native_strict_baseline_requires_complete_capture_provenance(
+    case: str,
+) -> None:
+    response = (
+        _response("unused")
+        if case == "missing-provenance"
+        else _response_with_capture(
+            "unused",
+            body_state=(
+                "incomplete"
+                if case == "incomplete-body"
+                else "truncated" if case == "truncated-body" else "complete"
+            ),
+            headers_state=("incomplete" if case == "incomplete-headers" else "complete"),
+        )
+    )
+    executor = _SequenceExecutor([response, response, response])
+
+    decision = collect_content_discovery_baseline(
+        ORIGIN,
+        executor,
+        token_factory=iter(("one", "two", "three")).__next__,
+        require_complete_capture_provenance=True,
+    )
+
+    assert decision.classification == BASELINE_CLASSIFICATION_FAILED
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+    assert decision.completed_observations == 0
+    for observation in decision.observations:
+        assert observation.observation_status == "failed"
+        assert observation.failure_reason == "capture_provenance_incomplete"
+        if case == "missing-provenance":
+            assert observation.terminal_http_status is None
+            assert observation.final_url is None
+        else:
+            assert observation.terminal_http_status == 403
+            assert observation.final_url == observation.request_url
+        if case == "incomplete-headers":
+            assert observation.response_bytes == len(b"body")
+            assert observation.body_sha256 == hashlib.sha256(b"body").hexdigest()
+        else:
+            assert observation.response_bytes is None
+            assert observation.body_sha256 is None
+
+
+def test_native_strict_truncated_response_retains_supported_baseline_metadata() -> None:
+    response = _response_with_capture("unused", body_state="truncated")
+
+    decision = collect_content_discovery_baseline(
+        ORIGIN,
+        _SequenceExecutor([response, response, response]),
+        token_factory=iter(("one", "two", "three")).__next__,
+        require_complete_capture_provenance=True,
+    )
+
+    assert decision.classification == BASELINE_CLASSIFICATION_FAILED
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+    assert decision.completed_observations == 0
+    for observation in decision.observations:
+        assert observation.observation_status == "failed"
+        assert observation.failure_reason == "capture_provenance_incomplete"
+        assert observation.terminal_http_status == 403
+        assert observation.final_url == observation.request_url
+        assert observation.redirect_hops == ()
+        assert observation.response_bytes is None
+        assert observation.body_sha256 is None
+
+
+def test_legacy_baseline_still_accepts_success_without_capture_provenance() -> None:
+    response = _response("unused", status=403, body=b"legacy")
+
+    decision = collect_content_discovery_baseline(
+        ORIGIN,
+        _SequenceExecutor([response, response, response]),
+        token_factory=iter(("one", "two", "three")).__next__,
+    )
+
+    assert decision.classification == BASELINE_CLASSIFICATION_STABLE_FALLBACK
+    assert decision.selected_policy == BASELINE_POLICY_INTERNAL_COMPARATOR
+
+
+def test_native_strict_baseline_keeps_terminal_collection_failure_failed() -> None:
+    executor = _FailingExecutor()
+
+    decision = collect_content_discovery_baseline(
+        ORIGIN,
+        executor,
+        token_factory=iter(("one", "two", "three")).__next__,
+        require_complete_capture_provenance=True,
+    )
+
+    assert decision.classification == BASELINE_CLASSIFICATION_FAILED
+    assert decision.selected_policy == BASELINE_POLICY_REFUSE
+    assert decision.completed_observations == 0
+    assert len(executor.urls) == 3
+
+
 def test_redirect_comparison_requires_the_complete_redirect_signature() -> None:
     baseline = _response(
         f"{ORIGIN}missing",
@@ -441,6 +553,40 @@ def _response(
     )
 
 
+def _response_with_capture(
+    request_url: str,
+    *,
+    body_state: str = "complete",
+    headers_state: str = "complete",
+) -> InternalHTTPResponse:
+    body = b"body"
+    capture_body = None if body_state == "incomplete" else body
+    body_reason = "premature_eof" if body_state == "incomplete" else None
+    headers_reason = (
+        "response_header_limit" if headers_state == "incomplete" else None
+    )
+    capture = HTTPResponseCapture(
+        body=capture_body,
+        body_capture_state=body_state,
+        body_incomplete_reason=body_reason,
+        headers=(),
+        headers_capture_state=headers_state,
+        headers_incomplete_reason=headers_reason,
+    )
+    received = HTTPReceivedResponse(request_url, 403, capture)
+    return InternalHTTPResponse(
+        requested_url=request_url,
+        final_url=request_url,
+        status_code=403,
+        headers=(),
+        body=body,
+        elapsed_seconds=0.01,
+        redirects=(),
+        capture=capture,
+        received_exchanges=(received,),
+    )
+
+
 class _SequenceExecutor:
     def __init__(self, responses: list[InternalHTTPResponse]) -> None:
         self.responses = list(responses)
@@ -457,6 +603,10 @@ class _SequenceExecutor:
             body=response.body,
             elapsed_seconds=response.elapsed_seconds,
             redirects=response.redirects,
+            refused_redirect=response.refused_redirect,
+            redirect_followup_failure=response.redirect_followup_failure,
+            capture=response.capture,
+            received_exchanges=response.received_exchanges,
         )
 
 
