@@ -435,6 +435,116 @@ def test_received_exchange_terminal_failure_round_trips_at_final_exchange(
 
 
 @pytest.mark.parametrize(
+    ("capture_state", "incomplete_reason", "category"),
+    (
+        ("complete", None, "timeout"),
+        ("truncated", None, "transport_error"),
+        ("incomplete", "body_read_error", "tls_error"),
+    ),
+)
+def test_received_exchange_terminal_failure_accepts_every_capture_state(
+    tmp_path: Path,
+    capture_state: str,
+    incomplete_reason: str | None,
+    category: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    url = "https://app.example.test/final"
+    exchange = _exchange(
+        store,
+        url,
+        b"captured evidence",
+        state=capture_state,
+        reason=incomplete_reason,
+        status_code=503,
+    )
+    terminal_failure = observation_store_module.NativeReceivedExchangeTerminalFailure(
+        url,
+        category,
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=url,
+        exchanges=(exchange,),
+        terminal_failure=terminal_failure,
+    )
+
+    _publish(store, observation, maximum_redirect_hops=0)
+
+    assert store.load_observation(0) == observation
+    envelope = json.loads(
+        (store.root / "observations/00000000.json").read_text(encoding="utf-8")
+    )
+    assert envelope["schema_version"] == 2
+    assert set(envelope["observation"]) == {
+        "candidate_index",
+        "exchanges",
+        "failure",
+        "request_url",
+        "refused_redirect",
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+        "fatal_execution_stop",
+    }
+
+
+def test_multi_exchange_terminal_failure_round_trips_after_complete_destination(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    source_url = "https://app.example.test/start"
+    destination_url = "https://app.example.test/destination"
+    redirect = _exchange(
+        store,
+        source_url,
+        b"redirect",
+        status_code=302,
+        headers=(("Location", "/destination"),),
+    )
+    destination = _exchange(
+        store,
+        destination_url,
+        b"complete destination response",
+        status_code=503,
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=source_url,
+        exchanges=(redirect, destination),
+        terminal_failure=(
+            observation_store_module.NativeReceivedExchangeTerminalFailure(
+                destination_url,
+                "timeout",
+            )
+        ),
+    )
+
+    _publish(store, observation, maximum_redirect_hops=1)
+
+    assert store.load_observation(0) == observation
+    assert tuple(
+        exchange.request_url for exchange in store.load_observation(0).exchanges
+    ) == (source_url, destination_url)
+
+
+def test_attempt_failure_still_rejects_final_received_exchange_url(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    url = "https://app.example.test/final"
+    exchange = _exchange(store, url, b"complete", status_code=503)
+
+    with pytest.raises(ValueError, match="follow-up failure URL"):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=url,
+            exchanges=(exchange,),
+            failure=NativeAttemptFailure(url, "timeout"),
+        )
+
+
+@pytest.mark.parametrize(
     ("category", "exchange_count"),
     (
         ("invalid_resolver_result", 1),
@@ -2087,16 +2197,42 @@ def test_metadata_serialization_bounds_cover_adversarial_legal_observations(
         )
         for reason in observation_store_module._REDIRECT_REFUSAL_REASONS_WITH_DESTINATION
     )
+    terminal_exchanges = (
+        exchange,
+        NativeReceivedExchange(
+            request_url=source_url,
+            status_code=503,
+            headers=observation_store_module._maximum_headers(),
+            capture_state="complete",
+            captured_bytes=observation_store_module.UINT64_MAXIMUM,
+            body_sha256=digest,
+            body=body,
+            headers_capture_state="incomplete",
+            headers_incomplete_reason="a" * 64,
+        ),
+        NativeReceivedExchange(
+            request_url=source_url,
+            status_code=503,
+            headers=observation_store_module._maximum_headers(),
+            capture_state="truncated",
+            captured_bytes=observation_store_module.UINT64_MAXIMUM,
+            body_sha256=digest,
+            body=body,
+            headers_capture_state="incomplete",
+            headers_incomplete_reason="a" * 64,
+        ),
+    )
     maximum_outcomes.extend(
         NativeCandidateObservation(
             35_059,
             source_url,
-            (exchange,) * 11,
+            (terminal_exchange,) * 11,
             terminal_failure=observation_store_module.NativeReceivedExchangeTerminalFailure(
                 source_url,
                 category,
             ),
         )
+        for terminal_exchange in terminal_exchanges
         for category in observation_store_module.RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES
     )
     maximum_outcomes.extend(

@@ -389,7 +389,6 @@ class NativeCandidateObservation:
             if (
                 not self.exchanges
                 or self.terminal_failure.request_url != self.exchanges[-1].request_url
-                or self.exchanges[-1].capture_state != "incomplete"
             ):
                 raise ValueError("Native candidate terminal failure is invalid.")
         if self.fatal_execution_stop is not None:
