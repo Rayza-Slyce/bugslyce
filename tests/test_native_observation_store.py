@@ -323,7 +323,13 @@ def test_existing_no_refusal_payload_reloads_as_non_refused(tmp_path: Path) -> N
     _publish(store, observation)
     payload_path = store.root / "observations" / "00000000.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    del payload["observation"]["refused_redirect"]
+    for field in (
+        "refused_redirect",
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+    ):
+        del payload["observation"][field]
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
     reopened = _store(store.root, 100)
@@ -350,6 +356,443 @@ def test_redirect_refusal_is_distinct_from_attempt_failure(tmp_path: Path) -> No
             failure=NativeAttemptFailure("https://other.test/landing", "timeout"),
             refused_redirect=refusal,
         )
+
+
+def test_received_exchange_terminal_failure_round_trips_at_final_exchange(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    first_url = "https://app.example.test/first"
+    final_url = "https://app.example.test/final"
+    first = _exchange(
+        store,
+        first_url,
+        b"redirect",
+        status_code=302,
+        headers=(("Location", "/final"),),
+    )
+    final = _exchange(
+        store,
+        final_url,
+        b"prefix",
+        state="incomplete",
+        reason="body_read_error",
+    )
+    terminal_failure = observation_store_module.NativeReceivedExchangeTerminalFailure(
+        final_url,
+        "transport_error",
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=first_url,
+        exchanges=(first, final),
+        terminal_failure=terminal_failure,
+    )
+
+    _publish(store, observation, maximum_redirect_hops=1)
+
+    assert store.load_observation(0) == observation
+    assert store.load_observation(0).terminal_failure == terminal_failure
+    assert store.load_observation(0).failure is None
+
+
+@pytest.mark.parametrize(
+    ("has_exchange", "failure_url", "category"),
+    (
+        (False, "https://app.example.test/final", "transport_error"),
+        (True, "https://app.example.test/other", "transport_error"),
+        (True, "https://app.example.test/final", "connect_error"),
+    ),
+)
+def test_received_exchange_terminal_failure_rejects_invalid_shape(
+    tmp_path: Path,
+    has_exchange: bool,
+    failure_url: str,
+    category: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    final = _exchange(
+        store,
+        "https://app.example.test/final",
+        b"prefix",
+        state="incomplete",
+        reason="body_read_error",
+    )
+    actual_exchanges = (final,) if has_exchange else ()
+
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url="https://app.example.test/final",
+            exchanges=actual_exchanges,
+            terminal_failure=observation_store_module.NativeReceivedExchangeTerminalFailure(
+                failure_url,
+                category,
+            ),
+        )
+
+
+def test_explicit_rate_rejection_round_trips_without_inferring_from_429(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    first = _exchange(
+        store,
+        "https://app.example.test/first",
+        b"redirect",
+        status_code=302,
+        headers=(("Location", "/limited"),),
+    )
+    limited = _exchange(
+        store,
+        "https://app.example.test/limited",
+        b"limited",
+        status_code=429,
+        headers=(("Retry-After", "17"),),
+    )
+    rate_rejection = observation_store_module.NativeRateRejection(
+        limited.request_url,
+        "17",
+    )
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=first.request_url,
+        exchanges=(first, limited),
+        rate_rejection=rate_rejection,
+    )
+
+    _publish(store, observation, maximum_redirect_hops=1)
+
+    assert store.load_observation(0) == observation
+    ordinary = NativeCandidateObservation(1, limited.request_url, (limited,))
+    _publish(store, ordinary)
+    assert store.load_observation(1).rate_rejection is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "request_url", "retry_after"),
+    (
+        (429, "https://app.example.test/limited", "x" * 129),
+        (200, "https://app.example.test/limited", "17"),
+        (429, "https://app.example.test/other", "17"),
+        (429, "https://app.example.test/limited", "bad\nvalue"),
+    ),
+)
+def test_rate_rejection_rejects_invalid_terminal_shape(
+    tmp_path: Path,
+    status_code: int,
+    request_url: str,
+    retry_after: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(
+        store,
+        "https://app.example.test/limited",
+        b"limited",
+        status_code=status_code,
+    )
+
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=exchange.request_url,
+            exchanges=(exchange,),
+            rate_rejection=observation_store_module.NativeRateRejection(
+                request_url,
+                retry_after,
+            ),
+        )
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            candidate_index=1,
+            request_url=exchange.request_url,
+            exchanges=(),
+            rate_rejection=observation_store_module.NativeRateRejection(
+                exchange.request_url,
+                "17",
+            ),
+        )
+
+
+def test_programme_scope_refusals_round_trip_for_zero_and_received_exchanges(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    initial = observation_store_module.NativeProgrammeScopeRefusal(
+        "initial",
+        "no_matching_inclusion",
+        "Destination has no matching programme scope inclusion.",
+    )
+    zero_exchange = NativeCandidateObservation(
+        candidate_index=0,
+        request_url="https://app.example.test/initial",
+        exchanges=(),
+        programme_scope_refusal=initial,
+    )
+    redirect = _exchange(
+        store,
+        "https://app.example.test/redirect",
+        b"redirect",
+        status_code=302,
+        headers=(("Location", "https://other.test/"),),
+    )
+    redirect_refusal = observation_store_module.NativeProgrammeScopeRefusal(
+        "redirect",
+        "explicit_exclusion",
+        "Destination is blocked by explicit programme scope rule scope-rule.",
+    )
+    received_exchange = NativeCandidateObservation(
+        candidate_index=1,
+        request_url=redirect.request_url,
+        exchanges=(redirect,),
+        programme_scope_refusal=redirect_refusal,
+    )
+    peer_refusal = observation_store_module.NativeProgrammeScopeRefusal(
+        "resolved_peer",
+        "resolved_ip_requires_explicit_inclusion",
+        "Special-purpose or multicast resolved IPv4 peer requires explicit IPv4 programme scope inclusion.",
+    )
+    peer_before_request = NativeCandidateObservation(
+        candidate_index=2,
+        request_url="https://app.example.test/peer",
+        exchanges=(),
+        programme_scope_refusal=peer_refusal,
+    )
+    peer_after_redirect = NativeCandidateObservation(
+        candidate_index=3,
+        request_url=redirect.request_url,
+        exchanges=(redirect,),
+        programme_scope_refusal=peer_refusal,
+    )
+
+    _publish(store, zero_exchange)
+    _publish(store, received_exchange)
+    _publish(store, peer_before_request)
+    _publish(store, peer_after_redirect)
+
+    assert store.load_observation(0) == zero_exchange
+    assert store.load_observation(1) == received_exchange
+    assert store.load_observation(2) == peer_before_request
+    assert store.load_observation(3) == peer_after_redirect
+
+
+@pytest.mark.parametrize(
+    ("stage", "status_code", "reason_code", "explanation"),
+    (
+        ("redirect", None, "no_matching_inclusion", "Destination has no matching programme scope inclusion."),
+        ("initial", 302, "no_matching_inclusion", "Destination has no matching programme scope inclusion."),
+        ("redirect", 200, "no_matching_inclusion", "Destination has no matching programme scope inclusion."),
+        ("invalid", None, "no_matching_inclusion", "Destination has no matching programme scope inclusion."),
+        ("initial", None, "unknown_reason", "Destination has no matching programme scope inclusion."),
+        ("initial", None, "no_matching_inclusion", "unsafe\nexplanation"),
+    ),
+)
+def test_programme_scope_refusal_rejects_invalid_shape(
+    tmp_path: Path,
+    stage: str,
+    status_code: int | None,
+    reason_code: str,
+    explanation: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchanges = ()
+    if status_code is not None:
+        exchanges = (
+            _exchange(
+                store,
+                "https://app.example.test/redirect",
+                b"redirect",
+                status_code=status_code,
+            ),
+        )
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url="https://app.example.test/redirect",
+            exchanges=exchanges,
+            programme_scope_refusal=observation_store_module.NativeProgrammeScopeRefusal(
+                stage,
+                reason_code,
+                explanation,
+            ),
+        )
+
+
+def test_terminal_dispositions_are_mutually_exclusive_and_explicit_in_payload(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    url = "https://app.example.test/limited"
+    exchange = _exchange(store, url, b"limited", status_code=429)
+    terminal_failure = observation_store_module.NativeReceivedExchangeTerminalFailure(
+        url,
+        "transport_error",
+    )
+    rate_rejection = observation_store_module.NativeRateRejection(url, "17")
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            0,
+            url,
+            (exchange,),
+            terminal_failure=terminal_failure,
+            rate_rejection=rate_rejection,
+        )
+
+    observation = NativeCandidateObservation(
+        1,
+        url,
+        (exchange,),
+        rate_rejection=rate_rejection,
+    )
+    _publish(store, observation)
+    payload = json.loads(
+        (store.root / "observations" / "00000001.json").read_text(encoding="utf-8")
+    )
+    assert payload["observation"]["rate_rejection"] == {
+        "request_url": url,
+        "retry_after": "17",
+    }
+    assert payload["observation"]["terminal_failure"] is None
+    assert payload["observation"]["programme_scope_refusal"] is None
+
+
+def test_all_terminal_disposition_pairs_are_rejected(tmp_path: Path) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    source_url = "https://app.example.test/redirect"
+    redirect = _exchange(
+        store,
+        source_url,
+        b"prefix",
+        state="incomplete",
+        reason="body_read_error",
+        status_code=302,
+    )
+    refusal = observation_store_module.NativeRedirectRefusal(
+        source_url,
+        "https://other.test/landing",
+        "origin_not_approved",
+    )
+    scope_refusal = observation_store_module.NativeProgrammeScopeRefusal(
+        "redirect",
+        "no_matching_inclusion",
+        "Destination has no matching programme scope inclusion.",
+    )
+    terminal_failure = observation_store_module.NativeReceivedExchangeTerminalFailure(
+        source_url,
+        "transport_error",
+    )
+    cases = (
+        {
+            "failure": NativeAttemptFailure("https://other.test/landing", "timeout"),
+            "programme_scope_refusal": scope_refusal,
+        },
+        {"refused_redirect": refusal, "programme_scope_refusal": scope_refusal},
+        {"refused_redirect": refusal, "terminal_failure": terminal_failure},
+    )
+    for terminal_fields in cases:
+        with pytest.raises(ValueError, match="terminal dispositions"):
+            NativeCandidateObservation(
+                0,
+                source_url,
+                (redirect,),
+                **terminal_fields,
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("terminal_failure", {"request_url": "https://app.example.test/a"}),
+        ("rate_rejection", {"request_url": "https://app.example.test/a"}),
+        (
+            "programme_scope_refusal",
+            {
+                "stage": "initial",
+                "reason_code": "no_matching_inclusion",
+            },
+        ),
+    ),
+)
+def test_malformed_persisted_terminal_disposition_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value: dict[str, object],
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["observation"][field] = value
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        _store(store.root, 100)
+
+
+def test_legacy_payload_without_terminal_dispositions_reloads_unchanged(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    for field in (
+        "refused_redirect",
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+    ):
+        del payload["observation"][field]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert _store(store.root, 100).load_observation(0) == observation
+
+def test_redirect_refusal_era_payload_reloads_unchanged(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    for field in (
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+    ):
+        del payload["observation"][field]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert _store(store.root, 100).load_observation(0) == observation
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "refused_redirect",
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+    ),
+)
+def test_current_payload_missing_terminal_metadata_key_is_rejected(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    del payload["observation"][missing_field]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="observation payload"):
+        _store(store.root, 100)
 
 
 @pytest.mark.parametrize(
@@ -1228,6 +1671,52 @@ def test_metadata_serialization_bounds_cover_adversarial_legal_observations(
             ),
         )
         for reason in observation_store_module._REDIRECT_REFUSAL_REASONS_WITH_DESTINATION
+    )
+    maximum_outcomes.extend(
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (exchange,) * 11,
+            terminal_failure=observation_store_module.NativeReceivedExchangeTerminalFailure(
+                source_url,
+                category,
+            ),
+        )
+        for category in observation_store_module.RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES
+    )
+    rate_exchange = NativeReceivedExchange(
+        request_url=source_url,
+        status_code=429,
+        headers=observation_store_module._maximum_headers(),
+        capture_state="incomplete",
+        captured_bytes=observation_store_module.UINT64_MAXIMUM,
+        body_sha256=digest,
+        body=body,
+        incomplete_reason="a" * 64,
+        headers_capture_state="incomplete",
+        headers_incomplete_reason="a" * 64,
+    )
+    maximum_outcomes.append(
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (rate_exchange,) * 11,
+            rate_rejection=observation_store_module.NativeRateRejection(
+                source_url,
+                "a" * observation_store_module.MAXIMUM_RETRY_AFTER_CHARS,
+            ),
+        )
+    )
+    maximum_outcomes.append(
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (exchange,) * 11,
+            programme_scope_refusal=observation_store_module.NativeProgrammeScopeRefusal(
+                "redirect",
+                *observation_store_module._maximum_scope_refusal_payload(),
+            ),
+        )
     )
     assert store.maximum_observation_serialized_bytes(10) == max(
         len(

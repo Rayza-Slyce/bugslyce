@@ -12,12 +12,22 @@ import re
 import stat
 import tempfile
 from typing import Callable
+import unicodedata
 
 from bugslyce.core.programme_scope import (
     MAX_PATH_LENGTH,
+    MAX_OPERATOR_SAFE_EXPLANATION_LENGTH,
     MAX_QUERY_LENGTH,
     MAX_URL_LENGTH,
+    REASON_EXPLICIT_EXCLUSION,
+    REASON_INVALID_DESTINATION,
+    REASON_NO_MATCHING_INCLUSION,
+    REASON_RESOLVED_IP_EXCLUDED,
+    REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
+    REASON_UNSUPPORTED_DESTINATION,
+    SUPPORTED_SCOPE_REASON_CODES,
     canonicalise_http_url_destination,
+    validate_rule_id,
 )
 from bugslyce.recon.native_content_discovery import (
     MAXIMUM_NATIVE_TOTAL_CANDIDATE_REQUESTS,
@@ -37,6 +47,16 @@ ATTEMPT_FAILURE_CATEGORIES = frozenset(
         "transport_error",
     }
 )
+RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES = frozenset(
+    {"timeout", "tls_error", "transport_error"}
+)
+PROGRAMME_SCOPE_REFUSAL_STAGES = frozenset(
+    {"initial", "redirect", "resolved_peer"}
+)
+PROGRAMME_SCOPE_REFUSAL_REASON_CODES = frozenset(
+    SUPPORTED_SCOPE_REASON_CODES - {"included"}
+)
+MAXIMUM_RETRY_AFTER_CHARS = 128
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 REDIRECT_REFUSAL_REASONS = frozenset(
     {
@@ -196,6 +216,57 @@ class NativeAttemptFailure:
 
 
 @dataclass(frozen=True)
+class NativeReceivedExchangeTerminalFailure:
+    """One terminal transport failure after the final received exchange."""
+
+    request_url: str
+    category: str
+
+    def __post_init__(self) -> None:
+        _require_canonical_url(self.request_url)
+        if (
+            not isinstance(self.category, str)
+            or self.category not in RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES
+        ):
+            raise ValueError("Native received-exchange terminal failure is invalid.")
+
+
+@dataclass(frozen=True)
+class NativeRateRejection:
+    """One explicit terminal HTTP 429 disposition."""
+
+    request_url: str
+    retry_after: str
+
+    def __post_init__(self) -> None:
+        _require_canonical_url(self.request_url)
+        if not _valid_retry_after(self.retry_after):
+            raise ValueError("Native rate rejection Retry-After is invalid.")
+
+
+@dataclass(frozen=True)
+class NativeProgrammeScopeRefusal:
+    """One public programme-scope refusal without private policy state."""
+
+    stage: str
+    reason_code: str
+    operator_safe_explanation: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.stage, str)
+            or self.stage not in PROGRAMME_SCOPE_REFUSAL_STAGES
+            or not isinstance(self.reason_code, str)
+            or self.reason_code not in PROGRAMME_SCOPE_REFUSAL_REASON_CODES
+            or not _valid_scope_refusal_explanation(
+                self.reason_code,
+                self.operator_safe_explanation,
+            )
+        ):
+            raise ValueError("Native programme scope refusal is invalid.")
+
+
+@dataclass(frozen=True)
 class NativeCandidateObservation:
     """One logical candidate attempt, independent of interpretation."""
 
@@ -204,6 +275,9 @@ class NativeCandidateObservation:
     exchanges: tuple[NativeReceivedExchange, ...]
     failure: NativeAttemptFailure | None = None
     refused_redirect: NativeRedirectRefusal | None = None
+    terminal_failure: NativeReceivedExchangeTerminalFailure | None = None
+    rate_rejection: NativeRateRejection | None = None
+    programme_scope_refusal: NativeProgrammeScopeRefusal | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -221,13 +295,48 @@ class NativeCandidateObservation:
                 self.refused_redirect is not None
                 and not isinstance(self.refused_redirect, NativeRedirectRefusal)
             )
+            or (
+                self.terminal_failure is not None
+                and not isinstance(
+                    self.terminal_failure,
+                    NativeReceivedExchangeTerminalFailure,
+                )
+            )
+            or (
+                self.rate_rejection is not None
+                and not isinstance(self.rate_rejection, NativeRateRejection)
+            )
+            or (
+                self.programme_scope_refusal is not None
+                and not isinstance(
+                    self.programme_scope_refusal,
+                    NativeProgrammeScopeRefusal,
+                )
+            )
         ):
             raise ValueError("Native candidate outcome is invalid.")
+        dispositions = (
+            self.failure,
+            self.refused_redirect,
+            self.terminal_failure,
+            self.rate_rejection,
+            self.programme_scope_refusal,
+        )
+        if sum(item is not None for item in dispositions) > 1:
+            raise ValueError(
+                "Native candidate terminal dispositions are contradictory; "
+                "a refusal cannot coexist with another disposition."
+            )
         if not self.exchanges:
-            if self.failure is None:
+            if self.failure is None and self.programme_scope_refusal is None:
                 raise ValueError("Native candidate outcome is absent.")
-            if self.failure.request_url != self.request_url:
+            if self.failure is not None and self.failure.request_url != self.request_url:
                 raise ValueError("Native response-less failure URL is invalid.")
+            if (
+                self.programme_scope_refusal is not None
+                and self.programme_scope_refusal.stage not in {"initial", "resolved_peer"}
+            ):
+                raise ValueError("Native zero-exchange scope refusal is invalid.")
         elif self.exchanges[0].request_url != self.request_url:
             raise ValueError("Native candidate first exchange URL is invalid.")
         elif (
@@ -235,8 +344,6 @@ class NativeCandidateObservation:
             and self.failure.request_url == self.exchanges[-1].request_url
         ):
             raise ValueError("Native candidate follow-up failure URL is invalid.")
-        if self.failure is not None and self.refused_redirect is not None:
-            raise ValueError("Native candidate refusal cannot be an attempt failure.")
         if self.refused_redirect is not None:
             if (
                 not self.exchanges
@@ -244,6 +351,26 @@ class NativeCandidateObservation:
                 or self.exchanges[-1].status_code not in REDIRECT_STATUSES
             ):
                 raise ValueError("Native candidate redirect refusal is invalid.")
+        if self.terminal_failure is not None:
+            if (
+                not self.exchanges
+                or self.terminal_failure.request_url != self.exchanges[-1].request_url
+                or self.exchanges[-1].capture_state != "incomplete"
+            ):
+                raise ValueError("Native candidate terminal failure is invalid.")
+        if self.rate_rejection is not None:
+            if (
+                not self.exchanges
+                or self.rate_rejection.request_url != self.exchanges[-1].request_url
+                or self.exchanges[-1].status_code != 429
+            ):
+                raise ValueError("Native candidate rate rejection is invalid.")
+        if self.programme_scope_refusal is not None and self.exchanges:
+            if (
+                self.programme_scope_refusal.stage == "initial"
+                or self.exchanges[-1].status_code not in REDIRECT_STATUSES
+            ):
+                raise ValueError("Native candidate programme scope refusal is invalid.")
 
 
 @dataclass(frozen=True)
@@ -1180,9 +1307,64 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
             reason=refusal_reason,
         ),
     )
+    terminal_failure_category = max(
+        RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES,
+        key=lambda category: (
+            len(
+                _json_bytes(
+                    _terminal_failure_payload(
+                        NativeReceivedExchangeTerminalFailure(source_url, category)
+                    )
+                )
+            ),
+            category,
+        ),
+    )
+    terminal_failure_observation = NativeCandidateObservation(
+        candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
+        request_url=source_url,
+        exchanges=(exchange,) * (maximum_redirect_hops + 1),
+        terminal_failure=NativeReceivedExchangeTerminalFailure(
+            source_url,
+            terminal_failure_category,
+        ),
+    )
+    rate_rejection_observation = NativeCandidateObservation(
+        candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
+        request_url=source_url,
+        exchanges=(
+            NativeReceivedExchange(
+                request_url=source_url,
+                status_code=429,
+                headers=headers,
+                capture_state="incomplete",
+                captured_bytes=UINT64_MAXIMUM,
+                body_sha256=digest,
+                body=reference,
+                incomplete_reason="a" * 64,
+                headers_capture_state="incomplete",
+                headers_incomplete_reason="a" * 64,
+            ),
+        ) * (maximum_redirect_hops + 1),
+        rate_rejection=NativeRateRejection(source_url, "a" * MAXIMUM_RETRY_AFTER_CHARS),
+    )
+    scope_reason, scope_explanation = _maximum_scope_refusal_payload()
+    scope_refusal_observation = NativeCandidateObservation(
+        candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
+        request_url=source_url,
+        exchanges=(exchange,) * (maximum_redirect_hops + 1),
+        programme_scope_refusal=NativeProgrammeScopeRefusal(
+            "redirect",
+            scope_reason,
+            scope_explanation,
+        ),
+    )
     return max(
         len(_json_bytes(_observation_payload(failure_observation))),
         len(_json_bytes(_observation_payload(refusal_observation))),
+        len(_json_bytes(_observation_payload(terminal_failure_observation))),
+        len(_json_bytes(_observation_payload(rate_rejection_observation))),
+        len(_json_bytes(_observation_payload(scope_refusal_observation))),
     )
 
 
@@ -1238,6 +1420,87 @@ def _maximum_headers() -> tuple[tuple[str, str], ...]:
     return headers
 
 
+def _valid_retry_after(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value) <= MAXIMUM_RETRY_AFTER_CHARS
+        and not _contains_unsafe_text(value)
+    )
+
+
+def _contains_unsafe_text(value: str) -> bool:
+    return any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+        or character in {"\u2028", "\u2029"}
+        for character in value
+    )
+
+
+def _valid_scope_refusal_explanation(reason_code: str, value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > MAX_OPERATOR_SAFE_EXPLANATION_LENGTH
+        or _contains_unsafe_text(value)
+    ):
+        return False
+    fixed = {
+        REASON_NO_MATCHING_INCLUSION: "Destination has no matching programme scope inclusion.",
+        REASON_UNSUPPORTED_DESTINATION: "Destination type is unsupported by programme scope evaluation.",
+        REASON_INVALID_DESTINATION: "Destination is invalid and was not evaluated as authorised.",
+        REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION: (
+            "Special-purpose or multicast resolved IPv4 peer requires explicit "
+            "IPv4 programme scope inclusion."
+        ),
+    }
+    if reason_code in fixed:
+        return value == fixed[reason_code]
+    prefixes = {
+        REASON_EXPLICIT_EXCLUSION: "Destination is blocked by explicit programme scope rule ",
+        REASON_RESOLVED_IP_EXCLUDED: "Resolved IPv4 peer is blocked by explicit programme scope rule ",
+    }
+    prefix = prefixes.get(reason_code)
+    if prefix is None or not value.startswith(prefix) or not value.endswith("."):
+        return False
+    try:
+        validate_rule_id(value[len(prefix) : -1])
+    except ValueError:
+        return False
+    return True
+
+
+def _maximum_scope_refusal_payload() -> tuple[str, str]:
+    candidates = (
+        (
+            REASON_EXPLICIT_EXCLUSION,
+            "Destination is blocked by explicit programme scope rule " + "a" * 64 + ".",
+        ),
+        (
+            REASON_RESOLVED_IP_EXCLUDED,
+            "Resolved IPv4 peer is blocked by explicit programme scope rule " + "a" * 64 + ".",
+        ),
+        (
+            REASON_RESOLVED_IP_REQUIRES_EXPLICIT_INCLUSION,
+            "Special-purpose or multicast resolved IPv4 peer requires explicit "
+            "IPv4 programme scope inclusion.",
+        ),
+    )
+    return max(
+        candidates,
+        key=lambda item: (
+            len(
+                _json_bytes(
+                    _programme_scope_refusal_payload(
+                        NativeProgrammeScopeRefusal("redirect", item[0], item[1])
+                    )
+                )
+            ),
+            item,
+        ),
+    )
+
+
 def _observation_payload(observation: NativeCandidateObservation) -> dict[str, object]:
     return {
         "created_by": STORE_CREATED_BY,
@@ -1245,8 +1508,13 @@ def _observation_payload(observation: NativeCandidateObservation) -> dict[str, o
             "candidate_index": observation.candidate_index,
             "exchanges": [_exchange_payload(item) for item in observation.exchanges],
             "failure": _failure_payload(observation.failure),
+            "programme_scope_refusal": _programme_scope_refusal_payload(
+                observation.programme_scope_refusal
+            ),
+            "rate_rejection": _rate_rejection_payload(observation.rate_rejection),
             "refused_redirect": _refusal_payload(observation.refused_redirect),
             "request_url": observation.request_url,
+            "terminal_failure": _terminal_failure_payload(observation.terminal_failure),
         },
         "schema_version": STORE_SCHEMA_VERSION,
     }
@@ -1293,10 +1561,50 @@ def _refusal_payload(refusal: NativeRedirectRefusal | None) -> dict[str, str | N
     }
 
 
+def _terminal_failure_payload(
+    failure: NativeReceivedExchangeTerminalFailure | None,
+) -> dict[str, str] | None:
+    if failure is None:
+        return None
+    return {"category": failure.category, "request_url": failure.request_url}
+
+
+def _rate_rejection_payload(
+    rejection: NativeRateRejection | None,
+) -> dict[str, str] | None:
+    if rejection is None:
+        return None
+    return {"request_url": rejection.request_url, "retry_after": rejection.retry_after}
+
+
+def _programme_scope_refusal_payload(
+    refusal: NativeProgrammeScopeRefusal | None,
+) -> dict[str, str] | None:
+    if refusal is None:
+        return None
+    return {
+        "operator_safe_explanation": refusal.operator_safe_explanation,
+        "reason_code": refusal.reason_code,
+        "stage": refusal.stage,
+    }
+
+
 def _observation_from_payload(value: object) -> NativeCandidateObservation:
-    old_expected = {"candidate_index", "exchanges", "failure", "request_url"}
-    expected = old_expected | {"refused_redirect"}
-    if not isinstance(value, dict) or (set(value) != old_expected and set(value) != expected):
+    legacy_expected = {"candidate_index", "exchanges", "failure", "request_url"}
+    redirect_refusal_expected = legacy_expected | {"refused_redirect"}
+    current_expected = redirect_refusal_expected | {
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+    }
+    if not isinstance(value, dict):
+        raise ValueError("Native candidate observation payload is invalid.")
+    keys = set(value)
+    if (
+        keys != legacy_expected
+        and keys != redirect_refusal_expected
+        and keys != current_expected
+    ):
         raise ValueError("Native candidate observation payload is invalid.")
     raw_exchanges = value["exchanges"]
     if not isinstance(raw_exchanges, list):
@@ -1307,6 +1615,11 @@ def _observation_from_payload(value: object) -> NativeCandidateObservation:
         exchanges=tuple(_exchange_from_payload(item) for item in raw_exchanges),
         failure=_failure_from_payload(value["failure"]),
         refused_redirect=_refusal_from_payload(value.get("refused_redirect")),
+        terminal_failure=_terminal_failure_from_payload(value.get("terminal_failure")),
+        rate_rejection=_rate_rejection_from_payload(value.get("rate_rejection")),
+        programme_scope_refusal=_programme_scope_refusal_from_payload(
+            value.get("programme_scope_refusal")
+        ),
     )
 
 
@@ -1384,6 +1697,42 @@ def _refusal_from_payload(value: object) -> NativeRedirectRefusal | None:
         source_url=value["source_url"],
         destination_url=value["destination_url"],
         reason=value["reason"],
+    )
+
+
+def _terminal_failure_from_payload(
+    value: object,
+) -> NativeReceivedExchangeTerminalFailure | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"category", "request_url"}:
+        raise ValueError("Native terminal failure payload is invalid.")
+    return NativeReceivedExchangeTerminalFailure(value["request_url"], value["category"])
+
+
+def _rate_rejection_from_payload(value: object) -> NativeRateRejection | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"request_url", "retry_after"}:
+        raise ValueError("Native rate rejection payload is invalid.")
+    return NativeRateRejection(value["request_url"], value["retry_after"])
+
+
+def _programme_scope_refusal_from_payload(
+    value: object,
+) -> NativeProgrammeScopeRefusal | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "operator_safe_explanation",
+        "reason_code",
+        "stage",
+    }:
+        raise ValueError("Native programme scope refusal payload is invalid.")
+    return NativeProgrammeScopeRefusal(
+        value["stage"],
+        value["reason_code"],
+        value["operator_safe_explanation"],
     )
 
 
