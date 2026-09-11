@@ -34,7 +34,11 @@ from bugslyce.recon.native_content_discovery import (
 )
 
 
-STORE_SCHEMA_VERSION = 1
+LEGACY_STORE_SCHEMA_VERSION = 1
+STORE_SCHEMA_VERSION = 2
+SUPPORTED_STORE_SCHEMA_VERSIONS = frozenset(
+    {LEGACY_STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION}
+)
 STORE_CREATED_BY = "bugslyce.native_observation_store"
 CAPTURE_STATES = frozenset({"complete", "truncated", "incomplete"})
 ATTEMPT_FAILURE_CATEGORIES = frozenset(
@@ -49,6 +53,13 @@ ATTEMPT_FAILURE_CATEGORIES = frozenset(
 )
 RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES = frozenset(
     {"timeout", "tls_error", "transport_error"}
+)
+FATAL_HTTP_EXECUTION_STOP_CATEGORIES = frozenset(
+    {
+        "invalid_resolver_result",
+        "peer_mismatch",
+        "tls_configuration_error",
+    }
 )
 PROGRAMME_SCOPE_REFUSAL_STAGES = frozenset(
     {"initial", "redirect", "resolved_peer"}
@@ -232,6 +243,20 @@ class NativeReceivedExchangeTerminalFailure:
 
 
 @dataclass(frozen=True)
+class NativeFatalHTTPExecutionStop:
+    """One fatal HTTP execution stop after received redirect evidence."""
+
+    category: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.category, str)
+            or self.category not in FATAL_HTTP_EXECUTION_STOP_CATEGORIES
+        ):
+            raise ValueError("Native fatal HTTP execution stop is invalid.")
+
+
+@dataclass(frozen=True)
 class NativeRateRejection:
     """One explicit terminal HTTP 429 disposition."""
 
@@ -278,6 +303,7 @@ class NativeCandidateObservation:
     terminal_failure: NativeReceivedExchangeTerminalFailure | None = None
     rate_rejection: NativeRateRejection | None = None
     programme_scope_refusal: NativeProgrammeScopeRefusal | None = None
+    fatal_execution_stop: NativeFatalHTTPExecutionStop | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -303,6 +329,13 @@ class NativeCandidateObservation:
                 )
             )
             or (
+                self.fatal_execution_stop is not None
+                and not isinstance(
+                    self.fatal_execution_stop,
+                    NativeFatalHTTPExecutionStop,
+                )
+            )
+            or (
                 self.rate_rejection is not None
                 and not isinstance(self.rate_rejection, NativeRateRejection)
             )
@@ -319,6 +352,7 @@ class NativeCandidateObservation:
             self.failure,
             self.refused_redirect,
             self.terminal_failure,
+            self.fatal_execution_stop,
             self.rate_rejection,
             self.programme_scope_refusal,
         )
@@ -358,6 +392,12 @@ class NativeCandidateObservation:
                 or self.exchanges[-1].capture_state != "incomplete"
             ):
                 raise ValueError("Native candidate terminal failure is invalid.")
+        if self.fatal_execution_stop is not None:
+            if (
+                not self.exchanges
+                or self.exchanges[-1].status_code not in REDIRECT_STATUSES
+            ):
+                raise ValueError("Native candidate fatal execution stop is invalid.")
         if self.rate_rejection is not None:
             if (
                 not self.exchanges
@@ -387,6 +427,7 @@ class NativeObservationStoreIndex:
     metadata_bytes_committed: int
     observation_count: int
     observation_indices: tuple[int, ...]
+    schema_version: int
 
 
 @dataclass(frozen=True)
@@ -445,7 +486,11 @@ class NativeObservationStore:
             self._sha256_dir,
             self.body_byte_allowance,
         )
-        self._observations, self._observation_sizes = _scan_observations(
+        (
+            self._observations,
+            self._observation_sizes,
+            observation_schema_version,
+        ) = _scan_observations(
             self.root,
             self._observations_dir,
             self._body_sizes,
@@ -475,6 +520,14 @@ class NativeObservationStore:
             ):
                 raise ValueError("Native observation store allowance has changed.")
             self._index_bytes = validated.metadata_index_bytes
+            self.schema_version = validated.schema_version
+        else:
+            if observation_schema_version == LEGACY_STORE_SCHEMA_VERSION:
+                raise ValueError(
+                    "Native observation store schema 1 is read-only; "
+                    "create a fresh store for new observations."
+                )
+            self.schema_version = STORE_SCHEMA_VERSION
         if (
             self.metadata_bytes_committed + self._reserved_final_index_capacity
             > self.metadata_byte_allowance
@@ -534,7 +587,10 @@ class NativeObservationStore:
         return reservation
 
     def maximum_observation_serialized_bytes(self, maximum_redirect_hops: int) -> int:
-        return maximum_native_observation_serialized_bytes(maximum_redirect_hops)
+        return maximum_native_observation_serialized_bytes(
+            maximum_redirect_hops,
+            schema_version=self.schema_version,
+        )
 
     def reserve_candidate_metadata(
         self,
@@ -637,7 +693,9 @@ class NativeObservationStore:
             raise ValueError("Native candidate observation already exists.")
         _validate_observation_bodies(self.root, observation, self._body_sizes)
         path = self._observation_path(observation.candidate_index)
-        content = _json_bytes(_observation_payload(observation))
+        content = _json_bytes(
+            _observation_payload(observation, schema_version=self.schema_version)
+        )
         if len(content) > reservation.maximum_bytes:
             raise ValueError("Native candidate observation exceeds its metadata reservation.")
         if (
@@ -658,8 +716,13 @@ class NativeObservationStore:
         except BaseException:
             self._requires_partial_index = True
             raise
-        loaded = _load_observation_file(self.root, path, self._body_sizes)
-        if loaded != observation:
+        loaded, loaded_schema_version = _load_observation_file(
+            self.root,
+            path,
+            self._body_sizes,
+            expected_schema_version=self.schema_version,
+        )
+        if loaded_schema_version != self.schema_version or loaded != observation:
             raise ValueError("Published native candidate observation is corrupt.")
         self._observations[observation.candidate_index] = observation
         self._observation_sizes[observation.candidate_index] = len(content)
@@ -703,6 +766,7 @@ class NativeObservationStore:
         ) = _validate_preindex_durable_graph(
             self.root,
             self.body_byte_allowance,
+            self.schema_version,
             self._body_sizes,
             self._observations,
             self._observation_sizes,
@@ -718,6 +782,7 @@ class NativeObservationStore:
             durable_body_sizes,
             durable_observations,
             durable_observation_sizes,
+            schema_version=self.schema_version,
         )
         content = _json_bytes(payload)
         if len(content) > self.reserved_final_index_capacity:
@@ -793,20 +858,22 @@ def validate_native_observation_store(root: Path) -> NativeObservationStoreIndex
     if (
         set(payload) != expected_keys
         or type(payload.get("schema_version")) is not int
-        or payload.get("schema_version") != STORE_SCHEMA_VERSION
+        or payload.get("schema_version") not in SUPPORTED_STORE_SCHEMA_VERSIONS
         or payload.get("created_by") != STORE_CREATED_BY
     ):
         raise ValueError("Native observation store index schema is invalid.")
+    schema_version = payload["schema_version"]
     state = payload.get("store_state")
     allowance = payload.get("body_byte_allowance")
     metadata_allowance = payload.get("metadata_byte_allowance")
     if not _unsigned_64_bit_int(allowance):
         raise ValueError("Native observation store index schema is invalid.")
     body_sizes = _scan_body_objects(sha256_dir, allowance)
-    observations, observation_sizes = _scan_observations(
+    observations, observation_sizes, observed_schema_version = _scan_observations(
         resolved,
         observations_dir,
         body_sizes,
+        expected_schema_version=schema_version,
     )
     committed = sum(body_sizes.values())
     captured = _response_bytes_captured(observations)
@@ -834,6 +901,10 @@ def validate_native_observation_store(root: Path) -> NativeObservationStoreIndex
         or metadata_observation_bytes + len(index_content) > metadata_allowance
         or entries != expected_entries
         or (
+            observed_schema_version is not None
+            and observed_schema_version != schema_version
+        )
+        or (
             state == "complete"
             and _referenced_body_digests(observations) != set(body_sizes)
         )
@@ -850,6 +921,7 @@ def validate_native_observation_store(root: Path) -> NativeObservationStoreIndex
         metadata_bytes_committed=metadata_observation_bytes + len(index_content),
         observation_count=len(observations),
         observation_indices=tuple(sorted(observations)),
+        schema_version=schema_version,
     )
 
 
@@ -945,9 +1017,12 @@ def _scan_observations(
     root: Path,
     directory: Path,
     body_sizes: dict[str, int],
-) -> tuple[dict[int, NativeCandidateObservation], dict[int, int]]:
+    *,
+    expected_schema_version: int | None = None,
+) -> tuple[dict[int, NativeCandidateObservation], dict[int, int], int | None]:
     result: dict[int, NativeCandidateObservation] = {}
     sizes: dict[int, int] = {}
+    observed_schema_version: int | None = None
     for path in directory.iterdir():
         if path.name.startswith("."):
             continue
@@ -956,20 +1031,33 @@ def _scan_observations(
             raise ValueError("Native candidate observation filename is invalid.")
         if len(result) >= MAXIMUM_NATIVE_OBSERVATION_CANDIDATES:
             raise ValueError("Native candidate observation count is invalid.")
-        observation = _load_observation_file(root, path, body_sizes)
+        observation, schema_version = _load_observation_file(
+            root,
+            path,
+            body_sizes,
+            expected_schema_version=expected_schema_version,
+        )
+        if observed_schema_version is None:
+            observed_schema_version = schema_version
+        elif observed_schema_version != schema_version:
+            raise ValueError(
+                "Native candidate observation schema versions are mixed."
+            )
         index = int(match.group("index"))
         if observation.candidate_index != index or index in result:
             raise ValueError("Native candidate observation index is invalid.")
         result[index] = observation
         sizes[index] = path.stat(follow_symlinks=False).st_size
-    return result, sizes
+    return result, sizes, observed_schema_version
 
 
 def _load_observation_file(
     root: Path,
     path: Path,
     body_sizes: dict[str, int],
-) -> NativeCandidateObservation:
+    *,
+    expected_schema_version: int | None = None,
+) -> tuple[NativeCandidateObservation, int]:
     content = _read_regular_file(
         path,
         "Native candidate observation",
@@ -978,16 +1066,24 @@ def _load_observation_file(
         ),
     )
     payload = _load_json_object_content(content, "Native candidate observation")
+    schema_version = payload.get("schema_version")
     if (
         set(payload) != {"created_by", "observation", "schema_version"}
-        or type(payload.get("schema_version")) is not int
-        or payload.get("schema_version") != STORE_SCHEMA_VERSION
+        or type(schema_version) is not int
+        or schema_version not in SUPPORTED_STORE_SCHEMA_VERSIONS
+        or (
+            expected_schema_version is not None
+            and schema_version != expected_schema_version
+        )
         or payload.get("created_by") != STORE_CREATED_BY
     ):
         raise ValueError("Native candidate observation schema is invalid.")
-    observation = _observation_from_payload(payload.get("observation"))
+    observation = _observation_from_payload(
+        payload.get("observation"),
+        schema_version=schema_version,
+    )
     _validate_observation_bodies(root, observation, body_sizes)
-    return observation
+    return observation, schema_version
 
 
 def _validate_observation_graph(
@@ -1004,6 +1100,7 @@ def _validate_observation_graph(
 def _validate_preindex_durable_graph(
     root: Path,
     body_byte_allowance: int,
+    schema_version: int,
     expected_body_sizes: dict[str, int],
     expected_observations: dict[int, NativeCandidateObservation],
     expected_observation_sizes: dict[int, int],
@@ -1016,11 +1113,18 @@ def _validate_preindex_durable_graph(
     sha256_dir = _require_fixed_directory(bodies, "sha256")
     observations_dir = _require_fixed_directory(root, "observations")
     durable_body_sizes = _scan_body_objects(sha256_dir, body_byte_allowance)
-    durable_observations, durable_observation_sizes = _scan_observations(
+    (
+        durable_observations,
+        durable_observation_sizes,
+        durable_schema_version,
+    ) = _scan_observations(
         root,
         observations_dir,
         durable_body_sizes,
+        expected_schema_version=schema_version,
     )
+    if durable_schema_version not in {None, schema_version}:
+        raise ValueError("Native observation store schema versions are mixed.")
     if durable_body_sizes != expected_body_sizes:
         raise ValueError("Native observation store durable body graph has changed.")
     if durable_observations != expected_observations:
@@ -1237,7 +1341,11 @@ def _response_bytes_captured(
 
 
 @lru_cache(maxsize=None)
-def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> int:
+def maximum_native_observation_serialized_bytes(
+    maximum_redirect_hops: int,
+    *,
+    schema_version: int = STORE_SCHEMA_VERSION,
+) -> int:
     """Return an exact JSON upper bound for one permitted candidate outcome."""
 
     if (
@@ -1246,6 +1354,11 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
         or not 0 <= maximum_redirect_hops <= MAXIMUM_REDIRECT_HOPS_FOR_OBSERVATIONS
     ):
         raise ValueError("Native observation redirect allowance is invalid.")
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_STORE_SCHEMA_VERSIONS
+    ):
+        raise ValueError("Native observation schema version is invalid.")
     source_url = _maximum_canonical_url("a")
     failure_url = _maximum_canonical_url("b")
     headers = _maximum_headers()
@@ -1329,6 +1442,25 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
             terminal_failure_category,
         ),
     )
+    fatal_category = max(
+        FATAL_HTTP_EXECUTION_STOP_CATEGORIES,
+        key=lambda category: (
+            len(
+                _json_bytes(
+                    _fatal_execution_stop_payload(
+                        NativeFatalHTTPExecutionStop(category)
+                    )
+                )
+            ),
+            category,
+        ),
+    )
+    fatal_execution_stop_observation = NativeCandidateObservation(
+        candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
+        request_url=source_url,
+        exchanges=(exchange,) * (maximum_redirect_hops + 1),
+        fatal_execution_stop=NativeFatalHTTPExecutionStop(fatal_category),
+    )
     rate_rejection_observation = NativeCandidateObservation(
         candidate_index=MAXIMUM_NATIVE_OBSERVATION_INDEX,
         request_url=source_url,
@@ -1359,12 +1491,25 @@ def maximum_native_observation_serialized_bytes(maximum_redirect_hops: int) -> i
             scope_explanation,
         ),
     )
+    observations = [
+        failure_observation,
+        refusal_observation,
+        terminal_failure_observation,
+        rate_rejection_observation,
+        scope_refusal_observation,
+    ]
+    if schema_version == STORE_SCHEMA_VERSION:
+        observations.append(fatal_execution_stop_observation)
     return max(
-        len(_json_bytes(_observation_payload(failure_observation))),
-        len(_json_bytes(_observation_payload(refusal_observation))),
-        len(_json_bytes(_observation_payload(terminal_failure_observation))),
-        len(_json_bytes(_observation_payload(rate_rejection_observation))),
-        len(_json_bytes(_observation_payload(scope_refusal_observation))),
+        len(
+            _json_bytes(
+                _observation_payload(
+                    observation,
+                    schema_version=schema_version,
+                )
+            )
+        )
+        for observation in observations
     )
 
 
@@ -1389,9 +1534,10 @@ def maximum_native_observation_index_bytes() -> int:
             "observation_count": MAXIMUM_NATIVE_OBSERVATION_CANDIDATES,
             "observations": entries,
             "response_bytes_captured": UINT64_MAXIMUM,
-            "schema_version": STORE_SCHEMA_VERSION,
+            "schema_version": schema_version,
             "store_state": state,
         }
+        for schema_version in SUPPORTED_STORE_SCHEMA_VERSIONS
         for state in ("complete", "partial")
     )
     return max(len(_json_bytes(payload)) for payload in payloads)
@@ -1501,22 +1647,40 @@ def _maximum_scope_refusal_payload() -> tuple[str, str]:
     )
 
 
-def _observation_payload(observation: NativeCandidateObservation) -> dict[str, object]:
+def _observation_payload(
+    observation: NativeCandidateObservation,
+    *,
+    schema_version: int = STORE_SCHEMA_VERSION,
+) -> dict[str, object]:
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_STORE_SCHEMA_VERSIONS
+        or (
+            schema_version == LEGACY_STORE_SCHEMA_VERSION
+            and observation.fatal_execution_stop is not None
+        )
+    ):
+        raise ValueError("Native observation schema version is invalid.")
+    observation_payload = {
+        "candidate_index": observation.candidate_index,
+        "exchanges": [_exchange_payload(item) for item in observation.exchanges],
+        "failure": _failure_payload(observation.failure),
+        "programme_scope_refusal": _programme_scope_refusal_payload(
+            observation.programme_scope_refusal
+        ),
+        "rate_rejection": _rate_rejection_payload(observation.rate_rejection),
+        "refused_redirect": _refusal_payload(observation.refused_redirect),
+        "request_url": observation.request_url,
+        "terminal_failure": _terminal_failure_payload(observation.terminal_failure),
+    }
+    if schema_version == STORE_SCHEMA_VERSION:
+        observation_payload["fatal_execution_stop"] = _fatal_execution_stop_payload(
+            observation.fatal_execution_stop
+        )
     return {
         "created_by": STORE_CREATED_BY,
-        "observation": {
-            "candidate_index": observation.candidate_index,
-            "exchanges": [_exchange_payload(item) for item in observation.exchanges],
-            "failure": _failure_payload(observation.failure),
-            "programme_scope_refusal": _programme_scope_refusal_payload(
-                observation.programme_scope_refusal
-            ),
-            "rate_rejection": _rate_rejection_payload(observation.rate_rejection),
-            "refused_redirect": _refusal_payload(observation.refused_redirect),
-            "request_url": observation.request_url,
-            "terminal_failure": _terminal_failure_payload(observation.terminal_failure),
-        },
-        "schema_version": STORE_SCHEMA_VERSION,
+        "observation": observation_payload,
+        "schema_version": schema_version,
     }
 
 
@@ -1569,6 +1733,14 @@ def _terminal_failure_payload(
     return {"category": failure.category, "request_url": failure.request_url}
 
 
+def _fatal_execution_stop_payload(
+    stop: NativeFatalHTTPExecutionStop | None,
+) -> dict[str, str] | None:
+    if stop is None:
+        return None
+    return {"category": stop.category}
+
+
 def _rate_rejection_payload(
     rejection: NativeRateRejection | None,
 ) -> dict[str, str] | None:
@@ -1589,7 +1761,11 @@ def _programme_scope_refusal_payload(
     }
 
 
-def _observation_from_payload(value: object) -> NativeCandidateObservation:
+def _observation_from_payload(
+    value: object,
+    *,
+    schema_version: int,
+) -> NativeCandidateObservation:
     legacy_expected = {"candidate_index", "exchanges", "failure", "request_url"}
     redirect_refusal_expected = legacy_expected | {"refused_redirect"}
     current_expected = redirect_refusal_expected | {
@@ -1597,14 +1773,20 @@ def _observation_from_payload(value: object) -> NativeCandidateObservation:
         "rate_rejection",
         "programme_scope_refusal",
     }
+    schema_2_expected = current_expected | {"fatal_execution_stop"}
     if not isinstance(value, dict):
         raise ValueError("Native candidate observation payload is invalid.")
     keys = set(value)
-    if (
-        keys != legacy_expected
-        and keys != redirect_refusal_expected
-        and keys != current_expected
-    ):
+    if type(schema_version) is not int:
+        raise ValueError("Native candidate observation payload is invalid.")
+    if schema_version == LEGACY_STORE_SCHEMA_VERSION:
+        accepted = {frozenset(legacy_expected), frozenset(redirect_refusal_expected), frozenset(current_expected)}
+        valid_keys = frozenset(keys) in accepted
+    elif schema_version == STORE_SCHEMA_VERSION:
+        valid_keys = keys == schema_2_expected
+    else:
+        valid_keys = False
+    if not valid_keys:
         raise ValueError("Native candidate observation payload is invalid.")
     raw_exchanges = value["exchanges"]
     if not isinstance(raw_exchanges, list):
@@ -1619,6 +1801,9 @@ def _observation_from_payload(value: object) -> NativeCandidateObservation:
         rate_rejection=_rate_rejection_from_payload(value.get("rate_rejection")),
         programme_scope_refusal=_programme_scope_refusal_from_payload(
             value.get("programme_scope_refusal")
+        ),
+        fatal_execution_stop=_fatal_execution_stop_from_payload(
+            value.get("fatal_execution_stop")
         ),
     )
 
@@ -1710,6 +1895,16 @@ def _terminal_failure_from_payload(
     return NativeReceivedExchangeTerminalFailure(value["request_url"], value["category"])
 
 
+def _fatal_execution_stop_from_payload(
+    value: object,
+) -> NativeFatalHTTPExecutionStop | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"category"}:
+        raise ValueError("Native fatal HTTP execution stop payload is invalid.")
+    return NativeFatalHTTPExecutionStop(value["category"])
+
+
 def _rate_rejection_from_payload(value: object) -> NativeRateRejection | None:
     if value is None:
         return None
@@ -1743,7 +1938,14 @@ def _index_payload(
     body_sizes: dict[str, int],
     observations: dict[int, NativeCandidateObservation],
     observation_sizes: dict[int, int],
+    *,
+    schema_version: int,
 ) -> dict[str, object]:
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_STORE_SCHEMA_VERSIONS
+    ):
+        raise ValueError("Native observation store index schema is invalid.")
     return {
         "body_byte_allowance": allowance,
         "body_bytes_committed": sum(body_sizes.values()),
@@ -1759,7 +1961,7 @@ def _index_payload(
             for index in sorted(observations)
         ],
         "response_bytes_captured": _response_bytes_captured(observations),
-        "schema_version": STORE_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "store_state": state,
     }
 

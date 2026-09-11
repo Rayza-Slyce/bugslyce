@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from itertools import combinations
 import json
 import os
 from pathlib import Path
@@ -89,6 +90,43 @@ def _observation(
         request_url=exchange.request_url,
         exchanges=(exchange,),
     )
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.write_bytes(observation_store_module._json_bytes(payload))
+
+
+def _rewrite_store_as_schema_1(root: Path, *, era: str = "C") -> None:
+    removable_by_era = {
+        "A": {
+            "refused_redirect",
+            "terminal_failure",
+            "rate_rejection",
+            "programme_scope_refusal",
+            "fatal_execution_stop",
+        },
+        "B": {
+            "terminal_failure",
+            "rate_rejection",
+            "programme_scope_refusal",
+            "fatal_execution_stop",
+        },
+        "C": {"fatal_execution_stop"},
+    }
+    for path in (root / "observations").glob("*.json"):
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope["schema_version"] = 1
+        for key in removable_by_era[era]:
+            envelope["observation"].pop(key, None)
+        _write_json(path, envelope)
+    index_path = root / "index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["schema_version"] = 1
+        index["metadata_observation_bytes"] = sum(
+            path.stat().st_size for path in (root / "observations").glob("*.json")
+        )
+        _write_json(index_path, index)
 
 
 def test_exact_body_round_trip_and_sha256_identity(tmp_path: Path) -> None:
@@ -326,16 +364,16 @@ def test_existing_no_refusal_payload_reloads_as_non_refused(tmp_path: Path) -> N
     for field in (
         "refused_redirect",
         "terminal_failure",
+        "fatal_execution_stop",
         "rate_rejection",
         "programme_scope_refusal",
     ):
         del payload["observation"][field]
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    reopened = _store(store.root, 100)
-
-    assert reopened.load_observation(0) == observation
-    assert reopened.load_observation(0).refused_redirect is None
+    assert observation_store_module._observation_from_payload(
+        payload["observation"], schema_version=1
+    ) == observation
 
 
 def test_redirect_refusal_is_distinct_from_attempt_failure(tmp_path: Path) -> None:
@@ -394,6 +432,138 @@ def test_received_exchange_terminal_failure_round_trips_at_final_exchange(
     assert store.load_observation(0) == observation
     assert store.load_observation(0).terminal_failure == terminal_failure
     assert store.load_observation(0).failure is None
+
+
+@pytest.mark.parametrize(
+    ("category", "exchange_count"),
+    (
+        ("invalid_resolver_result", 1),
+        ("peer_mismatch", 2),
+        ("tls_configuration_error", 1),
+    ),
+)
+def test_fatal_http_execution_stop_round_trips_with_redirect_evidence(
+    tmp_path: Path,
+    category: str,
+    exchange_count: int,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    first_url = "https://app.example.test/first"
+    exchanges = tuple(
+        _exchange(
+            store,
+            first_url if index == 0 else f"https://app.example.test/hop-{index}",
+            f"redirect-{index}".encode("ascii"),
+            status_code=302,
+            headers=(("Location", f"/hop-{index + 1}"),),
+        )
+        for index in range(exchange_count)
+    )
+    stop = observation_store_module.NativeFatalHTTPExecutionStop(category)
+    observation = NativeCandidateObservation(
+        candidate_index=0,
+        request_url=first_url,
+        exchanges=exchanges,
+        fatal_execution_stop=stop,
+    )
+
+    _publish(store, observation, maximum_redirect_hops=exchange_count - 1)
+
+    assert store.load_observation(0) == observation
+    assert store.load_observation(0).fatal_execution_stop == stop
+
+
+@pytest.mark.parametrize(
+    ("status_code", "category", "has_exchange"),
+    (
+        (302, "invalid_resolver_result", False),
+        (200, "invalid_resolver_result", True),
+        (302, "timeout", True),
+        (302, "unknown_fatal", True),
+    ),
+)
+def test_fatal_http_execution_stop_rejects_invalid_candidate_shape(
+    tmp_path: Path,
+    status_code: int,
+    category: str,
+    has_exchange: bool,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(
+        store,
+        "https://app.example.test/redirect",
+        b"redirect",
+        status_code=status_code,
+    )
+    with pytest.raises(ValueError):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=exchange.request_url,
+            exchanges=(exchange,) if has_exchange else (),
+            fatal_execution_stop=observation_store_module.NativeFatalHTTPExecutionStop(
+                category
+            ),
+        )
+
+
+def test_fatal_http_execution_stop_is_explicit_and_mutually_exclusive(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    url = "https://app.example.test/redirect"
+    exchange = _exchange(store, url, b"redirect", status_code=302)
+    stop = observation_store_module.NativeFatalHTTPExecutionStop(
+        "invalid_resolver_result"
+    )
+    with pytest.raises(ValueError, match="terminal dispositions"):
+        NativeCandidateObservation(
+            candidate_index=0,
+            request_url=url,
+            exchanges=(exchange,),
+            fatal_execution_stop=stop,
+            programme_scope_refusal=observation_store_module.NativeProgrammeScopeRefusal(
+                "redirect",
+                "no_matching_inclusion",
+                "Destination has no matching programme scope inclusion.",
+            ),
+        )
+
+    observation = NativeCandidateObservation(
+        candidate_index=1,
+        request_url=url,
+        exchanges=(exchange,),
+        fatal_execution_stop=stop,
+    )
+    _publish(store, observation)
+    payload = json.loads(
+        (store.root / "observations" / "00000001.json").read_text(encoding="utf-8")
+    )
+    assert payload["observation"]["fatal_execution_stop"] == {
+        "category": "invalid_resolver_result"
+    }
+
+
+def test_fatal_stop_field_preserves_existing_positional_constructor_order(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    url = "https://app.example.test/limited"
+    exchange = _exchange(store, url, b"limited", status_code=429)
+    rate_rejection = observation_store_module.NativeRateRejection(url, "17")
+
+    observation = NativeCandidateObservation(
+        0,
+        url,
+        (exchange,),
+        None,
+        None,
+        None,
+        rate_rejection,
+        None,
+    )
+
+    assert observation.rate_rejection == rate_rejection
+    assert observation.fatal_execution_stop is None
 
 
 @pytest.mark.parametrize(
@@ -681,21 +851,25 @@ def test_all_terminal_disposition_pairs_are_rejected(tmp_path: Path) -> None:
         source_url,
         "transport_error",
     )
-    cases = (
-        {
-            "failure": NativeAttemptFailure("https://other.test/landing", "timeout"),
-            "programme_scope_refusal": scope_refusal,
-        },
-        {"refused_redirect": refusal, "programme_scope_refusal": scope_refusal},
-        {"refused_redirect": refusal, "terminal_failure": terminal_failure},
-    )
-    for terminal_fields in cases:
+    dispositions = {
+        "failure": NativeAttemptFailure("https://other.test/landing", "timeout"),
+        "refused_redirect": refusal,
+        "terminal_failure": terminal_failure,
+        "rate_rejection": observation_store_module.NativeRateRejection(
+            source_url, "17"
+        ),
+        "programme_scope_refusal": scope_refusal,
+        "fatal_execution_stop": observation_store_module.NativeFatalHTTPExecutionStop(
+            "invalid_resolver_result"
+        ),
+    }
+    for first, second in combinations(dispositions, 2):
         with pytest.raises(ValueError, match="terminal dispositions"):
             NativeCandidateObservation(
                 0,
                 source_url,
                 (redirect,),
-                **terminal_fields,
+                **{first: dispositions[first], second: dispositions[second]},
             )
 
 
@@ -703,6 +877,7 @@ def test_all_terminal_disposition_pairs_are_rejected(tmp_path: Path) -> None:
     ("field", "value"),
     (
         ("terminal_failure", {"request_url": "https://app.example.test/a"}),
+        ("fatal_execution_stop", {"category": "timeout"}),
         ("rate_rejection", {"request_url": "https://app.example.test/a"}),
         (
             "programme_scope_refusal",
@@ -742,13 +917,34 @@ def test_legacy_payload_without_terminal_dispositions_reloads_unchanged(
     for field in (
         "refused_redirect",
         "terminal_failure",
+        "fatal_execution_stop",
         "rate_rejection",
         "programme_scope_refusal",
     ):
         del payload["observation"][field]
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert _store(store.root, 100).load_observation(0) == observation
+    assert observation_store_module._observation_from_payload(
+        payload["observation"], schema_version=1
+    ) == observation
+
+
+def test_terminal_disposition_era_payload_without_fatal_stop_reloads_unchanged(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    payload_path = store.root / "observations" / "00000000.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    del payload["observation"]["fatal_execution_stop"]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert observation_store_module._observation_from_payload(
+        payload["observation"], schema_version=1
+    ) == observation
+
 
 def test_redirect_refusal_era_payload_reloads_unchanged(
     tmp_path: Path,
@@ -761,13 +957,16 @@ def test_redirect_refusal_era_payload_reloads_unchanged(
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     for field in (
         "terminal_failure",
+        "fatal_execution_stop",
         "rate_rejection",
         "programme_scope_refusal",
     ):
         del payload["observation"][field]
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert _store(store.root, 100).load_observation(0) == observation
+    assert observation_store_module._observation_from_payload(
+        payload["observation"], schema_version=1
+    ) == observation
 
 
 @pytest.mark.parametrize(
@@ -775,6 +974,7 @@ def test_redirect_refusal_era_payload_reloads_unchanged(
     (
         "refused_redirect",
         "terminal_failure",
+        "fatal_execution_stop",
         "rate_rejection",
         "programme_scope_refusal",
     ),
@@ -793,6 +993,221 @@ def test_current_payload_missing_terminal_metadata_key_is_rejected(
 
     with pytest.raises(ValueError, match="observation payload"):
         _store(store.root, 100)
+
+
+def test_new_store_writes_schema_2_observation_and_index(tmp_path: Path) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    observation_payload = json.loads(
+        (store.root / "observations/00000000.json").read_text(encoding="utf-8")
+    )
+    store.publish_index("complete")
+    index_payload = json.loads((store.root / "index.json").read_text(encoding="utf-8"))
+
+    assert observation_store_module.STORE_SCHEMA_VERSION == 2
+    assert observation_payload["schema_version"] == 2
+    assert set(observation_payload["observation"]) == {
+        "candidate_index",
+        "exchanges",
+        "failure",
+        "request_url",
+        "refused_redirect",
+        "terminal_failure",
+        "rate_rejection",
+        "programme_scope_refusal",
+        "fatal_execution_stop",
+    }
+    assert observation_payload["observation"]["fatal_execution_stop"] is None
+    assert index_payload["schema_version"] == 2
+    assert validate_native_observation_store(store.root).schema_version == 2
+
+
+def test_schema_1_rejects_nine_key_fatal_prototype_and_hybrid_shapes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    envelope = json.loads(
+        (store.root / "observations/00000000.json").read_text(encoding="utf-8")
+    )
+    current = envelope["observation"]
+
+    with pytest.raises(ValueError, match="observation payload"):
+        observation_store_module._observation_from_payload(current, schema_version=1)
+    hybrid = dict(current)
+    del hybrid["fatal_execution_stop"]
+    del hybrid["rate_rejection"]
+    with pytest.raises(ValueError, match="observation payload"):
+        observation_store_module._observation_from_payload(hybrid, schema_version=1)
+
+
+def test_schema_2_accepts_only_exact_nine_key_observation_shape(tmp_path: Path) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    envelope = json.loads(
+        (store.root / "observations/00000000.json").read_text(encoding="utf-8")
+    )
+    current = envelope["observation"]
+
+    assert observation_store_module._observation_from_payload(
+        current, schema_version=2
+    ) == observation
+    eight_key = dict(current)
+    del eight_key["fatal_execution_stop"]
+    extra_key = dict(current)
+    extra_key["unexpected"] = None
+    for invalid in (eight_key, extra_key):
+        with pytest.raises(ValueError, match="observation payload"):
+            observation_store_module._observation_from_payload(
+                invalid, schema_version=2
+            )
+
+
+@pytest.mark.parametrize("schema_version", (True, "2", 0, 3))
+def test_observation_envelope_rejects_wrong_or_unknown_schema_version(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    path = store.root / "observations/00000000.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["schema_version"] = schema_version
+    _write_json(path, envelope)
+
+    with pytest.raises(ValueError, match="schema"):
+        _store(store.root, 100)
+
+
+@pytest.mark.parametrize("state", ("complete", "partial"))
+def test_published_schema_1_store_is_readable_validatable_and_sealed(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    observation = _observation(0, exchange)
+    _publish(store, observation)
+    store.publish_index(state)
+    _rewrite_store_as_schema_1(store.root)
+    before = {
+        path.relative_to(store.root): path.read_bytes()
+        for path in store.root.rglob("*")
+        if path.is_file()
+    }
+
+    reopened = _store(store.root, 100)
+    validated = validate_native_observation_store(store.root)
+
+    assert reopened.schema_version == 1
+    assert reopened.load_observation(0) == observation
+    assert validated.schema_version == 1
+    assert validated.store_state == state
+    with pytest.raises(ValueError, match="already published"):
+        reopened.reserve_body_bytes(1)
+    assert before == {
+        path.relative_to(store.root): path.read_bytes()
+        for path in store.root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_unpublished_schema_1_observation_store_cannot_be_continued(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "native-observations"
+    store = _store(root, 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    _rewrite_store_as_schema_1(root)
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError, match="schema 1.*read-only"):
+        _store(root, 100)
+
+    assert before == {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_mixed_observation_versions_and_index_version_disagreement_are_rejected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mixed-observations"
+    store = _store(root, 100)
+    first = _exchange(store, "https://app.example.test/a", b"a")
+    second = _exchange(store, "https://app.example.test/b", b"b")
+    _publish(store, _observation(0, first))
+    _publish(store, _observation(1, second))
+    first_path = root / "observations/00000000.json"
+    first_envelope = json.loads(first_path.read_text(encoding="utf-8"))
+    first_envelope["schema_version"] = 1
+    first_envelope["observation"].pop("fatal_execution_stop")
+    _write_json(first_path, first_envelope)
+    with pytest.raises(ValueError, match="schema versions"):
+        _store(root, 100)
+
+    published_root = tmp_path / "index-disagreement"
+    published = _store(published_root, 100)
+    exchange = _exchange(published, "https://app.example.test/a", b"body")
+    _publish(published, _observation(0, exchange))
+    published.publish_index("complete")
+    index_path = published_root / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["schema_version"] = 1
+    _write_json(index_path, index)
+    with pytest.raises(ValueError, match="schema"):
+        validate_native_observation_store(published_root)
+
+
+@pytest.mark.parametrize("schema_version", (True, "2", 0, 3))
+def test_index_rejects_wrong_or_unknown_schema_version(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    root = tmp_path / "native-observations"
+    store = _store(root, 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    store.publish_index("complete")
+    index_path = root / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["schema_version"] = schema_version
+    _write_json(index_path, index)
+
+    with pytest.raises(ValueError, match="index schema"):
+        validate_native_observation_store(root)
+
+
+def test_interrupted_schema_2_store_reopens_without_rewriting_records(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "native-observations"
+    store = _store(root, 100)
+    exchange = _exchange(store, "https://app.example.test/a", b"body")
+    _publish(store, _observation(0, exchange))
+    path = root / "observations/00000000.json"
+    before = path.read_bytes()
+
+    reopened = _store(root, 100)
+
+    assert reopened.schema_version == 2
+    assert path.read_bytes() == before
+    second = _exchange(reopened, "https://app.example.test/b", b"next")
+    _publish(reopened, _observation(1, second))
+    reopened.publish_index("partial")
+    assert validate_native_observation_store(root).schema_version == 2
 
 
 @pytest.mark.parametrize(
@@ -1683,6 +2098,17 @@ def test_metadata_serialization_bounds_cover_adversarial_legal_observations(
             ),
         )
         for category in observation_store_module.RECEIVED_EXCHANGE_TERMINAL_FAILURE_CATEGORIES
+    )
+    maximum_outcomes.extend(
+        NativeCandidateObservation(
+            35_059,
+            source_url,
+            (exchange,) * 11,
+            fatal_execution_stop=observation_store_module.NativeFatalHTTPExecutionStop(
+                category
+            ),
+        )
+        for category in observation_store_module.FATAL_HTTP_EXECUTION_STOP_CATEGORIES
     )
     rate_exchange = NativeReceivedExchange(
         request_url=source_url,

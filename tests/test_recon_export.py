@@ -4487,6 +4487,7 @@ def _publish_native_observation_store(
     *,
     state: str,
     orphan_body: bytes | None = None,
+    schema_version: int = 2,
 ) -> tuple[Path, bytes]:
     root = input_dir / _NATIVE_OBSERVATION_STORE_ROOT
     store = NativeObservationStore(
@@ -4524,6 +4525,24 @@ def _publish_native_observation_store(
         orphan_reservation = store.reserve_body_bytes(len(orphan_body))
         store.commit_body(orphan_reservation, orphan_body)
     store.publish_index(state)
+    if schema_version == 1:
+        observation_bytes = 0
+        for path in (root / "observations").glob("*.json"):
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+            envelope["schema_version"] = 1
+            del envelope["observation"]["fatal_execution_stop"]
+            content = (
+                json.dumps(envelope, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            path.write_bytes(content)
+            observation_bytes += len(content)
+        index_path = root / "index.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["schema_version"] = 1
+        index["metadata_observation_bytes"] = observation_bytes
+        index_path.write_bytes(
+            (json.dumps(index, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
     return root, body
 
 
@@ -4531,9 +4550,14 @@ def _export_and_extract_native_store(
     tmp_path: Path,
     *,
     state: str,
+    schema_version: int = 2,
 ) -> tuple[Path, Path, Path, bytes]:
     input_dir = _export_input(tmp_path)
-    source_root, body = _publish_native_observation_store(input_dir, state=state)
+    source_root, body = _publish_native_observation_store(
+        input_dir,
+        state=state,
+        schema_version=schema_version,
+    )
     output_path = tmp_path / "native-store-pack.zip"
     export_recon_evidence_pack(input_dir, output_path, clock=lambda: FIXED_TIME)
     extracted = tmp_path / "native-store-extracted"
@@ -4607,6 +4631,50 @@ def test_native_observation_store_partial_round_trip_preserves_state(
     assert validate_native_observation_store(source_root).store_state == "partial"
     assert validate_native_observation_store(extracted_root).store_state == "partial"
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+@pytest.mark.parametrize("state", ("complete", "partial"))
+def test_schema_1_native_observation_store_remains_portable(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    source_root, extracted_root, extracted, _body = _export_and_extract_native_store(
+        tmp_path,
+        state=state,
+        schema_version=1,
+    )
+
+    source = validate_native_observation_store(source_root)
+    packed = validate_native_observation_store(extracted_root)
+
+    assert source.schema_version == 1
+    assert packed == source
+    assert packed.store_state == state
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_mixed_version_extracted_native_store_makes_pack_incomplete(
+    tmp_path: Path,
+) -> None:
+    _source, extracted_root, extracted, _body = _export_and_extract_native_store(
+        tmp_path,
+        state="complete",
+    )
+    path = extracted_root / "observations/00000000.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["schema_version"] = 1
+    del envelope["observation"]["fatal_execution_stop"]
+    path.write_bytes(
+        (json.dumps(envelope, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    )
+
+    with pytest.raises(ValueError, match="schema"):
+        validate_native_observation_store(extracted_root)
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "incomplete"
+    assert "structured_reference_discovery_failed" in (
+        validation.metadata_consistency_errors
+    )
 
 
 def test_native_observation_store_partial_round_trip_preserves_orphan_body(
