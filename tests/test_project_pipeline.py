@@ -1341,7 +1341,7 @@ def test_html_finalisation_failure_is_truthful_and_preserves_markdown(
     assert "xdg-open" not in guidance
 
 
-def test_project_html_is_rendered_once_before_evidence_pack_exports(
+def test_project_html_is_rendered_once_before_single_final_evidence_pack_export(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1349,6 +1349,7 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
     ordering: list[str] = []
+    packed_pipeline_states: list[tuple[str, str]] = []
 
     def write_html(input_dir: Path, **_kwargs) -> Path:
         ordering.append("html")
@@ -1362,8 +1363,20 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
     def export_with_html(input_dir: Path, output_path: Path, **_kwargs):
         ordering.append("export")
         assert (input_dir / "report.html").is_file()
+        pipeline = json.loads(
+            (input_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8")
+        )
+        export_step = next(
+            step
+            for step in pipeline["steps"]
+            if step["step_id"] == "PIPELINE-STEP-012"
+        )
+        packed_pipeline_states.append(
+            (pipeline["final_status"], export_step["status"])
+        )
         with zipfile.ZipFile(output_path, "w") as archive:
             archive.write(input_dir / "report.html", "report.html")
+            archive.write(input_dir / PIPELINE_JSON_FILENAME, PIPELINE_JSON_FILENAME)
         return SimpleNamespace(output_path=str(output_path))
 
     monkeypatch.setattr(
@@ -1382,9 +1395,16 @@ def test_project_html_is_rendered_once_before_evidence_pack_exports(
     )
 
     assert result.final_status == "completed"
-    assert ordering == ["html", "export", "export"]
+    assert ordering == ["html", "export"]
+    assert packed_pipeline_states == [("completed", "completed")]
     with zipfile.ZipFile(f"{output_dir}-evidence-pack.zip") as archive:
-        assert archive.namelist() == ["report.html"]
+        packed_pipeline = json.loads(archive.read(PIPELINE_JSON_FILENAME))
+        assert packed_pipeline["final_status"] == "completed"
+        assert next(
+            step
+            for step in packed_pipeline["steps"]
+            if step["step_id"] == "PIPELINE-STEP-012"
+        )["status"] == "completed"
 
 
 def test_failure_after_status_refreshes_pipeline_status_artifacts(
@@ -1952,8 +1972,8 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_dir / "deep_recon_orchestration.json",
         output_dir / "application_service_model.json",
     )
-    assert captured_evidence_paths == [expected_deep_paths, expected_deep_paths]
-    assert len(captured_reference_requirements) == 2
+    assert captured_evidence_paths == [expected_deep_paths]
+    assert len(captured_reference_requirements) == 1
     for requirements in captured_reference_requirements:
         assert len(requirements) == 1
         assert requirements[0].portable_path == "deep_source_route_collection.json"
@@ -2153,19 +2173,16 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     def export_then_fail(input_dir, output_path, **kwargs):
         nonlocal export_calls
         export_calls += 1
-        if export_calls == 2:
-            error = OSError("final export refresh failed")
-            error.add_note("temporary export archive cleanup failed: permission denied")
-            raise error
-        Path(output_path).write_bytes(b"zip\n")
-        return SimpleNamespace(output_path=str(output_path))
+        error = OSError("final export publication failed")
+        error.add_note("temporary export archive cleanup failed: permission denied")
+        raise error
 
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_then_fail)
 
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(project_file, DEEP_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
-    assert export_calls == 2
+    assert export_calls == 1
     assert (output_dir / "report.html").is_file()
     assert exc_info.value.result.final_status == "failed"
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
@@ -2178,7 +2195,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     assert payload["export_path"] is None
     markdown = (output_dir / PIPELINE_MARKDOWN_FILENAME).read_text(encoding="utf-8")
     assert f"- Evidence pack: `{output_dir}-evidence-pack.zip`" not in markdown
-    assert "final export refresh failed" in markdown
+    assert "final export publication failed" in markdown
     assert "Cleanup warning: temporary export archive cleanup failed" in markdown
     status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
     assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
@@ -2186,7 +2203,7 @@ def test_deep_final_evidence_refresh_failure_fails_pipeline_coherently(
     assert not Path(f"{output_dir}-evidence-pack.zip").exists()
 
 
-def test_finalisation_owned_pack_cleanup_failure_does_not_mask_original_error(
+def test_failed_final_publication_is_not_registered_as_owned_output(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2199,10 +2216,8 @@ def test_finalisation_owned_pack_cleanup_failure_does_not_mask_original_error(
     def export_then_fail(input_dir, output_path, **kwargs):
         nonlocal export_calls
         export_calls += 1
-        if export_calls == 2:
-            raise OSError("final export refresh failed")
-        Path(output_path).write_bytes(b"owned stale pack\n")
-        return SimpleNamespace(output_path=str(output_path))
+        Path(output_path).write_bytes(b"unpublished output\n")
+        raise OSError("final export publication failed")
 
     original_unlink = Path.unlink
 
@@ -2217,18 +2232,18 @@ def test_finalisation_owned_pack_cleanup_failure_does_not_mask_original_error(
     with pytest.raises(ProjectPipelineFailed) as exc_info:
         run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
-    assert str(exc_info.value) == "final export refresh failed"
+    assert str(exc_info.value) == "final export publication failed"
+    assert export_calls == 1
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
     assert exc_info.value.result.export_path is None
-    assert export_path.read_bytes() == b"owned stale pack\n"
+    assert export_path.read_bytes() == b"unpublished output\n"
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     assert payload["failed_step"] == "PIPELINE-FINALISE"
     assert payload["export_path"] is None
-    assert "owned evidence pack cleanup failed: cannot remove owned pack" in payload["steps"][-1]["message"]
-    assert str(export_path) in payload["steps"][-1]["message"]
+    assert "owned evidence pack cleanup failed" not in payload["steps"][-1]["message"]
 
 
-def test_finalisation_cleanup_refuses_symlink_export_without_unlinking_target(
+def test_failed_final_publication_does_not_treat_symlink_as_owned_output(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2243,10 +2258,8 @@ def test_finalisation_cleanup_refuses_symlink_export_without_unlinking_target(
     def export_symlink_then_fail(input_dir, output_path, **kwargs):
         nonlocal export_calls
         export_calls += 1
-        if export_calls == 2:
-            raise OSError("final export refresh failed")
         Path(output_path).symlink_to(symlink_target)
-        return SimpleNamespace(output_path=str(output_path))
+        raise OSError("final export publication failed")
 
     monkeypatch.setattr("bugslyce.project_pipeline.export_recon_evidence_pack", export_symlink_then_fail)
 
@@ -2254,10 +2267,11 @@ def test_finalisation_cleanup_refuses_symlink_export_without_unlinking_target(
         run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
+    assert export_calls == 1
     assert export_path.is_symlink()
     assert symlink_target.read_bytes() == b"previous external pack"
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
-    assert "owned evidence pack cleanup refused symlink path" in payload["steps"][-1]["message"]
+    assert "owned evidence pack cleanup refused symlink path" not in payload["steps"][-1]["message"]
 
 
 def test_ordinary_export_failure_refreshes_existing_status_and_runbook(
@@ -2314,8 +2328,7 @@ def test_ordinary_export_failure_refreshes_existing_status_and_runbook(
         run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert "ordinary export failed" in str(exc_info.value)
-    assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
-    assert exc_info.value.result.failed_step != "PIPELINE-FINALISE"
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
     assert payload["final_status"] == "failed"
     status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
@@ -2419,11 +2432,11 @@ def test_failure_reconciliation_warning_does_not_mask_original_export_error(
         run_project_pipeline(project_file, NORMAL_PIPELINE_PROFILE, clock=lambda: FIXED_TIME)
 
     assert str(exc_info.value) == "ordinary export failed"
-    assert exc_info.value.result.failed_step == "PIPELINE-STEP-012"
+    assert exc_info.value.result.failed_step == "PIPELINE-FINALISE"
     payload = json.loads((output_dir / PIPELINE_JSON_FILENAME).read_text(encoding="utf-8"))
-    failed_step = next(step for step in payload["steps"] if step["step_id"] == "PIPELINE-STEP-012")
-    assert "ordinary export failed" in failed_step["message"]
-    assert "Reconciliation warning: runbook refresh failed: runbook cleanup failed." in failed_step["message"]
+    final_step = next(step for step in payload["steps"] if step["step_id"] == "PIPELINE-STEP-012")
+    assert "ordinary export failed" in final_step["message"]
+    assert "Reconciliation warning: runbook refresh failed: runbook cleanup failed." in final_step["message"]
     status_payload = json.loads((output_dir / "recon_status.json").read_text(encoding="utf-8"))
     assert status_payload["latest_execution"]["pipeline_final_status"] == "failed"
     assert not Path(f"{output_dir}-evidence-pack.zip").exists()

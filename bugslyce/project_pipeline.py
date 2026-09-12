@@ -963,6 +963,7 @@ def run_project_pipeline(
     if not preserve_canonical_pipeline_metadata:
         try:
             _refresh_final_pipeline_outputs(result, project_file, scope_file, context, clock)
+            _publish_final_evidence_pack(result, context, clock)
         except (ValueError, OSError) as exc:
             diagnostic = format_exception_diagnostic(exc)
             result = replace(
@@ -985,7 +986,7 @@ def run_project_pipeline(
             )
             _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             cleanup_errors = _remove_owned_export_after_finalisation_failure(context)
-            if isinstance(context.get("published_export_path"), Path):
+            if result.export_path is not None:
                 result = replace(result, export_path=None)
                 _write_project_pipeline_checkpoint(result, preserve_canonical_pipeline_metadata)
             result = _reconcile_failed_pipeline_outputs(
@@ -2693,11 +2694,16 @@ def _step_runners(
         )
 
     def export():
-        deep_evidence_paths = _deep_evidence_paths_required(profile, context)
-        reference_requirements = _evidence_pack_reference_requirements(
+        context["final_export_deep_evidence_paths"] = _deep_evidence_paths_required(
             profile,
-            output_dir,
             context,
+        )
+        context["final_export_reference_requirements"] = (
+            _evidence_pack_reference_requirements(
+                profile,
+                output_dir,
+                context,
+            )
         )
         if profile == DEEP_PIPELINE_PROFILE:
             application_service_model = _deep_outputs_from_context(
@@ -2713,26 +2719,10 @@ def _step_runners(
             )
         else:
             write_project_html_report(output_dir)
-        if deep_evidence_paths is None:
-            result = export_recon_evidence_pack(
-                output_dir,
-                export_path,
-                clock=clock,
-                reference_requirements=reference_requirements,
-            )
-        else:
-            result = export_recon_evidence_pack(
-                output_dir,
-                export_path,
-                clock=clock,
-                deep_evidence_paths=deep_evidence_paths,
-                reference_requirements=reference_requirements,
-            )
-        context["published_export_path"] = Path(result.output_path)
         return (
-            "Portable evidence pack exported.",
-            [result.output_path],
-            {"export_path": result.output_path},
+            "Portable evidence pack prepared for final publication.",
+            [str(export_path)],
+            {"export_path": str(export_path)},
         )
 
     return {
@@ -3315,24 +3305,32 @@ def _refresh_final_pipeline_outputs(
     if deep_runbook_markdown is not None:
         runbook_kwargs["deep_recon_runbook_markdown"] = deep_runbook_markdown
     write_project_runbook(build_project_runbook(project_file, **runbook_kwargs))
+    write_project_pipeline_result(result)
+
+
+def _publish_final_evidence_pack(
+    result: PipelineResult,
+    context: dict[str, object],
+    clock: Clock | None,
+) -> None:
+    """Publish one archive after all final pipeline outputs are durable."""
+
+    output_dir = Path(result.output_dir).expanduser().resolve()
     if result.export_path and _step_completed(result, "PIPELINE-STEP-012"):
         export_kwargs: dict[str, object] = {"force": True, "clock": clock}
-        deep_paths = _deep_evidence_paths_for_final_export(result.profile, output_dir)
+        deep_paths = context.get("final_export_deep_evidence_paths")
         if deep_paths is not None:
             export_kwargs["deep_evidence_paths"] = deep_paths
-        export_kwargs["reference_requirements"] = (
-            _evidence_pack_reference_requirements(
-                result.profile,
-                output_dir,
-                context,
-            )
+        export_kwargs["reference_requirements"] = context.get(
+            "final_export_reference_requirements",
+            (),
         )
-        export_recon_evidence_pack(
+        export_result = export_recon_evidence_pack(
             output_dir,
             Path(result.export_path),
             **export_kwargs,
         )
-    write_project_pipeline_result(result)
+        context["published_export_path"] = Path(export_result.output_path)
 
 
 def _reconcile_failed_pipeline_outputs(
@@ -3470,15 +3468,6 @@ def _refresh_runbook_after_failure(
     if deep_runbook_markdown is not None:
         runbook_kwargs["deep_recon_runbook_markdown"] = deep_runbook_markdown
     write_project_runbook(build_project_runbook(project_file, **runbook_kwargs))
-
-
-def _deep_evidence_paths_for_final_export(profile: str, output_dir: Path) -> tuple[Path, ...] | None:
-    if profile != DEEP_PIPELINE_PROFILE:
-        return None
-    deep_paths = tuple(output_dir / name for name in DEEP_FIXED_ARTEFACT_FILENAMES)
-    if not all(path.is_file() for path in deep_paths):
-        raise ValueError("Deep evidence artefacts are incomplete before final export refresh.")
-    return deep_paths
 
 
 def _remove_owned_export_after_finalisation_failure(context: dict[str, object]) -> list[str]:

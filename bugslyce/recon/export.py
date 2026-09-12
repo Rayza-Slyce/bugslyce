@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 import json
 import os
@@ -71,6 +71,7 @@ def export_recon_evidence_pack(
     *,
     deep_evidence_paths: Sequence[Path] | None = None,
     reference_requirements: Sequence[EvidencePackReference] | None = None,
+    phase_callback: Callable[[str], None] | None = None,
 ) -> ReconExportResult:
     """Create a deterministic ZIP containing only approved local evidence files."""
 
@@ -214,11 +215,14 @@ def export_recon_evidence_pack(
         if all(record.included for record in closure_records) and not missing_files
         else "incomplete"
     )
+    _emit_export_phase(phase_callback, "evidence_discovery_and_validation_complete")
+    preferred_paths = _preferred_portable_paths(included)
     operator_brief_paths = _operator_brief_portable_paths(
         input_dir,
-        included,
+        preferred_paths,
         closure_records,
     )
+    _emit_export_phase(phase_callback, "portable_path_mapping_complete")
 
     archive_files = sorted(
         [
@@ -291,11 +295,14 @@ def export_recon_evidence_pack(
                         archive_name,
                         input_dir,
                         included,
+                        preferred_paths,
                         operator_brief_paths,
                     ),
                 )
+        _emit_export_phase(phase_callback, "archive_writing_complete")
         temp_path.replace(output_path)
         temp_path = None
+        _emit_export_phase(phase_callback, "final_publication_complete")
     except BaseException as exc:
         primary_error = exc
         raise
@@ -550,10 +557,10 @@ def _portable_pack_content(
     archive_name: str,
     input_dir: Path,
     included: dict[str, Path],
+    preferred_paths: dict[Path, str],
     operator_brief_paths: dict[Path, str],
 ) -> bytes:
     content = source_path.read_bytes()
-    preferred_paths = _preferred_portable_paths(included)
     if archive_name == "project_pipeline.json":
         return _portable_confidence_pipeline_content(content)
     if (
@@ -872,10 +879,10 @@ def _preferred_portable_paths(included: dict[str, Path]) -> dict[Path, str]:
 
 def _operator_brief_portable_paths(
     input_dir: Path,
-    included: dict[str, Path],
+    preferred_paths: dict[Path, str],
     closure_records: tuple[EvidencePackReferenceRecord, ...],
 ) -> dict[Path, str]:
-    preferred_paths = _preferred_portable_paths(included)
+    preferred_paths = dict(preferred_paths)
     for record in closure_records:
         source_path, _relative = _resolve_reference(
             input_dir,
@@ -888,6 +895,19 @@ def _operator_brief_portable_paths(
         ) < portable_archive_path_preference(current):
             preferred_paths[source_path] = record.portable_path
     return preferred_paths
+
+
+def _emit_export_phase(
+    callback: Callable[[str], None] | None,
+    phase: str,
+) -> None:
+    """Expose best-effort diagnostics without making them part of correctness."""
+
+    if callback is not None:
+        try:
+            callback(phase)
+        except Exception:
+            pass
 
 
 def _portable_operator_brief_content(

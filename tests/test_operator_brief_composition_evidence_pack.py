@@ -14,7 +14,13 @@ import zipfile
 import pytest
 
 import bugslyce.project_pipeline as project_pipeline
-from bugslyce.project_pipeline import STANDARD_PIPELINE_PROFILE, _step_runners
+from bugslyce.project_pipeline import (
+    STANDARD_PIPELINE_PROFILE,
+    PipelineResult,
+    PipelineStep,
+    _publish_final_evidence_pack,
+    _step_runners,
+)
 from bugslyce.recon.evidence_pack_closure import (
     REFERENCE_CLOSURE_FILENAME,
     validate_evidence_pack_root,
@@ -422,11 +428,11 @@ def test_future_repeated_export_preserves_canonical_member_and_closure_mapping(
     assert load_operator_brief_composition_artifact(second_root) == composition
 
 
-def test_future_pipeline_step_012_exports_existing_canonical_snapshot(
+def test_future_final_publication_exports_existing_canonical_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root, _composition, _path, _before = _canonical_project(tmp_path)
+    root, _composition, _path, before = _canonical_project(tmp_path)
     output = tmp_path / "pipeline.zip"
     (root / "plan").mkdir()
     (root / "project.json").write_text("{}\n", encoding="utf-8")
@@ -452,9 +458,37 @@ def test_future_pipeline_step_012_exports_existing_canonical_snapshot(
     }
 
     _step_runners(context, lambda: _FIXED_TIME)["PIPELINE-STEP-012"]()
+    result = PipelineResult(
+        project_name="fixture",
+        target="10.10.10.10",
+        profile=STANDARD_PIPELINE_PROFILE,
+        project_file=str(root / "project.json"),
+        scope_file=str(root / "scope.md"),
+        output_dir=str(root),
+        started_at="2026-08-25T12:00:00+00:00",
+        completed_at="2026-08-25T12:00:00+00:00",
+        final_status="completed",
+        resume_requested=False,
+        reused_existing_evidence=False,
+        skipped_steps=0,
+        no_op_steps=0,
+        completed_steps=2,
+        failed_step=None,
+        steps=[
+            PipelineStep("PIPELINE-STEP-010", "status", "local", "completed"),
+            PipelineStep("PIPELINE-STEP-012", "export", "export", "completed"),
+        ],
+        report_path=None,
+        runbook_path=None,
+        export_path=str(output),
+        no_unapproved_actions=True,
+    )
+
+    _publish_final_evidence_pack(result, context, lambda: _FIXED_TIME)
 
     with zipfile.ZipFile(output) as archive:
         assert _CANONICAL in archive.namelist()
+        assert archive.read(_CANONICAL) == before
 
 
 def test_future_standalone_legacy_export_does_not_migrate_canonical_state(

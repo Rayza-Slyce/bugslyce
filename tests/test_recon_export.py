@@ -2093,6 +2093,79 @@ def test_export_is_deterministic_for_unchanged_input(tmp_path: Path) -> None:
     assert first.read_bytes() == second.read_bytes()
 
 
+def test_export_computes_portable_path_mapping_once_for_large_member_set(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    extra_paths = []
+    for index in range(128):
+        path = input_dir / f"large-member-{index:03d}.txt"
+        path.write_text(f"member {index}\n", encoding="utf-8")
+        extra_paths.append(path)
+    calls = 0
+    original = export_module._preferred_portable_paths
+
+    def counted(included):
+        nonlocal calls
+        calls += 1
+        return original(included)
+
+    monkeypatch.setattr(export_module, "_preferred_portable_paths", counted)
+    output_path = tmp_path / "large-pack.zip"
+
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        deep_evidence_paths=tuple(extra_paths),
+    )
+
+    assert calls == 1
+    with zipfile.ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+    assert {
+        f"raw/large-member-{index:03d}.txt"
+        for index in range(128)
+    } <= names
+
+
+def test_export_reports_deterministic_phase_completion(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    phases: list[str] = []
+
+    export_recon_evidence_pack(
+        input_dir,
+        tmp_path / "pack.zip",
+        clock=lambda: FIXED_TIME,
+        phase_callback=phases.append,
+    )
+
+    assert phases == [
+        "evidence_discovery_and_validation_complete",
+        "portable_path_mapping_complete",
+        "archive_writing_complete",
+        "final_publication_complete",
+    ]
+
+
+def test_export_phase_diagnostics_do_not_control_publication(tmp_path: Path) -> None:
+    input_dir = _export_input(tmp_path)
+    output_path = tmp_path / "pack.zip"
+
+    def fail_diagnostic(_phase: str) -> None:
+        raise RuntimeError("diagnostic unavailable")
+
+    export_recon_evidence_pack(
+        input_dir,
+        output_path,
+        clock=lambda: FIXED_TIME,
+        phase_callback=fail_diagnostic,
+    )
+
+    assert output_path.is_file()
+
+
 def test_export_deep_evidence_omitted_none_and_empty_are_unchanged(tmp_path: Path) -> None:
     input_dir = _export_input(tmp_path)
     baseline = tmp_path / "baseline.zip"
