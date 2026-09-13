@@ -46,6 +46,14 @@ from bugslyce.recon.native_observation_semantic_evidence_persistence import (
     load_native_observation_semantic_checkpoint_artifact,
     load_native_observation_semantic_evidence_artifact,
 )
+from bugslyce.recon.native_observation_retention import (
+    NativeObservationRetentionPlan,
+    build_native_observation_retention_plan,
+)
+from bugslyce.recon.native_observation_retention_persistence import (
+    NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+    load_native_observation_retention_plan_artifact,
+)
 
 from bugslyce.core.models import (
     DiscoveredPath,
@@ -166,6 +174,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "application_service_model_a2_assertion_support",
         "application_service_model_native_observation_evidence",
         "native_observation_semantic_evidence",
+        "native_observation_retention_plan",
         "investigation_thread_snapshot",
         "investigation_thread_application_relation",
         "investigation_thread_native_observation",
@@ -369,6 +378,12 @@ def discover_evidence_pack_references(
         )
     )
     references.extend(
+        _native_observation_retention_plan_references(
+            root,
+            references_are_portable=False,
+        )
+    )
+    references.extend(
         _application_service_model_references(
             root,
             tuple(references),
@@ -473,6 +488,12 @@ def discover_expected_pack_references(
     )
     references.extend(
         _native_observation_semantic_evidence_references(
+            root,
+            references_are_portable=True,
+        )
+    )
+    references.extend(
+        _native_observation_retention_plan_references(
             root,
             references_are_portable=True,
         )
@@ -787,6 +808,89 @@ def _native_observation_semantic_evidence_references(
                     owner_kind="native_observation_semantic_evidence",
                     owner_id=source_id,
                     source_path=None if references_are_portable else body_path,
+                )
+            )
+    return tuple(references)
+
+
+def _native_observation_retention_plan_references(
+    root: Path,
+    *,
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    """Recompute and bind one optional Package 4B retention plan."""
+
+    plan = load_native_observation_retention_plan_artifact(root)
+    if plan is None:
+        return ()
+    checkpoint = load_native_observation_semantic_checkpoint_artifact(root)
+    if checkpoint is None:
+        raise ValueError(
+            "native retention plan requires a semantic processing checkpoint"
+        )
+    native_root = root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    if not native_root.exists() and not native_root.is_symlink():
+        if plan != NativeObservationRetentionPlan() or (
+            checkpoint.evidence != NativeObservationSemanticEvidence()
+            or checkpoint.processed_sources
+        ):
+            raise ValueError(
+                "native retention plan requires a native observation store"
+            )
+        return (
+            EvidencePackReference(
+                portable_path=NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+                owner_kind="native_observation_retention_plan",
+                owner_id=NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+                source_path=(
+                    None
+                    if references_are_portable
+                    else NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME
+                ),
+            ),
+        )
+
+    store = NativeObservationStore.open_published(native_root)
+    expected = build_native_observation_retention_plan(
+        store,
+        semantic_evidence=checkpoint.evidence,
+        processed_sources=checkpoint.processed_sources,
+    )
+    if plan != expected:
+        raise ValueError(
+            "native retention plan contradicts its store or semantic checkpoint"
+        )
+
+    references = [
+        EvidencePackReference(
+            portable_path=NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+            owner_kind="native_observation_retention_plan",
+            owner_id=NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+            source_path=(
+                None
+                if references_are_portable
+                else NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME
+            ),
+        )
+    ]
+    for decision in plan.decisions:
+        observation_path = (
+            f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/observations/"
+            f"{decision.candidate_index:08d}.json"
+        )
+        body_path = (
+            f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/bodies/sha256/"
+            f"{decision.body_sha256}"
+        )
+        for member_path in (observation_path, body_path):
+            references.append(
+                EvidencePackReference(
+                    portable_path=member_path,
+                    owner_kind="native_observation_retention_plan",
+                    owner_id=decision.source_id,
+                    source_path=(
+                        None if references_are_portable else member_path
+                    ),
                 )
             )
     return tuple(references)

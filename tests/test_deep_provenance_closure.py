@@ -244,9 +244,13 @@ def test_real_deep_step_collects_persists_composes_and_exports_all_three_owners(
     with zipfile.ZipFile(archive_path) as archive:
         archive.extractall(extracted)
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
-    assert len(paths) == 8
+    assert len(paths) == 9
     assert any(
         path.endswith("/native_observation_semantic_evidence.json")
+        for path in paths
+    )
+    assert any(
+        path.endswith("/native_observation_retention_plan.json")
         for path in paths
     )
 

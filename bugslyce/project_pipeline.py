@@ -99,6 +99,14 @@ from bugslyce.recon.native_observation_semantic_evidence_persistence import (
     NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
     write_native_observation_semantic_evidence_artifact,
 )
+from bugslyce.recon.native_observation_retention import (
+    NativeObservationRetentionPlan,
+    build_native_observation_retention_plan,
+)
+from bugslyce.recon.native_observation_retention_persistence import (
+    NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+    write_native_observation_retention_plan_artifact,
+)
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
     NativeObservationStore,
@@ -309,13 +317,23 @@ PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
     INVESTIGATION_THREADS_FILENAME,
 )
-DEEP_FIXED_ARTEFACT_FILENAMES = (
+PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[:6],
     NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
     *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[6:],
     INVESTIGATION_THREADS_FILENAME,
 )
 PACKAGE4A_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES[:-1],
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[:6],
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+    *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[6:],
+    INVESTIGATION_THREADS_FILENAME,
+)
+PACKAGE4B_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *DEEP_FIXED_ARTEFACT_FILENAMES[:-1],
 )
 SKIPPED_STEP_MESSAGES = {
@@ -1733,6 +1751,7 @@ def _deep_completed_resume_verified(
     required_deep_names = _completed_deep_artefact_names(prior_pipeline)
     if required_deep_names not in {
         DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
     } and any(
@@ -1747,6 +1766,7 @@ def _deep_completed_resume_verified(
             APPLICATION_SERVICE_MODEL_FILENAME,
             INVESTIGATION_THREADS_FILENAME,
             NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+            NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
         )
     ):
         return False
@@ -1779,8 +1799,10 @@ def _completed_deep_artefact_names(
         for path in step["output_paths"]
         if isinstance(path, str)
     }
-    if NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in all_recorded_names:
+    if NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME in all_recorded_names:
         return DEEP_FIXED_ARTEFACT_FILENAMES
+    if NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in all_recorded_names:
+        return PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES
     if INVESTIGATION_THREADS_FILENAME in all_recorded_names:
         return PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES
     for step in raw_steps:
@@ -2051,24 +2073,20 @@ def _native_content_discovery_limits_for_pipeline(
     )
 
 
-def _native_observation_semantic_evidence_for_output(
+def _native_observation_semantics_for_output(
     output_dir: Path,
-) -> NativeObservationSemanticEvidence:
+) -> tuple[
+    NativeObservationSemanticEvidence,
+    tuple[NativeSemanticProcessingSource, ...],
+    NativeObservationStore | None,
+]:
     store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
     if not store_root.exists() and not store_root.is_symlink():
-        return NativeObservationSemanticEvidence()
+        return NativeObservationSemanticEvidence(), (), None
     store = NativeObservationStore.open_published(store_root)
-    return build_native_observation_semantic_evidence(store)
-
-
-def _native_observation_semantic_processing_sources_for_output(
-    output_dir: Path,
-) -> tuple[NativeSemanticProcessingSource, ...]:
-    store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
-    if not store_root.exists() and not store_root.is_symlink():
-        return ()
-    store = NativeObservationStore.open_published(store_root)
-    return build_native_observation_semantic_processing_sources(store)
+    evidence = build_native_observation_semantic_evidence(store)
+    processed_sources = build_native_observation_semantic_processing_sources(store)
+    return evidence, processed_sources, store
 
 
 
@@ -2626,17 +2644,33 @@ def _step_runners(
             project_state,
             source_collection=source_collection,
         )
-        native_observation_evidence = (
-            _native_observation_semantic_evidence_for_output(output_dir)
-        )
-        native_observation_processing_sources = (
-            _native_observation_semantic_processing_sources_for_output(output_dir)
+        (
+            native_observation_evidence,
+            native_observation_processing_sources,
+            native_observation_store,
+        ) = _native_observation_semantics_for_output(
+            output_dir
         )
         native_observation_semantic_evidence_path = (
             write_native_observation_semantic_evidence_artifact(
                 output_dir,
                 native_observation_evidence,
                 processed_sources=native_observation_processing_sources,
+            )
+        )
+        native_observation_retention_plan = (
+            NativeObservationRetentionPlan()
+            if native_observation_store is None
+            else build_native_observation_retention_plan(
+                native_observation_store,
+                semantic_evidence=native_observation_evidence,
+                processed_sources=native_observation_processing_sources,
+            )
+        )
+        native_observation_retention_plan_path = (
+            write_native_observation_retention_plan_artifact(
+                output_dir,
+                native_observation_retention_plan,
             )
         )
         application_composition = build_application_service_composition(
@@ -2671,6 +2705,7 @@ def _step_runners(
                     *metadata_paths,
                     *provenance_paths,
                     native_observation_semantic_evidence_path,
+                    native_observation_retention_plan_path,
                     application_service_model_path,
                 ),
             ),
@@ -2684,6 +2719,7 @@ def _step_runners(
                     *metadata_paths,
                     *provenance_paths,
                     native_observation_semantic_evidence_path,
+                    native_observation_retention_plan_path,
                     application_service_model_path,
                 )
             ],
@@ -3163,6 +3199,8 @@ def _deep_evidence_paths_required(
     expected_names = tuple(path.name for path in deduped)
     if expected_names not in {
         DEEP_FIXED_ARTEFACT_FILENAMES,
+        PACKAGE4B_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES,
         PACKAGE4A_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,

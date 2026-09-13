@@ -1969,6 +1969,7 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         output_dir / "deep_shallow_route_followup_collection.json",
         output_dir / "deep_route_extraction.json",
         output_dir / "native_observation_semantic_evidence.json",
+        output_dir / "native_observation_retention_plan.json",
         output_dir / "deep_recon_review.md",
         output_dir / "deep_recon_runbook.md",
         output_dir / "deep_recon_orchestration.json",
@@ -2743,9 +2744,10 @@ def test_native_deep_collection_step_executes_and_threads_metadata_handoff(
         "deep_source_route_collection.json",
         "deep_metadata_collection.md",
         "deep_metadata_collection.json",
-        "application_service_model.json",
-        "native_observation_semantic_evidence.json",
-        "deep_shallow_route_followup_collection.json",
+            "application_service_model.json",
+            "native_observation_semantic_evidence.json",
+            "native_observation_retention_plan.json",
+            "deep_shallow_route_followup_collection.json",
         "deep_route_extraction.json",
     }
     outputs = context["deep_outputs"]

@@ -27,6 +27,10 @@ from bugslyce.recon.native_observation_semantic_evidence_persistence import (
     load_native_observation_semantic_checkpoint_artifact,
     load_native_observation_semantic_evidence_artifact,
 )
+from bugslyce.recon.native_observation_retention_persistence import (
+    NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+    load_native_observation_retention_plan_artifact,
+)
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
     NativeCandidateObservation,
@@ -205,6 +209,13 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     runtime = SimpleNamespace(programme_scope_policy=None, http_executor=None)
     context = _context(tmp_path, runtime=runtime)
     native_evidence = _native_evidence(tmp_path)
+    native_observation_path = (
+        tmp_path
+        / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+        / "observations"
+        / "00000007.json"
+    )
+    native_observation_bytes_before = native_observation_path.read_bytes()
     assert state.discovered_paths == ()
     assert len(native_evidence.structured_responses) == 1
     context["wp4_root_plan"] = object()
@@ -346,6 +357,15 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
             processed.body_sha256
             == native_evidence.structured_responses[0].body_sha256
         )
+        retention_plan = load_native_observation_retention_plan_artifact(root)
+        assert retention_plan is not None
+        assert len(retention_plan.decisions) == 1
+        assert retention_plan.decisions[0].action == "retain"
+        stored_exchange = NativeObservationStore.open_published(
+            root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+        ).load_observation(7).exchanges[0]
+        assert stored_exchange.body_retention_state == "retained"
+        assert stored_exchange.body_retention_reason is None
         calls["persist"].append(model)
         path = root / "application_service_model.json"
         path.write_text("fixture\n", encoding="utf-8")
@@ -393,6 +413,9 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     assert NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in {
         Path(path).name for path in collection_paths
     }
+    assert NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME in {
+        Path(path).name for path in collection_paths
+    }
     assert len(
         tuple(
             (
@@ -403,6 +426,7 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
             ).iterdir()
         )
     ) == 1
+    assert native_observation_path.read_bytes() == native_observation_bytes_before
     assert "application_service_model.json" in {Path(path).name for path in collection_paths}
     outputs = context["deep_outputs"]
     assert isinstance(outputs, pipeline.DeepPipelineOutputs)
@@ -446,6 +470,7 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
         ("legacy", False),
         ("pre_wp5d", False),
         ("pre_package3c", True),
+        ("pre_package4b", True),
         ("current", True),
     ),
 )
@@ -458,6 +483,7 @@ def test_completed_deep_resume_keeps_old_shapes_and_requires_current_model(
         "legacy": pipeline.LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES,
         "pre_wp5d": pipeline.PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES,
         "pre_package3c": pipeline.PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
+        "pre_package4b": pipeline.PRE_PACKAGE4B_DEEP_FIXED_ARTEFACT_FILENAMES,
         "current": pipeline.DEEP_FIXED_ARTEFACT_FILENAMES,
     }[shape]
     export_path = tmp_path / "evidence-pack.zip"

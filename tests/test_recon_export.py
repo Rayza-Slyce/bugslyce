@@ -38,6 +38,14 @@ from bugslyce.recon.native_observation_store import (
     NativeReceivedExchange,
     validate_native_observation_store,
 )
+from bugslyce.recon.native_observation_facts import NativeObservationSemanticEvidence
+from bugslyce.recon.native_observation_retention import NativeObservationRetentionPlan
+from bugslyce.recon.native_observation_retention_persistence import (
+    write_native_observation_retention_plan_artifact,
+)
+from bugslyce.recon.native_observation_semantic_evidence_persistence import (
+    write_native_observation_semantic_evidence_artifact,
+)
 from bugslyce.reports.analysis_coverage import (
     ANALYSIS_COVERAGE_FILENAME,
     AnalysisCoverageExecutionEvidence,
@@ -4695,6 +4703,26 @@ def test_native_observation_store_complete_round_trip_is_portable(
     )
     assert expected_members <= set(export_manifest["files_included"])
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_native_retention_plan_is_a_reconstructable_export_member(
+    tmp_path: Path,
+) -> None:
+    input_dir = _export_input(tmp_path)
+    write_native_observation_semantic_evidence_artifact(
+        input_dir,
+        NativeObservationSemanticEvidence(),
+    )
+    write_native_observation_retention_plan_artifact(
+        input_dir,
+        NativeObservationRetentionPlan(),
+    )
+
+    references = closure_module.discover_evidence_pack_references(input_dir)
+
+    assert "native_observation_retention_plan.json" in {
+        reference.portable_path for reference in references
+    }
 
 
 def test_native_observation_store_partial_round_trip_preserves_state(
