@@ -3263,10 +3263,21 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         build_report_view,
     )
 
+    def reject_legacy_brief(*_args, **_kwargs):
+        raise AssertionError(
+            "current canonical Deep output must not build OperatorBriefView"
+        )
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_operator_brief_view",
+        reject_legacy_brief,
+    )
+
     def write_outputs(*_args, **kwargs):
         captured["view"] = kwargs["operator_report_view"]
         captured["threads"] = kwargs["investigation_threads"]
-        captured["brief"] = kwargs["operator_brief"]
+        captured["brief"] = kwargs.get("operator_brief")
         captured["persisted_coverage"] = kwargs["analysis_coverage_evidence"]
         return tmp_path / "report.md", tmp_path / "project_state.json"
 
@@ -3316,16 +3327,10 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     assert rendered_runbook_threads == [canonical_threads]
     assert thread_model_calls == [application_service_model]
 
-    from bugslyce.reports.operator_brief import build_operator_brief_view
-
     view = captured["view"]
     brief = captured["brief"]
 
-    assert brief == build_operator_brief_view(summary)
-    assert tuple(
-        disposition.source_id
-        for disposition in brief.dispositions
-    ) == ("LEAD-CONTROLLED",)
+    assert brief is None
 
     assert view.primary_anchor_ids == (canonical_threads[0].thread_id,)
     assert tuple(

@@ -3308,9 +3308,10 @@ def _write_interpretation_report_if_needed(
     if operator_summary is not None:
         report_kwargs["operator_summary"] = operator_summary
         report_kwargs["investigation_threads"] = threads
-        report_kwargs["operator_brief"] = build_operator_brief_view(
-            operator_summary,
-        )
+        if thread_path is None:
+            report_kwargs["operator_brief"] = build_operator_brief_view(
+                operator_summary,
+            )
         if operator_report_view is not None:
             report_kwargs["operator_report_view"] = operator_report_view
     confidence_markdown = render_collection_confidence_markdown(confidence_notices)

@@ -643,13 +643,32 @@ def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
     presentation = model.operator_brief_presentation
     if presentation is None:
         raise ValueError("Technical investigation evidence requires canonical presentation.")
+    subjects = tuple(
+        item
+        for item in presentation.investigation_subjects
+        if item.source_family != "application_service"
+    )
+    canonical_snapshot_present = model.investigation_threads is not None
+    if canonical_snapshot_present:
+        subjects = tuple(
+            sorted(
+                subjects,
+                key=lambda item: (
+                    item.source_family,
+                    item.semantic_subject_key or "",
+                    item.policy_key,
+                ),
+            )
+        )
     content = (
         '<p class="section-note">Canonical technical subjects and provenance are retained '
         "for supporting review. These disclosures are not a second priority ranking.</p>"
         + "".join(
-            _technical_investigation_subject(item)
-            for item in presentation.investigation_subjects
-            if item.source_family != "application_service"
+            _technical_investigation_subject(
+                item,
+                show_legacy_priority=not canonical_snapshot_present,
+            )
+            for item in subjects
         )
     )
     return _section(
@@ -670,16 +689,26 @@ def _documented_application_service_context_section(
     )
 
 
-def _technical_investigation_subject(item: object) -> str:
+def _technical_investigation_subject(
+    item: object,
+    *,
+    show_legacy_priority: bool = True,
+) -> str:
     label = item.display_title
     return (
         '<details class="record searchable technical-investigation-subject" '
         f'data-category="{_a(_TECHNICAL_INVESTIGATION_CATEGORY)}" data-status="">'
-        f'<summary>{_h(label)}</summary>{_investigation_subject(item)}</details>'
+        f'<summary>{_h(label)}</summary>'
+        f'{_investigation_subject(item, show_legacy_priority=show_legacy_priority)}'
+        "</details>"
     )
 
 
-def _investigation_subject(item: object) -> str:
+def _investigation_subject(
+    item: object,
+    *,
+    show_legacy_priority: bool = True,
+) -> str:
     metadata = (
         ("Disposition", _human_label(item.disposition)),
         ("Subject kind", item.subject_kind.value),
@@ -687,7 +716,7 @@ def _investigation_subject(item: object) -> str:
     )
     rank = (
         f'<p class="investigation-rank searchable">Rank {_h(item.rank)}</p>'
-        if item.rank is not None
+        if show_legacy_priority and item.rank is not None
         else ""
     )
     fields = "".join(

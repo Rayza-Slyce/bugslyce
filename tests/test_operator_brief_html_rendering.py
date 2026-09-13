@@ -312,6 +312,54 @@ def test_html_model_loads_canonical_snapshot_without_thread_recomposition(
     assert build_html_report_model(root).investigation_threads == threads
 
 
+def test_canonical_technical_evidence_uses_neutral_non_priority_presentation(
+    tmp_path: Path,
+) -> None:
+    threads = (_canonical_thread("d", "CANONICAL PRIORITY", "http://blog.thm/api/"),)
+    model = build_html_report_model(_canonical_thread_pack(tmp_path, threads))
+    technical_subjects = tuple(
+        subject
+        for subject in model.operator_brief_presentation.investigation_subjects
+        if subject.source_family != "application_service"
+    )
+    neutral_subjects = tuple(
+        sorted(
+            technical_subjects,
+            key=lambda subject: (
+                subject.source_family,
+                subject.semantic_subject_key or "",
+                subject.policy_key,
+            ),
+        )
+    )
+    assert technical_subjects != neutral_subjects
+
+    html = render_html_report(model)
+    technical = html.split('<section id="technical-investigation-evidence"', 1)[1].split(
+        "</section>", 1,
+    )[0]
+
+    assert re.search(r"\bRank [0-9]+\b", technical) is None
+    assert all(subject.thread_id not in technical for subject in technical_subjects)
+    positions = [technical.index(subject.policy_key) for subject in neutral_subjects]
+    assert positions == sorted(positions)
+    assert threads[0].thread_id in html
+
+
+def test_historical_technical_evidence_retains_legacy_policy_presentation(
+    tmp_path: Path,
+) -> None:
+    model = _model_with_human_brief_and_composition(tmp_path)
+    assert model.investigation_threads is None
+
+    html = render_html_report(model)
+    technical = html.split('<section id="technical-investigation-evidence"', 1)[1].split(
+        "</section>", 1,
+    )[0]
+
+    assert re.search(r"\bRank [0-9]+\b", technical) is not None
+
+
 def test_empty_persisted_brief_does_not_suppress_ranked_human_fallback(
     tmp_path: Path,
 ) -> None:
