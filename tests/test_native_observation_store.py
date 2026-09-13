@@ -96,6 +96,12 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_bytes(observation_store_module._json_bytes(payload))
 
 
+def _remove_schema_3_retention_fields(observation: dict[str, object]) -> None:
+    for exchange in observation["exchanges"]:
+        exchange.pop("body_retention_reason", None)
+        exchange.pop("body_retention_state", None)
+
+
 def _rewrite_store_as_schema_1(root: Path, *, era: str = "C") -> None:
     removable_by_era = {
         "A": {
@@ -116,6 +122,7 @@ def _rewrite_store_as_schema_1(root: Path, *, era: str = "C") -> None:
     for path in (root / "observations").glob("*.json"):
         envelope = json.loads(path.read_text(encoding="utf-8"))
         envelope["schema_version"] = 1
+        _remove_schema_3_retention_fields(envelope["observation"])
         for key in removable_by_era[era]:
             envelope["observation"].pop(key, None)
         _write_json(path, envelope)
@@ -126,6 +133,22 @@ def _rewrite_store_as_schema_1(root: Path, *, era: str = "C") -> None:
         index["metadata_observation_bytes"] = sum(
             path.stat().st_size for path in (root / "observations").glob("*.json")
         )
+        _write_json(index_path, index)
+
+
+def _rewrite_store_as_schema_2(root: Path) -> None:
+    observation_bytes = 0
+    for path in (root / "observations").glob("*.json"):
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope["schema_version"] = 2
+        _remove_schema_3_retention_fields(envelope["observation"])
+        _write_json(path, envelope)
+        observation_bytes += path.stat().st_size
+    index_path = root / "index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["schema_version"] = 2
+        index["metadata_observation_bytes"] = observation_bytes
         _write_json(index_path, index)
 
 
@@ -180,6 +203,134 @@ def test_complete_zero_byte_body_is_evidence(tmp_path: Path) -> None:
     assert exchange.body_sha256 == hashlib.sha256(b"").hexdigest()
     assert store.read_body(exchange.body) == b""
     assert store.body_bytes_committed == 0
+
+
+def test_complete_capture_can_record_intentional_body_non_retention() -> None:
+    digest = hashlib.sha256(b"captured then checkpointed").hexdigest()
+
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/api/search/",
+        status_code=200,
+        headers=(("Content-Type", "application/json"),),
+        capture_state="complete",
+        captured_bytes=len(b"captured then checkpointed"),
+        body_sha256=digest,
+        body=None,
+        body_retention_state="intentionally_not_retained",
+        body_retention_reason="semantic_processing_checkpointed",
+    )
+
+    assert exchange.capture_state == "complete"
+    assert exchange.captured_bytes == len(b"captured then checkpointed")
+    assert exchange.body_sha256 == digest
+    assert exchange.body is None
+
+
+def test_intentional_body_non_retention_requires_a_reason() -> None:
+    with pytest.raises(ValueError, match="retention reason"):
+        NativeReceivedExchange(
+            request_url="https://app.example.test/api/search/",
+            status_code=200,
+            headers=(),
+            capture_state="complete",
+            captured_bytes=2,
+            body_sha256=hashlib.sha256(b"{}").hexdigest(),
+            body=None,
+            body_retention_state="intentionally_not_retained",
+        )
+
+
+def test_intentionally_unretained_capture_accounting_is_distinct_from_cas_bytes(
+    tmp_path: Path,
+) -> None:
+    body = b'{"direct": true}'
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/api/search/",
+        status_code=200,
+        headers=(("Content-Type", "application/json"),),
+        capture_state="complete",
+        captured_bytes=len(body),
+        body_sha256=hashlib.sha256(body).hexdigest(),
+        body=None,
+        body_retention_state="intentionally_not_retained",
+        body_retention_reason="semantic_processing_checkpointed",
+    )
+    store = _store(tmp_path / "native-observations", 100)
+    _publish(store, _observation(0, exchange), maximum_redirect_hops=0)
+    store.publish_index("complete")
+
+    validated = validate_native_observation_store(store.root)
+
+    assert validated.body_bytes_committed == 0
+    assert validated.response_bytes_captured == len(body)
+
+
+def test_historical_schema_two_retention_state_is_inferred_truthfully(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    retained = _exchange(store, "https://app.example.test/retained", b"body")
+    unavailable = NativeReceivedExchange(
+        request_url="https://app.example.test/unavailable",
+        status_code=503,
+        headers=(),
+        capture_state="incomplete",
+        captured_bytes=0,
+        body_sha256=None,
+        body=None,
+        incomplete_reason="body_read_error",
+    )
+    _publish(store, _observation(0, retained))
+    _publish(store, _observation(1, unavailable))
+    store.publish_index("complete")
+    _rewrite_store_as_schema_2(store.root)
+
+    reopened = _store(store.root, 100)
+
+    assert reopened.load_observation(0).exchanges[0].body_retention_state == "retained"
+    assert reopened.load_observation(1).exchanges[0].body_retention_state == "unavailable"
+    assert reopened.load_observation(1).exchanges[0].body_retention_reason is None
+
+
+def test_unpublished_schema_two_store_is_read_only_for_schema_three_writer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "native-observations"
+    store = _store(root, 100)
+    _publish(
+        store,
+        _observation(0, _exchange(store, "https://app.example.test/a", b"body")),
+    )
+    _rewrite_store_as_schema_2(root)
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError, match="schema 2.*read-only"):
+        _store(root, 100)
+
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    } == before
+
+
+def test_intentional_body_non_retention_rejects_unknown_reason() -> None:
+    with pytest.raises(ValueError, match="capture"):
+        NativeReceivedExchange(
+            request_url="https://app.example.test/a",
+            status_code=200,
+            headers=(),
+            capture_state="complete",
+            captured_bytes=2,
+            body_sha256=hashlib.sha256(b"{}").hexdigest(),
+            body=None,
+            body_retention_state="intentionally_not_retained",
+            body_retention_reason="operator_said_so",
+        )
 
 
 def test_response_less_failure_fabricates_no_body(tmp_path: Path) -> None:
@@ -361,6 +512,7 @@ def test_existing_no_refusal_payload_reloads_as_non_refused(tmp_path: Path) -> N
     _publish(store, observation)
     payload_path = store.root / "observations" / "00000000.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    _remove_schema_3_retention_fields(payload["observation"])
     for field in (
         "refused_redirect",
         "terminal_failure",
@@ -475,7 +627,7 @@ def test_received_exchange_terminal_failure_accepts_every_capture_state(
     envelope = json.loads(
         (store.root / "observations/00000000.json").read_text(encoding="utf-8")
     )
-    assert envelope["schema_version"] == 2
+    assert envelope["schema_version"] == 3
     assert set(envelope["observation"]) == {
         "candidate_index",
         "exchanges",
@@ -1024,6 +1176,7 @@ def test_legacy_payload_without_terminal_dispositions_reloads_unchanged(
     _publish(store, observation)
     payload_path = store.root / "observations" / "00000000.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    _remove_schema_3_retention_fields(payload["observation"])
     for field in (
         "refused_redirect",
         "terminal_failure",
@@ -1048,6 +1201,7 @@ def test_terminal_disposition_era_payload_without_fatal_stop_reloads_unchanged(
     _publish(store, observation)
     payload_path = store.root / "observations" / "00000000.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    _remove_schema_3_retention_fields(payload["observation"])
     del payload["observation"]["fatal_execution_stop"]
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -1065,6 +1219,7 @@ def test_redirect_refusal_era_payload_reloads_unchanged(
     _publish(store, observation)
     payload_path = store.root / "observations" / "00000000.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    _remove_schema_3_retention_fields(payload["observation"])
     for field in (
         "terminal_failure",
         "fatal_execution_stop",
@@ -1105,7 +1260,7 @@ def test_current_payload_missing_terminal_metadata_key_is_rejected(
         _store(store.root, 100)
 
 
-def test_new_store_writes_schema_2_observation_and_index(tmp_path: Path) -> None:
+def test_new_store_writes_schema_3_observation_and_index(tmp_path: Path) -> None:
     store = _store(tmp_path / "native-observations", 100)
     exchange = _exchange(store, "https://app.example.test/a", b"body")
     _publish(store, _observation(0, exchange))
@@ -1115,8 +1270,8 @@ def test_new_store_writes_schema_2_observation_and_index(tmp_path: Path) -> None
     store.publish_index("complete")
     index_payload = json.loads((store.root / "index.json").read_text(encoding="utf-8"))
 
-    assert observation_store_module.STORE_SCHEMA_VERSION == 2
-    assert observation_payload["schema_version"] == 2
+    assert observation_store_module.STORE_SCHEMA_VERSION == 3
+    assert observation_payload["schema_version"] == 3
     assert set(observation_payload["observation"]) == {
         "candidate_index",
         "exchanges",
@@ -1129,8 +1284,33 @@ def test_new_store_writes_schema_2_observation_and_index(tmp_path: Path) -> None
         "fatal_execution_stop",
     }
     assert observation_payload["observation"]["fatal_execution_stop"] is None
-    assert index_payload["schema_version"] == 2
-    assert validate_native_observation_store(store.root).schema_version == 2
+    exchange_payload = observation_payload["observation"]["exchanges"][0]
+    assert exchange_payload["body_retention_state"] == "retained"
+    assert exchange_payload["body_retention_reason"] is None
+    assert index_payload["schema_version"] == 3
+    assert validate_native_observation_store(store.root).schema_version == 3
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ("body_retention_state", "body_retention_reason"),
+)
+def test_schema_3_exchange_requires_explicit_retention_fields(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    store = _store(tmp_path / "native-observations", 100)
+    _publish(
+        store,
+        _observation(0, _exchange(store, "https://app.example.test/a", b"body")),
+    )
+    path = store.root / "observations/00000000.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    del envelope["observation"]["exchanges"][0][missing_field]
+    _write_json(path, envelope)
+
+    with pytest.raises(ValueError, match="exchange payload"):
+        _store(store.root, 100)
 
 
 def test_schema_1_rejects_nine_key_fatal_prototype_and_hybrid_shapes(
@@ -1162,6 +1342,7 @@ def test_schema_2_accepts_only_exact_nine_key_observation_shape(tmp_path: Path) 
         (store.root / "observations/00000000.json").read_text(encoding="utf-8")
     )
     current = envelope["observation"]
+    _remove_schema_3_retention_fields(current)
 
     assert observation_store_module._observation_from_payload(
         current, schema_version=2
@@ -1177,7 +1358,7 @@ def test_schema_2_accepts_only_exact_nine_key_observation_shape(tmp_path: Path) 
             )
 
 
-@pytest.mark.parametrize("schema_version", (True, "2", 0, 3))
+@pytest.mark.parametrize("schema_version", (True, "2", 0, 4))
 def test_observation_envelope_rejects_wrong_or_unknown_schema_version(
     tmp_path: Path,
     schema_version: object,
@@ -1264,6 +1445,7 @@ def test_mixed_observation_versions_and_index_version_disagreement_are_rejected(
     first_envelope = json.loads(first_path.read_text(encoding="utf-8"))
     first_envelope["schema_version"] = 1
     first_envelope["observation"].pop("fatal_execution_stop")
+    _remove_schema_3_retention_fields(first_envelope["observation"])
     _write_json(first_path, first_envelope)
     with pytest.raises(ValueError, match="schema versions"):
         _store(root, 100)
@@ -1281,7 +1463,7 @@ def test_mixed_observation_versions_and_index_version_disagreement_are_rejected(
         validate_native_observation_store(published_root)
 
 
-@pytest.mark.parametrize("schema_version", (True, "2", 0, 3))
+@pytest.mark.parametrize("schema_version", (True, "2", 0, 4))
 def test_index_rejects_wrong_or_unknown_schema_version(
     tmp_path: Path,
     schema_version: object,
@@ -1300,7 +1482,7 @@ def test_index_rejects_wrong_or_unknown_schema_version(
         validate_native_observation_store(root)
 
 
-def test_interrupted_schema_2_store_reopens_without_rewriting_records(
+def test_interrupted_schema_3_store_reopens_without_rewriting_records(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "native-observations"
@@ -1312,12 +1494,12 @@ def test_interrupted_schema_2_store_reopens_without_rewriting_records(
 
     reopened = _store(root, 100)
 
-    assert reopened.schema_version == 2
+    assert reopened.schema_version == 3
     assert path.read_bytes() == before
     second = _exchange(reopened, "https://app.example.test/b", b"next")
     _publish(reopened, _observation(1, second))
     reopened.publish_index("partial")
-    assert validate_native_observation_store(root).schema_version == 2
+    assert validate_native_observation_store(root).schema_version == 3
 
 
 @pytest.mark.parametrize(
@@ -2478,4 +2660,19 @@ def test_observation_body_validation_is_bounded_by_reference_capture_length(
             root,
             observation,
             {digest: len(expected)},
+        )
+
+
+def test_truncated_capture_cannot_claim_semantic_processing_retention() -> None:
+    with pytest.raises(ValueError, match="capture"):
+        NativeReceivedExchange(
+            request_url="https://app.example.test/truncated",
+            status_code=200,
+            headers=(),
+            capture_state="truncated",
+            captured_bytes=4,
+            body_sha256=hashlib.sha256(b"part").hexdigest(),
+            body=None,
+            body_retention_state="intentionally_not_retained",
+            body_retention_reason="semantic_processing_checkpointed",
         )

@@ -30,12 +30,21 @@ from bugslyce.core.programme_scope import (
     validate_rule_id,
 )
 LEGACY_STORE_SCHEMA_VERSION = 1
-STORE_SCHEMA_VERSION = 2
+PREVIOUS_STORE_SCHEMA_VERSION = 2
+STORE_SCHEMA_VERSION = 3
 SUPPORTED_STORE_SCHEMA_VERSIONS = frozenset(
-    {LEGACY_STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION}
+    {
+        LEGACY_STORE_SCHEMA_VERSION,
+        PREVIOUS_STORE_SCHEMA_VERSION,
+        STORE_SCHEMA_VERSION,
+    }
 )
 STORE_CREATED_BY = "bugslyce.native_observation_store"
 CAPTURE_STATES = frozenset({"complete", "truncated", "incomplete"})
+BODY_RETENTION_STATES = frozenset(
+    {"retained", "intentionally_not_retained", "unavailable"}
+)
+BODY_RETENTION_REASON_CODES = frozenset({"semantic_processing_checkpointed"})
 ATTEMPT_FAILURE_CATEGORIES = frozenset(
     {
         "connect_error",
@@ -147,6 +156,8 @@ class NativeReceivedExchange:
     incomplete_reason: str | None = None
     headers_capture_state: str = "complete"
     headers_incomplete_reason: str | None = None
+    body_retention_state: str | None = None
+    body_retention_reason: str | None = None
 
     def __post_init__(self) -> None:
         _require_canonical_url(self.request_url)
@@ -161,14 +172,42 @@ class NativeReceivedExchange:
             or not _unsigned_64_bit_int(self.captured_bytes)
         ):
             raise ValueError("Native received exchange capture is invalid.")
-        if self.body is None:
-            if (
-                self.capture_state != "incomplete"
-                or self.captured_bytes != 0
-                or self.body_sha256 is not None
-            ):
-                raise ValueError("Native received exchange capture is invalid.")
-        elif (
+        retention_state = self.body_retention_state
+        if retention_state is None:
+            retention_state = "retained" if self.body is not None else "unavailable"
+            object.__setattr__(self, "body_retention_state", retention_state)
+        if retention_state not in BODY_RETENTION_STATES:
+            raise ValueError("Native received exchange body retention state is invalid.")
+        if retention_state == "retained" and (
+            self.body is None
+            or not isinstance(self.body, NativeBodyReference)
+            or not isinstance(self.body_sha256, str)
+            or self.body_sha256 != self.body.sha256
+            or self.captured_bytes != self.body.captured_bytes
+            or self.body_retention_reason is not None
+        ):
+            raise ValueError("Native received exchange capture is invalid.")
+        if retention_state == "intentionally_not_retained" and (
+            self.body is not None
+            or self.capture_state != "complete"
+            or self.headers_capture_state != "complete"
+            or not _unsigned_64_bit_int(self.captured_bytes)
+            or not isinstance(self.body_sha256, str)
+            or _DIGEST.fullmatch(self.body_sha256) is None
+            or self.body_retention_reason not in BODY_RETENTION_REASON_CODES
+        ):
+            if self.body_retention_reason is None:
+                raise ValueError("Native received exchange retention reason is invalid.")
+            raise ValueError("Native received exchange capture is invalid.")
+        if retention_state == "unavailable" and (
+            self.body is not None
+            or self.capture_state != "incomplete"
+            or self.captured_bytes != 0
+            or self.body_sha256 is not None
+            or self.body_retention_reason is not None
+        ):
+            raise ValueError("Native received exchange capture is invalid.")
+        if self.body is not None and (
             not isinstance(self.body, NativeBodyReference)
             or not isinstance(self.body_sha256, str)
             or self.body_sha256 != self.body.sha256
@@ -529,9 +568,13 @@ class NativeObservationStore:
             self._index_bytes = validated.metadata_index_bytes
             self.schema_version = validated.schema_version
         else:
-            if observation_schema_version == LEGACY_STORE_SCHEMA_VERSION:
+            if (
+                observation_schema_version is not None
+                and observation_schema_version != STORE_SCHEMA_VERSION
+            ):
                 raise ValueError(
-                    "Native observation store schema 1 is read-only; "
+                    f"Native observation store schema {observation_schema_version} "
+                    "is read-only; "
                     "create a fresh store for new observations."
                 )
             self.schema_version = STORE_SCHEMA_VERSION
@@ -540,6 +583,54 @@ class NativeObservationStore:
             > self.metadata_byte_allowance
         ):
             raise ValueError("Native observation store metadata allowance is insufficient.")
+
+    @classmethod
+    def open_published(cls, root: Path) -> "NativeObservationStore":
+        """Open one validated sealed store without creating missing directories."""
+
+        index = validate_native_observation_store(root)
+        resolved = _require_existing_store_root(root)
+        self = object.__new__(cls)
+        self.root = resolved
+        self._bodies_dir = resolved / "bodies"
+        self._sha256_dir = self._bodies_dir / "sha256"
+        self._observations_dir = resolved / "observations"
+        self.body_byte_allowance = index.body_byte_allowance
+        self.metadata_byte_allowance = index.metadata_byte_allowance
+        self._failure_injector = None
+        self._reservation_owner = object()
+        self._next_reservation = 0
+        self._reservations = {}
+        self._metadata_reservation_owner = object()
+        self._next_metadata_reservation = 0
+        self._metadata_reservations = {}
+        self._metadata_reserved_bytes = 0
+        self._reserved_candidate_indices = set()
+        self._body_sizes = (
+            _scan_body_objects(self._sha256_dir, index.body_byte_allowance)
+            if self._sha256_dir.exists()
+            else {}
+        )
+        if self._observations_dir.exists():
+            self._observations, self._observation_sizes, observed_version = (
+                _scan_observations(
+                    resolved,
+                    self._observations_dir,
+                    self._body_sizes,
+                    expected_schema_version=index.schema_version,
+                )
+            )
+            if observed_version not in {None, index.schema_version}:
+                raise ValueError("Native observation store schema versions are mixed.")
+        else:
+            self._observations = {}
+            self._observation_sizes = {}
+        self._sealed = True
+        self._requires_partial_index = False
+        self._index_bytes = index.metadata_index_bytes
+        self._reserved_final_index_capacity = 0
+        self.schema_version = index.schema_version
+        return self
 
     @property
     def body_bytes_committed(self) -> int:
@@ -844,9 +935,6 @@ def validate_native_observation_store(root: Path) -> NativeObservationStoreIndex
     """Independently validate one published observation-to-body graph."""
 
     resolved = _require_existing_store_root(root)
-    bodies = _require_fixed_directory(resolved, "bodies")
-    sha256_dir = _require_fixed_directory(bodies, "sha256")
-    observations_dir = _require_fixed_directory(resolved, "observations")
     index_path = resolved / "index.json"
     index_content = _read_regular_file(
         index_path,
@@ -879,13 +967,31 @@ def validate_native_observation_store(root: Path) -> NativeObservationStoreIndex
     metadata_allowance = payload.get("metadata_byte_allowance")
     if not _unsigned_64_bit_int(allowance):
         raise ValueError("Native observation store index schema is invalid.")
-    body_sizes = _scan_body_objects(sha256_dir, allowance)
-    observations, observation_sizes, observed_schema_version = _scan_observations(
-        resolved,
-        observations_dir,
-        body_sizes,
-        expected_schema_version=schema_version,
-    )
+    body_bytes_claimed = payload.get("body_bytes_committed")
+    observation_count_claimed = payload.get("observation_count")
+    bodies_path = resolved / "bodies"
+    sha256_path = bodies_path / "sha256"
+    if bodies_path.exists() or bodies_path.is_symlink() or sha256_path.exists():
+        bodies = _require_fixed_directory(resolved, "bodies")
+        sha256_dir = _require_fixed_directory(bodies, "sha256")
+        body_sizes = _scan_body_objects(sha256_dir, allowance)
+    elif schema_version == STORE_SCHEMA_VERSION and body_bytes_claimed == 0:
+        body_sizes = {}
+    else:
+        raise ValueError("Native observation store hierarchy is unsafe.")
+    observations_path = resolved / "observations"
+    if observations_path.exists() or observations_path.is_symlink():
+        observations_dir = _require_fixed_directory(resolved, "observations")
+        observations, observation_sizes, observed_schema_version = _scan_observations(
+            resolved,
+            observations_dir,
+            body_sizes,
+            expected_schema_version=schema_version,
+        )
+    elif schema_version == STORE_SCHEMA_VERSION and observation_count_claimed == 0:
+        observations, observation_sizes, observed_schema_version = {}, {}, None
+    else:
+        raise ValueError("Native observation store hierarchy is unsafe.")
     committed = sum(body_sizes.values())
     captured = _response_bytes_captured(observations)
     metadata_observation_bytes = sum(observation_sizes.values())
@@ -1509,7 +1615,7 @@ def maximum_native_observation_serialized_bytes(
         rate_rejection_observation,
         scope_refusal_observation,
     ]
-    if schema_version == STORE_SCHEMA_VERSION:
+    if schema_version != LEGACY_STORE_SCHEMA_VERSION:
         observations.append(fatal_execution_stop_observation)
     return max(
         len(
@@ -1670,11 +1776,21 @@ def _observation_payload(
             schema_version == LEGACY_STORE_SCHEMA_VERSION
             and observation.fatal_execution_stop is not None
         )
+        or (
+            schema_version != STORE_SCHEMA_VERSION
+            and any(
+                exchange.body_retention_state == "intentionally_not_retained"
+                for exchange in observation.exchanges
+            )
+        )
     ):
         raise ValueError("Native observation schema version is invalid.")
     observation_payload = {
         "candidate_index": observation.candidate_index,
-        "exchanges": [_exchange_payload(item) for item in observation.exchanges],
+        "exchanges": [
+            _exchange_payload(item, schema_version=schema_version)
+            for item in observation.exchanges
+        ],
         "failure": _failure_payload(observation.failure),
         "programme_scope_refusal": _programme_scope_refusal_payload(
             observation.programme_scope_refusal
@@ -1684,7 +1800,7 @@ def _observation_payload(
         "request_url": observation.request_url,
         "terminal_failure": _terminal_failure_payload(observation.terminal_failure),
     }
-    if schema_version == STORE_SCHEMA_VERSION:
+    if schema_version != LEGACY_STORE_SCHEMA_VERSION:
         observation_payload["fatal_execution_stop"] = _fatal_execution_stop_payload(
             observation.fatal_execution_stop
         )
@@ -1695,8 +1811,12 @@ def _observation_payload(
     }
 
 
-def _exchange_payload(exchange: NativeReceivedExchange) -> dict[str, object]:
-    return {
+def _exchange_payload(
+    exchange: NativeReceivedExchange,
+    *,
+    schema_version: int = STORE_SCHEMA_VERSION,
+) -> dict[str, object]:
+    payload = {
         "body": (
             {
                 "captured_bytes": exchange.body.captured_bytes,
@@ -1718,6 +1838,10 @@ def _exchange_payload(exchange: NativeReceivedExchange) -> dict[str, object]:
         "request_url": exchange.request_url,
         "status_code": exchange.status_code,
     }
+    if schema_version == STORE_SCHEMA_VERSION:
+        payload["body_retention_reason"] = exchange.body_retention_reason
+        payload["body_retention_state"] = exchange.body_retention_state
+    return payload
 
 
 def _failure_payload(failure: NativeAttemptFailure | None) -> dict[str, str] | None:
@@ -1793,7 +1917,7 @@ def _observation_from_payload(
     if schema_version == LEGACY_STORE_SCHEMA_VERSION:
         accepted = {frozenset(legacy_expected), frozenset(redirect_refusal_expected), frozenset(current_expected)}
         valid_keys = frozenset(keys) in accepted
-    elif schema_version == STORE_SCHEMA_VERSION:
+    elif schema_version in {PREVIOUS_STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION}:
         valid_keys = keys == schema_2_expected
     else:
         valid_keys = False
@@ -1805,7 +1929,10 @@ def _observation_from_payload(
     return NativeCandidateObservation(
         candidate_index=value["candidate_index"],
         request_url=value["request_url"],
-        exchanges=tuple(_exchange_from_payload(item) for item in raw_exchanges),
+        exchanges=tuple(
+            _exchange_from_payload(item, schema_version=schema_version)
+            for item in raw_exchanges
+        ),
         failure=_failure_from_payload(value["failure"]),
         refused_redirect=_refusal_from_payload(value.get("refused_redirect")),
         terminal_failure=_terminal_failure_from_payload(value.get("terminal_failure")),
@@ -1819,7 +1946,11 @@ def _observation_from_payload(
     )
 
 
-def _exchange_from_payload(value: object) -> NativeReceivedExchange:
+def _exchange_from_payload(
+    value: object,
+    *,
+    schema_version: int = STORE_SCHEMA_VERSION,
+) -> NativeReceivedExchange:
     expected = {
         "body",
         "body_sha256",
@@ -1832,6 +1963,13 @@ def _exchange_from_payload(value: object) -> NativeReceivedExchange:
         "request_url",
         "status_code",
     }
+    if schema_version == STORE_SCHEMA_VERSION:
+        expected |= {"body_retention_reason", "body_retention_state"}
+    elif schema_version not in {
+        LEGACY_STORE_SCHEMA_VERSION,
+        PREVIOUS_STORE_SCHEMA_VERSION,
+    }:
+        raise ValueError("Native received exchange payload is invalid.")
     if not isinstance(value, dict) or set(value) != expected:
         raise ValueError("Native received exchange payload is invalid.")
     body = value["body"]
@@ -1869,6 +2007,8 @@ def _exchange_from_payload(value: object) -> NativeReceivedExchange:
         incomplete_reason=value["incomplete_reason"],
         headers_capture_state=value["headers_capture_state"],
         headers_incomplete_reason=value["headers_incomplete_reason"],
+        body_retention_state=value.get("body_retention_state"),
+        body_retention_reason=value.get("body_retention_reason"),
     )
 
 

@@ -37,6 +37,7 @@ from bugslyce.recon.documentation_assertions import (
 )
 from bugslyce.recon.evidence_pack_closure import (
     discover_evidence_pack_references,
+    discover_expected_pack_references,
     validate_evidence_pack_root,
 )
 from bugslyce.recon.export import export_recon_evidence_pack
@@ -44,7 +45,13 @@ from bugslyce.recon.http_origin import HttpOrigin
 from bugslyce.recon.http_route_relationships import HttpRouteRelationshipEdge
 from bugslyce.recon.native_observation_facts import (
     NativeObservationSemanticEvidence,
+    NativeSemanticProcessingSource,
+    NativeStructuredResponseFact,
     build_native_observation_semantic_evidence,
+)
+from bugslyce.recon.native_observation_semantic_evidence_persistence import (
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    write_native_observation_semantic_evidence_artifact,
 )
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
@@ -379,6 +386,10 @@ def test_closure_binds_native_model_evidence_to_exact_store_members(
 ) -> None:
     root = _EXPORT_HELPERS["_export_input"](tmp_path)
     model, _native_evidence, body_sha256 = _native_model(root)
+    write_native_observation_semantic_evidence_artifact(
+        root,
+        model.native_observation_evidence,
+    )
     write_application_service_model_artifact(root, model)
 
     references = discover_evidence_pack_references(root)
@@ -415,6 +426,178 @@ def test_closure_binds_native_model_evidence_to_exact_store_members(
         )
         for reference in redirect_references
     )
+    assert any(
+        reference.portable_path == NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+        and reference.owner_kind == "native_observation_semantic_evidence"
+        for reference in references
+    )
+    output = tmp_path / "checkpointed-native-model.zip"
+    export_recon_evidence_pack(root, output, clock=lambda: _FIXED_TIME)
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in names
+        assert (
+            f"native-observations/bodies/sha256/{body_sha256}" in names
+        )
+
+
+def _intentionally_unretained_native_model(
+    root: Path,
+    *,
+    persist_checkpoint: bool,
+):
+    body = b'{"results": [], "count": 0}'
+    digest = sha256(body).hexdigest()
+    store = NativeObservationStore(
+        root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+        100_000,
+        metadata_byte_allowance=10_000_000,
+    )
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/api/search/",
+        status_code=200,
+        headers=(("Content-Type", "application/json"),),
+        capture_state="complete",
+        captured_bytes=len(body),
+        body_sha256=digest,
+        body=None,
+        body_retention_state="intentionally_not_retained",
+        body_retention_reason="semantic_processing_checkpointed",
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=7,
+            request_url=exchange.request_url,
+            exchanges=(exchange,),
+        ),
+        store.reserve_candidate_metadata(7, maximum_redirect_hops=0),
+    )
+    store.publish_index("complete")
+    evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url=exchange.request_url,
+                status_code=exchange.status_code,
+                candidate_index=7,
+                exchange_index=0,
+                body_sha256=digest,
+            ),
+        )
+    )
+    if persist_checkpoint:
+        write_native_observation_semantic_evidence_artifact(
+            root,
+            evidence,
+            processed_sources=(
+                NativeSemanticProcessingSource(
+                    request_url=exchange.request_url,
+                    status_code=exchange.status_code,
+                    candidate_index=7,
+                    exchange_index=0,
+                    captured_bytes=len(body),
+                    body_sha256=digest,
+                ),
+            ),
+        )
+    model = build_application_service_model(
+        application_composition=build_application_service_composition(
+            native_observation_evidence=evidence,
+        ),
+        documentation_assertions=DocumentationAssertionExtractionResult(
+            assertions=(),
+            skipped_sources=(),
+            sources_considered=0,
+            sources_eligible=0,
+        ),
+        native_observation_evidence=evidence,
+    )
+    write_application_service_model_artifact(root, model)
+    return digest
+
+
+def test_closure_accepts_checkpointed_intentionally_unretained_native_body(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    digest = _intentionally_unretained_native_model(
+        root,
+        persist_checkpoint=True,
+    )
+
+    references = discover_evidence_pack_references(root)
+
+    assert any(
+        item.portable_path == NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+        for item in references
+    )
+    output = tmp_path / "intentionally-unretained-native-model.zip"
+    export_recon_evidence_pack(root, output, clock=lambda: _FIXED_TIME)
+    extracted = tmp_path / "intentionally-unretained-native-model"
+    with zipfile.ZipFile(output) as archive:
+        assert NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in archive.namelist()
+        assert not any(name.endswith(digest) for name in archive.namelist())
+        archive.extractall(extracted)
+    discover_expected_pack_references(extracted)
+    validation = validate_evidence_pack_root(extracted)
+    assert validation.validation_status == "complete", (
+        validation.metadata_consistency_errors,
+        validation.expected_references_missing_from_closure,
+        validation.owner_association_errors,
+        validation.required_declaration_errors,
+    )
+    assert not any(item.portable_path.endswith(digest) for item in references)
+    assert any(
+        item.portable_path.endswith("native-observations/observations/00000007.json")
+        and item.owner_kind
+        in {
+            "native_observation_semantic_evidence",
+            "application_service_model_native_observation_evidence",
+        }
+        for item in references
+    )
+
+
+def test_closure_rejects_intentional_omission_without_semantic_checkpoint(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    _intentionally_unretained_native_model(root, persist_checkpoint=False)
+
+    with pytest.raises(ValueError, match="semantic checkpoint"):
+        discover_evidence_pack_references(root)
+
+
+def test_closure_rejects_intentional_omission_with_contradictory_checkpoint(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    _intentionally_unretained_native_model(root, persist_checkpoint=True)
+    checkpoint_path = root / NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["structured_responses"][0]["body_sha256"] = "f" * 64
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="contradicts"):
+        discover_evidence_pack_references(root)
+
+
+def test_historical_native_model_without_checkpoint_uses_body_backed_closure(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    model, _native_evidence, body_sha256 = _native_model(root)
+    write_application_service_model_artifact(root, model)
+
+    references = discover_evidence_pack_references(root)
+
+    assert not any(
+        item.portable_path == NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+        for item in references
+    )
+    assert any(item.portable_path.endswith(body_sha256) for item in references)
 
 
 def test_broken_required_provenance_is_rejected(tmp_path: Path) -> None:
@@ -498,3 +681,121 @@ def test_investigation_thread_snapshot_is_exported_and_validated(
 
     assert load_investigation_threads_artifact(extracted) == (thread,)
     assert validate_evidence_pack_root(extracted).validation_status == "complete"
+
+
+def test_closure_accepts_checkpointed_no_fact_intentional_omission(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    body = b"<html><body>ordinary repeated application shell</body></html>"
+    digest = sha256(body).hexdigest()
+    store = NativeObservationStore(
+        root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+        100_000,
+        metadata_byte_allowance=10_000_000,
+    )
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/ordinary/",
+        status_code=200,
+        headers=(("Content-Type", "text/html"),),
+        capture_state="complete",
+        captured_bytes=len(body),
+        body_sha256=digest,
+        body=None,
+        body_retention_state="intentionally_not_retained",
+        body_retention_reason="semantic_processing_checkpointed",
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=12,
+            request_url=exchange.request_url,
+            exchanges=(exchange,),
+        ),
+        store.reserve_candidate_metadata(12, maximum_redirect_hops=0),
+    )
+    store.publish_index("complete")
+    write_native_observation_semantic_evidence_artifact(
+        root,
+        NativeObservationSemanticEvidence(),
+        processed_sources=(
+            NativeSemanticProcessingSource(
+                request_url=exchange.request_url,
+                status_code=exchange.status_code,
+                candidate_index=12,
+                exchange_index=0,
+                captured_bytes=len(body),
+                body_sha256=digest,
+            ),
+        ),
+    )
+
+    references = discover_evidence_pack_references(root)
+
+    assert any(
+        item.portable_path.endswith(
+            "native-observations/observations/00000012.json"
+        )
+        and item.owner_kind == "native_observation_semantic_evidence"
+        for item in references
+    )
+    assert not any(item.portable_path.endswith(digest) for item in references)
+
+
+def test_closure_rejects_no_fact_omission_without_processing_coverage(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    body = b"<html><body>ordinary repeated application shell</body></html>"
+    digest = sha256(body).hexdigest()
+    store = NativeObservationStore(
+        root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+        100_000,
+        metadata_byte_allowance=10_000_000,
+    )
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/ordinary/",
+        status_code=200,
+        headers=(("Content-Type", "text/html"),),
+        capture_state="complete",
+        captured_bytes=len(body),
+        body_sha256=digest,
+        body=None,
+        body_retention_state="intentionally_not_retained",
+        body_retention_reason="semantic_processing_checkpointed",
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=12,
+            request_url=exchange.request_url,
+            exchanges=(exchange,),
+        ),
+        store.reserve_candidate_metadata(12, maximum_redirect_hops=0),
+    )
+    store.publish_index("complete")
+    write_native_observation_semantic_evidence_artifact(
+        root,
+        NativeObservationSemanticEvidence(),
+    )
+
+    with pytest.raises(ValueError, match="processing coverage"):
+        discover_evidence_pack_references(root)
+
+
+def test_closure_rejects_intentional_omission_with_contradictory_processing_coverage(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    _intentionally_unretained_native_model(
+        root,
+        persist_checkpoint=True,
+    )
+    checkpoint_path = root / NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["processed_sources"][0]["captured_bytes"] += 1
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="processing coverage contradicts"):
+        discover_evidence_pack_references(root)

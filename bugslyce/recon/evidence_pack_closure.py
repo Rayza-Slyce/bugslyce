@@ -36,9 +36,15 @@ from bugslyce.recon.native_observation_store import (
 )
 from bugslyce.recon.native_observation_facts import (
     NativeMobileAssociationDeclaration,
+    NativeObservationSemanticEvidence,
     NativeRedirectRelationship,
     NativeStructuredResponseFact,
     build_native_observation_semantic_evidence,
+)
+from bugslyce.recon.native_observation_semantic_evidence_persistence import (
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    load_native_observation_semantic_checkpoint_artifact,
+    load_native_observation_semantic_evidence_artifact,
 )
 
 from bugslyce.core.models import (
@@ -159,6 +165,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "application_service_model_a1_relation_support",
         "application_service_model_a2_assertion_support",
         "application_service_model_native_observation_evidence",
+        "native_observation_semantic_evidence",
         "investigation_thread_snapshot",
         "investigation_thread_application_relation",
         "investigation_thread_native_observation",
@@ -356,6 +363,12 @@ def discover_evidence_pack_references(
         )
     )
     references.extend(
+        _native_observation_semantic_evidence_references(
+            root,
+            references_are_portable=False,
+        )
+    )
+    references.extend(
         _application_service_model_references(
             root,
             tuple(references),
@@ -459,6 +472,12 @@ def discover_expected_pack_references(
         )
     )
     references.extend(
+        _native_observation_semantic_evidence_references(
+            root,
+            references_are_portable=True,
+        )
+    )
+    references.extend(
         _application_service_model_references(
             root,
             tuple(references),
@@ -519,7 +538,7 @@ def _native_observation_store_references(
     body_root = store_root / "bodies" / "sha256"
     member_paths.extend(
         f"{store_relative}/bodies/sha256/{path.name}"
-        for path in body_root.iterdir()
+        for path in (() if not body_root.exists() else body_root.iterdir())
         if not path.name.startswith(".")
     )
     return tuple(
@@ -531,6 +550,246 @@ def _native_observation_store_references(
         )
         for member_path in sorted(member_paths)
     )
+
+
+def _native_observation_semantic_evidence_references(
+    root: Path,
+    *,
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    """Validate one fact checkpoint against its exact native source graph."""
+
+    checkpoint_record = load_native_observation_semantic_checkpoint_artifact(root)
+    checkpoint = None if checkpoint_record is None else checkpoint_record.evidence
+    processed_sources = (
+        ()
+        if checkpoint_record is None
+        else checkpoint_record.processed_sources
+    )
+    native_root = root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    if not native_root.exists() and not native_root.is_symlink():
+        if checkpoint is None:
+            return ()
+        if checkpoint != NativeObservationSemanticEvidence() or processed_sources:
+            raise ValueError(
+                "native semantic checkpoint requires a native observation store"
+            )
+        return (
+            EvidencePackReference(
+                portable_path=NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+                owner_kind="native_observation_semantic_evidence",
+                owner_id=NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+                source_path=(
+                    None
+                    if references_are_portable
+                    else NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+                ),
+            ),
+        )
+
+    index = validate_native_observation_store(native_root)
+    store = NativeObservationStore.open_published(native_root)
+    sources: dict[str, tuple[object, str, str | None]] = {}
+    for candidate_index in index.observation_indices:
+        observation = store.load_observation(candidate_index)
+        for exchange_index, exchange in enumerate(observation.exchanges):
+            source_id = f"native-observation:{candidate_index}:{exchange_index}"
+            sources[source_id] = (
+                exchange,
+                f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/observations/"
+                f"{candidate_index:08d}.json",
+                (
+                    f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/"
+                    f"{exchange.body.relative_path}"
+                    if exchange.body is not None
+                    else None
+                ),
+            )
+
+    covered_sources: set[str] = set()
+    for processed in processed_sources:
+        source_id = processed.source_id
+        try:
+            exchange, _observation_path, _body_path = sources[source_id]
+        except KeyError as exc:
+            raise ValueError(
+                "native semantic processing coverage does not resolve"
+            ) from exc
+        if (
+            exchange.request_url != processed.request_url
+            or exchange.status_code != processed.status_code
+            or exchange.capture_state != processed.capture_state
+            or exchange.headers_capture_state != processed.headers_capture_state
+            or exchange.captured_bytes != processed.captured_bytes
+            or exchange.body_sha256 != processed.body_sha256
+        ):
+            raise ValueError(
+                "native semantic processing coverage contradicts its source"
+            )
+        covered_sources.add(source_id)
+
+
+    intentionally_omitted = {
+        source_id
+        for source_id, (exchange, _observation_path, _body_path) in sources.items()
+        if exchange.body_retention_state == "intentionally_not_retained"
+    }
+    if checkpoint is None:
+        if intentionally_omitted:
+            raise ValueError(
+                "intentional native body omission requires a semantic checkpoint"
+            )
+        return ()
+
+    represented_sources: set[str] = set()
+
+    def source(
+        candidate_index: int,
+        exchange_index: int,
+        label: str,
+    ) -> tuple[str, object, str, str | None]:
+        source_id = f"native-observation:{candidate_index}:{exchange_index}"
+        try:
+            exchange, observation_path, body_path = sources[source_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"native semantic checkpoint {label} does not resolve"
+            ) from exc
+        represented_sources.add(source_id)
+        return source_id, exchange, observation_path, body_path
+
+    for fact in checkpoint.structured_responses:
+        _source_id, exchange, _observation_path, _body_path = source(
+            fact.candidate_index,
+            fact.exchange_index,
+            "structured fact",
+        )
+        if (
+            exchange.request_url != fact.request_url
+            or exchange.status_code != fact.status_code
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or exchange.body_sha256 != fact.body_sha256
+            or not fact.direct_observation
+            or fact.confirmed_api
+        ):
+            raise ValueError(
+                "native semantic checkpoint structured fact contradicts its source"
+            )
+    for declaration in checkpoint.mobile_association_declarations:
+        _source_id, exchange, _observation_path, _body_path = source(
+            declaration.candidate_index,
+            declaration.exchange_index,
+            "mobile declaration",
+        )
+        if (
+            exchange.request_url != declaration.document_url
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or exchange.body_sha256 != declaration.body_sha256
+            or not declaration.direct_observation
+            or declaration.ownership_confirmed
+        ):
+            raise ValueError(
+                "native semantic checkpoint mobile declaration contradicts its source"
+            )
+    for relationship in checkpoint.redirect_relationships:
+        _source_id, exchange, _observation_path, _body_path = source(
+            relationship.candidate_index,
+            relationship.exchange_index,
+            "redirect relationship",
+        )
+        raw_location = next(
+            (
+                value
+                for name, value in exchange.headers
+                if name.casefold() == "location"
+            ),
+            None,
+        )
+        target_url = (
+            canonical_relationship_url(urljoin(exchange.request_url, raw_location))
+            if raw_location is not None
+            else None
+        )
+        if (
+            exchange.request_url != relationship.source_url
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or raw_location != relationship.raw_location
+            or target_url != relationship.target_url
+            or not relationship.direct_observation
+            or relationship.destination_fetched
+        ):
+            raise ValueError(
+                "native semantic checkpoint redirect contradicts its source"
+            )
+    if intentionally_omitted - covered_sources:
+        raise ValueError(
+            "intentional native body omission lacks semantic processing coverage"
+        )
+
+    extracted = build_native_observation_semantic_evidence(store)
+    retained_checkpoint = NativeObservationSemanticEvidence(
+        structured_responses=tuple(
+            item
+            for item in checkpoint.structured_responses
+            if sources[
+                f"native-observation:{item.candidate_index}:{item.exchange_index}"
+            ][0].body_retention_state
+            == "retained"
+        ),
+        redirect_relationships=tuple(
+            item
+            for item in checkpoint.redirect_relationships
+            if sources[item.source_id][0].body_retention_state == "retained"
+        ),
+        mobile_association_declarations=tuple(
+            item
+            for item in checkpoint.mobile_association_declarations
+            if sources[
+                f"native-observation:{item.candidate_index}:{item.exchange_index}"
+            ][0].body_retention_state
+            == "retained"
+        ),
+    )
+    if extracted != retained_checkpoint:
+        raise ValueError(
+            "native semantic checkpoint does not match retained native evidence"
+        )
+
+    references = [
+        EvidencePackReference(
+            portable_path=NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+            owner_kind="native_observation_semantic_evidence",
+            owner_id=NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+            source_path=(
+                None
+                if references_are_portable
+                else NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME
+            ),
+        )
+    ]
+    for source_id in sorted(represented_sources | covered_sources):
+        exchange, observation_path, body_path = sources[source_id]
+        references.append(
+            EvidencePackReference(
+                portable_path=observation_path,
+                owner_kind="native_observation_semantic_evidence",
+                owner_id=source_id,
+                source_path=None if references_are_portable else observation_path,
+            )
+        )
+        if body_path is not None:
+            references.append(
+                EvidencePackReference(
+                    portable_path=body_path,
+                    owner_kind="native_observation_semantic_evidence",
+                    owner_id=source_id,
+                    source_path=None if references_are_portable else body_path,
+                )
+            )
+    return tuple(references)
 
 
 def evidence_pack_references_from_deep_models(
@@ -1848,17 +2107,23 @@ def _application_service_model_references(
     if model is None:
         return ()
 
+    semantic_checkpoint = load_native_observation_semantic_evidence_artifact(root)
+    if (
+        semantic_checkpoint is not None
+        and model.native_observation_evidence != semantic_checkpoint
+    ):
+        raise ValueError(
+            "application/service model native evidence contradicts its semantic checkpoint"
+        )
     native_sources: dict[str, tuple[object, str, str | None]] = {}
     native_root = root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
     if native_root.exists() or native_root.is_symlink():
         native_index = validate_native_observation_store(native_root)
-        native_store = NativeObservationStore(
-            native_root,
-            native_index.body_byte_allowance,
-            metadata_byte_allowance=native_index.metadata_byte_allowance,
-        )
-        extracted_native_evidence = build_native_observation_semantic_evidence(
-            native_store
+        native_store = NativeObservationStore.open_published(native_root)
+        extracted_native_evidence = (
+            semantic_checkpoint
+            if semantic_checkpoint is not None
+            else build_native_observation_semantic_evidence(native_store)
         )
         for candidate_index in native_index.observation_indices:
             observation = native_store.load_observation(candidate_index)
@@ -1913,14 +2178,29 @@ def _application_service_model_references(
             raise ValueError("native model evidence does not resolve to an observation exchange") from exc
         if require_body_sha256 is not None:
             if (
-                exchange.body is None
-                or exchange.body_sha256 != require_body_sha256
-                or body_path is None
+                exchange.body_sha256 != require_body_sha256
+                or (
+                    body_path is None
+                    and (
+                        semantic_checkpoint is None
+                        or exchange.body_retention_state
+                        != "intentionally_not_retained"
+                    )
+                )
             ):
                 raise ValueError("native model evidence body does not match its observation exchange")
-        paths = (observation_path,) if body_path is None or require_body_sha256 is None else (
+        paths = (
+            *(
+                (NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,)
+                if semantic_checkpoint is not None
+                else ()
+            ),
             observation_path,
-            body_path,
+            *(
+                (body_path,)
+                if body_path is not None and require_body_sha256 is not None
+                else ()
+            ),
         )
         for source_path in paths:
             portable_path = source_path if references_are_portable else source_path
@@ -2229,10 +2509,7 @@ def _investigation_thread_references(
         if not native_root.exists() or native_root.is_symlink():
             raise ValueError("investigation thread native evidence requires a sealed native observation store")
         index = validate_native_observation_store(native_root)
-        native_store = NativeObservationStore(
-            native_root, index.body_byte_allowance,
-            metadata_byte_allowance=index.metadata_byte_allowance,
-        )
+        native_store = NativeObservationStore.open_published(native_root)
 
     evidence_paths: dict[str, list[EvidencePackReference]] = {}
     for reference in existing_references:
@@ -2268,15 +2545,27 @@ def _investigation_thread_references(
             ))
             body_sha256 = native_bodies.get(source_id)
             if body_sha256 is not None:
-                if exchange.body is None or exchange.body_sha256 != body_sha256:
+                if exchange.body_sha256 != body_sha256:
                     raise ValueError("investigation thread native body contradicts the observation store")
-                body_path = f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/{exchange.body.relative_path}"
-                references.append(EvidencePackReference(
-                    portable_path=body_path,
-                    owner_kind="investigation_thread_native_observation",
-                    owner_id=f"{thread.thread_id}:{source_id}",
-                    source_path=None if references_are_portable else body_path,
-                ))
+                if exchange.body is None:
+                    if (
+                        exchange.body_retention_state
+                        != "intentionally_not_retained"
+                    ):
+                        raise ValueError(
+                            "investigation thread native body contradicts the observation store"
+                        )
+                else:
+                    body_path = (
+                        f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/"
+                        f"{exchange.body.relative_path}"
+                    )
+                    references.append(EvidencePackReference(
+                        portable_path=body_path,
+                        owner_kind="investigation_thread_native_observation",
+                        owner_id=f"{thread.thread_id}:{source_id}",
+                        source_path=None if references_are_portable else body_path,
+                    ))
         for evidence_id in thread.related_evidence_ids:
             matches = evidence_paths.get(evidence_id, ())
             if not matches:

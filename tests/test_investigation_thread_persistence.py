@@ -176,7 +176,11 @@ def test_thread_snapshot_closure_binds_exact_model_and_native_members(
     monkeypatch.setattr(closure, "load_investigation_threads_artifact", lambda _root: (thread,))
     monkeypatch.setattr(closure, "load_application_service_model_artifact", lambda _root: model)
     monkeypatch.setattr(closure, "validate_native_observation_store", lambda _root: SimpleNamespace(body_byte_allowance=1, metadata_byte_allowance=1))
-    monkeypatch.setattr(closure, "NativeObservationStore", lambda *_args, **_kwargs: store)
+    monkeypatch.setattr(
+        closure.NativeObservationStore,
+        "open_published",
+        classmethod(lambda _cls, _root: store),
+    )
 
     references = closure._investigation_thread_references(
         tmp_path,

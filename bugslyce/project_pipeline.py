@@ -91,12 +91,17 @@ from bugslyce.recon.investigation_thread_persistence import (
 )
 from bugslyce.recon.native_observation_facts import (
     NativeObservationSemanticEvidence,
+    NativeSemanticProcessingSource,
     build_native_observation_semantic_evidence,
+    build_native_observation_semantic_processing_sources,
+)
+from bugslyce.recon.native_observation_semantic_evidence_persistence import (
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    write_native_observation_semantic_evidence_artifact,
 )
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
     NativeObservationStore,
-    validate_native_observation_store,
 )
 from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
@@ -300,9 +305,18 @@ PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES[4:],
     APPLICATION_SERVICE_MODEL_FILENAME,
 )
-DEEP_FIXED_ARTEFACT_FILENAMES = (
+PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
     INVESTIGATION_THREADS_FILENAME,
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[:6],
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES[6:],
+    INVESTIGATION_THREADS_FILENAME,
+)
+PACKAGE4A_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *DEEP_FIXED_ARTEFACT_FILENAMES[:-1],
 )
 SKIPPED_STEP_MESSAGES = {
     "PIPELINE-STEP-002": (
@@ -1719,6 +1733,7 @@ def _deep_completed_resume_verified(
     required_deep_names = _completed_deep_artefact_names(prior_pipeline)
     if required_deep_names not in {
         DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
     } and any(
         (output_dir / name).exists() for name in (SHALLOW_JSON, EXTRACTION_JSON)
@@ -1731,6 +1746,7 @@ def _deep_completed_resume_verified(
             DEEP_METADATA_COLLECTION_JSON,
             APPLICATION_SERVICE_MODEL_FILENAME,
             INVESTIGATION_THREADS_FILENAME,
+            NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
         )
     ):
         return False
@@ -1763,8 +1779,10 @@ def _completed_deep_artefact_names(
         for path in step["output_paths"]
         if isinstance(path, str)
     }
-    if INVESTIGATION_THREADS_FILENAME in all_recorded_names:
+    if NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in all_recorded_names:
         return DEEP_FIXED_ARTEFACT_FILENAMES
+    if INVESTIGATION_THREADS_FILENAME in all_recorded_names:
+        return PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES
     for step in raw_steps:
         if not isinstance(step, dict) or step.get("step_id") != "PIPELINE-STEP-010D":
             continue
@@ -2039,13 +2057,19 @@ def _native_observation_semantic_evidence_for_output(
     store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
     if not store_root.exists() and not store_root.is_symlink():
         return NativeObservationSemanticEvidence()
-    index = validate_native_observation_store(store_root)
-    store = NativeObservationStore(
-        store_root,
-        index.body_byte_allowance,
-        metadata_byte_allowance=index.metadata_byte_allowance,
-    )
+    store = NativeObservationStore.open_published(store_root)
     return build_native_observation_semantic_evidence(store)
+
+
+def _native_observation_semantic_processing_sources_for_output(
+    output_dir: Path,
+) -> tuple[NativeSemanticProcessingSource, ...]:
+    store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    if not store_root.exists() and not store_root.is_symlink():
+        return ()
+    store = NativeObservationStore.open_published(store_root)
+    return build_native_observation_semantic_processing_sources(store)
+
 
 
 def _recursive_evidence_feedback_limits() -> RecursiveEvidenceFeedbackLimits:
@@ -2605,6 +2629,16 @@ def _step_runners(
         native_observation_evidence = (
             _native_observation_semantic_evidence_for_output(output_dir)
         )
+        native_observation_processing_sources = (
+            _native_observation_semantic_processing_sources_for_output(output_dir)
+        )
+        native_observation_semantic_evidence_path = (
+            write_native_observation_semantic_evidence_artifact(
+                output_dir,
+                native_observation_evidence,
+                processed_sources=native_observation_processing_sources,
+            )
+        )
         application_composition = build_application_service_composition(
             redirect_edges=redirect_edges,
             metadata_collection=metadata_collection,
@@ -2632,14 +2666,26 @@ def _step_runners(
             recursive_feedback_result=recursive_result,
             application_service_model=application_service_model,
             deep_artifact_paths=_dedupe_paths(
-                (*source_paths, *metadata_paths, *provenance_paths, application_service_model_path),
+                (
+                    *source_paths,
+                    *metadata_paths,
+                    *provenance_paths,
+                    native_observation_semantic_evidence_path,
+                    application_service_model_path,
+                ),
             ),
         )
         return (
             "Deep bounded source-route and metadata collection, with shallow same-origin follow-up, completed.",
             [
                 str(path)
-                for path in (*source_paths, *metadata_paths, *provenance_paths, application_service_model_path)
+                for path in (
+                    *source_paths,
+                    *metadata_paths,
+                    *provenance_paths,
+                    native_observation_semantic_evidence_path,
+                    application_service_model_path,
+                )
             ],
             {},
         )
@@ -3117,6 +3163,8 @@ def _deep_evidence_paths_required(
     expected_names = tuple(path.name for path in deduped)
     if expected_names not in {
         DEEP_FIXED_ARTEFACT_FILENAMES,
+        PACKAGE4A_PRE_THREAD_DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE4A_DEEP_FIXED_ARTEFACT_FILENAMES,
         PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
     }:
         raise ValueError(

@@ -152,6 +152,44 @@ class NativeObservationSemanticEvidence:
                 raise ValueError(f"Native {name} are not deterministic.")
 
 
+@dataclass(frozen=True)
+class NativeSemanticProcessingSource:
+    """One exact native exchange presented to semantic extraction."""
+
+    request_url: str
+    status_code: int
+    candidate_index: int
+    exchange_index: int
+    captured_bytes: int
+    body_sha256: str
+    capture_state: str = "complete"
+    headers_capture_state: str = "complete"
+
+    def __post_init__(self) -> None:
+        if (
+            not _valid_source_fields(
+                request_url=self.request_url,
+                candidate_index=self.candidate_index,
+                exchange_index=self.exchange_index,
+                body_sha256=self.body_sha256,
+            )
+            or isinstance(self.status_code, bool)
+            or not isinstance(self.status_code, int)
+            or not 100 <= self.status_code <= 599
+            or isinstance(self.captured_bytes, bool)
+            or not isinstance(self.captured_bytes, int)
+            or self.captured_bytes < 0
+            or self.capture_state != "complete"
+            or self.headers_capture_state != "complete"
+        ):
+            raise ValueError("Native semantic processing source is invalid.")
+
+    @property
+    def source_id(self) -> str:
+        return _native_source_id(self.candidate_index, self.exchange_index)
+
+
+
 def _complete_exchange(exchange) -> bool:
     return (
         exchange.capture_state == "complete"
@@ -159,6 +197,45 @@ def _complete_exchange(exchange) -> bool:
         and exchange.body is not None
         and exchange.body_sha256 is not None
     )
+
+
+def build_native_observation_semantic_processing_sources(
+    store: NativeObservationStore,
+) -> tuple[NativeSemanticProcessingSource, ...]:
+    """Record exact exchanges whose retained bodies were available to semantic extraction."""
+
+    if not isinstance(store, NativeObservationStore):
+        raise TypeError("native semantic processing coverage requires a native observation store")
+    index = validate_native_observation_store(store.root)
+    processed: list[NativeSemanticProcessingSource] = []
+    for candidate_index in index.observation_indices:
+        observation = store.load_observation(candidate_index)
+        for exchange_index, exchange in enumerate(observation.exchanges):
+            if not _complete_exchange(exchange):
+                continue
+            processed.append(
+                NativeSemanticProcessingSource(
+                    request_url=exchange.request_url,
+                    status_code=exchange.status_code,
+                    candidate_index=candidate_index,
+                    exchange_index=exchange_index,
+                    captured_bytes=exchange.captured_bytes,
+                    body_sha256=exchange.body_sha256,
+                    capture_state=exchange.capture_state,
+                    headers_capture_state=exchange.headers_capture_state,
+                )
+            )
+    return tuple(
+        sorted(
+            set(processed),
+            key=lambda value: (
+                value.candidate_index,
+                value.exchange_index,
+                value.request_url,
+            ),
+        )
+    )
+
 
 
 def _json_body(store: NativeObservationStore, exchange):

@@ -22,6 +22,11 @@ from bugslyce.recon.http_route_relationships import (
 from bugslyce.recon.native_observation_facts import (
     build_native_observation_semantic_evidence,
 )
+from bugslyce.recon.native_observation_semantic_evidence_persistence import (
+    NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    load_native_observation_semantic_checkpoint_artifact,
+    load_native_observation_semantic_evidence_artifact,
+)
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
     NativeCandidateObservation,
@@ -331,6 +336,16 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     )
 
     def persist(root: Path, model: object) -> Path:
+        assert load_native_observation_semantic_evidence_artifact(root) == native_evidence
+        checkpoint = load_native_observation_semantic_checkpoint_artifact(root)
+        assert checkpoint is not None
+        assert len(checkpoint.processed_sources) == 1
+        processed = checkpoint.processed_sources[0]
+        assert processed.source_id == "native-observation:7:0"
+        assert (
+            processed.body_sha256
+            == native_evidence.structured_responses[0].body_sha256
+        )
         calls["persist"].append(model)
         path = root / "application_service_model.json"
         path.write_text("fixture\n", encoding="utf-8")
@@ -371,6 +386,23 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
         }
     ]
     assert calls["persist"] == [application_service_model]
+    assert (
+        calls["a1"][0]["native_observation_evidence"]
+        is calls["a3"][0]["native_observation_evidence"]
+    )
+    assert NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME in {
+        Path(path).name for path in collection_paths
+    }
+    assert len(
+        tuple(
+            (
+                tmp_path
+                / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+                / "bodies"
+                / "sha256"
+            ).iterdir()
+        )
+    ) == 1
     assert "application_service_model.json" in {Path(path).name for path in collection_paths}
     outputs = context["deep_outputs"]
     assert isinstance(outputs, pipeline.DeepPipelineOutputs)
