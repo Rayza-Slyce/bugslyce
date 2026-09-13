@@ -31,6 +31,7 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectionResult,
 )
 from bugslyce.recon.documentation_assertions import (
+    DocumentationAssertionExtractionResult,
     DocumentationAssertionKind,
     build_documentation_assertions,
 )
@@ -41,6 +42,16 @@ from bugslyce.recon.evidence_pack_closure import (
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.http_origin import HttpOrigin
 from bugslyce.recon.http_route_relationships import HttpRouteRelationshipEdge
+from bugslyce.recon.native_observation_facts import (
+    NativeObservationSemanticEvidence,
+    build_native_observation_semantic_evidence,
+)
+from bugslyce.recon.native_observation_store import (
+    NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    NativeCandidateObservation,
+    NativeObservationStore,
+    NativeReceivedExchange,
+)
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +134,78 @@ def _model(*, target_only: bool = False, reversed_inputs: bool = False):
     )
 
 
+def _native_model(root: Path):
+    store = NativeObservationStore(
+        root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+        100_000,
+        metadata_byte_allowance=10_000_000,
+    )
+
+    json_body = b'{"results": [], "count": 0}'
+    json_reference = store.commit_body(
+        store.reserve_body_bytes(len(json_body)),
+        json_body,
+    )
+    json_exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/api/search/",
+        status_code=200,
+        headers=(("Content-Type", "application/json"),),
+        capture_state="complete",
+        captured_bytes=len(json_body),
+        body_sha256=sha256(json_body).hexdigest(),
+        body=json_reference,
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=7,
+            request_url=json_exchange.request_url,
+            exchanges=(json_exchange,),
+        ),
+        store.reserve_candidate_metadata(7, maximum_redirect_hops=0),
+    )
+
+    redirect_body = b""
+    redirect_reference = store.commit_body(
+        store.reserve_body_bytes(len(redirect_body)),
+        redirect_body,
+    )
+    redirect_exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/login",
+        status_code=302,
+        headers=(("Location", "//account.example.test/sign-in"),),
+        capture_state="complete",
+        captured_bytes=0,
+        body_sha256=sha256(redirect_body).hexdigest(),
+        body=redirect_reference,
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=3,
+            request_url=redirect_exchange.request_url,
+            exchanges=(redirect_exchange,),
+        ),
+        store.reserve_candidate_metadata(3, maximum_redirect_hops=0),
+    )
+
+    store.publish_index("complete")
+
+    native_evidence = build_native_observation_semantic_evidence(store)
+    composition = build_application_service_composition(
+        native_observation_evidence=native_evidence,
+    )
+    model = build_application_service_model(
+        application_composition=composition,
+        documentation_assertions=DocumentationAssertionExtractionResult(
+            assertions=(),
+            skipped_sources=(),
+            sources_considered=0,
+            sources_eligible=0,
+        ),
+        native_observation_evidence=native_evidence,
+    )
+    return model, native_evidence, sha256(json_body).hexdigest()
+
+
 def _project(tmp_path: Path, model) -> Path:
     root = _EXPORT_HELPERS["_export_input"](tmp_path)
     (root / "redirect.txt").write_text("HTTP/1.1 302 Found\n", encoding="utf-8")
@@ -155,13 +238,68 @@ def test_schema_one_self_contained_round_trip_preserves_lower_truth() -> None:
     }
 
 
+def test_schema_two_round_trip_preserves_native_observation_evidence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "native-model"
+    root.mkdir()
+
+    model, native_evidence, _body_sha256 = _native_model(root)
+
+    payload = application_service_model_to_dict(model)
+
+    assert payload["schema_version"] == 2
+
+    restored = application_service_model_from_dict(payload)
+
+    assert restored == model
+    assert restored.native_observation_evidence == native_evidence
+
+
+def test_schema_one_without_native_evidence_loads_as_empty_native_evidence() -> None:
+    payload = application_service_model_to_dict(_model())
+    payload["schema_version"] = 1
+    payload.pop("native_observation_evidence", None)
+
+    restored = application_service_model_from_dict(payload)
+
+    assert restored.native_observation_evidence == NativeObservationSemanticEvidence()
+
+
+def test_schema_one_noncanonical_ordering_fails_closed() -> None:
+    payload = application_service_model_to_dict(_model())
+    payload["schema_version"] = 1
+    payload.pop("native_observation_evidence", None)
+
+    resources = payload["documentation_resources"]
+    assert isinstance(resources, list)
+    assert len(resources) > 1
+    payload["documentation_resources"] = list(reversed(resources))
+
+    with pytest.raises(ValueError, match="schema-1.*canonical"):
+        application_service_model_from_dict(payload)
+
+
+def test_schema_one_rejects_native_a1_vocabulary(tmp_path: Path) -> None:
+    root = tmp_path / "schema-one-native"
+    root.mkdir()
+    model, _native_evidence, _body_sha256 = _native_model(root)
+
+    payload = application_service_model_to_dict(model)
+    payload["schema_version"] = 1
+    payload.pop("native_observation_evidence", None)
+
+    with pytest.raises(ValueError, match="schema-1.*native observation vocabulary"):
+        application_service_model_from_dict(payload)
+
+
 def test_canonical_serialization_is_deterministic_for_reversed_inputs(tmp_path: Path) -> None:
     first = write_application_service_model_artifact(tmp_path / "first", _model())
     second = write_application_service_model_artifact(tmp_path / "second", _model(reversed_inputs=True))
     assert first.read_bytes() == second.read_bytes()
 
 
-@pytest.mark.parametrize("field,value", (("schema_version", 2), ("generated_by", "other")))
+@pytest.mark.parametrize("field,value", (("schema_version", 3), ("generated_by", "other")))
 def test_unknown_schema_identity_fails_closed(field: str, value: object) -> None:
     payload = application_service_model_to_dict(_model())
     payload[field] = value
@@ -234,6 +372,49 @@ def test_closure_records_model_artifact_and_lower_provenance(tmp_path: Path) -> 
     assert {"application_service_model", "application_service_model_a1_relation_support", "application_service_model_a2_assertion_support"} <= kinds
     assert any(item.portable_path == "raw/redirect.txt" and item.evidence_ids == ("EVID-OBS",) for item in references)
     assert any(item.portable_path == "raw/docs.html" and item.evidence_ids == ("EVID-DOC",) for item in references)
+
+
+def test_closure_binds_native_model_evidence_to_exact_store_members(
+    tmp_path: Path,
+) -> None:
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    model, _native_evidence, body_sha256 = _native_model(root)
+    write_application_service_model_artifact(root, model)
+
+    references = discover_evidence_pack_references(root)
+
+    fact_references = tuple(
+        reference
+        for reference in references
+        if reference.owner_kind
+        == "application_service_model_native_observation_evidence"
+        and reference.owner_id == "native-observation:7:0"
+    )
+    assert any(
+        reference.portable_path.endswith(
+            "native-observations/observations/00000007.json"
+        )
+        for reference in fact_references
+    )
+    assert any(
+        reference.portable_path.endswith(
+            f"native-observations/bodies/sha256/{body_sha256}"
+        )
+        for reference in fact_references
+    )
+
+    redirect_references = tuple(
+        reference
+        for reference in references
+        if reference.owner_kind == "application_service_model_a1_relation_support"
+        and "native_observation_exchange" in reference.owner_id
+    )
+    assert any(
+        reference.portable_path.endswith(
+            "native-observations/observations/00000003.json"
+        )
+        for reference in redirect_references
+    )
 
 
 def test_broken_required_provenance_is_rejected(tmp_path: Path) -> None:

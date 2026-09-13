@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path, PurePosixPath
+from urllib.parse import urljoin
 from bugslyce.recon.deep_collection_provenance import (
     is_response_id, validate_response_id, response_identity, item_response_identity,
 )
@@ -17,14 +18,27 @@ from bugslyce.recon.deep_metadata_collection_export import (
     DEEP_METADATA_COLLECTION_JSON, deep_metadata_collection_result_from_dict,
 )
 from bugslyce.recon.deep_source_route_collection_export import deep_source_route_collection_result_from_dict
-from bugslyce.recon.application_service_composition import build_application_service_composition
+from bugslyce.recon.application_service_composition import (
+    build_application_service_composition,
+    ApplicationServiceSourceOwnerKind,
+)
 from bugslyce.recon.documentation_assertions import (
     retained_response_source_reference, retained_response_source_id,
 )
-from bugslyce.recon.http_route_relationships import build_http_redirect_relationship_edges
+from bugslyce.recon.http_route_relationships import (
+    build_http_redirect_relationship_edges,
+    canonical_relationship_url,
+)
 from bugslyce.recon.native_observation_store import (
     NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    NativeObservationStore,
     validate_native_observation_store,
+)
+from bugslyce.recon.native_observation_facts import (
+    NativeMobileAssociationDeclaration,
+    NativeRedirectRelationship,
+    NativeStructuredResponseFact,
+    build_native_observation_semantic_evidence,
 )
 
 from bugslyce.core.models import (
@@ -140,6 +154,7 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "application_service_model",
         "application_service_model_a1_relation_support",
         "application_service_model_a2_assertion_support",
+        "application_service_model_native_observation_evidence",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -1815,6 +1830,35 @@ def _application_service_model_references(
     if model is None:
         return ()
 
+    native_sources: dict[str, tuple[object, str, str | None]] = {}
+    native_root = root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    if native_root.exists() or native_root.is_symlink():
+        native_index = validate_native_observation_store(native_root)
+        native_store = NativeObservationStore(
+            native_root,
+            native_index.body_byte_allowance,
+            metadata_byte_allowance=native_index.metadata_byte_allowance,
+        )
+        extracted_native_evidence = build_native_observation_semantic_evidence(
+            native_store
+        )
+        for candidate_index in native_index.observation_indices:
+            observation = native_store.load_observation(candidate_index)
+            for exchange_index, exchange in enumerate(observation.exchanges):
+                source_id = f"native-observation:{candidate_index}:{exchange_index}"
+                body_path = (
+                    f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/{exchange.body.relative_path}"
+                    if exchange.body is not None
+                    else None
+                )
+                native_sources[source_id] = (
+                    exchange,
+                    f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/observations/{candidate_index:08d}.json",
+                    body_path,
+                )
+    else:
+        extracted_native_evidence = None
+
     preferred_paths = _composition_preferred_reference_paths_by_source(
         root,
         existing_references,
@@ -1837,6 +1881,116 @@ def _application_service_model_references(
             owner_id=APPLICATION_SERVICE_MODEL_FILENAME,
         )
     ]
+
+    def add_native_members(
+        *,
+        source_id: str,
+        owner_kind: str,
+        owner_id: str,
+        require_body_sha256: str | None = None,
+    ) -> None:
+        try:
+            exchange, observation_path, body_path = native_sources[source_id]
+        except KeyError as exc:
+            raise ValueError("native model evidence does not resolve to an observation exchange") from exc
+        if require_body_sha256 is not None:
+            if (
+                exchange.body is None
+                or exchange.body_sha256 != require_body_sha256
+                or body_path is None
+            ):
+                raise ValueError("native model evidence body does not match its observation exchange")
+        paths = (observation_path,) if body_path is None or require_body_sha256 is None else (
+            observation_path,
+            body_path,
+        )
+        for source_path in paths:
+            portable_path = source_path if references_are_portable else source_path
+            references.append(
+                EvidencePackReference(
+                    portable_path=portable_path,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    source_path=None if references_are_portable else source_path,
+                )
+            )
+
+    def native_source_id(candidate_index: int, exchange_index: int) -> str:
+        return f"native-observation:{candidate_index}:{exchange_index}"
+
+    def validate_structured_fact(fact: NativeStructuredResponseFact) -> str:
+        source_id = native_source_id(fact.candidate_index, fact.exchange_index)
+        try:
+            exchange, _observation_path, _body_path = native_sources[source_id]
+        except KeyError as exc:
+            raise ValueError("native structured fact does not resolve to an observation exchange") from exc
+        if (
+            extracted_native_evidence is None
+            or fact not in extracted_native_evidence.structured_responses
+            or exchange.request_url != fact.request_url
+            or exchange.status_code != fact.status_code
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or exchange.body_sha256 != fact.body_sha256
+            or not fact.direct_observation
+            or fact.confirmed_api
+        ):
+            raise ValueError("native structured fact contradicts its observation exchange")
+        return source_id
+
+    def validate_mobile_declaration(
+        declaration: NativeMobileAssociationDeclaration,
+    ) -> str:
+        source_id = native_source_id(
+            declaration.candidate_index,
+            declaration.exchange_index,
+        )
+        try:
+            exchange, _observation_path, _body_path = native_sources[source_id]
+        except KeyError as exc:
+            raise ValueError("native mobile declaration does not resolve to an observation exchange") from exc
+        if (
+            extracted_native_evidence is None
+            or declaration not in extracted_native_evidence.mobile_association_declarations
+            or exchange.request_url != declaration.document_url
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or exchange.body_sha256 != declaration.body_sha256
+            or declaration.platform != "android"
+            or not declaration.direct_observation
+            or declaration.ownership_confirmed
+        ):
+            raise ValueError("native mobile declaration contradicts its observation exchange")
+        return source_id
+
+    def validate_redirect(relationship: NativeRedirectRelationship) -> str:
+        source_id = relationship.source_id
+        try:
+            exchange, _observation_path, _body_path = native_sources[source_id]
+        except KeyError as exc:
+            raise ValueError("native redirect does not resolve to an observation exchange") from exc
+        raw_location = next(
+            (value for name, value in exchange.headers if name.casefold() == "location"),
+            None,
+        )
+        target_url = (
+            canonical_relationship_url(urljoin(exchange.request_url, raw_location))
+            if raw_location is not None
+            else None
+        )
+        if (
+            extracted_native_evidence is None
+            or relationship not in extracted_native_evidence.redirect_relationships
+            or exchange.request_url != relationship.source_url
+            or exchange.capture_state != "complete"
+            or exchange.headers_capture_state != "complete"
+            or raw_location != relationship.raw_location
+            or target_url != relationship.target_url
+            or not relationship.direct_observation
+            or relationship.destination_fetched
+        ):
+            raise ValueError("native redirect contradicts its observation exchange")
+        return source_id
 
     def add_evidence_references(
         *,
@@ -1880,6 +2034,36 @@ def _application_service_model_references(
 
     for relation in model.application_composition.relations:
         for support in relation.supports:
+            if (
+                support.source_reference.owner_kind
+                is ApplicationServiceSourceOwnerKind.NATIVE_OBSERVATION_EXCHANGE
+            ):
+                source_id = support.source_reference.source_id
+                redirect = next(
+                    (
+                        item
+                        for item in model.native_observation_evidence.redirect_relationships
+                        if item.source_id == source_id
+                    ),
+                    None,
+                )
+                if (
+                    redirect is None
+                    or support.evidence_ids != (source_id,)
+                    or validate_redirect(redirect) != source_id
+                ):
+                    raise ValueError("native A1 redirect support contradicts native evidence")
+                owner_id = (
+                    f"{relation.relation_id}:"
+                    f"{support.source_reference.owner_kind.value}:"
+                    f"{source_id}"
+                )
+                add_native_members(
+                    source_id=source_id,
+                    owner_kind="application_service_model_a1_relation_support",
+                    owner_id=owner_id,
+                )
+                continue
             if any(is_response_id(value) for value in support.evidence_ids):
                 if (relation.relation_id, support) not in expected_supports:
                     raise ValueError("Deep response relation source correspondence mismatch")
@@ -1912,6 +2096,28 @@ def _application_service_model_references(
                         ),
                     )
                 )
+
+    emitted_native_fact_sources: set[str] = set()
+    for fact in model.native_observation_evidence.structured_responses:
+        source_id = validate_structured_fact(fact)
+        if source_id not in emitted_native_fact_sources:
+            add_native_members(
+                source_id=source_id,
+                owner_kind="application_service_model_native_observation_evidence",
+                owner_id=source_id,
+                require_body_sha256=fact.body_sha256,
+            )
+            emitted_native_fact_sources.add(source_id)
+    for declaration in model.native_observation_evidence.mobile_association_declarations:
+        source_id = validate_mobile_declaration(declaration)
+        if source_id not in emitted_native_fact_sources:
+            add_native_members(
+                source_id=source_id,
+                owner_kind="application_service_model_native_observation_evidence",
+                owner_id=source_id,
+                require_body_sha256=declaration.body_sha256,
+            )
+            emitted_native_fact_sources.add(source_id)
 
     for assertion in model.documentation_assertions.assertions:
         for support in assertion.supports:

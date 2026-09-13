@@ -643,6 +643,7 @@ def test_source_owner_kind_and_initial_vocabularies_are_closed() -> None:
         "deep_metadata_collected_item",
         "deep_html_route_reference",
         "deep_javascript_route_candidate",
+        "native_observation_exchange",
     }
     assert {item.value for item in api.ApplicationServiceEntityKind} == {
         "http_origin",
@@ -665,6 +666,7 @@ def test_source_owner_kind_and_initial_vocabularies_are_closed() -> None:
         "html_route_reference",
         "javascript_request_call",
         "javascript_route_configuration",
+        "native_http_redirect",
     }
     with pytest.raises((TypeError, ValueError)):
         api.ApplicationServiceSourceReference(
@@ -793,6 +795,7 @@ def test_composition_is_immutable_and_builder_preserves_typed_inputs() -> None:
         "metadata_collection",
         "html_extraction",
         "javascript_extraction",
+        "native_observation_evidence",
     )
 
     composition = api.build_application_service_composition(

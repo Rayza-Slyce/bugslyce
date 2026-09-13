@@ -84,6 +84,15 @@ from bugslyce.recon.application_service_model_persistence import (
     APPLICATION_SERVICE_MODEL_FILENAME,
     write_application_service_model_artifact,
 )
+from bugslyce.recon.native_observation_facts import (
+    NativeObservationSemanticEvidence,
+    build_native_observation_semantic_evidence,
+)
+from bugslyce.recon.native_observation_store import (
+    NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    NativeObservationStore,
+    validate_native_observation_store,
+)
 from bugslyce.recon.deep_html_route_extraction import build_deep_html_route_extraction
 from bugslyce.recon.deep_http_fetcher import build_deep_http_fetcher
 from bugslyce.recon.deep_javascript_route_extraction import (
@@ -1974,6 +1983,21 @@ def _native_content_discovery_limits_for_pipeline(
     )
 
 
+def _native_observation_semantic_evidence_for_output(
+    output_dir: Path,
+) -> NativeObservationSemanticEvidence:
+    store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    if not store_root.exists() and not store_root.is_symlink():
+        return NativeObservationSemanticEvidence()
+    index = validate_native_observation_store(store_root)
+    store = NativeObservationStore(
+        store_root,
+        index.body_byte_allowance,
+        metadata_byte_allowance=index.metadata_byte_allowance,
+    )
+    return build_native_observation_semantic_evidence(store)
+
+
 def _recursive_evidence_feedback_limits() -> RecursiveEvidenceFeedbackLimits:
     return RecursiveEvidenceFeedbackLimits(
         maximum_total_candidate_requests=800,
@@ -2528,16 +2552,21 @@ def _step_runners(
             project_state,
             source_collection=source_collection,
         )
+        native_observation_evidence = (
+            _native_observation_semantic_evidence_for_output(output_dir)
+        )
         application_composition = build_application_service_composition(
             redirect_edges=redirect_edges,
             metadata_collection=metadata_collection,
             html_extraction=html_routes,
             javascript_extraction=javascript_routes,
+            native_observation_evidence=native_observation_evidence,
         )
         documentation_assertions = build_documentation_assertions(source_collection)
         application_service_model = build_application_service_model(
             application_composition=application_composition,
             documentation_assertions=documentation_assertions,
+            native_observation_evidence=native_observation_evidence,
         )
         application_service_model_path = write_application_service_model_artifact(
             output_dir,

@@ -19,6 +19,15 @@ from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipEdge,
     build_http_redirect_relationship_edges,
 )
+from bugslyce.recon.native_observation_facts import (
+    build_native_observation_semantic_evidence,
+)
+from bugslyce.recon.native_observation_store import (
+    NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+    NativeCandidateObservation,
+    NativeObservationStore,
+    NativeReceivedExchange,
+)
 
 
 def _source_item(url: str, body: bytes, evidence_id: str) -> DeepSourceRouteCollectedItem:
@@ -63,6 +72,38 @@ def _context(tmp_path: Path, *, runtime: object | None = None) -> dict[str, obje
         "project_runtime": runtime,
         "deep_outputs": pipeline.DeepPipelineOutputs(),
     }
+
+
+def _native_evidence(root: Path):
+    store = NativeObservationStore(
+        root / NATIVE_OBSERVATION_STORE_PROJECT_PATH,
+        100_000,
+        metadata_byte_allowance=10_000_000,
+    )
+    body = b'{"results": [], "count": 0}'
+    reference = store.commit_body(
+        store.reserve_body_bytes(len(body)),
+        body,
+    )
+    exchange = NativeReceivedExchange(
+        request_url="https://app.example.test/api/search/",
+        status_code=200,
+        headers=(("Content-Type", "application/json"),),
+        capture_state="complete",
+        captured_bytes=len(body),
+        body_sha256=sha256(body).hexdigest(),
+        body=reference,
+    )
+    store.publish_observation(
+        NativeCandidateObservation(
+            candidate_index=7,
+            request_url=exchange.request_url,
+            exchanges=(exchange,),
+        ),
+        store.reserve_candidate_metadata(7, maximum_redirect_hops=0),
+    )
+    store.publish_index("complete")
+    return build_native_observation_semantic_evidence(store)
 
 
 def test_public_redirect_edge_producer_preserves_direct_semantics_and_cluster_reuses_it(
@@ -158,6 +199,9 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     }
     runtime = SimpleNamespace(programme_scope_policy=None, http_executor=None)
     context = _context(tmp_path, runtime=runtime)
+    native_evidence = _native_evidence(tmp_path)
+    assert state.discovered_paths == ()
+    assert len(native_evidence.structured_responses) == 1
     context["wp4_root_plan"] = object()
     context["wp4_programme_orchestration"] = SimpleNamespace(
         http_work_items=(
@@ -316,12 +360,14 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
             "metadata_collection": metadata,
             "html_extraction": html_routes,
             "javascript_extraction": javascript_routes,
+            "native_observation_evidence": native_evidence,
         }
     ]
     assert calls["a3"] == [
         {
             "application_composition": application_composition,
             "documentation_assertions": documentation_assertions,
+            "native_observation_evidence": native_evidence,
         }
     ]
     assert calls["persist"] == [application_service_model]

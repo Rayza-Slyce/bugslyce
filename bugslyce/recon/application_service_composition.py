@@ -29,6 +29,10 @@ from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipEdge,
     canonical_relationship_url,
 )
+from bugslyce.recon.native_observation_facts import (
+    NativeObservationSemanticEvidence,
+    NativeRedirectRelationship,
+)
 
 
 class ApplicationServiceEntityKind(Enum):
@@ -55,6 +59,7 @@ class ApplicationServiceSourceSemantic(Enum):
     HTML_ROUTE_REFERENCE = "html_route_reference"
     JAVASCRIPT_REQUEST_CALL = "javascript_request_call"
     JAVASCRIPT_ROUTE_CONFIGURATION = "javascript_route_configuration"
+    NATIVE_HTTP_REDIRECT = "native_http_redirect"
 
 
 class ApplicationServiceSourceOwnerKind(Enum):
@@ -62,6 +67,7 @@ class ApplicationServiceSourceOwnerKind(Enum):
     DEEP_METADATA_COLLECTED_ITEM = "deep_metadata_collected_item"
     DEEP_HTML_ROUTE_REFERENCE = "deep_html_route_reference"
     DEEP_JAVASCRIPT_ROUTE_CANDIDATE = "deep_javascript_route_candidate"
+    NATIVE_OBSERVATION_EXCHANGE = "native_observation_exchange"
 
 
 _VALID_SUPPORT_KINDS = {
@@ -85,11 +91,18 @@ _VALID_SUPPORT_KINDS = {
         ApplicationServiceSupportBasis.DETERMINISTIC_DERIVATION,
         ApplicationServiceSourceOwnerKind.DEEP_JAVASCRIPT_ROUTE_CANDIDATE,
     ),
+    ApplicationServiceSourceSemantic.NATIVE_HTTP_REDIRECT: (
+        ApplicationServiceSupportBasis.DIRECT_OBSERVATION,
+        ApplicationServiceSourceOwnerKind.NATIVE_OBSERVATION_EXCHANGE,
+    ),
 }
 
 _VALID_RELATION_SEMANTICS = {
     ApplicationServiceRelationKind.REDIRECTS_TO: frozenset(
-        {ApplicationServiceSourceSemantic.HTTP_REDIRECT}
+        {
+            ApplicationServiceSourceSemantic.HTTP_REDIRECT,
+            ApplicationServiceSourceSemantic.NATIVE_HTTP_REDIRECT,
+        }
     ),
     ApplicationServiceRelationKind.DECLARES_ROUTE: frozenset(
         {ApplicationServiceSourceSemantic.SITEMAP_DECLARATION}
@@ -556,6 +569,26 @@ def _add_redirect(builder: _CompositionBuilder, edge: HttpRouteRelationshipEdge)
     )
 
 
+def _add_native_redirect(
+    builder: _CompositionBuilder,
+    relationship: NativeRedirectRelationship,
+) -> None:
+    if not isinstance(relationship, NativeRedirectRelationship):
+        raise TypeError("native redirect evidence must be typed")
+    source = builder.add_route(relationship.source_url)
+    target = builder.add_route(relationship.target_url)
+    builder.add_relation(
+        ApplicationServiceRelationKind.REDIRECTS_TO,
+        source.entity_id,
+        target.entity_id,
+        _support(
+            basis=ApplicationServiceSupportBasis.DIRECT_OBSERVATION,
+            semantic=ApplicationServiceSourceSemantic.NATIVE_HTTP_REDIRECT,
+            owner=ApplicationServiceSourceOwnerKind.NATIVE_OBSERVATION_EXCHANGE,
+            source_id=relationship.source_id,
+            evidence_ids=(relationship.source_id,),
+        ),
+    )
 def _metadata_source_id(item: DeepMetadataCollectedItem) -> str:
     return _semantic_id(
         "DEEP-METADATA-ITEM",
@@ -674,12 +707,18 @@ def build_application_service_composition(
     metadata_collection: DeepMetadataCollectionResult | None = None,
     html_extraction: DeepHtmlRouteExtractionResult | None = None,
     javascript_extraction: DeepJavaScriptRouteExtractionResult | None = None,
+    native_observation_evidence: NativeObservationSemanticEvidence | None = None,
 ) -> ApplicationServiceComposition:
     """Compose deterministic semantic relationships from retained typed evidence."""
 
     builder = _CompositionBuilder()
     for edge in redirect_edges:
         _add_redirect(builder, edge)
+    if native_observation_evidence is not None:
+        if not isinstance(native_observation_evidence, NativeObservationSemanticEvidence):
+            raise TypeError("native observation evidence must be typed")
+        for relationship in native_observation_evidence.redirect_relationships:
+            _add_native_redirect(builder, relationship)
     if metadata_collection is not None:
         if not isinstance(metadata_collection, DeepMetadataCollectionResult):
             raise TypeError("metadata collection must use its typed result model")

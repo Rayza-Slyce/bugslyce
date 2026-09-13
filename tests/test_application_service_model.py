@@ -499,11 +499,21 @@ def test_public_api_signature_vocabularies_and_boundary_are_closed():
         "direct_documentation", "deterministic_derivation",
     }
     signature = inspect.signature(api.build_application_service_model)
-    assert tuple(signature.parameters) == ("application_composition", "documentation_assertions")
-    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty for p in signature.parameters.values())
+    assert tuple(signature.parameters) == (
+        "application_composition",
+        "documentation_assertions",
+        "native_observation_evidence",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+    assert signature.parameters["application_composition"].default is inspect.Parameter.empty
+    assert signature.parameters["documentation_assertions"].default is inspect.Parameter.empty
     assert tuple(f.name for f in fields(api.ApplicationServiceModel)) == (
         "application_composition", "documentation_assertions", "documentation_resources",
         "documented_http_services", "documented_realtime_endpoints", "relations",
+        "native_observation_evidence",
     )
     assert tuple(f.name for f in fields(api.ApplicationServiceDocumentationResource)) == ("entity_id", "source_reference", "kind")
     assert tuple(f.name for f in fields(api.ApplicationServiceDocumentedHttpService)) == ("entity_id", "value", "kind")

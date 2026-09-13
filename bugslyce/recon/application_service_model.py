@@ -29,6 +29,7 @@ from bugslyce.recon.documentation_assertions import (
     DocumentationAssertionSourceReference,
     DocumentationAssertionSupport,
 )
+from bugslyce.recon.native_observation_facts import NativeObservationSemanticEvidence
 
 
 class ApplicationServiceModelEntityKind(Enum):
@@ -582,6 +583,9 @@ class ApplicationServiceModel:
         ...,
     ]
     relations: tuple[ApplicationServiceModelRelation, ...]
+    native_observation_evidence: NativeObservationSemanticEvidence = (
+        NativeObservationSemanticEvidence()
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.application_composition, ApplicationServiceComposition):
@@ -591,6 +595,8 @@ class ApplicationServiceModel:
             DocumentationAssertionExtractionResult,
         ):
             raise ValueError("documentation assertions must be typed")
+        if not isinstance(self.native_observation_evidence, NativeObservationSemanticEvidence):
+            raise ValueError("native observation evidence must be typed")
 
         resources = _deduplicate_entities(
             self.documentation_resources,
@@ -733,6 +739,9 @@ def build_application_service_model(
     *,
     application_composition: ApplicationServiceComposition,
     documentation_assertions: DocumentationAssertionExtractionResult,
+    native_observation_evidence: NativeObservationSemanticEvidence = (
+        NativeObservationSemanticEvidence()
+    ),
 ) -> ApplicationServiceModel:
     """Compose immutable A3 entities and relations from exact A1/A2 results."""
 
@@ -743,6 +752,8 @@ def build_application_service_model(
         DocumentationAssertionExtractionResult,
     ):
         raise ValueError("documentation assertions must be typed")
+    if not isinstance(native_observation_evidence, NativeObservationSemanticEvidence):
+        raise ValueError("native observation evidence must be typed")
 
     resources: list[ApplicationServiceDocumentationResource] = []
     services: list[ApplicationServiceDocumentedHttpService] = []
@@ -886,4 +897,5 @@ def build_application_service_model(
         documented_http_services=tuple(services),
         documented_realtime_endpoints=tuple(realtime_endpoints),
         relations=tuple(relations),
+        native_observation_evidence=native_observation_evidence,
     )

@@ -1,4 +1,4 @@
-"""Canonical schema-1 persistence for the application/service model."""
+"""Canonical versioned persistence for the application/service model."""
 
 from __future__ import annotations
 
@@ -56,11 +56,18 @@ from bugslyce.recon.documentation_assertions import (
     DocumentationStructuralContext,
 )
 from bugslyce.recon.http_origin import HttpOrigin
+from bugslyce.recon.native_observation_facts import (
+    NativeMobileAssociationDeclaration,
+    NativeObservationSemanticEvidence,
+    NativeRedirectRelationship,
+    NativeStructuredResponseFact,
+)
 
 
 APPLICATION_SERVICE_MODEL_FILENAME = "application_service_model.json"
 
-_SCHEMA_VERSION = 1
+_LEGACY_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _GENERATED_BY = "bugslyce.application_service_model"
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _EnumT = TypeVar("_EnumT", bound=Enum)
@@ -87,6 +94,12 @@ def _text(value: object, label: str) -> str:
 def _integer(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{label} must be an integer")
+    return value
+
+
+def _boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a boolean")
     return value
 
 
@@ -402,8 +415,109 @@ def _entity_reference_from_dict(value: object, label: str) -> ApplicationService
     )
 
 
+def _native_evidence_to_dict(
+    value: NativeObservationSemanticEvidence,
+) -> dict[str, object]:
+    return {
+        "structured_responses": [
+            {
+                "request_url": item.request_url,
+                "status_code": item.status_code,
+                "candidate_index": item.candidate_index,
+                "exchange_index": item.exchange_index,
+                "body_sha256": item.body_sha256,
+                "direct_observation": item.direct_observation,
+                "confirmed_api": item.confirmed_api,
+            }
+            for item in value.structured_responses
+        ],
+        "redirect_relationships": [
+            {
+                "source_url": item.source_url,
+                "raw_location": item.raw_location,
+                "target_url": item.target_url,
+                "candidate_index": item.candidate_index,
+                "exchange_index": item.exchange_index,
+                "direct_observation": item.direct_observation,
+                "destination_fetched": item.destination_fetched,
+            }
+            for item in value.redirect_relationships
+        ],
+        "mobile_association_declarations": [
+            {
+                "document_url": item.document_url,
+                "platform": item.platform,
+                "package_name": item.package_name,
+                "candidate_index": item.candidate_index,
+                "exchange_index": item.exchange_index,
+                "body_sha256": item.body_sha256,
+                "direct_observation": item.direct_observation,
+                "ownership_confirmed": item.ownership_confirmed,
+            }
+            for item in value.mobile_association_declarations
+        ],
+    }
+
+
+def _native_evidence_from_dict(value: object) -> NativeObservationSemanticEvidence:
+    top = _mapping(
+        value,
+        {
+            "structured_responses",
+            "redirect_relationships",
+            "mobile_association_declarations",
+        },
+        "native_observation_evidence",
+    )
+    structured = tuple(
+        NativeStructuredResponseFact(
+            request_url=_text(raw["request_url"], f"structured_responses[{index}].request_url"),
+            status_code=_integer(raw["status_code"], f"structured_responses[{index}].status_code"),
+            candidate_index=_integer(raw["candidate_index"], f"structured_responses[{index}].candidate_index"),
+            exchange_index=_integer(raw["exchange_index"], f"structured_responses[{index}].exchange_index"),
+            body_sha256=_text(raw["body_sha256"], f"structured_responses[{index}].body_sha256"),
+            direct_observation=_boolean(raw["direct_observation"], f"structured_responses[{index}].direct_observation"),
+            confirmed_api=_boolean(raw["confirmed_api"], f"structured_responses[{index}].confirmed_api"),
+        )
+        for index, item in enumerate(_array(top["structured_responses"], "structured_responses"))
+        for raw in [_mapping(item, {"request_url", "status_code", "candidate_index", "exchange_index", "body_sha256", "direct_observation", "confirmed_api"}, f"structured_responses[{index}]")]
+    )
+    redirects = tuple(
+        NativeRedirectRelationship(
+            source_url=_text(raw["source_url"], f"redirect_relationships[{index}].source_url"),
+            raw_location=_text(raw["raw_location"], f"redirect_relationships[{index}].raw_location"),
+            target_url=_text(raw["target_url"], f"redirect_relationships[{index}].target_url"),
+            candidate_index=_integer(raw["candidate_index"], f"redirect_relationships[{index}].candidate_index"),
+            exchange_index=_integer(raw["exchange_index"], f"redirect_relationships[{index}].exchange_index"),
+            direct_observation=_boolean(raw["direct_observation"], f"redirect_relationships[{index}].direct_observation"),
+            destination_fetched=_boolean(raw["destination_fetched"], f"redirect_relationships[{index}].destination_fetched"),
+        )
+        for index, item in enumerate(_array(top["redirect_relationships"], "redirect_relationships"))
+        for raw in [_mapping(item, {"source_url", "raw_location", "target_url", "candidate_index", "exchange_index", "direct_observation", "destination_fetched"}, f"redirect_relationships[{index}]")]
+    )
+    associations = tuple(
+        NativeMobileAssociationDeclaration(
+            document_url=_text(raw["document_url"], f"mobile_association_declarations[{index}].document_url"),
+            platform=_text(raw["platform"], f"mobile_association_declarations[{index}].platform"),
+            package_name=_text(raw["package_name"], f"mobile_association_declarations[{index}].package_name"),
+            candidate_index=_integer(raw["candidate_index"], f"mobile_association_declarations[{index}].candidate_index"),
+            exchange_index=_integer(raw["exchange_index"], f"mobile_association_declarations[{index}].exchange_index"),
+            body_sha256=_text(raw["body_sha256"], f"mobile_association_declarations[{index}].body_sha256"),
+            direct_observation=_boolean(raw["direct_observation"], f"mobile_association_declarations[{index}].direct_observation"),
+            ownership_confirmed=_boolean(raw["ownership_confirmed"], f"mobile_association_declarations[{index}].ownership_confirmed"),
+        )
+        for index, item in enumerate(_array(top["mobile_association_declarations"], "mobile_association_declarations"))
+        for raw in [_mapping(item, {"document_url", "platform", "package_name", "candidate_index", "exchange_index", "body_sha256", "direct_observation", "ownership_confirmed"}, f"mobile_association_declarations[{index}]")]
+    )
+    return NativeObservationSemanticEvidence(
+        structured_responses=structured,
+        redirect_relationships=redirects,
+        mobile_association_declarations=associations,
+    )
+
+
 def application_service_model_to_dict(model: ApplicationServiceModel) -> dict[str, object]:
-    """Return the canonical schema-1 structured representation."""
+    """Return the canonical schema-2 structured representation."""
 
     if not isinstance(model, ApplicationServiceModel):
         raise TypeError("application/service model persistence requires a typed model")
@@ -416,6 +530,9 @@ def application_service_model_to_dict(model: ApplicationServiceModel) -> dict[st
         "documented_http_services": [{"entity_id": item.entity_id, "value": _value_to_dict(DocumentationAssertionKind.SERVICE_BASE_URL, item.value), "kind": item.kind.value} for item in model.documented_http_services],
         "documented_realtime_endpoints": [{"entity_id": item.entity_id, "value": _value_to_dict(DocumentationAssertionKind.REALTIME_ENDPOINT, item.value), "kind": item.kind.value} for item in model.documented_realtime_endpoints],
         "relations": [{"relation_id": item.relation_id, "relation_kind": item.relation_kind.value, "basis": item.basis.value, "source": _entity_reference_to_dict(item.source), "target": _entity_reference_to_dict(item.target), "supports": [_a3_support_to_dict(support) for support in item.supports]} for item in model.relations],
+        "native_observation_evidence": _native_evidence_to_dict(
+            model.native_observation_evidence
+        ),
     }
     for relation in model.application_composition.relations:
         for support in relation.supports:
@@ -427,11 +544,20 @@ def application_service_model_to_dict(model: ApplicationServiceModel) -> dict[st
 
 
 def application_service_model_from_dict(payload: object) -> ApplicationServiceModel:
-    """Strictly reconstruct one canonical schema-1 model."""
+    """Strictly reconstruct one canonical supported model version."""
 
-    keys = {"schema_version", "generated_by", "application_composition", "documentation_assertions", "documentation_resources", "documented_http_services", "documented_realtime_endpoints", "relations"}
-    top = _mapping(payload, keys, APPLICATION_SERVICE_MODEL_FILENAME)
-    if _integer(top["schema_version"], "schema_version") != _SCHEMA_VERSION:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{APPLICATION_SERVICE_MODEL_FILENAME} has missing or unexpected fields")
+    schema_version = _integer(payload.get("schema_version"), "schema_version")
+    legacy_keys = {"schema_version", "generated_by", "application_composition", "documentation_assertions", "documentation_resources", "documented_http_services", "documented_realtime_endpoints", "relations"}
+    current_keys = {*legacy_keys, "native_observation_evidence"}
+    if schema_version == _LEGACY_SCHEMA_VERSION:
+        top = _mapping(payload, legacy_keys, APPLICATION_SERVICE_MODEL_FILENAME)
+        native_evidence = NativeObservationSemanticEvidence()
+    elif schema_version == _SCHEMA_VERSION:
+        top = _mapping(payload, current_keys, APPLICATION_SERVICE_MODEL_FILENAME)
+        native_evidence = _native_evidence_from_dict(top["native_observation_evidence"])
+    else:
         raise ValueError("application/service model has an unsupported schema version")
     if _text(top["generated_by"], "generated_by") != _GENERATED_BY:
         raise ValueError("application/service model has an invalid generated_by value")
@@ -483,8 +609,30 @@ def application_service_model_from_dict(payload: object) -> ApplicationServiceMo
         documented_http_services=services,
         documented_realtime_endpoints=realtime,
         relations=relations,
+        native_observation_evidence=native_evidence,
     )
-    if application_service_model_to_dict(model) != top:
+    if schema_version == _LEGACY_SCHEMA_VERSION:
+        for relation in model.application_composition.relations:
+            for support in relation.supports:
+                if (
+                    support.source_semantic
+                    is ApplicationServiceSourceSemantic.NATIVE_HTTP_REDIRECT
+                    or support.source_reference.owner_kind
+                    is ApplicationServiceSourceOwnerKind.NATIVE_OBSERVATION_EXCHANGE
+                ):
+                    raise ValueError(
+                        "schema-1 application/service model contains unsupported "
+                        "native observation vocabulary"
+                    )
+
+        canonical_legacy = application_service_model_to_dict(model)
+        canonical_legacy["schema_version"] = _LEGACY_SCHEMA_VERSION
+        canonical_legacy.pop("native_observation_evidence", None)
+        if canonical_legacy != top:
+            raise ValueError(
+                "schema-1 application/service model payload is not canonical"
+            )
+    elif application_service_model_to_dict(model) != top:
         raise ValueError("application/service model payload is not canonical")
     return model
 
