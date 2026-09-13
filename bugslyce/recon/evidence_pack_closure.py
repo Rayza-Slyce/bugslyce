@@ -58,6 +58,10 @@ from bugslyce.recon.application_service_model_persistence import (
     APPLICATION_SERVICE_MODEL_FILENAME,
     load_application_service_model_artifact,
 )
+from bugslyce.recon.investigation_thread_persistence import (
+    INVESTIGATION_THREADS_FILENAME,
+    load_investigation_threads_artifact,
+)
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
     DEEP_RECON_REVIEW_MARKDOWN,
@@ -155,6 +159,10 @@ _KNOWN_RECONSTRUCTABLE_OWNER_KINDS = frozenset(
         "application_service_model_a1_relation_support",
         "application_service_model_a2_assertion_support",
         "application_service_model_native_observation_evidence",
+        "investigation_thread_snapshot",
+        "investigation_thread_application_relation",
+        "investigation_thread_native_observation",
+        "investigation_thread_evidence_support",
     }
 )
 _PORTABLE_PIPELINE_EMPTY_MESSAGE_STATUSES = frozenset({"pending", "running"})
@@ -356,6 +364,11 @@ def discover_evidence_pack_references(
         )
     )
     references.extend(
+        _investigation_thread_references(
+            root, tuple(references), references_are_portable=False,
+        )
+    )
+    references.extend(
         _operator_brief_composition_references(
             root,
             tuple(references),
@@ -451,6 +464,11 @@ def discover_expected_pack_references(
             tuple(references),
             evidence_by_source=evidence_by_source,
             references_are_portable=True,
+        )
+    )
+    references.extend(
+        _investigation_thread_references(
+            root, tuple(references), references_are_portable=True,
         )
     )
     references.extend(
@@ -2169,6 +2187,109 @@ def _analysis_coverage_references(
             owner_id=ANALYSIS_COVERAGE_FILENAME,
         ),
     )
+
+
+def _investigation_thread_references(
+    root: Path,
+    existing_references: tuple[EvidencePackReference, ...],
+    *,
+    references_are_portable: bool,
+) -> tuple[EvidencePackReference, ...]:
+    """Close a persisted thread snapshot through its existing model owners."""
+
+    threads = load_investigation_threads_artifact(root)
+    if threads is None:
+        return ()
+    model = load_application_service_model_artifact(root)
+    references: list[EvidencePackReference] = [
+        EvidencePackReference(
+            portable_path=INVESTIGATION_THREADS_FILENAME,
+            owner_kind="investigation_thread_snapshot",
+            owner_id=INVESTIGATION_THREADS_FILENAME,
+        )
+    ]
+    relation_ids = {
+        relation.relation_id for relation in model.application_composition.relations
+    } if model is not None else set()
+    native_bodies = {
+        f"native-observation:{fact.candidate_index}:{fact.exchange_index}": fact.body_sha256
+        for fact in (() if model is None else model.native_observation_evidence.structured_responses)
+    }
+    native_bodies.update({
+        f"native-observation:{item.candidate_index}:{item.exchange_index}": item.body_sha256
+        for item in (() if model is None else model.native_observation_evidence.mobile_association_declarations)
+    })
+    native_redirects = {
+        item.source_id
+        for item in (() if model is None else model.native_observation_evidence.redirect_relationships)
+    }
+    native_root = root / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    native_store = None
+    if native_bodies or native_redirects:
+        if not native_root.exists() or native_root.is_symlink():
+            raise ValueError("investigation thread native evidence requires a sealed native observation store")
+        index = validate_native_observation_store(native_root)
+        native_store = NativeObservationStore(
+            native_root, index.body_byte_allowance,
+            metadata_byte_allowance=index.metadata_byte_allowance,
+        )
+
+    evidence_paths: dict[str, list[EvidencePackReference]] = {}
+    for reference in existing_references:
+        for evidence_id in reference.evidence_ids:
+            evidence_paths.setdefault(evidence_id, []).append(reference)
+
+    for thread in threads:
+        for relation_id in thread.related_application_relation_ids:
+            if relation_id not in relation_ids:
+                raise ValueError("investigation thread references an unknown application relation")
+            references.append(EvidencePackReference(
+                portable_path=APPLICATION_SERVICE_MODEL_FILENAME,
+                owner_kind="investigation_thread_application_relation",
+                owner_id=f"{thread.thread_id}:{relation_id}",
+            ))
+        for source_id in thread.related_native_observation_ids:
+            if source_id not in native_bodies and source_id not in native_redirects:
+                raise ValueError("investigation thread native observation is not represented by the application model")
+            try:
+                _prefix, candidate_text, exchange_text = source_id.split(":")
+                candidate_index, exchange_index = int(candidate_text), int(exchange_text)
+                assert native_store is not None
+                observation = native_store.load_observation(candidate_index)
+                exchange = observation.exchanges[exchange_index]
+            except (AssertionError, IndexError, ValueError) as exc:
+                raise ValueError("investigation thread native observation does not resolve") from exc
+            observation_path = f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/observations/{candidate_index:08d}.json"
+            references.append(EvidencePackReference(
+                portable_path=observation_path,
+                owner_kind="investigation_thread_native_observation",
+                owner_id=f"{thread.thread_id}:{source_id}",
+                source_path=None if references_are_portable else observation_path,
+            ))
+            body_sha256 = native_bodies.get(source_id)
+            if body_sha256 is not None:
+                if exchange.body is None or exchange.body_sha256 != body_sha256:
+                    raise ValueError("investigation thread native body contradicts the observation store")
+                body_path = f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/{exchange.body.relative_path}"
+                references.append(EvidencePackReference(
+                    portable_path=body_path,
+                    owner_kind="investigation_thread_native_observation",
+                    owner_id=f"{thread.thread_id}:{source_id}",
+                    source_path=None if references_are_portable else body_path,
+                ))
+        for evidence_id in thread.related_evidence_ids:
+            matches = evidence_paths.get(evidence_id, ())
+            if not matches:
+                raise ValueError("investigation thread evidence ID does not resolve to pack ownership")
+            for match in matches:
+                references.append(EvidencePackReference(
+                    portable_path=match.portable_path,
+                    owner_kind="investigation_thread_evidence_support",
+                    owner_id=f"{thread.thread_id}:{evidence_id}",
+                    evidence_ids=(evidence_id,),
+                    source_path=match.source_path,
+                ))
+    return tuple(references)
 
 
 def _operator_brief_references(

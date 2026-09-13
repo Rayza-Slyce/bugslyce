@@ -410,7 +410,12 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
 
 @pytest.mark.parametrize(
     ("shape", "expect_model"),
-    (("legacy", False), ("pre_wp5d", False), ("current", True)),
+    (
+        ("legacy", False),
+        ("pre_wp5d", False),
+        ("pre_package3c", True),
+        ("current", True),
+    ),
 )
 def test_completed_deep_resume_keeps_old_shapes_and_requires_current_model(
     tmp_path: Path,
@@ -420,6 +425,7 @@ def test_completed_deep_resume_keeps_old_shapes_and_requires_current_model(
     names = {
         "legacy": pipeline.LEGACY_DEEP_FIXED_ARTEFACT_FILENAMES,
         "pre_wp5d": pipeline.PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES,
+        "pre_package3c": pipeline.PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
         "current": pipeline.DEEP_FIXED_ARTEFACT_FILENAMES,
     }[shape]
     export_path = tmp_path / "evidence-pack.zip"
@@ -451,6 +457,20 @@ def test_completed_deep_resume_keeps_old_shapes_and_requires_current_model(
         prior_pipeline=prior,
         prior_statuses=statuses,
     )
+    if shape == "current":
+        thread_snapshot = tmp_path / pipeline.INVESTIGATION_THREADS_FILENAME
+        thread_snapshot.unlink()
+        assert not pipeline._deep_completed_resume_verified(
+            output_dir=tmp_path,
+            export_path=export_path,
+            prior_pipeline=prior,
+            prior_statuses=statuses,
+        )
+        thread_snapshot.write_text(
+            pipeline.INVESTIGATION_THREADS_FILENAME,
+            encoding="utf-8",
+        )
+
     if expect_model:
         (tmp_path / "application_service_model.json").unlink()
         assert not pipeline._deep_completed_resume_verified(

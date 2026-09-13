@@ -3147,6 +3147,31 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     )
     coverage_calls: list[object] = []
 
+    class _Package3CApplicationServiceModel:
+        pass
+
+    application_service_model = _Package3CApplicationServiceModel()
+    canonical_threads = ("package3c-thread-sentinel",)
+    thread_model_calls: list[object | None] = []
+    persisted_thread_calls: list[tuple[object, ...]] = []
+    rendered_runbook_threads: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "ApplicationServiceModel",
+        _Package3CApplicationServiceModel,
+    )
+
+    def build_threads(*_args, **kwargs):
+        thread_model_calls.append(kwargs.get("application_service_model"))
+        return canonical_threads
+
+    def persist_threads(root: Path, threads):
+        persisted_thread_calls.append(threads)
+        output = root / project_pipeline.INVESTIGATION_THREADS_FILENAME
+        output.write_text("fixture\n", encoding="utf-8")
+        return output
+
     monkeypatch.setattr(project_pipeline, "build_project_state", lambda _: project_state)
     monkeypatch.setattr(project_pipeline, "build_collection_confidence_notices_from_project", lambda *args, **kwargs: ())
     monkeypatch.setattr(project_pipeline, "generate_candidates", lambda _: [])
@@ -3160,7 +3185,16 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
             sources=(),
         ),
     )
-    monkeypatch.setattr(project_pipeline, "build_investigation_threads", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_investigation_threads",
+        build_threads,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "write_investigation_threads_artifact",
+        persist_threads,
+    )
     monkeypatch.setattr(project_pipeline, "render_investigation_threads_markdown", lambda *args, **kwargs: "")
     monkeypatch.setattr(project_pipeline, "build_route_source_review", lambda *args, **kwargs: ())
     monkeypatch.setattr(project_pipeline, "render_route_source_review_markdown", lambda *args, **kwargs: "")
@@ -3204,12 +3238,47 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
 
     monkeypatch.setattr(project_pipeline, "write_project_outputs", write_outputs)
 
-    context = {"deep_outputs": DeepPipelineOutputs(orchestration=orchestration)}
+    context = {
+        "deep_outputs": DeepPipelineOutputs(
+            orchestration=orchestration,
+            application_service_model=application_service_model,
+        )
+    }
     project_pipeline._write_interpretation_report_if_needed(
         DEEP_PIPELINE_PROFILE,
         tmp_path,
         context,
     )
+
+    outputs_after_report = context["deep_outputs"]
+    assert isinstance(outputs_after_report, DeepPipelineOutputs)
+    assert thread_model_calls == [application_service_model]
+    assert persisted_thread_calls == [canonical_threads]
+    assert outputs_after_report.investigation_threads is canonical_threads
+
+    def render_runbook_threads(threads, **_kwargs):
+        rendered_runbook_threads.append(threads)
+        return "## Standard Investigation Workflow\n"
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_standard_investigation_workflow_runbook_section",
+        render_runbook_threads,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_successful_deep_content_runbook",
+        lambda *_args, **_kwargs: "",
+    )
+
+    project_pipeline._build_standard_investigation_runbook_section_if_needed(
+        DEEP_PIPELINE_PROFILE,
+        tmp_path,
+        context,
+    )
+
+    assert rendered_runbook_threads == [canonical_threads]
+    assert thread_model_calls == [application_service_model]
 
     from bugslyce.reports.operator_brief import build_operator_brief_view
 

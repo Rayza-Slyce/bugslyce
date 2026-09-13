@@ -434,3 +434,67 @@ def test_unknown_embedded_evidence_id_fails_closure_discovery(tmp_path: Path) ->
     (root / "project_state.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="exactly one"):
         discover_evidence_pack_references(root)
+
+def test_investigation_thread_snapshot_is_exported_and_validated(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.recon.investigation_thread_persistence import (
+        INVESTIGATION_THREADS_FILENAME,
+        load_investigation_threads_artifact,
+        write_investigation_threads_artifact,
+    )
+    from bugslyce.recon.investigation_threads import InvestigationThread
+
+    root = _EXPORT_HELPERS["_export_input"](tmp_path)
+    model, _native_evidence, _body_sha256 = _native_model(root)
+    write_application_service_model_artifact(root, model)
+
+    redirect_source_id = (
+        model.native_observation_evidence.redirect_relationships[0].source_id
+    )
+    relation_id = next(
+        relation.relation_id
+        for relation in model.application_composition.relations
+        if any(
+            support.source_reference.source_id == redirect_source_id
+            for support in relation.supports
+        )
+    )
+
+    thread = InvestigationThread(
+        thread_id="THREAD-" + "c" * 64,
+        title="Observed structured application interface",
+        priority="medium",
+        category="application_interface",
+        summary="A directly observed structured interface was retained.",
+        why_it_matters="The retained interface warrants bounded review.",
+        related_endpoints=("https://app.example.test/api/search/",),
+        related_evidence_ids=(),
+        related_candidate_ids=(),
+        related_lead_ids=(),
+        suggested_manual_review_order=(
+            "Review the retained structured response.",
+        ),
+        kill_switch_guidance="Stop if retained evidence does not support review.",
+        related_native_observation_ids=(
+            "native-observation:7:0",
+            redirect_source_id,
+        ),
+        related_application_relation_ids=(relation_id,),
+        limitation_codes=(
+            "redirect_destination_not_fetched",
+            "structured_response_not_confirmed_api",
+        ),
+    )
+    write_investigation_threads_artifact(root, (thread,))
+
+    output = tmp_path / "thread-pack.zip"
+    export_recon_evidence_pack(root, output, clock=lambda: _FIXED_TIME)
+
+    extracted = tmp_path / "thread-pack"
+    with zipfile.ZipFile(output) as archive:
+        archive.extractall(extracted)
+        assert INVESTIGATION_THREADS_FILENAME in archive.namelist()
+
+    assert load_investigation_threads_artifact(extracted) == (thread,)
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"

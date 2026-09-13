@@ -84,6 +84,11 @@ from bugslyce.recon.application_service_model_persistence import (
     APPLICATION_SERVICE_MODEL_FILENAME,
     write_application_service_model_artifact,
 )
+from bugslyce.recon.investigation_thread_persistence import (
+    INVESTIGATION_THREADS_FILENAME,
+    load_investigation_threads_artifact,
+    write_investigation_threads_artifact,
+)
 from bugslyce.recon.native_observation_facts import (
     NativeObservationSemanticEvidence,
     build_native_observation_semantic_evidence,
@@ -156,6 +161,7 @@ from bugslyce.recon.http_route_relationships import (
     render_http_route_relationship_clusters_runbook,
 )
 from bugslyce.recon.investigation_threads import (
+    InvestigationThread,
     build_investigation_threads,
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
@@ -287,12 +293,16 @@ PRE_WP7E_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES,
     APPLICATION_SERVICE_MODEL_FILENAME,
 )
-DEEP_FIXED_ARTEFACT_FILENAMES = (
+PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES = (
     *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES[:4],
     SHALLOW_JSON,
     EXTRACTION_JSON,
     *PRE_WP5D_DEEP_FIXED_ARTEFACT_FILENAMES[4:],
     APPLICATION_SERVICE_MODEL_FILENAME,
+)
+DEEP_FIXED_ARTEFACT_FILENAMES = (
+    *PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
+    INVESTIGATION_THREADS_FILENAME,
 )
 SKIPPED_STEP_MESSAGES = {
     "PIPELINE-STEP-002": (
@@ -360,6 +370,7 @@ class DeepPipelineOutputs:
     recursive_feedback_result: RecursiveEvidenceFeedbackResult | None = None
     orchestration: DeepReconOrchestrationResult | None = None
     application_service_model: ApplicationServiceModel | None = None
+    investigation_threads: tuple[InvestigationThread, ...] = ()
     deep_artifact_paths: tuple[Path, ...] = ()
 
 
@@ -1680,7 +1691,10 @@ def _deep_completed_resume_verified(
     if Path(recorded_export).expanduser().resolve() != export_path:
         return False
     required_deep_names = _completed_deep_artefact_names(prior_pipeline)
-    if required_deep_names != DEEP_FIXED_ARTEFACT_FILENAMES and any(
+    if required_deep_names not in {
+        DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
+    } and any(
         (output_dir / name).exists() for name in (SHALLOW_JSON, EXTRACTION_JSON)
     ):
         return False
@@ -1690,6 +1704,7 @@ def _deep_completed_resume_verified(
             DEEP_METADATA_COLLECTION_MARKDOWN,
             DEEP_METADATA_COLLECTION_JSON,
             APPLICATION_SERVICE_MODEL_FILENAME,
+            INVESTIGATION_THREADS_FILENAME,
         )
     ):
         return False
@@ -1715,6 +1730,15 @@ def _completed_deep_artefact_names(
     raw_steps = prior_pipeline.get("steps")
     if not isinstance(raw_steps, list):
         return DEEP_FIXED_ARTEFACT_FILENAMES
+    all_recorded_names = {
+        Path(path).name
+        for step in raw_steps
+        if isinstance(step, dict) and isinstance(step.get("output_paths"), list)
+        for path in step["output_paths"]
+        if isinstance(path, str)
+    }
+    if INVESTIGATION_THREADS_FILENAME in all_recorded_names:
+        return DEEP_FIXED_ARTEFACT_FILENAMES
     for step in raw_steps:
         if not isinstance(step, dict) or step.get("step_id") != "PIPELINE-STEP-010D":
             continue
@@ -1725,7 +1749,7 @@ def _completed_deep_artefact_names(
             Path(path).name for path in output_paths if isinstance(path, str)
         }
         if {SHALLOW_JSON, EXTRACTION_JSON} & recorded_names:
-            return DEEP_FIXED_ARTEFACT_FILENAMES
+            return PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES
         if APPLICATION_SERVICE_MODEL_FILENAME in recorded_names:
             return PRE_WP7E_DEEP_FIXED_ARTEFACT_FILENAMES
         if {
@@ -3065,7 +3089,10 @@ def _deep_evidence_paths_required(
     paths = _deep_outputs_from_context(context).deep_artifact_paths
     deduped = _dedupe_paths(paths)
     expected_names = tuple(path.name for path in deduped)
-    if expected_names != DEEP_FIXED_ARTEFACT_FILENAMES:
+    if expected_names not in {
+        DEEP_FIXED_ARTEFACT_FILENAMES,
+        PRE_PACKAGE3C_DEEP_FIXED_ARTEFACT_FILENAMES,
+    }:
         raise ValueError(
             "Deep evidence artefacts are incomplete; expected explicit paths for "
             + ", ".join(DEEP_FIXED_ARTEFACT_FILENAMES)
@@ -3125,12 +3152,33 @@ def _write_interpretation_report_if_needed(
         else assemble_standard_interpretation_from_project_state(project_state)
     )
     engagement_context = getattr(project_state, "engagement_context", "unknown")
+    application_service_model = None
+    thread_path: Path | None = None
+    if profile == DEEP_PIPELINE_PROFILE:
+        application_service_model = _deep_outputs_from_context(
+            context
+        ).application_service_model
+        if application_service_model is not None and not isinstance(
+            application_service_model, ApplicationServiceModel,
+        ):
+            # Existing pipeline test and adapter seams may deliberately carry a
+            # non-model sentinel. Only the typed A3 owner participates in P3C.
+            application_service_model = None
     threads = build_investigation_threads(
         project_state,
         candidates,
         assembly.review_leads,
         workflow_leads=workflow_leads,
+        application_service_model=application_service_model,
     )
+    if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
+        thread_path = write_investigation_threads_artifact(output_dir, threads)
+        outputs = _deep_outputs_from_context(context)
+        context["deep_outputs"] = replace(
+            outputs,
+            investigation_threads=threads,
+            deep_artifact_paths=_dedupe_paths((*outputs.deep_artifact_paths, thread_path)),
+        )
     route_source_leads = build_route_source_review(
         project_state,
         getattr(assembly, "sources", ()),
@@ -3255,7 +3303,11 @@ def _write_interpretation_report_if_needed(
             operator_summary=operator_summary,
             operator_report_view=operator_report_view,
         )
-    return [str(report_path), str(json_path)]
+    return [
+        str(report_path),
+        str(json_path),
+        *(() if thread_path is None else (str(thread_path),)),
+    ]
 
 
 def _build_completion_summary_from_project(
@@ -3580,12 +3632,22 @@ def _build_standard_investigation_runbook_section_if_needed(
             orchestration = outputs.orchestration
     workflow_leads = build_grouped_workflow_leads(project_state, orchestration)
     engagement_context = getattr(project_state, "engagement_context", "unknown")
-    threads = build_investigation_threads(
-        project_state,
-        candidates,
-        assembly.review_leads,
-        workflow_leads=workflow_leads,
-    )
+    threads: tuple[InvestigationThread, ...] | None = None
+    if profile == DEEP_PIPELINE_PROFILE and context is not None:
+        outputs = _deep_outputs_from_context(context)
+        if isinstance(outputs.application_service_model, ApplicationServiceModel):
+            threads = outputs.investigation_threads
+            if not threads:
+                threads = load_investigation_threads_artifact(output_dir)
+            if threads is None:
+                raise ValueError("Deep investigation thread snapshot is required before runbook generation.")
+    if threads is None:
+        threads = build_investigation_threads(
+            project_state,
+            candidates,
+            assembly.review_leads,
+            workflow_leads=workflow_leads,
+        )
     investigation_section = render_standard_investigation_workflow_runbook_section(
         threads,
         engagement_context=engagement_context,
