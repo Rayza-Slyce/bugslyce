@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from urllib.parse import urlparse
 
 from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
+from bugslyce.recon.application_service_composition import (
+    ApplicationServiceRelationKind,
+)
+from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
@@ -25,6 +30,7 @@ THREAD_CATEGORY_ORDER = {
     "http_service": 2,
     "discovered_content": 3,
     "artefact_interpretation": 4,
+    "application_interface": 5,
 }
 HIDDEN_PATH_WORDS = (
     "hidden",
@@ -40,7 +46,6 @@ ENCODED_CANDIDATE_TYPES = {
     "encoded_artifact_review",
     "credential_like_artifact_review",
 }
-MAX_WORKFLOW_EVIDENCE_IDS = 12
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,9 @@ class InvestigationThread:
     related_lead_ids: tuple[str, ...]
     suggested_manual_review_order: tuple[str, ...]
     kill_switch_guidance: str | None
+    related_native_observation_ids: tuple[str, ...] = ()
+    related_application_relation_ids: tuple[str, ...] = ()
+    limitation_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,10 @@ class _ThreadDraft:
     related_lead_ids: tuple[str, ...]
     suggested_manual_review_order: tuple[str, ...]
     kill_switch_guidance: str | None
+    identity_key: tuple[str, ...] = ()
+    related_native_observation_ids: tuple[str, ...] = ()
+    related_application_relation_ids: tuple[str, ...] = ()
+    limitation_codes: tuple[str, ...] = ()
 
 
 def build_investigation_threads(
@@ -82,6 +94,7 @@ def build_investigation_threads(
     review_leads: Sequence[ReviewLead] = (),
     *,
     workflow_leads: Sequence[WorkflowLead] = (),
+    application_service_model: ApplicationServiceModel | None = None,
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
 
@@ -94,6 +107,8 @@ def build_investigation_threads(
     encoded = _encoded_or_source_thread(project_state, candidates, review_leads)
     if encoded is not None:
         drafts.append(encoded)
+    if application_service_model is not None:
+        drafts.extend(_application_interface_threads(application_service_model))
     return _assign_thread_ids(drafts)
 
 
@@ -105,7 +120,7 @@ def _workflow_thread(lead: WorkflowLead) -> _ThreadDraft:
         summary=lead.summary,
         why_it_matters=lead.why_it_matters,
         related_endpoints=lead.representative_urls,
-        related_evidence_ids=lead.evidence_ids[:MAX_WORKFLOW_EVIDENCE_IDS],
+        related_evidence_ids=lead.evidence_ids,
         related_candidate_ids=(),
         related_lead_ids=(),
         suggested_manual_review_order=(
@@ -526,11 +541,155 @@ def _encoded_or_source_thread(
     )
 
 
+def _native_observation_id(candidate_index: int, exchange_index: int) -> str:
+    return f"native-observation:{candidate_index}:{exchange_index}"
+
+
+def _same_route_subject(first: str, second: str) -> bool:
+    return first.rstrip("/") == second.rstrip("/")
+
+
+def _application_interface_threads(
+    model: ApplicationServiceModel,
+) -> tuple[_ThreadDraft, ...]:
+    if not isinstance(model, ApplicationServiceModel):
+        raise TypeError("application service model must be typed")
+
+    facts_by_url = {}
+    for fact in model.native_observation_evidence.structured_responses:
+        facts_by_url.setdefault(fact.request_url, []).append(fact)
+
+    routes_by_id = {
+        route.entity_id: route
+        for route in model.application_composition.routes
+    }
+
+    drafts = []
+
+    for request_url in sorted(facts_by_url):
+        facts = tuple(
+            sorted(
+                facts_by_url[request_url],
+                key=lambda item: (
+                    item.candidate_index,
+                    item.exchange_index,
+                    item.body_sha256,
+                ),
+            )
+        )
+
+        matched_redirects = tuple(
+            redirect
+            for redirect in model.native_observation_evidence.redirect_relationships
+            if (
+                _same_route_subject(redirect.source_url, request_url)
+                or _same_route_subject(redirect.target_url, request_url)
+            )
+        )
+
+        relation_ids = set()
+        for relation in model.application_composition.relations:
+            if relation.relation_kind is not ApplicationServiceRelationKind.REDIRECTS_TO:
+                continue
+
+            source = routes_by_id.get(relation.source_entity_id)
+            target = routes_by_id.get(relation.target_entity_id)
+            if source is None or target is None:
+                continue
+
+            if any(
+                source.canonical_url == redirect.source_url
+                and target.canonical_url == redirect.target_url
+                for redirect in matched_redirects
+            ):
+                relation_ids.add(relation.relation_id)
+
+        native_observation_ids = {
+            _native_observation_id(
+                fact.candidate_index,
+                fact.exchange_index,
+            )
+            for fact in facts
+        }
+        native_observation_ids.update(
+            redirect.source_id
+            for redirect in matched_redirects
+        )
+
+        endpoints = {request_url}
+        for redirect in matched_redirects:
+            endpoints.add(redirect.source_url)
+            endpoints.add(redirect.target_url)
+
+        limitations = set()
+        if any(not fact.confirmed_api for fact in facts):
+            limitations.add("structured_response_not_confirmed_api")
+        if any(not redirect.destination_fetched for redirect in matched_redirects):
+            limitations.add("redirect_destination_not_fetched")
+
+        drafts.append(
+            _ThreadDraft(
+                title="Observed structured application interface",
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "A directly observed response contains structured JSON "
+                    "content suitable for bounded application review."
+                ),
+                why_it_matters=(
+                    "Structured application responses can reveal useful interface "
+                    "and business context without proving an API or vulnerability."
+                ),
+                related_endpoints=_unique_sorted(endpoints),
+                related_evidence_ids=(),
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Review the retained structured response and its surrounding application context.",
+                    "Correlate related redirects and documented interfaces before escalating.",
+                    "Do not infer API status, authentication behaviour, or vulnerability from structure alone.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the retained response is generic, unrelated to the "
+                    "application under review, or outside authorised scope."
+                ),
+                identity_key=(request_url,),
+                related_native_observation_ids=_unique_sorted(
+                    native_observation_ids
+                ),
+                related_application_relation_ids=_unique_sorted(
+                    relation_ids
+                ),
+                limitation_codes=_unique_sorted(limitations),
+            )
+        )
+
+    return tuple(drafts)
+
+
+def _semantic_thread_id(draft: _ThreadDraft) -> str:
+    subject = (
+        draft.identity_key
+        or draft.related_endpoints
+        or draft.related_candidate_ids
+        or draft.related_lead_ids
+        or draft.related_evidence_ids
+    )
+
+    digest = sha256()
+    for value in (draft.category, *subject):
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+
+    return f"THREAD-{digest.hexdigest()}"
+
+
 def _assign_thread_ids(drafts: list[_ThreadDraft]) -> tuple[InvestigationThread, ...]:
     sorted_drafts = sorted(drafts, key=_thread_sort_key)
     return tuple(
         InvestigationThread(
-            thread_id=f"THREAD-{index:04d}",
+            thread_id=_semantic_thread_id(draft),
             title=draft.title,
             priority=draft.priority,
             category=draft.category,
@@ -542,8 +701,13 @@ def _assign_thread_ids(drafts: list[_ThreadDraft]) -> tuple[InvestigationThread,
             related_lead_ids=draft.related_lead_ids,
             suggested_manual_review_order=draft.suggested_manual_review_order,
             kill_switch_guidance=draft.kill_switch_guidance,
+            related_native_observation_ids=draft.related_native_observation_ids,
+            related_application_relation_ids=(
+                draft.related_application_relation_ids
+            ),
+            limitation_codes=draft.limitation_codes,
         )
-        for index, draft in enumerate(sorted_drafts, start=1)
+        for draft in sorted_drafts
     )
 
 

@@ -343,7 +343,15 @@ def test_standard_report_includes_investigation_threads_for_hidden_paths() -> No
 
     assert report.investigation_thread_count == 1
     assert "## Investigation Threads" in report.markdown
-    assert "THREAD-0001: Discovered hidden-path review" in report.markdown
+    hidden_thread = next(
+        thread
+        for thread in report.investigation_threads
+        if thread.title == "Discovered hidden-path review"
+    )
+    assert (
+        f"{hidden_thread.thread_id}: Discovered hidden-path review"
+        in report.markdown
+    )
     assert "`EVID-PATH-HIDDEN`" in report.markdown
 
 

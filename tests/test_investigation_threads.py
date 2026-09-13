@@ -12,11 +12,34 @@ from bugslyce.core.models import (
 from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.recon.interpretation_collection import collect_interpretation_from_sources
 from bugslyce.recon.interpretation_sources import artefact_sources_from_project_state
+from bugslyce.recon.application_service_composition import (
+    build_application_service_composition,
+)
+from bugslyce.recon.application_service_model import (
+    build_application_service_model,
+)
+from bugslyce.recon.documentation_assertions import (
+    DocumentationAssertionExtractionResult,
+)
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
 )
+from bugslyce.recon.native_observation_facts import (
+    NativeObservationSemanticEvidence,
+    NativeRedirectRelationship,
+    NativeStructuredResponseFact,
+)
+from bugslyce.triage.workflow_leads import WorkflowLead
+
+
+
+def _assert_semantic_thread_id(value: str) -> None:
+    assert value.startswith("THREAD-")
+    suffix = value.removeprefix("THREAD-")
+    assert len(suffix) == 64
+    assert all(character in "0123456789abcdef" for character in suffix)
 
 
 def test_high_port_http_and_multiple_services_generate_one_thread() -> None:
@@ -57,7 +80,7 @@ def test_high_port_http_and_multiple_services_generate_one_thread() -> None:
 
     assert len(threads) == 1
     thread = threads[0]
-    assert thread.thread_id == "THREAD-0001"
+    _assert_semantic_thread_id(thread.thread_id)
     assert thread.title == "High-port HTTP application review"
     assert thread.priority == "medium"
     assert (
@@ -89,7 +112,7 @@ def test_hidden_path_evidence_generates_hidden_path_thread() -> None:
 
     thread = build_investigation_threads(state)[0]
 
-    assert thread.thread_id == "THREAD-0001"
+    _assert_semantic_thread_id(thread.thread_id)
     assert thread.title == "Discovered hidden-path review"
     assert thread.category == "discovered_content"
     assert (
@@ -128,7 +151,7 @@ def test_encoded_or_source_evidence_generates_artefact_thread() -> None:
 
     thread = build_investigation_threads(state, review_leads=leads)[0]
 
-    assert thread.thread_id == "THREAD-0001"
+    _assert_semantic_thread_id(thread.thread_id)
     assert thread.title == "Encoded or source artefact review"
     assert thread.category == "artefact_interpretation"
     assert (
@@ -605,11 +628,9 @@ def test_thread_order_and_ids_are_deterministic() -> None:
     second = build_investigation_threads(state, review_leads=leads)
 
     assert first == second
-    assert [thread.thread_id for thread in first] == [
-        "THREAD-0001",
-        "THREAD-0002",
-        "THREAD-0003",
-    ]
+    assert len({thread.thread_id for thread in first}) == 3
+    for thread in first:
+        _assert_semantic_thread_id(thread.thread_id)
     assert [thread.title for thread in first] == [
         "Encoded or source artefact review",
         "High-port HTTP application review",
@@ -618,11 +639,15 @@ def test_thread_order_and_ids_are_deterministic() -> None:
     assert first[0].priority == "high"
 
     markdown = render_investigation_threads_markdown(first)
-    assert markdown.index("### THREAD-0001: Encoded or source artefact review") < markdown.index(
-        "### THREAD-0002: High-port HTTP application review"
+    assert markdown.index(
+        f"### {first[0].thread_id}: {first[0].title}"
+    ) < markdown.index(
+        f"### {first[1].thread_id}: {first[1].title}"
     )
-    assert markdown.index("### THREAD-0002: High-port HTTP application review") < markdown.index(
-        "### THREAD-0003: Discovered hidden-path review"
+    assert markdown.index(
+        f"### {first[1].thread_id}: {first[1].title}"
+    ) < markdown.index(
+        f"### {first[2].thread_id}: {first[2].title}"
     )
 
 
@@ -678,11 +703,15 @@ def test_runbook_workflow_renderer_preserves_thread_order_and_core_fields() -> N
     assert markdown.startswith("## Standard Investigation Workflow")
     assert "manual review prompts, not confirmed findings" in markdown
     assert "Offline Route/Source Review section" in markdown
-    assert markdown.index("### THREAD-0001: Encoded or source artefact review") < markdown.index(
-        "### THREAD-0002: High-port HTTP application review"
+    assert markdown.index(
+        f"### {threads[0].thread_id}: {threads[0].title}"
+    ) < markdown.index(
+        f"### {threads[1].thread_id}: {threads[1].title}"
     )
-    assert markdown.index("### THREAD-0002: High-port HTTP application review") < markdown.index(
-        "### THREAD-0003: Discovered hidden-path review"
+    assert markdown.index(
+        f"### {threads[1].thread_id}: {threads[1].title}"
+    ) < markdown.index(
+        f"### {threads[2].thread_id}: {threads[2].title}"
     )
     assert "* Related endpoints:" in markdown
     assert "`EVID-SVC`" in markdown
@@ -741,11 +770,9 @@ def test_standard_thread_renderers_include_context_guidance_without_reordering()
         engagement_context="bug_bounty",
     )
 
-    assert [thread.thread_id for thread in threads] == [
-        "THREAD-0001",
-        "THREAD-0002",
-        "THREAD-0003",
-    ]
+    assert len({thread.thread_id for thread in threads}) == 3
+    for thread in threads:
+        _assert_semantic_thread_id(thread.thread_id)
     assert [thread.title for thread in threads] == [
         "Encoded or source artefact review",
         "High-port HTTP application review",
@@ -753,8 +780,16 @@ def test_standard_thread_renderers_include_context_guidance_without_reordering()
     ]
     assert "In a bug bounty context, treat this as low-confidence metadata" in report_markdown
     assert "In a bug bounty context, treat this as low-confidence metadata" in runbook_markdown
-    assert report_markdown.index("THREAD-0001") < report_markdown.index("THREAD-0002")
-    assert runbook_markdown.index("THREAD-0001") < runbook_markdown.index("THREAD-0002")
+    assert report_markdown.index(
+        threads[0].thread_id
+    ) < report_markdown.index(
+        threads[1].thread_id
+    )
+    assert runbook_markdown.index(
+        threads[0].thread_id
+    ) < runbook_markdown.index(
+        threads[1].thread_id
+    )
 
 
 def test_renderer_includes_core_thread_fields_and_empty_state() -> None:
@@ -787,7 +822,7 @@ def test_renderer_includes_core_thread_fields_and_empty_state() -> None:
 
     assert markdown.startswith("## Investigation Threads")
     assert "These threads group related review signals" in markdown
-    assert "### THREAD-0001: Discovered hidden-path review" in markdown
+    assert f"### {thread.thread_id}: Discovered hidden-path review" in markdown
     assert "- Priority: medium" in markdown
     assert "- Category: discovered_content" in markdown
     assert "`EVID-PATH-BACKUP`" in markdown
@@ -879,3 +914,203 @@ def _lead(
         suggested_manual_validation=("Review manually.",),
         evidence_ids=evidence_ids,
     )
+
+
+
+def _package3_application_model(*, include_unrelated_origin: bool = False):
+    structured_responses = [
+        NativeStructuredResponseFact(
+            request_url="https://app.example.test/api/search/",
+            status_code=200,
+            candidate_index=7,
+            exchange_index=0,
+            body_sha256="a" * 64,
+        )
+    ]
+    if include_unrelated_origin:
+        structured_responses.append(
+            NativeStructuredResponseFact(
+                request_url="https://other.example.test/api/status/",
+                status_code=200,
+                candidate_index=20,
+                exchange_index=0,
+                body_sha256="b" * 64,
+            )
+        )
+
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=tuple(structured_responses),
+        redirect_relationships=(
+            NativeRedirectRelationship(
+                source_url="https://app.example.test/api/search",
+                raw_location="/api/search/",
+                target_url="https://app.example.test/api/search/",
+                candidate_index=8,
+                exchange_index=0,
+            ),
+        ),
+    )
+
+    application_composition = build_application_service_composition(
+        native_observation_evidence=native_evidence,
+    )
+
+    model = build_application_service_model(
+        application_composition=application_composition,
+        documentation_assertions=DocumentationAssertionExtractionResult(
+            assertions=(),
+            skipped_sources=(),
+            sources_considered=0,
+            sources_eligible=0,
+        ),
+        native_observation_evidence=native_evidence,
+    )
+    return model
+
+
+def test_package3_semantic_thread_id_survives_unrelated_higher_ranked_thread() -> None:
+    state = _project_state(
+        http_services=[
+            HTTPService(
+                url="https://application.example.test:8443/",
+                hostname="application.example.test",
+                status_code=200,
+                title="Operations workspace",
+                technologies=[],
+                content_length=200,
+                evidence_ids=["EVID-APPLICATION"],
+                tags=[],
+            )
+        ]
+    )
+
+    baseline = build_investigation_threads(state)
+    baseline_thread = next(
+        thread
+        for thread in baseline
+        if thread.title == "High-port HTTP application review"
+    )
+
+    expanded = build_investigation_threads(
+        state,
+        review_leads=[
+            _lead(
+                "LEAD-HIGH-UNRELATED",
+                category="html_source",
+                lead_type="possible_transform",
+                priority="high",
+                url="https://other.example.test/source",
+                related_artefact_types=("possible_base64",),
+                evidence_ids=("EVID-UNRELATED-HIGH",),
+            )
+        ],
+    )
+    expanded_thread = next(
+        thread
+        for thread in expanded
+        if thread.title == "High-port HTTP application review"
+    )
+
+    assert baseline_thread.thread_id == expanded_thread.thread_id
+
+    prefix = "THREAD-"
+    assert baseline_thread.thread_id.startswith(prefix)
+    semantic_suffix = baseline_thread.thread_id[len(prefix):]
+    assert len(semantic_suffix) == 64
+    assert all(character in "0123456789abcdef" for character in semantic_suffix)
+
+
+def test_package3_native_application_evidence_composes_without_discovered_path() -> None:
+    state = _project_state()
+    model = _package3_application_model()
+
+    assert state.discovered_paths == []
+
+    threads = build_investigation_threads(
+        state,
+        application_service_model=model,
+    )
+
+    application_thread = next(
+        thread
+        for thread in threads
+        if "https://app.example.test/api/search/" in thread.related_endpoints
+    )
+
+    assert application_thread.category == "application_interface"
+    assert "structured" in application_thread.title.lower()
+
+    relation_id = model.application_composition.relations[0].relation_id
+
+    assert application_thread.related_native_observation_ids == (
+        "native-observation:7:0",
+        "native-observation:8:0",
+    )
+    assert application_thread.related_application_relation_ids == (
+        relation_id,
+    )
+    assert application_thread.limitation_codes == (
+        "redirect_destination_not_fetched",
+        "structured_response_not_confirmed_api",
+    )
+
+
+def test_package3_unrelated_application_origin_does_not_change_thread_identity() -> None:
+    state = _project_state()
+
+    baseline = build_investigation_threads(
+        state,
+        application_service_model=_package3_application_model(),
+    )
+    expanded = build_investigation_threads(
+        state,
+        application_service_model=_package3_application_model(
+            include_unrelated_origin=True,
+        ),
+    )
+
+    baseline_thread = next(
+        thread
+        for thread in baseline
+        if "https://app.example.test/api/search/" in thread.related_endpoints
+    )
+    expanded_thread = next(
+        thread
+        for thread in expanded
+        if "https://app.example.test/api/search/" in thread.related_endpoints
+    )
+    unrelated_thread = next(
+        thread
+        for thread in expanded
+        if "https://other.example.test/api/status/" in thread.related_endpoints
+    )
+
+    assert baseline_thread.thread_id == expanded_thread.thread_id
+    assert unrelated_thread.thread_id != expanded_thread.thread_id
+
+
+def test_package3_workflow_thread_retains_all_exact_evidence_references() -> None:
+    evidence_ids = tuple(
+        f"EVID-WORKFLOW-{index:02d}"
+        for index in range(1, 14)
+    )
+
+    workflow = WorkflowLead(
+        title="Account workflow review",
+        priority="high",
+        category="account_workflow",
+        summary="Observed account workflow context.",
+        why_it_matters="Account boundaries deserve bounded review.",
+        suggested_manual_action="Review retained account workflow evidence.",
+        representative_urls=("https://app.example.test/account",),
+        covered_urls=("https://app.example.test/account",),
+        evidence_ids=evidence_ids,
+        signal="account_workflow",
+    )
+
+    thread = build_investigation_threads(
+        _project_state(),
+        workflow_leads=(workflow,),
+    )[0]
+
+    assert thread.related_evidence_ids == evidence_ids
