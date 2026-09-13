@@ -32,6 +32,10 @@ from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.application_service_model_persistence import (
     load_application_service_model_artifact,
 )
+from bugslyce.recon.investigation_thread_persistence import (
+    load_investigation_threads_artifact,
+)
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.recon.deep_http_fingerprint_summary import (
     DeepHttpFingerprintSummary,
     build_deep_http_fingerprint_summary,
@@ -194,6 +198,7 @@ class HtmlReportModel:
     operator_brief_composition: OperatorBriefComposition | None = None
     operator_brief_presentation: OperatorBriefHtmlPresentation | None = None
     application_service_model: ApplicationServiceModel | None = None
+    investigation_threads: tuple[InvestigationThread, ...] | None = None
 
 
 def build_html_report_model(
@@ -215,6 +220,7 @@ def build_html_report_model(
         raise TypeError("HTML report requires a typed application/service model")
     if application_service_model is None:
         application_service_model = load_application_service_model_artifact(root)
+    investigation_threads = load_investigation_threads_artifact(root)
 
     operator_brief_composition = load_operator_brief_composition_artifact(root)
     operator_brief_presentation = None
@@ -316,6 +322,7 @@ def build_html_report_model(
     )
     operator_report_view = build_operator_report_view(
         operator_summary,
+        investigation_threads=investigation_threads,
         investigation_sources=InvestigationContextSources(
             evidence=tuple(project_state.evidence),
             route_reasoning=route_reasoning,
@@ -361,6 +368,7 @@ def build_html_report_model(
         operator_brief_composition=operator_brief_composition,
         operator_brief_presentation=operator_brief_presentation,
         application_service_model=application_service_model,
+        investigation_threads=investigation_threads,
     )
 
 

@@ -16,6 +16,10 @@ import pytest
 from bugslyce.reports import html as html_module
 from bugslyce.reports.html import render_html_report
 from bugslyce.reports.html_model import HtmlReportModel, build_html_report_model
+from bugslyce.recon.investigation_thread_persistence import (
+    write_investigation_threads_artifact,
+)
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.reports.operator_brief_assembly import OperatorBriefComposition
 from bugslyce.reports.operator_brief_composition_persistence import (
     write_operator_brief_composition_artifact,
@@ -199,6 +203,113 @@ def _model_with_human_brief_and_composition(
     write_operator_brief_composition_artifact(root, composition)
     write_operator_brief_artifact(root, _human_blog_operator_brief())
     return build_html_report_model(root)
+
+
+def _canonical_thread(digest: str, title: str, endpoint: str) -> InvestigationThread:
+    return InvestigationThread(
+        thread_id="THREAD-" + digest * 64,
+        title=title,
+        priority="medium",
+        category="application_interface",
+        summary="Canonical persisted summary.",
+        why_it_matters="Canonical persisted rationale.",
+        related_endpoints=(endpoint,),
+        related_evidence_ids=(f"EVID-CANONICAL-{digest.upper()}",),
+        related_candidate_ids=(),
+        related_lead_ids=(),
+        suggested_manual_review_order=("Review retained evidence offline.",),
+        kill_switch_guidance="Stop if provenance does not support the thread.",
+        limitation_codes=("canonical_test_limitation",),
+    )
+
+
+def _canonical_thread_pack(
+    tmp_path: Path,
+    threads: tuple[InvestigationThread, ...],
+) -> Path:
+    root, _initial, _canonical_bytes = _LOADING_HELPERS[
+        "_write_canonical_html_pack"
+    ](tmp_path / "canonical-thread-pack")
+    write_operator_brief_composition_artifact(
+        root,
+        _PERSISTENCE_HELPERS["_representative_composition"](),
+    )
+    write_operator_brief_artifact(root, _human_blog_operator_brief())
+    write_investigation_threads_artifact(root, threads)
+    return root
+
+
+def test_persisted_canonical_threads_own_html_priority_identity_and_order(
+    tmp_path: Path,
+) -> None:
+    threads = (
+        _canonical_thread("b", "CANONICAL SECOND-ID FIRST", "http://blog.thm/api/"),
+        _canonical_thread("a", "CANONICAL FIRST-ID SECOND", "http://blog.thm/account/"),
+    )
+    model = build_html_report_model(_canonical_thread_pack(tmp_path, threads))
+    html = render_html_report(model)
+    primary = html.split('<section id="investigation-priorities"', 1)[1].split(
+        "</section>", 1,
+    )[0]
+
+    assert model.investigation_threads == threads
+    assert model.operator_report_view.primary_anchor_ids == tuple(
+        thread.thread_id for thread in threads
+    )
+    assert primary.index(threads[0].title) < primary.index(threads[1].title)
+    assert primary.index(threads[0].thread_id) < primary.index(threads[1].thread_id)
+    assert model.operator_brief.threads[0].title not in primary
+    assert model.operator_brief.threads[0].thread_id not in primary
+    assert all(
+        subject.thread_id not in primary
+        for subject in model.operator_brief_presentation.investigation_subjects
+        if subject.thread_id
+    )
+
+
+def test_present_empty_canonical_snapshot_does_not_restore_legacy_html_priority(
+    tmp_path: Path,
+) -> None:
+    model = build_html_report_model(_canonical_thread_pack(tmp_path, ()))
+    html = render_html_report(model)
+    primary = html.split('<section id="investigation-priorities"', 1)[1].split(
+        "</section>", 1,
+    )[0]
+
+    assert model.investigation_threads == ()
+    assert model.operator_report_view.primary_anchor_ids == ()
+    assert model.operator_brief.threads[0].title not in primary
+    assert "No canonical investigation priority was recorded" in primary
+
+
+def test_absent_canonical_snapshot_preserves_historical_html_fallback(
+    tmp_path: Path,
+) -> None:
+    root = _LOADING_HELPERS["_write_html_pack"](tmp_path / "historical-pack")
+    model = build_html_report_model(root)
+    html = render_html_report(model)
+
+    assert model.investigation_threads is None
+    assert model.operator_brief.threads
+    assert model.operator_brief.threads[0].title in html
+
+
+def test_html_model_loads_canonical_snapshot_without_thread_recomposition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    threads = (_canonical_thread("c", "CANONICAL LOADED", "http://blog.thm/api/"),)
+    root = _canonical_thread_pack(tmp_path, threads)
+
+    def fail_recomposition(*_args, **_kwargs):
+        raise AssertionError("HTML must not recompose canonical investigation threads")
+
+    monkeypatch.setattr(
+        "bugslyce.recon.investigation_threads.build_investigation_threads",
+        fail_recomposition,
+    )
+
+    assert build_html_report_model(root).investigation_threads == threads
 
 
 def test_empty_persisted_brief_does_not_suppress_ranked_human_fallback(

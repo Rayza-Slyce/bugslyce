@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
 from bugslyce.recon.application_service_model import ApplicationServiceModel
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.recon.deep_source_route_collector import (
     render_deep_source_route_skip_reason,
 )
@@ -305,26 +306,29 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
             ("limitations", "Warnings and skipped collection", _limitations_section(model)),
         )
     canonical_presentation = model.operator_brief_presentation
+    canonical_threads_present = model.investigation_threads is not None
+    if canonical_threads_present or (
+        canonical_presentation is not None and model.operator_brief.threads
+    ):
+        legacy_primary_sections = {
+            "operator-summary",
+            "human-triage",
+            "manual-review",
+        }
+        sections = [
+            section
+            for section in sections
+            if section[0] not in legacy_primary_sections
+        ]
+        sections.insert(
+            1,
+            (
+                "investigation-priorities",
+                "Investigation priorities",
+                _investigation_priorities_section(model, context_index),
+            ),
+        )
     if canonical_presentation is not None:
-        if model.operator_brief.threads:
-            legacy_primary_sections = {
-                "operator-summary",
-                "human-triage",
-                "manual-review",
-            }
-            sections = [
-                section
-                for section in sections
-                if section[0] not in legacy_primary_sections
-            ]
-            sections.insert(
-                1,
-                (
-                    "investigation-priorities",
-                    "Investigation priorities",
-                    _investigation_priorities_section(model),
-                ),
-            )
         application_context = tuple(
             item
             for item in canonical_presentation.investigation_subjects
@@ -400,7 +404,27 @@ def _render_sections(model: HtmlReportModel) -> list[tuple[str, str, str]]:
     return sections
 
 
-def _investigation_priorities_section(model: HtmlReportModel) -> str:
+def _investigation_priorities_section(
+    model: HtmlReportModel,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
+    if model.investigation_threads is not None:
+        content = (
+            "".join(
+                _canonical_investigation_thread(thread, model, context_index)
+                for thread in model.investigation_threads
+            )
+            if model.investigation_threads
+            else _empty(
+                "No canonical investigation priority was recorded. Review retained "
+                "supporting evidence and collection limitations."
+            )
+        )
+        return _section(
+            "investigation-priorities",
+            "Investigation priorities",
+            content,
+        )
     supporting_by_thread = _application_service_contexts_by_thread(model)
     return _section(
         "investigation-priorities",
@@ -412,6 +436,71 @@ def _investigation_priorities_section(model: HtmlReportModel) -> str:
             )
             for thread in model.operator_brief.threads
         ),
+    )
+
+
+def _canonical_investigation_thread(
+    thread: InvestigationThread,
+    model: HtmlReportModel,
+    context_index: InvestigationContextPresentationIndex,
+) -> str:
+    context = context_index.primary_by_anchor_id.get(thread.thread_id)
+    fields = (
+        ("Thread ID", thread.thread_id),
+        ("Priority", thread.priority),
+        ("Category", thread.category),
+        ("Endpoints", _compact_list(thread.related_endpoints, "endpoints")),
+        ("Evidence", _compact_list(thread.related_evidence_ids, "evidence IDs")),
+        (
+            "Native observations",
+            _compact_list(thread.related_native_observation_ids, "native observations"),
+        ),
+        (
+            "Application relations",
+            _compact_list(thread.related_application_relation_ids, "relations"),
+        ),
+        ("Limitations", _compact_list(thread.limitation_codes, "limitations")),
+    )
+    metadata = "".join(
+        f"<dt>{_h(label)}</dt><dd>{_render_value(value)}</dd>"
+        for label, value in fields
+    )
+    review_steps = (
+        '<p class="searchable"><strong>Suggested manual review:</strong></p><ol>'
+        + "".join(f"<li>{_h(step)}</li>" for step in thread.suggested_manual_review_order)
+        + "</ol>"
+        if thread.suggested_manual_review_order
+        else ""
+    )
+    context_html = (
+        _html_investigation_context(
+            context.context_items,
+            context_index,
+            frozenset(item.id for item in model.project_state.evidence),
+            frozenset(group.url for group in model.route_groups),
+        )
+        if context is not None and context.context_items
+        else ""
+    )
+    element_id = (
+        f' id="{_a(context.anchor_reference.anchor_token)}"'
+        if context is not None
+        else ""
+    )
+    kill_switch = (
+        '<p class="searchable"><strong>Stop/deprioritise when:</strong> '
+        f"{_h(thread.kill_switch_guidance)}</p>"
+        if thread.kill_switch_guidance
+        else ""
+    )
+    return (
+        f'<article class="investigation-subject searchable"{element_id}>'
+        f"<h3>{_h(thread.title)}</h3>"
+        f'<dl class="investigation-meta">{metadata}</dl>'
+        f'<p class="searchable"><strong>Summary:</strong> {_h(thread.summary)}</p>'
+        f'<p class="searchable"><strong>Why review:</strong> '
+        f"{_h(thread.why_it_matters)}</p>"
+        f"{review_steps}{kill_switch}{context_html}</article>"
     )
 
 
