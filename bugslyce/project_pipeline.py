@@ -407,6 +407,9 @@ class PipelineCompletionSummary:
     collection_confidence_notices: tuple[CollectionConfidenceNotice, ...]
     operator_summary: OperatorSummary
     operator_report_view: OperatorReportView | None = None
+    # Optional for pre-Package 3C projects. Keep this after the historical
+    # positional fields so terminal-only compatibility callers remain valid.
+    investigation_threads: tuple[InvestigationThread, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1217,12 +1220,18 @@ def _render_compact_run_summary(
 ) -> tuple[str, ...] | None:
     notices = getattr(summary, "collection_confidence_notices", None)
     operator_summary = getattr(summary, "operator_summary", None)
+    investigation_threads = getattr(summary, "investigation_threads", None)
     if not isinstance(notices, tuple) or not isinstance(
         operator_summary,
         OperatorSummary,
     ):
         return None
     if not all(isinstance(notice, CollectionConfidenceNotice) for notice in notices):
+        return None
+    if investigation_threads is not None and (
+        not isinstance(investigation_threads, tuple)
+        or not all(isinstance(thread, InvestigationThread) for thread in investigation_threads)
+    ):
         return None
     if not all(
         isinstance(lead, OperatorSummaryLead)
@@ -1249,15 +1258,32 @@ def _render_compact_run_summary(
         )
 
     lines.extend(["", "Review first:"])
-    review_first = operator_summary.ranked_leads
-    if review_first:
-        for lead in review_first[:5]:
+    if investigation_threads is not None:
+        for position, thread in enumerate(investigation_threads[:5], start=1):
             lines.extend(
                 _terminal_bullet(
-                    f"{lead.rank}. [{lead.lead_id}] {lead.title}: {lead.rationale}"
+                    f"{position}. [{thread.thread_id}] {thread.title}: {thread.why_it_matters}"
                 )
             )
-        remaining = len(review_first) - 5
+        remaining = len(investigation_threads) - 5
+        if remaining > 0:
+            noun = "item" if remaining == 1 else "items"
+            lines.append(
+                f"... and {remaining} more prioritised {noun} in the full report."
+            )
+        if not investigation_threads:
+            lines.extend(
+                _terminal_bullet(
+                    "No prioritised review item was produced. Review the full report and "
+                    "retained evidence."
+                )
+            )
+    elif operator_summary.ranked_leads:
+        for lead in operator_summary.ranked_leads[:5]:
+            lines.extend(_terminal_bullet(
+                f"{lead.rank}. [{lead.lead_id}] {lead.title}: {lead.rationale}"
+            ))
+        remaining = len(operator_summary.ranked_leads) - 5
         if remaining > 0:
             noun = "item" if remaining == 1 else "items"
             lines.append(
@@ -3164,21 +3190,6 @@ def _write_interpretation_report_if_needed(
             # Existing pipeline test and adapter seams may deliberately carry a
             # non-model sentinel. Only the typed A3 owner participates in P3C.
             application_service_model = None
-    threads = build_investigation_threads(
-        project_state,
-        candidates,
-        assembly.review_leads,
-        workflow_leads=workflow_leads,
-        application_service_model=application_service_model,
-    )
-    if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
-        thread_path = write_investigation_threads_artifact(output_dir, threads)
-        outputs = _deep_outputs_from_context(context)
-        context["deep_outputs"] = replace(
-            outputs,
-            investigation_threads=threads,
-            deep_artifact_paths=_dedupe_paths((*outputs.deep_artifact_paths, thread_path)),
-        )
     route_source_leads = build_route_source_review(
         project_state,
         getattr(assembly, "sources", ()),
@@ -3215,6 +3226,24 @@ def _write_interpretation_report_if_needed(
         if isinstance(project_state, ProjectState)
         else None
     )
+    threads = build_investigation_threads(
+        project_state,
+        candidates,
+        assembly.review_leads,
+        workflow_leads=workflow_leads,
+        application_service_model=application_service_model,
+        compatibility_summary_leads=(
+            operator_summary.ranked_leads if operator_summary is not None else ()
+        ),
+    )
+    if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
+        thread_path = write_investigation_threads_artifact(output_dir, threads)
+        outputs = _deep_outputs_from_context(context)
+        context["deep_outputs"] = replace(
+            outputs,
+            investigation_threads=threads,
+            deep_artifact_paths=_dedupe_paths((*outputs.deep_artifact_paths, thread_path)),
+        )
     triage_kwargs: dict[str, object] = {}
     if operator_summary is not None:
         triage_kwargs["ranked_leads"] = operator_summary.ranked_leads
@@ -3234,6 +3263,7 @@ def _write_interpretation_report_if_needed(
     operator_report_view = (
         build_operator_report_view(
             operator_summary,
+            investigation_threads=threads,
             investigation_sources=InvestigationContextSources(
                 evidence=tuple(project_state.evidence),
                 route_reasoning=route_reasoning_review,
@@ -3277,6 +3307,7 @@ def _write_interpretation_report_if_needed(
     }
     if operator_summary is not None:
         report_kwargs["operator_summary"] = operator_summary
+        report_kwargs["investigation_threads"] = threads
         report_kwargs["operator_brief"] = build_operator_brief_view(
             operator_summary,
         )
@@ -3301,6 +3332,7 @@ def _write_interpretation_report_if_needed(
         context["completion_summary"] = PipelineCompletionSummary(
             collection_confidence_notices=confidence_notices,
             operator_summary=operator_summary,
+            investigation_threads=threads,
             operator_report_view=operator_report_view,
         )
     return [
@@ -3323,14 +3355,17 @@ def _build_completion_summary_from_project(
         return None
     candidates = generate_candidates(project_state)
     operator_summary = build_operator_summary(project_state, candidates)
+    investigation_threads = load_investigation_threads_artifact(output_dir)
     return PipelineCompletionSummary(
         collection_confidence_notices=build_collection_confidence_notices_from_project(
             project_state,
             output_dir,
         ),
         operator_summary=operator_summary,
+        investigation_threads=investigation_threads,
         operator_report_view=build_operator_report_view(
             operator_summary,
+            investigation_threads=investigation_threads,
             investigation_sources=InvestigationContextSources(
                 evidence=tuple(project_state.evidence),
                 workflow_leads=tuple(build_grouped_workflow_leads(project_state)),

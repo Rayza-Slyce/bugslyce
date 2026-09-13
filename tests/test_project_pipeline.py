@@ -91,6 +91,7 @@ from bugslyce.recon.collection_confidence import (
     CollectionConfidenceNotice,
     build_collection_confidence_notices,
 )
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.recon.path_followup import PathFollowupNoWork
 from bugslyce.recon.external_enforcement import assess_tool_capabilities
 from bugslyce.recon.evidence_pack_closure import validate_evidence_pack_root
@@ -3125,6 +3126,17 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         low_signal=[],
         coverage=[],
     )
+    direct_summary_lead = OperatorSummaryLead(
+        title="Structured direct response",
+        why="A structured response was directly observed.",
+        endpoints=["http://10.10.10.10/portal"],
+        evidence_ids=["EVID-DISCOVERY"],
+        next_action="Review retained evidence.",
+        signal="medium",
+        score=1,
+        lead_type="structured_json_routes",
+        lead_id="LEAD-DIRECT", rank=99,
+    )
     orchestration = SimpleNamespace(
         successful_content_reviews=(),
         form_inventory=SimpleNamespace(forms=()),
@@ -3151,8 +3163,24 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         pass
 
     application_service_model = _Package3CApplicationServiceModel()
-    canonical_threads = ("package3c-thread-sentinel",)
+    canonical_threads = (
+        InvestigationThread(
+            thread_id="THREAD-" + "a" * 64,
+            title="Canonical application review",
+            priority="medium",
+            category="application_interface",
+            summary="Supported direct application evidence.",
+            why_it_matters="Canonical thread rationale.",
+            related_endpoints=("http://10.10.10.10/portal",),
+            related_evidence_ids=("EVID-DISCOVERY",),
+            related_candidate_ids=(),
+            related_lead_ids=(),
+            suggested_manual_review_order=("Review retained evidence.",),
+            kill_switch_guidance=None,
+        ),
+    )
     thread_model_calls: list[object | None] = []
+    thread_compatibility_lead_calls: list[object] = []
     persisted_thread_calls: list[tuple[object, ...]] = []
     rendered_runbook_threads: list[tuple[object, ...]] = []
 
@@ -3164,6 +3192,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
 
     def build_threads(*_args, **kwargs):
         thread_model_calls.append(kwargs.get("application_service_model"))
+        thread_compatibility_lead_calls.append(kwargs.get("compatibility_summary_leads"))
         return canonical_threads
 
     def persist_threads(root: Path, threads):
@@ -3205,7 +3234,11 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     monkeypatch.setattr(project_pipeline, "render_human_triage_brief_markdown", lambda *args, **kwargs: "")
     monkeypatch.setattr(project_pipeline, "render_readable_evidence_cards_markdown", lambda *args, **kwargs: "")
     monkeypatch.setattr(project_pipeline, "render_http_route_relationship_clusters_markdown", lambda *args, **kwargs: "")
-    monkeypatch.setattr(project_pipeline, "_deep_operator_summary_leads", lambda *_: ())
+    monkeypatch.setattr(
+        project_pipeline,
+        "_deep_operator_summary_leads",
+        lambda *_: (direct_summary_lead,),
+    )
     monkeypatch.setattr(project_pipeline, "_render_deep_report_index", lambda *_: "")
 
     def report_coverage(orchestration_arg):
@@ -3232,6 +3265,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
 
     def write_outputs(*_args, **kwargs):
         captured["view"] = kwargs["operator_report_view"]
+        captured["threads"] = kwargs["investigation_threads"]
         captured["brief"] = kwargs["operator_brief"]
         captured["persisted_coverage"] = kwargs["analysis_coverage_evidence"]
         return tmp_path / "report.md", tmp_path / "project_state.json"
@@ -3253,8 +3287,10 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     outputs_after_report = context["deep_outputs"]
     assert isinstance(outputs_after_report, DeepPipelineOutputs)
     assert thread_model_calls == [application_service_model]
+    assert thread_compatibility_lead_calls == [tuple(summary.ranked_leads)]
     assert persisted_thread_calls == [canonical_threads]
     assert outputs_after_report.investigation_threads is canonical_threads
+    assert captured["threads"] is canonical_threads
 
     def render_runbook_threads(threads, **_kwargs):
         rendered_runbook_threads.append(threads)
@@ -3291,11 +3327,12 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         for disposition in brief.dispositions
     ) == ("LEAD-CONTROLLED",)
 
-    assert view.primary_anchor_ids == ("LEAD-CONTROLLED",)
+    assert view.primary_anchor_ids == (canonical_threads[0].thread_id,)
     assert tuple(
         context.anchor_id for context in view.investigation_context.primary_contexts
-    ) == ("LEAD-CONTROLLED",)
+    ) == (canonical_threads[0].thread_id,)
     assert view is context["completion_summary"].operator_report_view
+    assert context["completion_summary"].investigation_threads is canonical_threads
     assert coverage_calls == [orchestration]
     assert captured["view_coverage"] is coverage_evidence
     assert captured["persisted_coverage"] is coverage_evidence

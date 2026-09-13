@@ -10,6 +10,7 @@ import json
 import re
 
 from bugslyce.core.models import Evidence
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.recon.deep_form_inventory import DeepFormInventoryItem
 from bugslyce.recon.deep_initial_retained_javascript_route_extraction import (
     DeepInitialRetainedJavaScriptRouteCandidate,
@@ -178,6 +179,46 @@ def build_primary_investigation_contexts(
     )
 
 
+def build_primary_investigation_contexts_for_threads(
+    threads: Sequence[InvestigationThread],
+    sources: InvestigationContextSources = InvestigationContextSources(),
+) -> InvestigationContextAssembly:
+    """Project canonical thread order into report-only context anchors."""
+
+    if any(not isinstance(thread, InvestigationThread) for thread in threads):
+        raise TypeError("canonical investigation contexts require InvestigationThread values")
+    indexes = _ContextIndexes(sources)
+    drafts = [
+        (
+            ReportReferenceTarget(
+                "investigation_thread", thread.thread_id,
+                (thread.thread_id, thread.category, *thread.related_endpoints),
+            ),
+            thread.title,
+            indexes.items_for(thread.related_evidence_ids, thread.related_endpoints),
+        )
+        for thread in threads
+    ]
+    references = build_report_navigation_references(
+        target
+        for target, _, items in drafts
+        for target in (target, *(_target_for_item(item) for item in items))
+    )
+    reference_by_key = {
+        (reference.target_kind, reference.target_id): reference
+        for reference in references
+    }
+    contexts = tuple(
+        _context_view("investigation_thread", target, label, items, reference_by_key)
+        for target, label, items in drafts
+    )
+    return InvestigationContextAssembly(
+        primary_contexts=contexts,
+        evidence_backlinks=_backlinks(contexts, "evidence"),
+        route_backlinks=_backlinks(contexts, "route"),
+    )
+
+
 def build_context_for_route(
     route: RouteCandidate,
     sources: InvestigationContextSources = InvestigationContextSources(),
@@ -276,12 +317,17 @@ class _ContextIndexes:
         )
 
     def items_for_lead(self, lead: OperatorSummaryLead) -> tuple[InvestigationContextItem, ...]:
+        return self.items_for(lead.evidence_ids, lead.endpoints)
+
+    def items_for(
+        self, evidence_ids: Iterable[str], routes: Iterable[str],
+    ) -> tuple[InvestigationContextItem, ...]:
         items = [
             _evidence_item(self.evidence[evidence_id])
-            for evidence_id in lead.evidence_ids
+            for evidence_id in evidence_ids
             if evidence_id in self.evidence
         ]
-        items.extend(self.items_for_routes(lead.endpoints))
+        items.extend(self.items_for_routes(routes))
         return _ordered_items(items)
 
     def items_for_routes(self, routes: Iterable[str]) -> list[InvestigationContextItem]:

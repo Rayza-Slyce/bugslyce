@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from bugslyce.core.models import HTTPService, ProjectState
+from dataclasses import replace
+
+from bugslyce.core.models import HTTPService, ProjectState, SMBShare
 from bugslyce.recon.application_service_composition import (
     build_application_service_composition,
 )
@@ -234,6 +236,80 @@ def test_generic_compatibility_port_signal_is_ignored() -> None:
         for thread in threads
     )
     assert all(thread.priority != "high" for thread in threads)
+
+
+def test_smb_compatibility_thread_uses_typed_share_not_legacy_presentation_or_rank() -> None:
+    state = replace(
+        _state(),
+        smb_shares=[
+            SMBShare(
+                host="files.example.test",
+                port=31337,
+                share_name="nt4wrksv",
+                share_type="Disk",
+                comment="",
+                source_file="smb.txt",
+                trigger_service_names=["microsoft-ds"],
+                trigger_evidence_ids=["EVID-PORT-SMB"],
+                trigger_source_files=["services.txt"],
+                evidence_ids=["EVID-SMB-CUSTOM"],
+                tags=[],
+            )
+        ],
+    )
+    first = _summary_lead(
+        endpoint="files.example.test:31337/tcp",
+        evidence_id="EVID-SMB-CUSTOM",
+        title="Legacy wording one",
+        score=1,
+        lead_id="LEAD-LOW",
+        rank=99,
+        lead_type="smb_disk_share_review",
+    )
+    changed = _summary_lead(
+        endpoint="files.example.test:31337/tcp",
+        evidence_id="EVID-SMB-CUSTOM",
+        title="Completely different legacy wording",
+        score=999,
+        lead_id="LEAD-HIGH",
+        rank=1,
+        lead_type="smb_disk_share_review",
+    )
+
+    baseline = build_investigation_threads(
+        state, compatibility_summary_leads=(first,),
+    )
+    altered = build_investigation_threads(
+        state, compatibility_summary_leads=(changed,),
+    )
+
+    assert altered == baseline
+    smb = next(thread for thread in baseline if thread.category == "service_context")
+    assert smb.title == "SMB Disk share observed for review: nt4wrksv"
+    assert smb.related_endpoints == ("files.example.test:31337/tcp",)
+    assert smb.related_evidence_ids == ("EVID-SMB-CUSTOM",)
+    assert smb.priority == "medium"
+
+
+def test_low_priority_service_context_does_not_outrank_supported_application_evidence() -> None:
+    service_context = _summary_lead(
+        endpoint="files.example.test:22/tcp",
+        evidence_id="EVID-SSH",
+        title="SSH service context on 22/tcp",
+        score=999,
+        lead_id="LEAD-SERVICE",
+        rank=1,
+        lead_type="non_http_service_context",
+    )
+
+    threads = build_investigation_threads(
+        _state(), application_service_model=_model(),
+        compatibility_summary_leads=(service_context,),
+    )
+
+    assert threads[0].category == "application_interface"
+    assert threads[-1].category == "service_context"
+    assert threads[-1].priority == "low"
 
 
 def test_compatibility_permutation_and_limitations_remain_canonical() -> None:

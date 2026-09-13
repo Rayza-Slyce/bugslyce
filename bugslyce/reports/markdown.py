@@ -24,6 +24,7 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_operator_summary,
 )
+from bugslyce.recon.investigation_threads import InvestigationThread
 from bugslyce.reports.operator_report_view import OperatorReportView
 from bugslyce.reports.operator_brief import (
     OperatorBriefView,
@@ -77,9 +78,16 @@ def render_markdown_report(
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
     operator_summary: OperatorSummary | None = None,
+    investigation_threads: tuple[InvestigationThread, ...] | None = None,
     operator_report_view: OperatorReportView | None = None,
 ) -> str:
     """Render a cautious deterministic triage report."""
+
+    if investigation_threads is not None and (
+        not isinstance(investigation_threads, tuple)
+        or any(not isinstance(thread, InvestigationThread) for thread in investigation_threads)
+    ):
+        raise TypeError("canonical investigation threads must be a typed tuple")
 
     context_index = (
         build_investigation_context_presentation_index(
@@ -106,6 +114,7 @@ def render_markdown_report(
         candidates,
         additional_leads=operator_summary_leads,
         summary=operator_summary,
+        investigation_threads=investigation_threads,
         context_index=context_index,
     )
     _analysis_coverage(
@@ -151,6 +160,7 @@ def _operator_summary(
     *,
     additional_leads: tuple[OperatorSummaryLead, ...] = (),
     summary: OperatorSummary | None = None,
+    investigation_threads: tuple[InvestigationThread, ...] | None = None,
     context_index: InvestigationContextPresentationIndex | None = None,
 ) -> None:
     if summary is None:
@@ -160,7 +170,38 @@ def _operator_summary(
             additional_leads=additional_leads,
         )
     lines.extend(["## Operator Summary", "", "### Review First", ""])
-    if not summary.ranked_leads:
+    if investigation_threads is not None:
+        if not investigation_threads:
+            lines.extend(
+                [
+                    "No prioritised review item was produced. Review the retained evidence "
+                    "and supporting sections.",
+                    "",
+                ]
+            )
+        for position, thread in enumerate(investigation_threads, start=1):
+            context = (
+                context_index.primary_by_anchor_id.get(thread.thread_id)
+                if context_index is not None else None
+            )
+            if context is not None:
+                lines.append(f'<a id="{context.anchor_reference.anchor_token}"></a>')
+            lines.extend([
+                f"{position}. **{_md(thread.title)}**",
+                f"   - Thread ID: `{_md(thread.thread_id)}`",
+                f"   - Category: `{_md(thread.category)}`",
+                f"   - Priority: `{_md(thread.priority)}`",
+                f"   - Rationale: {_md(thread.why_it_matters)}",
+                f"   - Endpoint(s): {_complete_code_list(thread.related_endpoints)}",
+                f"   - Evidence: {_complete_code_list(thread.related_evidence_ids)}",
+                "",
+            ])
+            if context is not None and context.context_items:
+                _markdown_investigation_context(
+                    lines, context.context_items, context_index,
+                    frozenset(item.id for item in project_state.evidence),
+                )
+    elif not summary.ranked_leads:
         lines.extend(
             [
                 "No evidence-backed leads met the conservative summary threshold.",
@@ -385,6 +426,7 @@ def write_project_outputs(
     collection_confidence_markdown: str | None = None,
     operator_summary_leads: tuple[OperatorSummaryLead, ...] = (),
     operator_summary: OperatorSummary | None = None,
+    investigation_threads: tuple[InvestigationThread, ...] | None = None,
     operator_report_view: OperatorReportView | None = None,
     operator_brief: OperatorBriefView | None = None,
     analysis_coverage_evidence: tuple[AnalysisCoverageExecutionEvidence, ...] | None = None,
@@ -412,6 +454,7 @@ def write_project_outputs(
             collection_confidence_markdown=collection_confidence_markdown,
             operator_summary_leads=operator_summary_leads,
             operator_summary=operator_summary,
+            investigation_threads=investigation_threads,
             operator_report_view=operator_report_view,
         ),
         encoding="utf-8",

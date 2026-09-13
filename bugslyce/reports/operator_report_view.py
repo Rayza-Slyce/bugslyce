@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from bugslyce.recon.investigation_threads import InvestigationThread
+
 from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageExecutionEvidence,
     AnalysisCoverageView,
@@ -14,6 +16,7 @@ from bugslyce.reports.investigation_context import (
     InvestigationContextAssembly,
     InvestigationContextSources,
     build_primary_investigation_contexts,
+    build_primary_investigation_contexts_for_threads,
 )
 from bugslyce.reports.operator_summary import OperatorSummary
 
@@ -38,16 +41,26 @@ class OperatorReportView:
 def build_operator_report_view(
     operator_summary: OperatorSummary,
     *,
+    investigation_threads: tuple[InvestigationThread, ...] | None = None,
     investigation_sources: InvestigationContextSources = InvestigationContextSources(),
     coverage_evidence: Iterable[AnalysisCoverageExecutionEvidence] = (),
 ) -> OperatorReportView:
     """Compose existing report-only reasoning without adding report authority."""
 
-    ranked_leads = operator_summary.ranked_leads
+    if investigation_threads is not None and (
+        not isinstance(investigation_threads, tuple)
+        or any(not isinstance(thread, InvestigationThread) for thread in investigation_threads)
+    ):
+        raise TypeError("canonical investigation threads must be typed")
     return OperatorReportView(
-        investigation_context=build_primary_investigation_contexts(
-            ranked_leads,
-            investigation_sources,
+        investigation_context=(
+            build_primary_investigation_contexts_for_threads(
+                investigation_threads, investigation_sources,
+            )
+            if investigation_threads is not None
+            else build_primary_investigation_contexts(
+                operator_summary.ranked_leads, investigation_sources,
+            )
         ),
         analysis_coverage=build_analysis_coverage(coverage_evidence),
     )

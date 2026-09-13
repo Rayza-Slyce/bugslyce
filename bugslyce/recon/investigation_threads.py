@@ -32,6 +32,7 @@ THREAD_CATEGORY_ORDER = {
     "http_service": 3,
     "discovered_content": 4,
     "artefact_interpretation": 5,
+    "service_context": 6,
 }
 _COMPATIBILITY_SUMMARY_FAMILIES = frozenset(
     {
@@ -39,6 +40,11 @@ _COMPATIBILITY_SUMMARY_FAMILIES = frozenset(
         "structured_json_routes",
         "distinctive_access_boundary_response",
         "directory_listing_response",
+        "fetched_application_page",
+        "successful_deep_content",
+        "smb_disk_share_review",
+        "non_http_service_context",
+        "unusual_robots_user_agent",
     }
 )
 class CompatibilitySummaryLead(Protocol):
@@ -127,7 +133,9 @@ def build_investigation_threads(
         drafts.append(encoded)
     if application_service_model is not None:
         drafts.extend(_application_interface_threads(application_service_model))
-    drafts.extend(_compatibility_summary_threads(compatibility_summary_leads))
+    drafts.extend(
+        _compatibility_summary_threads(project_state, compatibility_summary_leads)
+    )
     return _assign_thread_ids(drafts)
 
 
@@ -687,11 +695,13 @@ def _application_interface_threads(
 
 
 def _compatibility_summary_threads(
+    project_state: ProjectState,
     leads: Sequence[CompatibilitySummaryLead],
 ) -> tuple[_ThreadDraft, ...]:
     """Adapt selected direct-evidence summary families without importing rank."""
 
     grouped: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+    grouped_endpoints: dict[tuple[str, tuple[str, ...]], set[str]] = {}
 
     for lead in leads:
         lead_type = getattr(lead, "lead_type", None)
@@ -718,11 +728,28 @@ def _compatibility_summary_threads(
         if not endpoints or not evidence_ids:
             continue
 
-        grouped.setdefault((lead_type, endpoints), set()).update(evidence_ids)
+        key = (
+            lead_type,
+            _compatibility_subject(
+                project_state,
+                lead_type,
+                endpoints,
+                evidence_ids,
+            ),
+        )
+        grouped.setdefault(key, set()).update(evidence_ids)
+        grouped_endpoints.setdefault(key, set()).update(endpoints)
 
     drafts: list[_ThreadDraft] = []
-    for lead_type, endpoints in sorted(grouped):
-        evidence_ids = tuple(sorted(grouped[(lead_type, endpoints)]))
+    for lead_type, subject in sorted(grouped):
+        evidence_ids = tuple(sorted(grouped[(lead_type, subject)]))
+        if lead_type == "successful_deep_content":
+            endpoints = tuple(sorted(grouped_endpoints[(lead_type, subject)]))
+        elif lead_type == "smb_disk_share_review":
+            typed_share_name = _typed_smb_share_name(project_state, evidence_ids)
+            endpoints = subject[1:] if typed_share_name is not None else subject
+        else:
+            endpoints = subject
 
         if lead_type == "structured_json_routes":
             title = "Observed structured route disclosure"
@@ -732,6 +759,8 @@ def _compatibility_summary_threads(
                 "proving that an uncollected route is reachable or vulnerable."
             )
             limitations = ("structured_response_not_confirmed_api",)
+            priority = "medium"
+            category = "application_interface"
         elif lead_type == "structured_configuration_body":
             title = "Observed structured application configuration"
             summary = (
@@ -742,6 +771,8 @@ def _compatibility_summary_threads(
                 "without proving impact."
             )
             limitations = ()
+            priority = "medium"
+            category = "application_interface"
         elif lead_type == "distinctive_access_boundary_response":
             title = "Observed distinctive access boundary"
             summary = (
@@ -752,7 +783,9 @@ def _compatibility_summary_threads(
                 "without proving an authorization flaw."
             )
             limitations = ()
-        else:
+            priority = "medium"
+            category = "application_interface"
+        elif lead_type == "directory_listing_response":
             title = "Observed directory listing response"
             summary = "A retained response presents directory-listing evidence."
             why = (
@@ -760,12 +793,67 @@ def _compatibility_summary_threads(
                 "and deserves bounded review."
             )
             limitations = ()
+            priority = "medium"
+            category = "application_interface"
+        elif lead_type == "fetched_application_page":
+            title = "Fetched application page review"
+            summary = "A retained application page is available for contextual review."
+            why = (
+                "A collected application page can provide useful context without "
+                "making its status or title a vulnerability claim."
+            )
+            limitations = ("fetched_response_not_security_finding",)
+            priority = "medium"
+            category = "application_interface"
+        elif lead_type == "successful_deep_content":
+            title = "Successfully collected Deep content available offline"
+            summary = "Grouped retained Deep responses are available for offline review."
+            why = (
+                "Successful retained content can provide application context without "
+                "treating an HTTP success response as a security finding."
+            )
+            limitations = ("successful_response_not_security_finding",)
+            priority = "medium"
+            category = "application_interface"
+        elif lead_type == "smb_disk_share_review":
+            share_name = _typed_smb_share_name(project_state, evidence_ids)
+            title = (
+                f"SMB Disk share observed for review: {share_name}"
+                if share_name is not None
+                else "Observed SMB service context"
+            )
+            summary = (
+                "A bounded SMB enumeration directly observed a non-administrative Disk share."
+                if share_name is not None
+                else "SMB service context is retained without a uniquely associated share name."
+            )
+            why = (
+                "Direct share evidence merits authorised contextual review without "
+                "authorising connection, traversal, or access testing."
+            )
+            limitations = ("smb_observation_not_access_authority",)
+            priority = "medium"
+            category = "service_context"
+        elif lead_type == "non_http_service_context":
+            title = "Observed non-HTTP service context"
+            summary = "An open non-HTTP service is retained as bounded service context."
+            why = "Service context is useful for topology review but does not itself establish impact."
+            limitations = ("service_context_not_security_finding",)
+            priority = "low"
+            category = "service_context"
+        else:
+            title = "Unusual robots user-agent context"
+            summary = "Collected robots.txt evidence contains non-default user-agent context."
+            why = "Robots context is low-priority supporting evidence until corroborated."
+            limitations = ("robots_context_not_security_finding",)
+            priority = "low"
+            category = "discovered_content"
 
         drafts.append(
             _ThreadDraft(
                 title=title,
-                priority="medium",
-                category="application_interface",
+                priority=priority,
+                category=category,
                 summary=summary,
                 why_it_matters=why,
                 related_endpoints=endpoints,
@@ -782,12 +870,47 @@ def _compatibility_summary_threads(
                     "Stop if the retained evidence is generic, repeated, or "
                     "unsupported by its provenance."
                 ),
-                identity_key=(lead_type, *endpoints),
+                identity_key=(lead_type, *subject),
                 limitation_codes=limitations,
             )
         )
 
     return tuple(drafts)
+
+
+def _compatibility_subject(
+    project_state: ProjectState,
+    lead_type: str,
+    endpoints: tuple[str, ...],
+    evidence_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Group a legacy summary family by semantic subject, never legacy rank."""
+
+    if lead_type == "successful_deep_content":
+        return ()
+    if lead_type == "smb_disk_share_review":
+        share_name = _typed_smb_share_name(project_state, evidence_ids)
+        return (share_name.casefold(), *endpoints) if share_name is not None else endpoints
+    return endpoints
+
+
+def _typed_smb_share_name(
+    project_state: ProjectState,
+    evidence_ids: Sequence[str],
+) -> str | None:
+    """Return one typed Disk-share subject linked by direct evidence, if unique."""
+
+    evidence_id_set = frozenset(evidence_ids)
+    names = {
+        share.share_name.strip()
+        for share in project_state.smb_shares
+        if share.share_type.casefold() == "disk"
+        and share.share_name.strip()
+        and evidence_id_set.intersection(share.evidence_ids)
+    }
+    if len(names) != 1:
+        return None
+    return next(iter(names))
 
 def _semantic_thread_id(draft: _ThreadDraft) -> str:
     subject = (
