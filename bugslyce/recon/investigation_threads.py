@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from typing import Protocol
 from urllib.parse import urlparse
 
 from bugslyce.core.engagement_context import engagement_context_review_guidance
@@ -27,11 +28,27 @@ PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 THREAD_CATEGORY_ORDER = {
     "account_workflow": 0,
     "object_reference_surface": 1,
-    "http_service": 2,
-    "discovered_content": 3,
-    "artefact_interpretation": 4,
-    "application_interface": 5,
+    "application_interface": 2,
+    "http_service": 3,
+    "discovered_content": 4,
+    "artefact_interpretation": 5,
 }
+_COMPATIBILITY_SUMMARY_FAMILIES = frozenset(
+    {
+        "structured_configuration_body",
+        "structured_json_routes",
+        "distinctive_access_boundary_response",
+        "directory_listing_response",
+    }
+)
+class CompatibilitySummaryLead(Protocol):
+    """Legacy summary evidence accepted without importing ranking authority."""
+
+    lead_type: str
+    endpoints: Sequence[str]
+    evidence_ids: Sequence[str]
+
+
 HIDDEN_PATH_WORDS = (
     "hidden",
     "secret",
@@ -95,6 +112,7 @@ def build_investigation_threads(
     *,
     workflow_leads: Sequence[WorkflowLead] = (),
     application_service_model: ApplicationServiceModel | None = None,
+    compatibility_summary_leads: Sequence[CompatibilitySummaryLead] = (),
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
 
@@ -109,6 +127,7 @@ def build_investigation_threads(
         drafts.append(encoded)
     if application_service_model is not None:
         drafts.extend(_application_interface_threads(application_service_model))
+    drafts.extend(_compatibility_summary_threads(compatibility_summary_leads))
     return _assign_thread_ids(drafts)
 
 
@@ -666,6 +685,109 @@ def _application_interface_threads(
 
     return tuple(drafts)
 
+
+def _compatibility_summary_threads(
+    leads: Sequence[CompatibilitySummaryLead],
+) -> tuple[_ThreadDraft, ...]:
+    """Adapt selected direct-evidence summary families without importing rank."""
+
+    grouped: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+
+    for lead in leads:
+        lead_type = getattr(lead, "lead_type", None)
+        raw_endpoints = getattr(lead, "endpoints", None)
+        raw_evidence_ids = getattr(lead, "evidence_ids", None)
+
+        if (
+            not isinstance(lead_type, str)
+            or not isinstance(raw_endpoints, Sequence)
+            or isinstance(raw_endpoints, (str, bytes))
+            or not isinstance(raw_evidence_ids, Sequence)
+            or isinstance(raw_evidence_ids, (str, bytes))
+            or any(not isinstance(item, str) for item in raw_endpoints)
+            or any(not isinstance(item, str) for item in raw_evidence_ids)
+        ):
+            raise TypeError("compatibility summary leads must expose typed semantic fields")
+
+        if lead_type not in _COMPATIBILITY_SUMMARY_FAMILIES:
+            continue
+
+        endpoints = _unique_sorted(raw_endpoints)
+        evidence_ids = _unique_sorted(raw_evidence_ids)
+
+        if not endpoints or not evidence_ids:
+            continue
+
+        grouped.setdefault((lead_type, endpoints), set()).update(evidence_ids)
+
+    drafts: list[_ThreadDraft] = []
+    for lead_type, endpoints in sorted(grouped):
+        evidence_ids = tuple(sorted(grouped[(lead_type, endpoints)]))
+
+        if lead_type == "structured_json_routes":
+            title = "Observed structured route disclosure"
+            summary = "A retained structured response directly discloses route values."
+            why = (
+                "Direct route values can provide useful application context without "
+                "proving that an uncollected route is reachable or vulnerable."
+            )
+            limitations = ("structured_response_not_confirmed_api",)
+        elif lead_type == "structured_configuration_body":
+            title = "Observed structured application configuration"
+            summary = (
+                "A retained response contains coherent structured configuration."
+            )
+            why = (
+                "Configuration context can inform bounded application review "
+                "without proving impact."
+            )
+            limitations = ()
+        elif lead_type == "distinctive_access_boundary_response":
+            title = "Observed distinctive access boundary"
+            summary = (
+                "A retained response differs meaningfully at an access boundary."
+            )
+            why = (
+                "A distinctive access boundary can merit careful contextual review "
+                "without proving an authorization flaw."
+            )
+            limitations = ()
+        else:
+            title = "Observed directory listing response"
+            summary = "A retained response presents directory-listing evidence."
+            why = (
+                "Directory-listing evidence may expose useful application context "
+                "and deserves bounded review."
+            )
+            limitations = ()
+
+        drafts.append(
+            _ThreadDraft(
+                title=title,
+                priority="medium",
+                category="application_interface",
+                summary=summary,
+                why_it_matters=why,
+                related_endpoints=endpoints,
+                related_evidence_ids=evidence_ids,
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Review the retained direct evidence and its surrounding "
+                    "application context.",
+                    "Do not request uncollected routes or infer a vulnerability "
+                    "from this evidence alone.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the retained evidence is generic, repeated, or "
+                    "unsupported by its provenance."
+                ),
+                identity_key=(lead_type, *endpoints),
+                limitation_codes=limitations,
+            )
+        )
+
+    return tuple(drafts)
 
 def _semantic_thread_id(draft: _ThreadDraft) -> str:
     subject = (
