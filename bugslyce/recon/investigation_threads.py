@@ -12,6 +12,7 @@ from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
 from bugslyce.recon.application_service_composition import (
     ApplicationServiceRelationKind,
+    ApplicationServiceSupportBasis,
 )
 from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.interpretation import ReviewLead
@@ -572,8 +573,42 @@ def _native_observation_id(candidate_index: int, exchange_index: int) -> str:
     return f"native-observation:{candidate_index}:{exchange_index}"
 
 
-def _same_route_subject(first: str, second: str) -> bool:
-    return first.rstrip("/") == second.rstrip("/")
+def _hostname_path_subject(
+    value: str,
+) -> tuple[str, str, str, str] | None:
+    parsed = urlparse(value)
+    if not parsed.hostname:
+        return None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+
+    scheme = parsed.scheme.casefold()
+    hostname = parsed.hostname.casefold().rstrip(".")
+    path = parsed.path.rstrip("/") or "/"
+    query = parsed.query
+
+    if (
+        (scheme == "http" and port in (None, 80))
+        or (scheme == "https" and port in (None, 443))
+    ):
+        transport_subject = "default-http-https"
+    else:
+        transport_subject = f"{scheme}:{'' if port is None else port}"
+
+    return hostname, path, query, transport_subject
+
+
+def _api_graphql_route(value: str) -> bool:
+    parsed = urlparse(value)
+    hostname = parsed.hostname.casefold().rstrip(".") if parsed.hostname else ""
+    labels = hostname.split(".") if hostname else ()
+    segments = tuple(
+        segment.casefold() for segment in parsed.path.split("/") if segment
+    )
+    return "api" in labels or "api" in segments or "graphql" in segments
 
 
 def _application_interface_threads(
@@ -582,21 +617,34 @@ def _application_interface_threads(
     if not isinstance(model, ApplicationServiceModel):
         raise TypeError("application service model must be typed")
 
-    facts_by_url = {}
-    for fact in model.native_observation_evidence.structured_responses:
-        facts_by_url.setdefault(fact.request_url, []).append(fact)
-
     routes_by_id = {
         route.entity_id: route
         for route in model.application_composition.routes
     }
+    source_sets_by_id = {
+        source_set.entity_id: source_set
+        for source_set in model.application_composition.source_sets
+    }
+    native_evidence = model.native_observation_evidence
+    mobile_sources = {
+        _native_observation_id(item.candidate_index, item.exchange_index)
+        for item in native_evidence.mobile_association_declarations
+    }
+    facts_by_subject = {}
+    for fact in native_evidence.structured_responses:
+        source_id = _native_observation_id(fact.candidate_index, fact.exchange_index)
+        if source_id in mobile_sources:
+            continue
+        subject = _hostname_path_subject(fact.request_url)
+        if subject is not None:
+            facts_by_subject.setdefault(subject, []).append(fact)
 
-    drafts = []
+    drafts: list[_ThreadDraft] = []
 
-    for request_url in sorted(facts_by_url):
+    for subject in sorted(facts_by_subject):
         facts = tuple(
             sorted(
-                facts_by_url[request_url],
+                facts_by_subject[subject],
                 key=lambda item: (
                     item.candidate_index,
                     item.exchange_index,
@@ -607,10 +655,10 @@ def _application_interface_threads(
 
         matched_redirects = tuple(
             redirect
-            for redirect in model.native_observation_evidence.redirect_relationships
+            for redirect in native_evidence.redirect_relationships
             if (
-                _same_route_subject(redirect.source_url, request_url)
-                or _same_route_subject(redirect.target_url, request_url)
+                _hostname_path_subject(redirect.source_url) == subject
+                or _hostname_path_subject(redirect.target_url) == subject
             )
         )
 
@@ -643,7 +691,7 @@ def _application_interface_threads(
             for redirect in matched_redirects
         )
 
-        endpoints = {request_url}
+        endpoints = {fact.request_url for fact in facts}
         for redirect in matched_redirects:
             endpoints.add(redirect.source_url)
             endpoints.add(redirect.target_url)
@@ -680,7 +728,7 @@ def _application_interface_threads(
                     "Stop if the retained response is generic, unrelated to the "
                     "application under review, or outside authorised scope."
                 ),
-                identity_key=(request_url,),
+                identity_key=("structured_response", *subject),
                 related_native_observation_ids=_unique_sorted(
                     native_observation_ids
                 ),
@@ -688,6 +736,180 @@ def _application_interface_threads(
                     relation_ids
                 ),
                 limitation_codes=_unique_sorted(limitations),
+            )
+        )
+
+    mobile_groups: dict[tuple[str, str], list[object]] = {}
+    for declaration in native_evidence.mobile_association_declarations:
+        mobile_groups.setdefault(
+            (declaration.platform, declaration.package_name), []
+        ).append(declaration)
+    for platform, package_name in sorted(mobile_groups):
+        declarations = tuple(
+            sorted(
+                mobile_groups[(platform, package_name)],
+                key=lambda item: (
+                    item.candidate_index,
+                    item.exchange_index,
+                    item.document_url,
+                ),
+            )
+        )
+        drafts.append(
+            _ThreadDraft(
+                title=(
+                    f"Observed {platform} application association: {package_name}"
+                ),
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "Retained mobile association documents directly declare this "
+                    f"{platform} application package."
+                ),
+                why_it_matters=(
+                    "Mobile association declarations can provide useful application "
+                    "and deep-link context without establishing ownership or impact."
+                ),
+                related_endpoints=_unique_sorted(
+                    item.document_url for item in declarations
+                ),
+                related_evidence_ids=(),
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Review the retained association documents and surrounding application context.",
+                    "Do not infer application ownership, reachability, or a vulnerability from the declaration alone.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the declaration cannot be tied to useful authorised "
+                    "application context."
+                ),
+                identity_key=("mobile_association", platform, package_name),
+                related_native_observation_ids=_unique_sorted(
+                    _native_observation_id(item.candidate_index, item.exchange_index)
+                    for item in declarations
+                ),
+                limitation_codes=("mobile_association_ownership_not_confirmed",),
+            )
+        )
+
+    redirect_boundaries: dict[str, list[object]] = {}
+    for relation in model.application_composition.relations:
+        if relation.relation_kind is not ApplicationServiceRelationKind.REDIRECTS_TO:
+            continue
+        if not any(
+            support.basis is ApplicationServiceSupportBasis.DIRECT_OBSERVATION
+            for support in relation.supports
+        ):
+            continue
+        source = routes_by_id.get(relation.source_entity_id)
+        target = routes_by_id.get(relation.target_entity_id)
+        if source is None or target is None:
+            continue
+        source_origin = http_origin_from_url(source.canonical_url)
+        target_origin = http_origin_from_url(target.canonical_url)
+        if (
+            source_origin is None
+            or target_origin is None
+            or source_origin.hostname == target_origin.hostname
+        ):
+            continue
+        redirect_boundaries.setdefault(target_origin.origin_url, []).append(relation)
+    for target_origin, relations in sorted(redirect_boundaries.items()):
+        related_endpoints: set[str] = set()
+        evidence_ids: set[str] = set()
+        native_ids: set[str] = set()
+        limitations: set[str] = set()
+        relation_ids: set[str] = set()
+        for relation in relations:
+            source = routes_by_id[relation.source_entity_id]
+            target = routes_by_id[relation.target_entity_id]
+            related_endpoints.update((source.canonical_url, target.canonical_url))
+            relation_ids.add(relation.relation_id)
+            for support in relation.supports:
+                if support.basis is not ApplicationServiceSupportBasis.DIRECT_OBSERVATION:
+                    continue
+                evidence_ids.update(support.evidence_ids)
+                if support.source_reference.source_id.startswith("native-observation:"):
+                    native_ids.add(support.source_reference.source_id)
+                    limitations.add("redirect_destination_not_fetched")
+        hostname = urlparse(target_origin).hostname or target_origin
+        drafts.append(
+            _ThreadDraft(
+                title=f"Observed redirect/service boundary to {hostname}",
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "Retained direct redirect evidence crosses from the observed "
+                    "application to this service origin."
+                ),
+                why_it_matters=(
+                    "Cross-origin redirects can identify account or service "
+                    "boundaries worth bounded contextual review."
+                ),
+                related_endpoints=_unique_sorted(related_endpoints),
+                related_evidence_ids=_unique_sorted(evidence_ids),
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Review the retained redirect support and the source/target service context.",
+                    "Do not claim destination reachability, ownership, or a vulnerability without further authorised evidence.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the redirect is generic infrastructure routing or "
+                    "outside authorised scope."
+                ),
+                identity_key=("redirect_boundary", target_origin),
+                related_native_observation_ids=_unique_sorted(native_ids),
+                related_application_relation_ids=_unique_sorted(relation_ids),
+                limitation_codes=_unique_sorted(limitations),
+            )
+        )
+
+    api_relations: dict[str, list[object]] = {}
+    for relation in model.application_composition.relations:
+        if relation.relation_kind is not ApplicationServiceRelationKind.REFERENCES_ROUTE:
+            continue
+        target = routes_by_id.get(relation.target_entity_id)
+        if target is not None and _api_graphql_route(target.canonical_url):
+            api_relations.setdefault(target.canonical_url, []).append(relation)
+    for target_url, relations in sorted(api_relations.items()):
+        related_endpoints = {target_url}
+        evidence_ids: set[str] = set()
+        relation_ids: set[str] = set()
+        for relation in relations:
+            source_set = source_sets_by_id.get(relation.source_entity_id)
+            if source_set is not None:
+                related_endpoints.update(source_set.resource_urls)
+            relation_ids.add(relation.relation_id)
+            for support in relation.supports:
+                evidence_ids.update(support.evidence_ids)
+        drafts.append(
+            _ThreadDraft(
+                title="Referenced API/GraphQL interface",
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "Retained application content references this precise API/GraphQL-shaped interface."
+                ),
+                why_it_matters=(
+                    "A typed application reference can provide useful interface context, "
+                    "but does not establish reachability, behaviour, or vulnerability."
+                ),
+                related_endpoints=_unique_sorted(related_endpoints),
+                related_evidence_ids=_unique_sorted(evidence_ids),
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Review the retained reference and its surrounding application context.",
+                    "Do not request or classify the referenced interface without separate authorised evidence.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the retained reference is generic, unsupported, or outside authorised scope."
+                ),
+                identity_key=("referenced_api_graphql", target_url),
+                related_application_relation_ids=_unique_sorted(relation_ids),
+                limitation_codes=("referenced_interface_not_confirmed_reachable",),
             )
         )
 

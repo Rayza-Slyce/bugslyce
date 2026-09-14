@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 from bugslyce.core.models import (
     Candidate,
     DiscoveredPath,
@@ -21,16 +23,25 @@ from bugslyce.recon.application_service_model import (
 from bugslyce.recon.documentation_assertions import (
     DocumentationAssertionExtractionResult,
 )
+from bugslyce.recon.deep_html_route_extraction import (
+    build_deep_html_route_extraction,
+)
+from bugslyce.recon.deep_source_route_collector import (
+    DeepSourceRouteCollectedItem,
+    DeepSourceRouteCollectionResult,
+)
 from bugslyce.recon.investigation_threads import (
     build_investigation_threads,
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
 )
 from bugslyce.recon.native_observation_facts import (
+    NativeMobileAssociationDeclaration,
     NativeObservationSemanticEvidence,
     NativeRedirectRelationship,
     NativeStructuredResponseFact,
 )
+from bugslyce.recon.http_route_relationships import HttpRouteRelationshipEdge
 from bugslyce.triage.workflow_leads import WorkflowLead
 
 
@@ -968,6 +979,305 @@ def _package3_application_model(*, include_unrelated_origin: bool = False):
     return model
 
 
+def _application_model_for_thread_subjects(
+    native_evidence: NativeObservationSemanticEvidence,
+    *,
+    html_target_url: str | None = None,
+):
+    html_extraction = None
+    if html_target_url is not None:
+        body = (
+            f'<html><a href="{html_target_url}">reference</a></html>'
+        ).encode("utf-8")
+        source = DeepSourceRouteCollectedItem(
+            url="https://www.example.test/docs/",
+            method="GET",
+            status_code=200,
+            final_url="https://www.example.test/docs/",
+            headers=(("Content-Type", "text/html"),),
+            body_preview=body.decode("utf-8"),
+            body_sha256=sha256(body).hexdigest(),
+            body_bytes=len(body),
+            elapsed_seconds=0.1,
+            source="fixture",
+            reason="fixture",
+            evidence_ids=("EVID-HTML-REFERENCE",),
+            body=body,
+        )
+        html_extraction = build_deep_html_route_extraction(
+            DeepSourceRouteCollectionResult(
+                collected=(source,),
+                skipped=(),
+                total_considered=1,
+                total_collected=1,
+                total_skipped=0,
+            )
+        )
+    composition = build_application_service_composition(
+        native_observation_evidence=native_evidence,
+        html_extraction=html_extraction,
+    )
+    return build_application_service_model(
+        application_composition=composition,
+        documentation_assertions=DocumentationAssertionExtractionResult(
+            assertions=(),
+            skipped_sources=(),
+            sources_considered=0,
+            sources_eligible=0,
+        ),
+        native_observation_evidence=native_evidence,
+    )
+
+
+def test_mobile_association_declarations_seed_one_limited_application_thread() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="http://www.example.test/.well-known/assetlinks.json",
+                status_code=200,
+                candidate_index=1,
+                exchange_index=0,
+                body_sha256="a" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url="https://www.example.test/.well-known/assetlinks.json",
+                status_code=200,
+                candidate_index=2,
+                exchange_index=0,
+                body_sha256="b" * 64,
+            ),
+        ),
+        mobile_association_declarations=(
+            NativeMobileAssociationDeclaration(
+                document_url="http://www.example.test/.well-known/assetlinks.json",
+                platform="android",
+                package_name="com.example.app",
+                candidate_index=1,
+                exchange_index=0,
+                body_sha256="a" * 64,
+            ),
+            NativeMobileAssociationDeclaration(
+                document_url="https://www.example.test/.well-known/assetlinks.json",
+                platform="android",
+                package_name="com.example.app",
+                candidate_index=2,
+                exchange_index=0,
+                body_sha256="b" * 64,
+            ),
+        ),
+    )
+    model = _application_model_for_thread_subjects(native_evidence)
+
+    threads = build_investigation_threads(
+        _project_state(), application_service_model=model
+    )
+
+    mobile_threads = [
+        thread for thread in threads if "com.example.app" in thread.title
+    ]
+    assert len(mobile_threads) == 1
+    thread = mobile_threads[0]
+    assert thread.related_endpoints == (
+        "http://www.example.test/.well-known/assetlinks.json",
+        "https://www.example.test/.well-known/assetlinks.json",
+    )
+    assert thread.related_native_observation_ids == (
+        "native-observation:1:0",
+        "native-observation:2:0",
+    )
+    assert "mobile_association_ownership_not_confirmed" in thread.limitation_codes
+    assert not any(
+        thread.title == "Observed structured application interface"
+        and ".well-known/assetlinks.json" in thread.related_endpoints
+        for thread in threads
+    )
+
+
+def test_structured_response_http_https_facts_group_by_host_and_path() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="http://app.example.test/api/search",
+                status_code=200,
+                candidate_index=1,
+                exchange_index=0,
+                body_sha256="a" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/search/",
+                status_code=200,
+                candidate_index=2,
+                exchange_index=0,
+                body_sha256="b" * 64,
+            ),
+        ),
+    )
+    threads = build_investigation_threads(
+        _project_state(),
+        application_service_model=_application_model_for_thread_subjects(native_evidence),
+    )
+
+    assert len(threads) == 1
+    assert threads[0].related_endpoints == (
+        "http://app.example.test/api/search",
+        "https://app.example.test/api/search/",
+    )
+    assert threads[0].related_native_observation_ids == (
+        "native-observation:1:0",
+        "native-observation:2:0",
+    )
+
+
+def test_cross_host_redirects_group_by_target_origin_but_same_host_scheme_does_not() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        redirect_relationships=(
+            NativeRedirectRelationship(
+                source_url="https://www.example.test/account",
+                raw_location="https://id.example.test/login",
+                target_url="https://id.example.test/login",
+                candidate_index=1,
+                exchange_index=0,
+            ),
+            NativeRedirectRelationship(
+                source_url="https://www.example.test/profile",
+                raw_location="https://id.example.test/settings",
+                target_url="https://id.example.test/settings",
+                candidate_index=2,
+                exchange_index=0,
+            ),
+            NativeRedirectRelationship(
+                source_url="http://www.example.test/start",
+                raw_location="https://www.example.test/start",
+                target_url="https://www.example.test/start",
+                candidate_index=3,
+                exchange_index=0,
+            ),
+        ),
+    )
+    model = _application_model_for_thread_subjects(native_evidence)
+
+    threads = build_investigation_threads(
+        _project_state(), application_service_model=model
+    )
+
+    boundary_threads = [
+        thread for thread in threads if "redirect" in thread.title.casefold()
+    ]
+    assert len(boundary_threads) == 1
+    thread = boundary_threads[0]
+    assert "id.example.test" in thread.title
+    assert set(thread.related_endpoints) == {
+        "https://www.example.test/account",
+        "https://www.example.test/profile",
+        "https://id.example.test/login",
+        "https://id.example.test/settings",
+    }
+    assert len(thread.related_application_relation_ids) == 2
+    assert "native-observation:3:0" not in thread.related_native_observation_ids
+
+
+def test_precise_referenced_api_graphql_route_seeds_conservative_thread() -> None:
+    model = _application_model_for_thread_subjects(
+        NativeObservationSemanticEvidence(),
+        html_target_url="https://api.example.test/api/graphql/v1",
+    )
+
+    threads = build_investigation_threads(
+        _project_state(), application_service_model=model
+    )
+
+    assert len(threads) == 1
+    thread = threads[0]
+    assert thread.title == "Referenced API/GraphQL interface"
+    assert set(thread.related_endpoints) == {
+        "https://api.example.test/api/graphql/v1",
+        "https://www.example.test/docs/",
+    }
+    assert thread.related_application_relation_ids
+    assert "referenced_interface_not_confirmed_reachable" in thread.limitation_codes
+
+
+def test_generic_external_html_reference_does_not_seed_api_thread() -> None:
+    model = _application_model_for_thread_subjects(
+        NativeObservationSemanticEvidence(),
+        html_target_url="https://cdn.example.test/fonts/main.woff2",
+    )
+
+    assert build_investigation_threads(
+        _project_state(), application_service_model=model
+    ) == ()
+
+
+def test_application_subject_threads_are_permutation_stable() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="http://app.example.test/api/status/",
+                status_code=200,
+                candidate_index=1,
+                exchange_index=0,
+                body_sha256="a" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/status/",
+                status_code=200,
+                candidate_index=2,
+                exchange_index=0,
+                body_sha256="b" * 64,
+            ),
+        ),
+        redirect_relationships=(
+            NativeRedirectRelationship(
+                source_url="https://app.example.test/login",
+                raw_location="https://id.example.test/login",
+                target_url="https://id.example.test/login",
+                candidate_index=3,
+                exchange_index=0,
+            ),
+        ),
+    )
+    first_edge = HttpRouteRelationshipEdge(
+        edge_type="redirect",
+        source_url="https://app.example.test/start",
+        target_url="https://id.example.test/start",
+        evidence_ids=("EVID-REDIRECT-A",),
+        raw_references=("https://id.example.test/start",),
+        status_code=302,
+    )
+    second_edge = HttpRouteRelationshipEdge(
+        edge_type="redirect",
+        source_url="https://app.example.test/continue",
+        target_url="https://id.example.test/continue",
+        evidence_ids=("EVID-REDIRECT-B",),
+        raw_references=("https://id.example.test/continue",),
+        status_code=302,
+    )
+
+    def model(edges):
+        composition = build_application_service_composition(
+            native_observation_evidence=native_evidence,
+            redirect_edges=edges,
+        )
+        return build_application_service_model(
+            application_composition=composition,
+            documentation_assertions=DocumentationAssertionExtractionResult(
+                assertions=(),
+                skipped_sources=(),
+                sources_considered=0,
+                sources_eligible=0,
+            ),
+            native_observation_evidence=native_evidence,
+        )
+
+    assert build_investigation_threads(
+        _project_state(),
+        application_service_model=model((first_edge, second_edge)),
+    ) == build_investigation_threads(
+        _project_state(),
+        application_service_model=model((second_edge, first_edge)),
+    )
+
+
 def test_package3_semantic_thread_id_survives_unrelated_higher_ranked_thread() -> None:
     state = _project_state(
         http_services=[
@@ -1114,3 +1424,196 @@ def test_package3_workflow_thread_retains_all_exact_evidence_references() -> Non
     )[0]
 
     assert thread.related_evidence_ids == evidence_ids
+
+
+
+def test_structured_response_query_identity_remains_distinct() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/search?scope=user",
+                status_code=200,
+                candidate_index=101,
+                exchange_index=0,
+                body_sha256="1" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/search?scope=admin",
+                status_code=200,
+                candidate_index=102,
+                exchange_index=0,
+                body_sha256="2" * 64,
+            ),
+        ),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        application_service_model=_application_model_for_thread_subjects(
+            native_evidence
+        ),
+    )
+
+    structured = tuple(
+        thread
+        for thread in threads
+        if thread.title == "Observed structured application interface"
+    )
+
+    assert len(structured) == 2
+    assert {
+        thread.related_endpoints
+        for thread in structured
+    } == {
+        ("https://app.example.test/api/search?scope=user",),
+        ("https://app.example.test/api/search?scope=admin",),
+    }
+
+
+def test_structured_response_non_default_port_identity_remains_distinct() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/status",
+                status_code=200,
+                candidate_index=111,
+                exchange_index=0,
+                body_sha256="3" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test:8443/api/status",
+                status_code=200,
+                candidate_index=112,
+                exchange_index=0,
+                body_sha256="4" * 64,
+            ),
+        ),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        application_service_model=_application_model_for_thread_subjects(
+            native_evidence
+        ),
+    )
+
+    structured = tuple(
+        thread
+        for thread in threads
+        if thread.title == "Observed structured application interface"
+    )
+
+    assert len(structured) == 2
+    assert {
+        thread.related_endpoints
+        for thread in structured
+    } == {
+        ("https://app.example.test/api/status",),
+        ("https://app.example.test:8443/api/status",),
+    }
+
+
+def test_query_distinct_redirect_does_not_enrich_structured_subject() -> None:
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url="https://app.example.test/api/search?scope=user",
+                status_code=200,
+                candidate_index=121,
+                exchange_index=0,
+                body_sha256="5" * 64,
+            ),
+        ),
+        redirect_relationships=(
+            NativeRedirectRelationship(
+                source_url="https://app.example.test/api/search?scope=admin",
+                raw_location="/login?scope=admin",
+                target_url="https://app.example.test/login?scope=admin",
+                candidate_index=122,
+                exchange_index=0,
+            ),
+        ),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        application_service_model=_application_model_for_thread_subjects(
+            native_evidence
+        ),
+    )
+
+    thread = next(
+        item
+        for item in threads
+        if item.title == "Observed structured application interface"
+    )
+
+    assert thread.related_native_observation_ids == (
+        "native-observation:121:0",
+    )
+    assert thread.related_application_relation_ids == ()
+    assert thread.related_endpoints == (
+        "https://app.example.test/api/search?scope=user",
+    )
+
+
+def test_mobile_subsumption_is_exact_observation_not_url_wide() -> None:
+    document_url = "https://www.example.test/.well-known/assetlinks.json"
+
+    native_evidence = NativeObservationSemanticEvidence(
+        structured_responses=(
+            NativeStructuredResponseFact(
+                request_url=document_url,
+                status_code=200,
+                candidate_index=131,
+                exchange_index=0,
+                body_sha256="6" * 64,
+            ),
+            NativeStructuredResponseFact(
+                request_url=document_url,
+                status_code=200,
+                candidate_index=132,
+                exchange_index=0,
+                body_sha256="7" * 64,
+            ),
+        ),
+        mobile_association_declarations=(
+            NativeMobileAssociationDeclaration(
+                document_url=document_url,
+                platform="android",
+                package_name="com.example.app",
+                candidate_index=131,
+                exchange_index=0,
+                body_sha256="6" * 64,
+            ),
+        ),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        application_service_model=_application_model_for_thread_subjects(
+            native_evidence
+        ),
+    )
+
+    mobile = tuple(
+        thread
+        for thread in threads
+        if "com.example.app" in thread.title
+    )
+    structured = tuple(
+        thread
+        for thread in threads
+        if thread.title == "Observed structured application interface"
+    )
+
+    assert len(mobile) == 1
+    assert mobile[0].related_native_observation_ids == (
+        "native-observation:131:0",
+    )
+
+    assert len(structured) == 1
+    assert structured[0].related_endpoints == (document_url,)
+    assert structured[0].related_native_observation_ids == (
+        "native-observation:132:0",
+    )
