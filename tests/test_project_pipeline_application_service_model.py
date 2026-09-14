@@ -204,7 +204,13 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     documentation_assertions = object()
     application_service_model = object()
     calls: dict[str, list[object]] = {
-        "a1": [], "a2": [], "a3": [], "persist": [], "html": [], "source_write": [],
+        "a1": [],
+        "a2": [],
+        "a3": [],
+        "compact": [],
+        "persist": [],
+        "html": [],
+        "source_write": [],
     }
     runtime = SimpleNamespace(programme_scope_policy=None, http_executor=None)
     context = _context(tmp_path, runtime=runtime)
@@ -346,6 +352,22 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
         lambda **kwargs: calls["a3"].append(kwargs) or application_service_model,
     )
 
+    actual_compactor = pipeline.compact_native_observation_store
+
+    def compact(root: Path):
+        checkpoint = load_native_observation_semantic_checkpoint_artifact(root)
+        plan = load_native_observation_retention_plan_artifact(root)
+        assert checkpoint is not None
+        assert (
+            checkpoint.evidence is native_evidence
+            or checkpoint.evidence == native_evidence
+        )
+        assert plan is not None
+        calls["compact"].append((checkpoint.evidence, plan))
+        return actual_compactor(root)
+
+    monkeypatch.setattr(pipeline, "compact_native_observation_store", compact)
+
     def persist(root: Path, model: object) -> Path:
         assert load_native_observation_semantic_evidence_artifact(root) == native_evidence
         checkpoint = load_native_observation_semantic_checkpoint_artifact(root)
@@ -406,6 +428,8 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
         }
     ]
     assert calls["persist"] == [application_service_model]
+    assert len(calls["compact"]) == 1
+    assert calls["compact"][0][0] == native_evidence
     assert (
         calls["a1"][0]["native_observation_evidence"]
         is calls["a3"][0]["native_observation_evidence"]

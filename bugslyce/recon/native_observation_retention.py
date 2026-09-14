@@ -15,6 +15,7 @@ from bugslyce.recon.native_observation_facts import (
 )
 from bugslyce.recon.native_observation_store import (
     NativeObservationStore,
+    NativeReceivedExchange,
     validate_native_observation_store,
 )
 
@@ -321,6 +322,32 @@ def _candidate_signature(source: _Source) -> tuple[str, str] | None:
         return None
     signature, _normalised = reflected
     return _canonical_origin(source.request_url), signature
+
+
+def native_retention_grade_signature(
+    store: NativeObservationStore,
+    exchange: NativeReceivedExchange,
+) -> tuple[str, str] | None:
+    """Return the auditable v1 grouping signature for one retained exchange."""
+
+    if not isinstance(store, NativeObservationStore) or not isinstance(
+        exchange, NativeReceivedExchange
+    ):
+        raise TypeError("Native retention signature requires typed store evidence.")
+    if exchange.body_retention_state != "retained" or exchange.body is None:
+        return None
+    source = _Source(
+        source_id="native-observation:0:0",
+        candidate_index=0,
+        exchange_index=0,
+        request_url=exchange.request_url,
+        status_code=exchange.status_code,
+        headers=exchange.headers,
+        captured_bytes=exchange.captured_bytes,
+        body_sha256=exchange.body_sha256,
+        body=store.read_body(exchange.body),
+    )
+    return _candidate_signature(source)
 
 
 def _family_identity(origin: str, signature: str) -> str:

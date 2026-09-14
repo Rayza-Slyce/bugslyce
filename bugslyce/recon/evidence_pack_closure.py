@@ -50,6 +50,10 @@ from bugslyce.recon.native_observation_retention import (
     NativeObservationRetentionPlan,
     build_native_observation_retention_plan,
 )
+from bugslyce.recon.native_observation_compaction import (
+    validate_compacted_native_observation_store,
+    validate_native_observation_retention_plan_state,
+)
 from bugslyce.recon.native_observation_retention_persistence import (
     NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
     load_native_observation_retention_plan_artifact,
@@ -851,15 +855,21 @@ def _native_observation_retention_plan_references(
         )
 
     store = NativeObservationStore.open_published(native_root)
-    expected = build_native_observation_retention_plan(
-        store,
-        semantic_evidence=checkpoint.evidence,
-        processed_sources=checkpoint.processed_sources,
+    _index, retention_state = validate_native_observation_retention_plan_state(
+        store, plan, checkpoint
     )
-    if plan != expected:
-        raise ValueError(
-            "native retention plan contradicts its store or semantic checkpoint"
+    if retention_state == "uncompacted":
+        expected = build_native_observation_retention_plan(
+            store,
+            semantic_evidence=checkpoint.evidence,
+            processed_sources=checkpoint.processed_sources,
         )
+        if plan != expected:
+            raise ValueError(
+                "native retention plan contradicts its store or semantic checkpoint"
+            )
+    else:
+        validate_compacted_native_observation_store(store, plan, checkpoint)
 
     references = [
         EvidencePackReference(
@@ -874,15 +884,20 @@ def _native_observation_retention_plan_references(
         )
     ]
     for decision in plan.decisions:
+        exchange = store.load_observation(decision.candidate_index).exchanges[
+            decision.exchange_index
+        ]
         observation_path = (
             f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/observations/"
             f"{decision.candidate_index:08d}.json"
         )
-        body_path = (
-            f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/bodies/sha256/"
-            f"{decision.body_sha256}"
-        )
-        for member_path in (observation_path, body_path):
+        member_paths = [observation_path]
+        if exchange.body is not None:
+            member_paths.append(
+                f"{NATIVE_OBSERVATION_STORE_PROJECT_PATH}/bodies/sha256/"
+                f"{decision.body_sha256}"
+            )
+        for member_path in member_paths:
             references.append(
                 EvidencePackReference(
                     portable_path=member_path,

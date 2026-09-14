@@ -97,7 +97,11 @@ from bugslyce.recon.native_observation_facts import (
 )
 from bugslyce.recon.native_observation_semantic_evidence_persistence import (
     NATIVE_OBSERVATION_SEMANTIC_EVIDENCE_FILENAME,
+    load_native_observation_semantic_checkpoint_artifact,
     write_native_observation_semantic_evidence_artifact,
+)
+from bugslyce.recon.native_observation_compaction import (
+    compact_native_observation_store,
 )
 from bugslyce.recon.native_observation_retention import (
     NativeObservationRetentionPlan,
@@ -105,6 +109,7 @@ from bugslyce.recon.native_observation_retention import (
 )
 from bugslyce.recon.native_observation_retention_persistence import (
     NATIVE_OBSERVATION_RETENTION_PLAN_FILENAME,
+    load_native_observation_retention_plan_artifact,
     write_native_observation_retention_plan_artifact,
 )
 from bugslyce.recon.native_observation_store import (
@@ -2079,14 +2084,36 @@ def _native_observation_semantics_for_output(
     NativeObservationSemanticEvidence,
     tuple[NativeSemanticProcessingSource, ...],
     NativeObservationStore | None,
+    NativeObservationRetentionPlan | None,
 ]:
     store_root = output_dir / NATIVE_OBSERVATION_STORE_PROJECT_PATH
+    checkpoint = load_native_observation_semantic_checkpoint_artifact(output_dir)
+    existing_plan = load_native_observation_retention_plan_artifact(output_dir)
+    if existing_plan is not None and checkpoint is None:
+        raise ValueError("Native retention plan has no semantic checkpoint.")
     if not store_root.exists() and not store_root.is_symlink():
-        return NativeObservationSemanticEvidence(), (), None
+        if checkpoint is not None and (
+            checkpoint.evidence != NativeObservationSemanticEvidence()
+            or checkpoint.processed_sources
+        ):
+            raise ValueError("Native semantic checkpoint has no observation store.")
+        return (
+            NativeObservationSemanticEvidence(),
+            (),
+            None,
+            existing_plan,
+        )
     store = NativeObservationStore.open_published(store_root)
+    if checkpoint is not None:
+        return (
+            checkpoint.evidence,
+            checkpoint.processed_sources,
+            store,
+            existing_plan,
+        )
     evidence = build_native_observation_semantic_evidence(store)
     processed_sources = build_native_observation_semantic_processing_sources(store)
-    return evidence, processed_sources, store
+    return evidence, processed_sources, store, None
 
 
 
@@ -2648,6 +2675,7 @@ def _step_runners(
             native_observation_evidence,
             native_observation_processing_sources,
             native_observation_store,
+            existing_native_observation_retention_plan,
         ) = _native_observation_semantics_for_output(
             output_dir
         )
@@ -2659,12 +2687,16 @@ def _step_runners(
             )
         )
         native_observation_retention_plan = (
-            NativeObservationRetentionPlan()
-            if native_observation_store is None
-            else build_native_observation_retention_plan(
-                native_observation_store,
-                semantic_evidence=native_observation_evidence,
-                processed_sources=native_observation_processing_sources,
+            existing_native_observation_retention_plan
+            if existing_native_observation_retention_plan is not None
+            else (
+                NativeObservationRetentionPlan()
+                if native_observation_store is None
+                else build_native_observation_retention_plan(
+                    native_observation_store,
+                    semantic_evidence=native_observation_evidence,
+                    processed_sources=native_observation_processing_sources,
+                )
             )
         )
         native_observation_retention_plan_path = (
@@ -2673,6 +2705,8 @@ def _step_runners(
                 native_observation_retention_plan,
             )
         )
+        if native_observation_store is not None:
+            compact_native_observation_store(output_dir)
         application_composition = build_application_service_composition(
             redirect_edges=redirect_edges,
             metadata_collection=metadata_collection,
