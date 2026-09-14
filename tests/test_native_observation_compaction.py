@@ -10,7 +10,10 @@ import runpy
 import pytest
 
 from bugslyce.recon import native_observation_compaction as compaction_module
-from bugslyce.recon.evidence_pack_closure import discover_evidence_pack_references
+from bugslyce.recon.evidence_pack_closure import (
+    discover_evidence_pack_references,
+    validate_evidence_pack_root,
+)
 from bugslyce.recon.export import export_recon_evidence_pack
 from bugslyce.recon.native_observation_compaction import (
     compact_native_observation_store,
@@ -367,9 +370,18 @@ def test_compacted_closure_and_export_include_only_retained_cas_objects(
 
     discover_evidence_pack_references(root)
     output = tmp_path / "compacted.zip"
-    export_recon_evidence_pack(root, output)
+    result = export_recon_evidence_pack(root, output)
+
+    assert result.reference_closure_status == "complete"
+    assert result.missing_files == []
+    assert result.unresolved_reference_paths == ()
+
+    extracted = tmp_path / "compacted-extracted"
     with __import__("zipfile").ZipFile(output) as archive:
         names = set(archive.namelist())
+        archive.extractall(extracted)
+
+    assert validate_evidence_pack_root(extracted).validation_status == "complete"
     packed_digests = {
         name.rsplit("/", 1)[-1]
         for name in names
