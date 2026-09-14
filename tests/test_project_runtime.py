@@ -1296,3 +1296,230 @@ def test_standard_pipeline_stages_receive_only_strict_runtime_adapters(
         assert values["project_runtime"] is runtime
         assert values["runner"] is not None
     assert observed["content"]["progress_callback"] is None
+
+
+def test_tcp_skip_runtime_accepts_multiple_explicit_authorised_http_seeds(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+            ("include", "http_path_prefix", "https://api.example.test/"),
+        ),
+    )
+
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+        configured_http_seeds=(
+            "https://api.example.test/",
+            "https://app.example.test/",
+        ),
+    )
+
+    assert runtime.project.target == "app.example.test"
+    assert runtime.initial_http_origins == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+    assert runtime.approved_http_origins == runtime.initial_http_origins
+
+
+def test_tcp_skip_runtime_rejects_explicit_http_seed_without_programme_authority(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="seed|authorised|programme scope"):
+        build_bug_bounty_project_runtime(
+            project,
+            DEEP_RECON_PROFILE,
+            capabilities=_capabilities(),
+            configured_http_seeds=(
+                "https://app.example.test/",
+                "https://outside.example.test/",
+            ),
+        )
+
+
+def test_tcp_skip_runtime_without_explicit_seeds_preserves_legacy_target_derivation(
+    tmp_path: Path,
+) -> None:
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(
+                ("include", "http_path_prefix", "https://app.example.test/"),
+            ),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+    )
+
+    assert runtime.initial_http_origins == ("https://app.example.test/",)
+    assert runtime.approved_http_origins == runtime.initial_http_origins
+
+
+
+def test_tcp_skip_runtime_rejects_configured_http_seed_with_route(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="root origin"):
+        build_bug_bounty_project_runtime(
+            project,
+            DEEP_RECON_PROFILE,
+            capabilities=_capabilities(),
+            configured_http_seeds=("https://app.example.test/api/",),
+        )
+
+
+def test_tcp_skip_runtime_rejects_configured_http_seed_with_query(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="root origin"):
+        build_bug_bounty_project_runtime(
+            project,
+            DEEP_RECON_PROFILE,
+            capabilities=_capabilities(),
+            configured_http_seeds=("https://app.example.test/?source=operator",),
+        )
+
+
+def test_tcp_skip_runtime_rejects_duplicate_configured_http_seeds(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        tcp_discovery_policy=TCP_SKIP,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unique"):
+        build_bug_bounty_project_runtime(
+            project,
+            DEEP_RECON_PROFILE,
+            capabilities=_capabilities(),
+            configured_http_seeds=(
+                "https://app.example.test/",
+                "https://app.example.test/",
+            ),
+        )
+
+
+def test_runtime_rejects_configured_http_seeds_while_tcp_discovery_is_active(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        http_rules=(
+            ("include", "http_path_prefix", "https://app.example.test/"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="TCP-skip"):
+        build_bug_bounty_project_runtime(
+            project,
+            DEEP_RECON_PROFILE,
+            capabilities=_capabilities(),
+            configured_http_seeds=("https://app.example.test/",),
+        )
+
+
+def test_tcp_skip_runtime_records_explicit_configured_seed_identity(
+    tmp_path: Path,
+) -> None:
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(
+                ("include", "http_path_prefix", "https://app.example.test/"),
+                ("include", "http_path_prefix", "https://api.example.test/"),
+            ),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+        configured_http_seeds=(
+            "https://api.example.test/",
+            "https://app.example.test/",
+        ),
+    )
+
+    assert runtime.configured_http_seeds == runtime.initial_http_origins
+
+
+def test_tcp_skip_legacy_runtime_has_no_explicit_configured_seed_identity(
+    tmp_path: Path,
+) -> None:
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(
+                ("include", "http_path_prefix", "https://app.example.test/"),
+            ),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+    )
+
+    assert runtime.configured_http_seeds is None
+    assert runtime.initial_http_origins == ("https://app.example.test/",)
+
+
+
+def test_tcp_skip_runtime_rejects_initial_origins_not_backed_by_configured_seed_identity(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    runtime = build_bug_bounty_project_runtime(
+        _project(
+            tmp_path,
+            tcp_discovery_policy=TCP_SKIP,
+            http_rules=(
+                ("include", "http_path_prefix", "https://app.example.test/"),
+                ("include", "http_path_prefix", "https://api.example.test/"),
+            ),
+        ),
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+        configured_http_seeds=(
+            "https://api.example.test/",
+            "https://app.example.test/",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Initial HTTP origins"):
+        replace(
+            runtime,
+            initial_http_origins=("https://api.example.test/",),
+        )

@@ -93,6 +93,7 @@ class BugBountyProjectRuntime:
     capabilities: dict[str, ToolCapabilities]
     ipv4_resolver: IPv4Resolver | None = None
     process_runner: object | None = None
+    configured_http_seeds: tuple[str, ...] | None = None
     _nmap_session: BugBountyExternalEnforcementSession = field(init=False, repr=False)
     _nmap_runtime: BugBountyExternalToolRuntime = field(init=False, repr=False)
     _http_session: BugBountyExternalEnforcementSession | None = field(
@@ -113,14 +114,24 @@ class BugBountyProjectRuntime:
             raise ValueError("Engagement policy is incomplete for project execution.")
         if self.target_decision.outcome != OUTCOME_ALLOWED:
             raise ValueError("Project target is not authorised by programme scope.")
-        expected_http_origins = (
-            _explicit_http_seed_origins(
-                self.programme_scope_policy,
-                self.target_decision,
+        if self.tcp_discovery_skipped:
+            expected_http_origins = (
+                _canonical_authorised_http_seed_origins(
+                    self.programme_scope_policy,
+                    self.configured_http_seeds,
+                )
+                if self.configured_http_seeds is not None
+                else _explicit_http_seed_origins(
+                    self.programme_scope_policy,
+                    self.target_decision,
+                )
             )
-            if self.tcp_discovery_skipped
-            else ()
-        )
+        else:
+            if self.configured_http_seeds is not None:
+                raise ValueError(
+                    "Configured HTTP seeds currently require TCP-skip project execution."
+                )
+            expected_http_origins = ()
         if self.initial_http_origins != expected_http_origins:
             raise ValueError(
                 "Initial HTTP origins do not match canonical programme-scope authority."
@@ -396,6 +407,7 @@ def build_bug_bounty_project_runtime(
     capabilities: dict[str, ToolCapabilities] | None = None,
     ipv4_resolver: IPv4Resolver | None = None,
     process_runner: object | None = None,
+    configured_http_seeds: tuple[str, ...] | None = None,
 ) -> BugBountyProjectRuntime:
     policy = load_project_engagement_policy(project)
     if policy is None:
@@ -421,11 +433,23 @@ def build_bug_bounty_project_runtime(
             "Project target is not authorised by programme scope "
             f"({decision.reason_code})."
         )
-    initial_http_origins = (
-        _explicit_http_seed_origins(programme_scope, decision)
-        if policy.tcp_discovery_policy == TCP_SKIP
-        else ()
-    )
+    if configured_http_seeds is not None and policy.tcp_discovery_policy != TCP_SKIP:
+        raise ValueError(
+            "Configured HTTP seeds currently require TCP-skip project execution."
+        )
+
+    if policy.tcp_discovery_policy == TCP_SKIP:
+        initial_http_origins = (
+            _canonical_authorised_http_seed_origins(
+                programme_scope,
+                configured_http_seeds,
+            )
+            if configured_http_seeds is not None
+            else _explicit_http_seed_origins(programme_scope, decision)
+        )
+    else:
+        initial_http_origins = ()
+
     if policy.tcp_discovery_policy == TCP_SKIP and not initial_http_origins:
         raise ValueError(
             "TCP-skip project execution requires explicit allowed root HTTP "
@@ -443,12 +467,56 @@ def build_bug_bounty_project_runtime(
         target_decision=decision,
         initial_http_origins=initial_http_origins,
         capabilities=selected_capabilities,
+        configured_http_seeds=(
+            initial_http_origins
+            if configured_http_seeds is not None
+            else None
+        ),
         ipv4_resolver=ipv4_resolver,
         process_runner=process_runner,
     )
     if initial_http_origins:
         runtime.bind_http_origins(initial_http_origins)
     return runtime
+
+
+def _canonical_authorised_http_seed_origins(
+    policy: ProgrammeScopePolicy,
+    configured_http_seeds: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Canonicalise explicit HTTP root seeds without granting authority."""
+
+    if not isinstance(configured_http_seeds, tuple) or not configured_http_seeds:
+        raise ValueError(
+            "Configured HTTP seeds must be a non-empty immutable tuple."
+        )
+
+    canonical: set[str] = set()
+    for value in configured_http_seeds:
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError("Configured HTTP seed is invalid.")
+
+        try:
+            destination = canonicalise_http_url_destination(value)
+        except (TypeError, ValueError):
+            raise ValueError("Configured HTTP seed is invalid.") from None
+
+        if destination.path != "/" or destination.query is not None:
+            raise ValueError(
+                "Configured HTTP seed must be an exact HTTP root origin."
+            )
+
+        if evaluate_programme_scope(policy, destination).outcome != OUTCOME_ALLOWED:
+            raise ValueError(
+                "Configured HTTP seed is not authorised by programme scope."
+            )
+
+        canonical.add(destination.canonical_value)
+
+    if len(canonical) != len(configured_http_seeds):
+        raise ValueError("Configured HTTP seeds must be unique.")
+
+    return tuple(sorted(canonical))
 
 
 def _explicit_http_seed_origins(
