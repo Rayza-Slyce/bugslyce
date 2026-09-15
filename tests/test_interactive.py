@@ -339,6 +339,8 @@ def test_bug_bounty_preproject_policy_is_saved_exactly_before_engagement_policy(
             return "3"
         if "Target" in prompt:
             return "allowed.example.test"
+        if "HTTP seed file path" in prompt:
+            return ""
         if "authorised to test this target" in prompt:
             return "YES"
         return "2"
@@ -792,6 +794,8 @@ def test_start_new_project_accepts_engagement_context_aliases(
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
+        if "HTTP seed file path" in prompt:
+            return ""
         return next(inputs)
 
     exit_code = run_interactive_launcher(
@@ -1571,6 +1575,8 @@ def test_ready_bug_bounty_reconnaissance_continues_from_scope_to_policy(
 
     def fake_input(prompt: str) -> str:
         prompts.append(prompt)
+        if "HTTP seed file path" in prompt:
+            return ""
         return next(answers)
 
     exit_code = run_interactive_launcher(
@@ -1761,6 +1767,7 @@ def test_bug_bounty_scope_persistence_failure_remains_fail_closed(
             "projects",
             "3",
             "example.test",
+            "",
             "1",
             "YES",
         )
@@ -1937,3 +1944,77 @@ def test_bug_bounty_operator_target_can_use_non_enumerable_authority(
         lambda _prompt: target,
         output.append,
     ) == (target, target)
+
+
+def test_bug_bounty_optional_seed_file_reaches_project_scaffold(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    proposal = _wp7b_exact_hostname_proposal("example.test")
+    project_file = tmp_path / "projects" / "demo" / "bugslyce_project.json"
+    seed_file = tmp_path / "seeds.txt"
+    seed_file.write_text(
+        "# Explicit starting origins\n"
+        "https://www.example.test/\n"
+        "https://api.example.test/\n",
+        encoding="utf-8",
+    )
+
+    received: dict[str, object] = {}
+    prompts: list[str] = []
+
+    monkeypatch.setattr(
+        "bugslyce.interactive._prepare_bug_bounty_programme_scope_proposal",
+        lambda *_args, **_kwargs: proposal,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.scaffold_project",
+        lambda **kwargs: received.update(kwargs) or _scaffold_result(project_file),
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.save_project_programme_scope_policy",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bugslyce.interactive.configure_project_policy_interactively",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            saved=False,
+            cancelled=True,
+            policy=None,
+        ),
+    )
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+
+        if "Choose an option" in prompt:
+            return "1"
+        if "Project name" in prompt:
+            return "demo"
+        if "Projects directory" in prompt:
+            return "projects"
+        if "engagement context" in prompt.lower():
+            return "3"
+        if "Target IP, hostname, or simple URL" in prompt:
+            return "example.test"
+        if "HTTP seed file path" in prompt:
+            return "seeds.txt"
+        if "Choose recon mode" in prompt:
+            return "2"
+        if "authorised to test this target" in prompt:
+            return "YES"
+
+        raise AssertionError(f"Unexpected prompt: {prompt}")
+
+    exit_code = run_interactive_launcher(
+        input_func=fake_input,
+        print_func=lambda _line: None,
+        cwd=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert received["configured_http_seeds"] == (
+        "https://www.example.test/",
+        "https://api.example.test/",
+    )
+    assert any("HTTP seed file path" in prompt for prompt in prompts)

@@ -64,6 +64,7 @@ from bugslyce.recon.modes import (
     get_recon_mode,
     resolve_executable_profile,
 )
+from bugslyce.project_seed_file import load_project_seed_file
 from bugslyce.project_session import (
     build_project_next,
     inspect_project_status,
@@ -167,6 +168,7 @@ def _start_new_project(
 
     programme_scope_proposal: ProgrammeScopeProposal | None = None
     programme_scope_policy: ProgrammeScopePolicy | None = None
+    configured_http_seeds: tuple[str, ...] | None = None
     if engagement_context == BUG_BOUNTY_CONTEXT:
         try:
             programme_scope_proposal = _prepare_bug_bounty_programme_scope_proposal(
@@ -220,6 +222,24 @@ def _start_new_project(
         print_func("No commands were executed.")
         print_func("No network requests were made.")
         return 2
+
+    if engagement_context == BUG_BOUNTY_CONTEXT:
+        seed_file_value = input_func(
+            "HTTP seed file path "
+            "(optional; press Enter to use target-derived HTTP seeds): "
+        ).strip()
+        if seed_file_value:
+            try:
+                configured_http_seeds = load_project_seed_file(
+                    _resolve_prompt_path(seed_file_value, cwd)
+                )
+            except ValueError as exc:
+                print_func(f"Error: {exc}")
+                print_func("No project was created.")
+                print_func("No commands were executed.")
+                print_func("No network requests were made.")
+                return 2
+
     print_func("")
     print_func(render_recon_mode_menu())
     profile = _prompt_available_recon_mode(input_func, print_func)
@@ -259,6 +279,7 @@ def _start_new_project(
             target=target,
             projects_dir=projects_dir,
             engagement_context=engagement_context,
+            configured_http_seeds=configured_http_seeds,
         )
         print_func(
             render_project_scaffold_summary(

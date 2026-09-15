@@ -281,6 +281,7 @@ def scaffold_project(
     force: bool = False,
     clock: Clock | None = None,
     engagement_context: str | None = None,
+    configured_http_seeds: tuple[str, ...] | None = None,
 ) -> ProjectScaffoldResult:
     """Create a conservative scope template and matching project file."""
 
@@ -333,6 +334,7 @@ def scaffold_project(
         force=force,
         clock=clock,
         engagement_context=normalized_engagement_context,
+        configured_http_seeds=configured_http_seeds,
     )
     return ProjectScaffoldResult(
         project=project,

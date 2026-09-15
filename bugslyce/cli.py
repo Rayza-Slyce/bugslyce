@@ -29,6 +29,7 @@ from bugslyce.engagement_policy_setup import (
 from bugslyce.interactive import run_interactive_launcher
 from bugslyce.llm.prompt_builder import build_minimised_triage_context
 from bugslyce.llm.providers import LLMProviderNotImplementedError, get_llm_provider
+from bugslyce.project_seed_file import load_project_seed_file
 from bugslyce.project_session import (
     build_project_runbook,
     build_project_next,
@@ -320,6 +321,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Create a local BugSlyce project file.",
     )
     project_init_parser.add_argument("--name", required=True, help="Safe local project name.")
+    project_init_parser.add_argument(
+        "--seeds-file",
+        type=Path,
+        help="Local UTF-8 file containing one explicit HTTP(S) root seed per line.",
+    )
     project_init_parser.add_argument("--target", required=True, help="One target IP or hostname.")
     project_init_parser.add_argument(
         "--scope",
@@ -350,6 +356,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Create a local project directory and starter scope template.",
     )
     project_scaffold_parser.add_argument("--name", required=True, help="Safe local project name.")
+    project_scaffold_parser.add_argument(
+        "--seeds-file",
+        type=Path,
+        help="Local UTF-8 file containing one explicit HTTP(S) root seed per line.",
+    )
     project_scaffold_parser.add_argument(
         "--target",
         required=True,
@@ -1299,6 +1310,11 @@ def _config(args: argparse.Namespace) -> int:
 def _project(args: argparse.Namespace) -> int:
     if args.project_command == "init":
         try:
+            configured_http_seeds = (
+                load_project_seed_file(args.seeds_file)
+                if args.seeds_file is not None
+                else None
+            )
             project, project_path = initialize_project(
                 name=args.name,
                 target=args.target,
@@ -1306,6 +1322,7 @@ def _project(args: argparse.Namespace) -> int:
                 output_dir=args.output_dir,
                 force=args.force,
                 engagement_context=args.engagement_context,
+                configured_http_seeds=configured_http_seeds,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -1317,12 +1334,18 @@ def _project(args: argparse.Namespace) -> int:
 
     if args.project_command == "scaffold":
         try:
+            configured_http_seeds = (
+                load_project_seed_file(args.seeds_file)
+                if args.seeds_file is not None
+                else None
+            )
             result = scaffold_project(
                 name=args.name,
                 target=args.target,
                 projects_dir=args.projects_dir,
                 force=args.force,
                 engagement_context=args.engagement_context,
+                configured_http_seeds=configured_http_seeds,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)

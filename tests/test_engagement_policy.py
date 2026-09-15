@@ -795,6 +795,7 @@ def test_interactive_bug_bounty_reconnaissance_is_save_only(
             "projects",
             "3",
             "10.10.10.10",
+            "",
             "1",
             "YES",
             "2",
@@ -1359,6 +1360,7 @@ def test_new_project_policy_storage_failure_returns_redacted_nonzero(
             "projects",
             "3",
             "10.10.10.10",
+            "",
             "2",
             "YES",
         ]
