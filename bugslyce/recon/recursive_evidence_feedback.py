@@ -96,18 +96,22 @@ class RecursiveEvidenceFeedbackLimits:
     maximum_depth: int
 
     def __post_init__(self) -> None:
-        for value in (
-            self.maximum_total_candidate_requests,
-            self.maximum_candidate_requests_per_origin,
+        if (
+            isinstance(self.maximum_total_candidate_requests, bool)
+            or not isinstance(self.maximum_total_candidate_requests, int)
+            or not 0
+            <= self.maximum_total_candidate_requests
+            <= MAXIMUM_RECURSIVE_EVIDENCE_FEEDBACK_REQUESTS
         ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 1
-                <= value
-                <= MAXIMUM_RECURSIVE_EVIDENCE_FEEDBACK_REQUESTS
-            ):
-                raise ValueError("Recursive evidence feedback request budget is invalid.")
+            raise ValueError("Recursive evidence feedback total request budget is invalid.")
+        if (
+            isinstance(self.maximum_candidate_requests_per_origin, bool)
+            or not isinstance(self.maximum_candidate_requests_per_origin, int)
+            or not 1
+            <= self.maximum_candidate_requests_per_origin
+            <= MAXIMUM_RECURSIVE_EVIDENCE_FEEDBACK_REQUESTS
+        ):
+            raise ValueError("Recursive evidence feedback per-origin request budget is invalid.")
         if (
             isinstance(self.maximum_depth, bool)
             or not isinstance(self.maximum_depth, int)

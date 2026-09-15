@@ -224,7 +224,9 @@ def test_deep_collection_builds_persists_and_hands_one_exact_model_to_html(
     native_observation_bytes_before = native_observation_path.read_bytes()
     assert state.discovered_paths == ()
     assert len(native_evidence.structured_responses) == 1
-    context["wp4_root_plan"] = object()
+    context["wp4_root_plan"] = SimpleNamespace(
+        candidate_requests_planned=0,
+    )
     context["wp4_programme_orchestration"] = SimpleNamespace(
         http_work_items=(
             SimpleNamespace(canonical_origin="https://docs.example.test"),

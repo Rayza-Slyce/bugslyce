@@ -2121,9 +2121,29 @@ def _native_observation_semantics_for_output(
 
 
 
-def _recursive_evidence_feedback_limits() -> RecursiveEvidenceFeedbackLimits:
+_RECURSIVE_EVIDENCE_FEEDBACK_MAXIMUM_TOTAL_CANDIDATE_REQUESTS = 800
+
+
+def _recursive_evidence_feedback_limits(
+    root_candidate_requests_planned: int,
+) -> RecursiveEvidenceFeedbackLimits:
+    if (
+        isinstance(root_candidate_requests_planned, bool)
+        or not isinstance(root_candidate_requests_planned, int)
+        or not 0
+        <= root_candidate_requests_planned
+        <= _NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT
+    ):
+        raise ValueError("Root candidate frontier budget consumption is invalid.")
+
+    remaining_frontier_budget = (
+        _NATIVE_TOTAL_CANDIDATE_REQUEST_LIMIT - root_candidate_requests_planned
+    )
     return RecursiveEvidenceFeedbackLimits(
-        maximum_total_candidate_requests=800,
+        maximum_total_candidate_requests=min(
+            _RECURSIVE_EVIDENCE_FEEDBACK_MAXIMUM_TOTAL_CANDIDATE_REQUESTS,
+            remaining_frontier_budget,
+        ),
         maximum_candidate_requests_per_origin=100,
         maximum_depth=1,
     )
@@ -2651,7 +2671,9 @@ def _step_runners(
                     html_extraction=html_routes,
                     javascript_extraction=javascript_routes,
                     source_depth=0,
-                    limits=_recursive_evidence_feedback_limits(),
+                    limits=_recursive_evidence_feedback_limits(
+                        root_plan.candidate_requests_planned
+                    ),
                 )
                 recursive_result = run_recursive_evidence_feedback(
                     project_runtime,

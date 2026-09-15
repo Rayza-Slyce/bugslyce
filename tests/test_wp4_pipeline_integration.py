@@ -997,3 +997,30 @@ def test_pipeline_recursive_rate_rejection_propagates_from_deep_collection_stage
         pipeline._step_runners(context, None)["PIPELINE-STEP-010D"]()
 
     assert raised.value is rejection
+
+
+
+def test_recursive_feedback_limits_share_remaining_root_frontier_budget() -> None:
+    unused = pipeline._recursive_evidence_feedback_limits(0)
+    assert unused == recursive_feedback.RecursiveEvidenceFeedbackLimits(
+        maximum_total_candidate_requests=800,
+        maximum_candidate_requests_per_origin=100,
+        maximum_depth=1,
+    )
+
+    partially_consumed = pipeline._recursive_evidence_feedback_limits(34_500)
+    assert partially_consumed == recursive_feedback.RecursiveEvidenceFeedbackLimits(
+        maximum_total_candidate_requests=560,
+        maximum_candidate_requests_per_origin=100,
+        maximum_depth=1,
+    )
+
+    exhausted = pipeline._recursive_evidence_feedback_limits(35_060)
+    assert exhausted == recursive_feedback.RecursiveEvidenceFeedbackLimits(
+        maximum_total_candidate_requests=0,
+        maximum_candidate_requests_per_origin=100,
+        maximum_depth=1,
+    )
+
+    with pytest.raises(ValueError, match="frontier|budget|root"):
+        pipeline._recursive_evidence_feedback_limits(35_061)

@@ -815,3 +815,41 @@ def test_recursive_stop_reasons_and_budget_accounting_are_machine_readable(
         "evidence_not_retained"
     )
     assert all(decision.outcome == "suppressed" for decision in plan.decisions)
+
+
+
+def test_zero_total_recursive_budget_suppresses_eligible_candidate_without_request(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    state = _state_with_evidence(runtime, "EVID-ZERO-BUDGET")
+    orchestration = build_programme_orchestration_plan(runtime, state)
+    metadata = _metadata_collection(
+        _sitemap_item(
+            routes=("https://app.example.test/docs/zero-budget",),
+            evidence_ids=("EVID-ZERO-BUDGET",),
+        )
+    )
+    module = _recursive_module()
+
+    limits = module.RecursiveEvidenceFeedbackLimits(
+        maximum_total_candidate_requests=0,
+        maximum_candidate_requests_per_origin=100,
+        maximum_depth=1,
+    )
+
+    plan = _build_plan(
+        module,
+        runtime,
+        state,
+        orchestration,
+        metadata=metadata,
+        limits=limits,
+    )
+
+    assert plan.requests == ()
+    assert plan.recursive_requests_planned == 0
+    assert plan.budget_consumed == 0
+    assert plan.budget_remaining == 0
+    assert plan.decisions[0].outcome == "suppressed"
+    assert plan.decisions[0].reason == "total_request_limit_exceeded"
