@@ -26,7 +26,10 @@ from bugslyce.core.engagement_policy import (
     load_engagement_policy,
     write_engagement_policy,
 )
-from bugslyce.core.programme_scope import ProgrammeScopePolicy
+from bugslyce.core.programme_scope import (
+    ProgrammeScopePolicy,
+    canonicalise_http_url_destination,
+)
 from bugslyce.core.programme_scope_store import (
     PROGRAMME_SCOPE_FILENAME,
     load_programme_scope_policy,
@@ -45,9 +48,14 @@ from bugslyce.time_utils import Clock, utc_now_iso
 PROJECT_FILENAME = "bugslyce_project.json"
 PROJECT_RUNBOOK_FILENAME = "runbook.md"
 PROJECT_SCHEMA_VERSION = "1.1"
+CONFIGURED_HTTP_SEEDS_PROJECT_SCHEMA_VERSION = "1.2"
 LEGACY_PROJECT_SCHEMA_VERSION = "1.0"
 SUPPORTED_PROJECT_SCHEMA_VERSIONS = frozenset(
-    {LEGACY_PROJECT_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION}
+    {
+        LEGACY_PROJECT_SCHEMA_VERSION,
+        PROJECT_SCHEMA_VERSION,
+        CONFIGURED_HTTP_SEEDS_PROJECT_SCHEMA_VERSION,
+    }
 )
 SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 HOSTNAME_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -106,6 +114,9 @@ _PROJECT_SCHEMA_1_0_FIELDS = frozenset(
 _PROJECT_SCHEMA_1_1_FIELDS = _PROJECT_SCHEMA_1_0_FIELDS | {
     "programme_scope_file"
 }
+_PROJECT_SCHEMA_1_2_FIELDS = _PROJECT_SCHEMA_1_1_FIELDS | {
+    "configured_http_seeds"
+}
 
 
 @dataclass(frozen=True)
@@ -124,6 +135,7 @@ class BugSlyceProject:
     notes: list[str] = field(default_factory=list)
     engagement_policy_file: str | None = None
     programme_scope_file: str | None = None
+    configured_http_seeds: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -210,6 +222,7 @@ def initialize_project(
     force: bool = False,
     clock: Clock | None = None,
     engagement_context: str | None = None,
+    configured_http_seeds: tuple[str, ...] | None = None,
 ) -> tuple[BugSlyceProject, Path]:
     """Validate and write one local project file."""
 
@@ -220,6 +233,9 @@ def initialize_project(
         )
     normalized_target = _validate_target(target)
     normalized_engagement_context = normalise_engagement_context(engagement_context)
+    normalized_configured_http_seeds = _normalise_configured_http_seeds(
+        configured_http_seeds
+    )
     scope_file = scope_file.expanduser().resolve()
     if not scope_file.is_file():
         raise ValueError(f"Scope file does not exist: {scope_file}")
@@ -236,7 +252,11 @@ def initialize_project(
         )
 
     project = BugSlyceProject(
-        schema_version=PROJECT_SCHEMA_VERSION,
+        schema_version=(
+            CONFIGURED_HTTP_SEEDS_PROJECT_SCHEMA_VERSION
+            if normalized_configured_http_seeds is not None
+            else PROJECT_SCHEMA_VERSION
+        ),
         name=normalized_name,
         target=normalized_target,
         scope_file=str(scope_file),
@@ -248,6 +268,7 @@ def initialize_project(
         notes=[],
         engagement_policy_file=None,
         programme_scope_file=None,
+        configured_http_seeds=normalized_configured_http_seeds,
     )
     _write_project_metadata(project_path, project)
     return project, project_path
@@ -399,6 +420,11 @@ def load_project(project_file: Path) -> BugSlyceProject:
         and not set(payload) <= _PROJECT_SCHEMA_1_1_FIELDS
     ):
         raise ValueError("Project file contains unsupported fields for its schema.")
+    if (
+        schema_version == CONFIGURED_HTTP_SEEDS_PROJECT_SCHEMA_VERSION
+        and not set(payload) <= _PROJECT_SCHEMA_1_2_FIELDS
+    ):
+        raise ValueError("Project file contains unsupported fields for its schema.")
     name = _required_text(payload, "name")
     if not SAFE_PROJECT_NAME.fullmatch(name):
         raise ValueError("Project file contains an unsafe project name.")
@@ -433,6 +459,14 @@ def load_project(project_file: Path) -> BugSlyceProject:
         "programme_scope_file",
         PROGRAMME_SCOPE_FILENAME,
     )
+    configured_http_seeds = (
+        _normalise_configured_http_seeds(payload.get("configured_http_seeds"))
+        if (
+            schema_version == CONFIGURED_HTTP_SEEDS_PROJECT_SCHEMA_VERSION
+            and "configured_http_seeds" in payload
+        )
+        else None
+    )
 
     return BugSlyceProject(
         schema_version=schema_version,
@@ -447,6 +481,7 @@ def load_project(project_file: Path) -> BugSlyceProject:
         notes=list(raw_notes),
         engagement_policy_file=engagement_policy_file,
         programme_scope_file=programme_scope_file,
+        configured_http_seeds=configured_http_seeds,
     )
 
 
@@ -534,7 +569,11 @@ def save_project_programme_scope_policy(
     save_programme_scope_policy(policy_path, policy)
     updated = replace(
         project,
-        schema_version=PROJECT_SCHEMA_VERSION,
+        schema_version=(
+            PROJECT_SCHEMA_VERSION
+            if project.schema_version == LEGACY_PROJECT_SCHEMA_VERSION
+            else project.schema_version
+        ),
         programme_scope_file=PROGRAMME_SCOPE_FILENAME,
     )
     try:
@@ -554,12 +593,48 @@ def save_project_programme_scope_policy(
     return updated, policy_path
 
 
+def _normalise_configured_http_seeds(
+    values: object,
+) -> tuple[str, ...] | None:
+    """Canonicalise persisted HTTP seed intent without granting authority."""
+
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError(
+            "Project configured_http_seeds must contain one or more HTTP root origins."
+        )
+
+    canonical: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError("Project configured HTTP seed is invalid.")
+        try:
+            destination = canonicalise_http_url_destination(value)
+        except (TypeError, ValueError):
+            raise ValueError("Project configured HTTP seed is invalid.") from None
+
+        if destination.path != "/" or destination.query is not None:
+            raise ValueError(
+                "Project configured HTTP seed must be an exact HTTP root origin."
+            )
+
+        canonical.add(destination.canonical_value)
+
+    if len(canonical) != len(values):
+        raise ValueError("Project configured HTTP seeds must be unique.")
+
+    return tuple(sorted(canonical))
+
+
 def _write_project_metadata(project_path: Path, project: BugSlyceProject) -> None:
     payload = asdict(project)
     if payload.get("engagement_policy_file") is None:
         payload.pop("engagement_policy_file", None)
     if payload.get("programme_scope_file") is None:
         payload.pop("programme_scope_file", None)
+    if payload.get("configured_http_seeds") is None:
+        payload.pop("configured_http_seeds", None)
     content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     project_path = project_path.expanduser().resolve(strict=False)
     if not project_path.parent.is_dir():

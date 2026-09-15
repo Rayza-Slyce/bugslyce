@@ -676,7 +676,11 @@ def enforce_project_execution_policy(
             "Bug-bounty live execution is supported only through the policy-aware "
             "Reconnaissance project pipeline."
         )
-    return build_bug_bounty_project_runtime(project, profile)
+    return build_bug_bounty_project_runtime(
+        project,
+        profile,
+        configured_http_seeds=getattr(project, "configured_http_seeds", None),
+    )
 
 
 def run_project_pipeline(

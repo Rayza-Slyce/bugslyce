@@ -6344,3 +6344,48 @@ def test_standard_report_generation_persists_operator_brief_end_to_end(
         lead.lead_id
         for lead in completion.operator_summary.ranked_leads
     )
+
+
+
+def test_bug_bounty_execution_policy_forwards_persisted_configured_http_seeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+
+    seeds = (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+    project = SimpleNamespace(
+        engagement_context="bug_bounty",
+        configured_http_seeds=seeds,
+    )
+    sentinel = object()
+    observed: dict[str, object] = {}
+
+    def fake_builder(
+        project_arg,
+        profile_arg,
+        *,
+        configured_http_seeds=None,
+    ):
+        observed["project"] = project_arg
+        observed["profile"] = profile_arg
+        observed["configured_http_seeds"] = configured_http_seeds
+        return sentinel
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_bug_bounty_project_runtime",
+        fake_builder,
+    )
+
+    runtime = pipeline_module.enforce_project_execution_policy(
+        project,
+        NORMAL_PIPELINE_PROFILE,
+    )
+
+    assert runtime is sentinel
+    assert observed["project"] is project
+    assert observed["profile"] == NORMAL_PIPELINE_PROFILE
+    assert observed["configured_http_seeds"] == seeds

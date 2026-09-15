@@ -817,3 +817,43 @@ def test_explicit_project_load_refuses_symlinked_scope_policy(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="regular file, not a link"):
         load_project_programme_scope_policy(load_project(project_file))
+
+
+
+def test_scope_save_preserves_schema_1_2_configured_http_seed_identity(
+    tmp_path: Path,
+) -> None:
+    scope = tmp_path / "scope.md"
+    scope.write_text(
+        "# Scope\n\n## In Scope\n\n- app.example.test\n",
+        encoding="utf-8",
+    )
+
+    project, project_file = initialize_project(
+        "schema-12-scope-save",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+        configured_http_seeds=(
+            "https://api.example.test/",
+            "https://app.example.test/",
+        ),
+    )
+
+    expected_seeds = project.configured_http_seeds
+
+    updated, _policy_path = save_project_programme_scope_policy(
+        project_file,
+        _complete_policy(),
+    )
+
+    stored = json.loads(project_file.read_text(encoding="utf-8"))
+    loaded = load_project(project_file)
+
+    assert updated.schema_version == "1.2"
+    assert updated.configured_http_seeds == expected_seeds
+    assert stored["schema_version"] == "1.2"
+    assert stored["configured_http_seeds"] == list(expected_seeds)
+    assert loaded.schema_version == "1.2"
+    assert loaded.configured_http_seeds == expected_seeds

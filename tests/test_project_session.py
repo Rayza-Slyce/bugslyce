@@ -514,3 +514,193 @@ def _scope_file(tmp_path: Path, target: str = "10.10.10.10") -> Path:
         encoding="utf-8",
     )
     return scope
+
+
+
+def test_project_init_with_configured_http_seeds_persists_schema_1_2(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+
+    project, project_path = initialize_project(
+        "multi-seed",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+        configured_http_seeds=(
+            "https://app.example.test/",
+            "https://api.example.test/",
+        ),
+    )
+
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == "1.2"
+    assert payload["configured_http_seeds"] == [
+        "https://api.example.test/",
+        "https://app.example.test/",
+    ]
+    assert project.configured_http_seeds == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+
+
+def test_project_load_schema_1_2_restores_configured_http_seed_identity(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+    _project, project_path = initialize_project(
+        "seed-load",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "1.2"
+    payload["configured_http_seeds"] = [
+        "https://api.example.test/",
+        "https://app.example.test/",
+    ]
+    project_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_project(project_path)
+
+    assert loaded.schema_version == "1.2"
+    assert loaded.configured_http_seeds == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+
+
+def test_project_schema_1_1_without_configured_seeds_retains_legacy_seed_identity(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+    _project, project_path = initialize_project(
+        "legacy-seed-identity",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+    )
+
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "1.1"
+    assert "configured_http_seeds" not in payload
+
+    loaded = load_project(project_path)
+
+    assert loaded.schema_version == "1.1"
+    assert loaded.configured_http_seeds is None
+
+
+def test_project_schema_1_1_rejects_configured_http_seed_extension(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+    _project, project_path = initialize_project(
+        "invalid-seed-extension",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+    )
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload["configured_http_seeds"] = ["https://app.example.test/"]
+    project_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        load_project(project_path)
+
+
+
+@pytest.mark.parametrize(
+    ("configured_http_seeds", "message"),
+    (
+        ((), "one or more"),
+        ((" ",), "invalid"),
+        (("https://app.example.test/api/",), "root origin"),
+        (("https://app.example.test/?source=operator",), "root origin"),
+        (
+            (
+                "https://app.example.test/",
+                "https://app.example.test/",
+            ),
+            "unique",
+        ),
+    ),
+)
+def test_project_init_rejects_invalid_configured_http_seed_identity(
+    tmp_path: Path,
+    configured_http_seeds,
+    message: str,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+
+    with pytest.raises(ValueError, match=message):
+        initialize_project(
+            "invalid-configured-seeds",
+            "app.example.test",
+            scope,
+            tmp_path / "output",
+            engagement_context="bug_bounty",
+            configured_http_seeds=configured_http_seeds,
+        )
+
+
+def test_project_schema_1_2_rejects_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+    _project, project_path = initialize_project(
+        "strict-schema-12",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+        configured_http_seeds=("https://app.example.test/",),
+    )
+
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload["unexpected"] = "field"
+    project_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        load_project(project_path)
+
+
+def test_project_schema_1_2_without_configured_seeds_loads_as_no_explicit_seed_identity(
+    tmp_path: Path,
+) -> None:
+    scope = _scope_file(tmp_path, target="app.example.test")
+    _project, project_path = initialize_project(
+        "schema-12-no-seeds",
+        "app.example.test",
+        scope,
+        tmp_path / "output",
+        engagement_context="bug_bounty",
+    )
+
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "1.2"
+    project_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_project(project_path)
+
+    assert loaded.schema_version == "1.2"
+    assert loaded.configured_http_seeds is None
