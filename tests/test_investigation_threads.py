@@ -1173,6 +1173,11 @@ def test_cross_host_redirects_group_by_target_origin_but_same_host_scheme_does_n
         "https://id.example.test/settings",
     }
     assert len(thread.related_application_relation_ids) == 2
+    assert thread.related_native_observation_ids == (
+        "native-observation:1:0",
+        "native-observation:2:0",
+    )
+    assert thread.related_evidence_ids == ()
     assert "native-observation:3:0" not in thread.related_native_observation_ids
 
 

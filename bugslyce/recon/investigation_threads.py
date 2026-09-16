@@ -829,10 +829,17 @@ def _application_interface_threads(
             for support in relation.supports:
                 if support.basis is not ApplicationServiceSupportBasis.DIRECT_OBSERVATION:
                     continue
-                evidence_ids.update(support.evidence_ids)
-                if support.source_reference.source_id.startswith("native-observation:"):
-                    native_ids.add(support.source_reference.source_id)
+                source_id = support.source_reference.source_id
+                if source_id.startswith("native-observation:"):
+                    native_ids.add(source_id)
+                    evidence_ids.update(
+                        evidence_id
+                        for evidence_id in support.evidence_ids
+                        if evidence_id != source_id
+                    )
                     limitations.add("redirect_destination_not_fetched")
+                else:
+                    evidence_ids.update(support.evidence_ids)
         hostname = urlparse(target_origin).hostname or target_origin
         drafts.append(
             _ThreadDraft(
