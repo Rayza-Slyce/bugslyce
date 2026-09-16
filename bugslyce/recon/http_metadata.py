@@ -55,6 +55,7 @@ def run_http_metadata_workflow(
     manifest = _load_manifest_payload(manifest_path)
     initial_state = build_project_state(input_dir)
     seed_profile = None
+    configured_runtime_origins: tuple[str, ...] = ()
     if programme_scope_seed_origins is not None:
         if project_runtime is None or not project_runtime.tcp_discovery_skipped:
             raise ValueError(
@@ -76,14 +77,47 @@ def run_http_metadata_workflow(
         all_origins = list(canonical_seeds)
         seed_profile = "bug-bounty-policy-http-seed"
     else:
-        if project_runtime is None:
-            enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
-        target = _resolve_target(manifest, initial_state)
-        all_origins = discover_http_origins(
-            initial_state,
-            target,
-            max_services=max(MAX_HTTP_METADATA_SERVICES, len(initial_state.port_services)),
+        approved_runtime_origins = (
+            getattr(project_runtime, "approved_http_origins", ())
+            if project_runtime is not None
+            else ()
         )
+        if approved_runtime_origins:
+            configured_runtime_origins = tuple(
+                sorted(
+                    set(
+                        getattr(
+                            project_runtime,
+                            "configured_http_seeds",
+                            (),
+                        )
+                        or ()
+                    )
+                )
+            )
+            seed_target = getattr(
+                getattr(project_runtime, "project", None),
+                "target",
+                None,
+            )
+            if not isinstance(seed_target, str) or not seed_target:
+                raise ValueError(
+                    "Bound project HTTP origins require a canonical project target."
+                )
+            target = seed_target
+            all_origins = list(approved_runtime_origins)
+        else:
+            if project_runtime is None:
+                enforce_r0b2_bug_bounty_live_block(initial_state.engagement_context)
+            target = _resolve_target(manifest, initial_state)
+            all_origins = discover_http_origins(
+                initial_state,
+                target,
+                max_services=max(
+                    MAX_HTTP_METADATA_SERVICES,
+                    len(initial_state.port_services),
+                ),
+            )
     target = validate_explicit_nmap_target_scope(target, scope_file)
     if project_runtime is not None:
         from bugslyce.recon.project_runtime import require_project_runtime_binding
@@ -98,7 +132,27 @@ def run_http_metadata_workflow(
         )
     if not all_origins:
         raise ValueError("No open HTTP services were found in existing nmap service evidence.")
-    origins = all_origins[:MAX_HTTP_METADATA_SERVICES]
+
+    if configured_runtime_origins:
+        all_origin_set = set(all_origins)
+        prioritised_configured_origins = [
+            origin
+            for origin in configured_runtime_origins
+            if origin in all_origin_set
+        ]
+        configured_origin_set = set(prioritised_configured_origins)
+        prioritised_origins = [
+            *prioritised_configured_origins,
+            *(
+                origin
+                for origin in all_origins
+                if origin not in configured_origin_set
+            ),
+        ]
+    else:
+        prioritised_origins = all_origins
+
+    origins = prioritised_origins[:MAX_HTTP_METADATA_SERVICES]
     warnings = list(initial_state.warnings)
     if len(all_origins) > MAX_HTTP_METADATA_SERVICES:
         warnings.append(

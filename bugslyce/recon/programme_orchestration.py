@@ -7,10 +7,12 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from bugslyce.core.models import ProjectState
+from bugslyce.core.normalise import normalise_hostname
 from bugslyce.core.programme_graph import (
     RELATIONSHIP_CONFIGURED_SEED,
     RELATIONSHIP_OBSERVED_REDIRECT,
     RELATIONSHIP_OBSERVED_REFERENCE,
+    RELATIONSHIP_OBSERVED_SERVICE,
     ProgrammeGraph,
     ProgrammeHTTPWorkItem,
     ProgrammeRelationshipEvidence,
@@ -23,12 +25,17 @@ from bugslyce.recon.http_enforcement import (
     InternalHTTPExecutor,
     build_internal_http_executor_view,
 )
+from bugslyce.parsers.nmap import http_scheme_for_port_service
 from bugslyce.recon.http_origin import http_origin_from_url
+from bugslyce.recon.http_service_identity import resolve_target_http_origins
 from bugslyce.recon.project_runtime import BugBountyProjectRuntime
 
 
 CONFIGURED_SEED_PROVENANCE = (
     "bug_bounty_project_runtime.approved_http_origins",
+)
+EXPLICIT_CONFIGURED_SEED_PROVENANCE = (
+    "bug_bounty_project_runtime.configured_http_seeds",
 )
 REFERENCE_ARTEFACT_TYPES = frozenset({"link", "form", "script_or_asset"})
 
@@ -44,6 +51,7 @@ class ProgrammeRuntimeBinding:
     profile: str
     target_decision: ScopeDecision
     initial_http_origins: tuple[str, ...]
+    configured_http_seeds: tuple[str, ...] | None
     approved_http_origins: tuple[str, ...]
 
 
@@ -110,8 +118,18 @@ def require_programme_orchestration_plan_binding(
     if plan.http_work_items != canonical_work_items:
         raise ValueError("Programme orchestration work-item plan is not canonical.")
 
-    actual_seed_origins = _canonical_graph_seed_origins(plan.programme_graph)
-    if actual_seed_origins != expected_binding.approved_http_origins:
+    if expected_binding.configured_http_seeds is not None:
+        expected_seed_origins = expected_binding.configured_http_seeds
+        expected_seed_provenance = EXPLICIT_CONFIGURED_SEED_PROVENANCE
+    else:
+        expected_seed_origins = expected_binding.approved_http_origins
+        expected_seed_provenance = CONFIGURED_SEED_PROVENANCE
+
+    actual_seed_origins = _canonical_graph_seed_origins(
+        plan.programme_graph,
+        provenance_sources=expected_seed_provenance,
+    )
+    if actual_seed_origins != expected_seed_origins:
         raise ValueError("Programme orchestration configured origins are not canonical.")
 
     has_non_seed_relationships = any(
@@ -173,8 +191,23 @@ def _build_expected_programme_graph(
     """Build the complete graph attributable to one runtime and retained state."""
 
     _require_project_state_binding(runtime, project_state)
+    if binding.configured_http_seeds is not None:
+        configured_seed_origins = binding.configured_http_seeds
+        configured_seed_provenance = EXPLICIT_CONFIGURED_SEED_PROVENANCE
+    else:
+        configured_seed_origins = binding.approved_http_origins
+        configured_seed_provenance = CONFIGURED_SEED_PROVENANCE
+
     relationship_evidence = (
-        *_configured_seed_evidence(binding.approved_http_origins),
+        *_configured_seed_evidence(
+            configured_seed_origins,
+            provenance_sources=configured_seed_provenance,
+        ),
+        *_observed_service_evidence(
+            runtime,
+            project_state,
+            approved_origins=binding.approved_http_origins,
+        ),
         *_redirect_evidence(project_state),
         *_reference_evidence(project_state),
     )
@@ -198,6 +231,11 @@ def _runtime_binding(runtime: object) -> ProgrammeRuntimeBinding:
         if not isinstance(target_decision, ScopeDecision):
             raise ValueError
         initial_origins = _canonical_origin_tuple(runtime.initial_http_origins)
+        configured_seeds = (
+            _canonical_origin_tuple(runtime.configured_http_seeds)
+            if runtime.configured_http_seeds is not None
+            else None
+        )
         approved_origins = _canonical_origin_tuple(runtime.approved_http_origins)
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise ValueError("Programme plan requires a canonical project runtime.") from None
@@ -209,6 +247,7 @@ def _runtime_binding(runtime: object) -> ProgrammeRuntimeBinding:
         profile=profile,
         target_decision=target_decision,
         initial_http_origins=initial_origins,
+        configured_http_seeds=configured_seeds,
         approved_http_origins=approved_origins,
     )
 
@@ -232,7 +271,9 @@ def _require_project_state_binding(
 
 
 def _configured_seed_evidence(
-    approved_origins: tuple[str, ...],
+    configured_origins: tuple[str, ...],
+    *,
+    provenance_sources: tuple[str, ...] = CONFIGURED_SEED_PROVENANCE,
 ) -> tuple[ProgrammeRelationshipEvidence, ...]:
     return tuple(
         build_programme_relationship_evidence(
@@ -240,10 +281,90 @@ def _configured_seed_evidence(
             source_origin=None,
             destination_origin=origin,
             evidence_ids=(),
-            provenance_sources=CONFIGURED_SEED_PROVENANCE,
+            provenance_sources=provenance_sources,
         )
-        for origin in approved_origins
+        for origin in configured_origins
     )
+
+
+
+def _observed_service_evidence(
+    runtime: BugBountyProjectRuntime,
+    project_state: ProjectState,
+    *,
+    approved_origins: tuple[str, ...],
+) -> tuple[ProgrammeRelationshipEvidence, ...]:
+    """Project retained Nmap-backed HTTP services without granting authority."""
+
+    approved = set(approved_origins)
+    evidence_by_id = {
+        item.id: item
+        for item in project_state.evidence
+    }
+    relationships: list[ProgrammeRelationshipEvidence] = []
+
+    for binding in resolve_target_http_origins(
+        project_state,
+        runtime.project.target,
+    ):
+        logical_origin = http_origin_from_url(binding.logical_origin)
+        observed_origin = http_origin_from_url(binding.observed_origin)
+        if logical_origin is None or observed_origin is None:
+            continue
+
+        canonical_logical_origin = logical_origin.origin_url
+        if (
+            not binding.nmap_discovered
+            or canonical_logical_origin not in approved
+        ):
+            continue
+
+        for service in project_state.port_services:
+            scheme = http_scheme_for_port_service(service)
+            if (
+                service.state != "open"
+                or service.protocol != "tcp"
+                or scheme != observed_origin.scheme
+                or normalise_hostname(service.host) != observed_origin.hostname
+                or service.port != observed_origin.effective_port
+            ):
+                continue
+
+            evidence_ids = tuple(service.evidence_ids)
+            if not evidence_ids:
+                continue
+
+            retained_evidence = tuple(
+                evidence_by_id.get(evidence_id)
+                for evidence_id in evidence_ids
+            )
+            if any(item is None for item in retained_evidence):
+                continue
+
+            provenance_sources = tuple(
+                sorted(
+                    {
+                        item.source_file
+                        for item in retained_evidence
+                        if item is not None and item.source_file
+                    }
+                )
+            )
+            if not provenance_sources:
+                continue
+
+            relationships.append(
+                build_programme_relationship_evidence(
+                    relationship_type=RELATIONSHIP_OBSERVED_SERVICE,
+                    source_origin=None,
+                    destination_origin=canonical_logical_origin,
+                    evidence_ids=evidence_ids,
+                    provenance_sources=provenance_sources,
+                )
+            )
+
+    return tuple(relationships)
+
 
 
 def _redirect_evidence(
@@ -328,7 +449,11 @@ def _resolved_relationship(
         return None
 
 
-def _canonical_graph_seed_origins(graph: ProgrammeGraph) -> tuple[str, ...]:
+def _canonical_graph_seed_origins(
+    graph: ProgrammeGraph,
+    *,
+    provenance_sources: tuple[str, ...] = CONFIGURED_SEED_PROVENANCE,
+) -> tuple[str, ...]:
     seeds: list[str] = []
     for relationship in graph.relationships:
         if relationship.relationship_type != RELATIONSHIP_CONFIGURED_SEED:
@@ -336,7 +461,7 @@ def _canonical_graph_seed_origins(graph: ProgrammeGraph) -> tuple[str, ...]:
         if (
             relationship.source_origin is not None
             or relationship.evidence_ids
-            or relationship.provenance_sources != CONFIGURED_SEED_PROVENANCE
+            or relationship.provenance_sources != provenance_sources
         ):
             raise ValueError("Programme orchestration configured origins are invalid.")
         seeds.append(relationship.destination_origin)

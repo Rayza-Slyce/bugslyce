@@ -1434,23 +1434,37 @@ def test_tcp_skip_runtime_rejects_duplicate_configured_http_seeds(
         )
 
 
-def test_runtime_rejects_configured_http_seeds_while_tcp_discovery_is_active(
+def test_runtime_accepts_configured_http_seeds_while_tcp_discovery_is_active(
     tmp_path: Path,
 ) -> None:
     project = _project(
         tmp_path,
         http_rules=(
             ("include", "http_path_prefix", "https://app.example.test/"),
+            ("include", "http_path_prefix", "https://api.example.test/"),
         ),
     )
 
-    with pytest.raises(ValueError, match="TCP-skip"):
-        build_bug_bounty_project_runtime(
-            project,
-            DEEP_RECON_PROFILE,
-            capabilities=_capabilities(),
-            configured_http_seeds=("https://app.example.test/",),
-        )
+    runtime = build_bug_bounty_project_runtime(
+        project,
+        DEEP_RECON_PROFILE,
+        capabilities=_capabilities(),
+        configured_http_seeds=(
+            "https://api.example.test/",
+            "https://app.example.test/",
+        ),
+    )
+
+    assert runtime.tcp_discovery_skipped is False
+    assert runtime.initial_http_origins == ()
+    assert runtime.configured_http_seeds == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+    assert runtime.approved_http_origins == ()
+
+    with pytest.raises(ValueError, match="HTTP origins have not been bound"):
+        _ = runtime.http_executor
 
 
 def test_tcp_skip_runtime_records_explicit_configured_seed_identity(

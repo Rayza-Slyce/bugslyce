@@ -5177,6 +5177,87 @@ def _patch_current_native_runtime(
     return runtime
 
 
+
+def test_http_metadata_combines_configured_seeds_with_nmap_origins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bugslyce.project_pipeline as pipeline_module
+    import bugslyce.recon.http_metadata as http_metadata_module
+
+    output_dir = tmp_path / "output"
+    runtime = _FixtureCurrentProjectRuntime()
+    runtime.configured_http_seeds = (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "BugBountyProjectRuntime",
+        _FixtureCurrentProjectRuntime,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_project_state",
+        lambda _path: _fixture_project_state(output_dir),
+    )
+    monkeypatch.setattr(
+        http_metadata_module,
+        "discover_http_origins",
+        lambda *_args, **_kwargs: [
+            "https://app.example.test/",
+            "http://10.10.10.10/",
+        ],
+    )
+
+    observed: dict[str, object] = {}
+
+    def fake_http_metadata_workflow(*_args, **_kwargs):
+        observed["bound_http_origins"] = runtime.bound_http_origins
+        return SimpleNamespace(artifact_paths=[], report_path="report.html")
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "run_http_metadata_workflow",
+        fake_http_metadata_workflow,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "write_http_metadata_execution_result",
+        lambda *_args, **_kwargs: [],
+    )
+
+    context = {
+        "output_dir": output_dir,
+        "scope_file": tmp_path / "scope.md",
+        "plan_dir": tmp_path / "plan",
+        "plan_path": tmp_path / "plan.json",
+        "export_path": tmp_path / "export.zip",
+        "target": "app.example.test",
+        "project_file": tmp_path / "bugslyce_project.json",
+        "resume": False,
+        "profile": NORMAL_PIPELINE_PROFILE,
+        "project_runtime": runtime,
+    }
+
+    runners = pipeline_module._step_runners(context, None)
+    runners["PIPELINE-STEP-004"]()
+
+    expected = (
+        "http://10.10.10.10/",
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+    assert runtime.bound_http_origins == expected
+    assert observed["bound_http_origins"] == expected
+    assert runtime.configured_http_seeds == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+
+
+
 def _patch_controlled_failure_runners(
     monkeypatch,
     calls: list[str],

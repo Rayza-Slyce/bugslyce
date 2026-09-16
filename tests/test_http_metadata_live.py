@@ -80,6 +80,84 @@ def test_http_metadata_builds_exact_commands_for_default_and_high_ports(
     )
 
 
+
+def test_http_metadata_accepts_multiple_exact_approved_hosts(
+    tmp_path: Path,
+) -> None:
+    origins = [
+        "https://www.playstation.com/",
+        "https://web.np.playstation.com/",
+    ]
+
+    commands = build_http_metadata_commands(
+        origins,
+        "www.playstation.com",
+        tmp_path,
+    )
+
+    assert len(commands) == 6
+    assert {
+        command.argv[-1]
+        for command in commands
+        if command.phase == "http-headers"
+    } == {
+        "https://www.playstation.com/",
+        "https://web.np.playstation.com/",
+    }
+
+    allowed_origins = set(origins)
+    assert all(
+        validate_live_http_metadata_command(
+            command,
+            tmp_path,
+            "www.playstation.com",
+            allowed_origins,
+        ).valid
+        for command in commands
+    )
+
+    assert {
+        Path(command.output_file).name
+        for command in commands
+    } == {
+        "curl-headers-www.playstation.com-443.txt",
+        "robots-www.playstation.com-443.txt",
+        "homepage-www.playstation.com-443.html",
+        "curl-headers-web.np.playstation.com-443.txt",
+        "robots-web.np.playstation.com-443.txt",
+        "homepage-web.np.playstation.com-443.html",
+    }
+
+
+
+
+def test_http_metadata_validator_refuses_origin_not_in_allowed_set(
+    tmp_path: Path,
+) -> None:
+    approved_origin = "https://www.playstation.com/"
+    unapproved_origin = "https://web.np.playstation.com/"
+
+    command = build_http_metadata_commands(
+        [unapproved_origin],
+        "web.np.playstation.com",
+        tmp_path,
+    )[0]
+
+    validation = validate_live_http_metadata_command(
+        command,
+        tmp_path,
+        "www.playstation.com",
+        {approved_origin},
+    )
+
+    assert validation.valid is False
+    assert any(
+        "discovered HTTP service" in error
+        for error in validation.errors
+    )
+
+
+
 def test_http_metadata_runner_uses_list_argv_and_bounded_timeout(
     tmp_path: Path,
     monkeypatch,
@@ -192,7 +270,9 @@ def test_http_metadata_runner_refuses_arbitrary_curl_shapes(
     assert called is False
 
 
-def test_http_metadata_runner_refuses_other_target(tmp_path: Path) -> None:
+def test_http_metadata_runner_refuses_origin_outside_allowed_set(
+    tmp_path: Path,
+) -> None:
     origins = {"http://10.10.10.10/"}
     command = build_http_metadata_commands(
         ["http://192.0.2.10/"],
@@ -203,7 +283,7 @@ def test_http_metadata_runner_refuses_other_target(tmp_path: Path) -> None:
     result = LiveHTTPMetadataRunner(tmp_path, "10.10.10.10", origins).run(command)
 
     assert result.executed is False
-    assert "discovered target host" in (result.error or "")
+    assert "discovered HTTP service" in (result.error or "")
 
 
 def test_http_metadata_runner_rejects_output_outside_directory(tmp_path: Path) -> None:
@@ -521,6 +601,58 @@ def test_http_metadata_workflow_refuses_target_not_in_scope(tmp_path: Path) -> N
             scope,
             runner=_MockHTTPMetadataRunner(),
         )
+
+
+
+def test_http_metadata_cap_preserves_explicit_configured_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    scope = _scope(tmp_path)
+
+    configured_seed = "https://zz-seed.example.test/"
+    discovered_origins = tuple(
+        f"https://{index:02d}.example.test/"
+        for index in range(MAX_HTTP_METADATA_SERVICES + 1)
+    )
+    approved_origins = tuple(
+        sorted(
+            {
+                configured_seed,
+                *discovered_origins,
+            }
+        )
+    )
+
+    runtime = SimpleNamespace(
+        tcp_discovery_skipped=False,
+        configured_http_seeds=(configured_seed,),
+        approved_http_origins=approved_origins,
+        project=SimpleNamespace(target="10.10.10.10"),
+    )
+    runner = _RecordingHTTPMetadataRunner()
+
+    monkeypatch.setattr(
+        "bugslyce.recon.project_runtime.require_project_runtime_binding",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    result = run_http_metadata_workflow(
+        input_dir,
+        scope,
+        runner=runner,
+        project_runtime=runtime,
+    )
+
+    assert len(result.http_services) == MAX_HTTP_METADATA_SERVICES
+    assert configured_seed in result.http_services
+    assert any(
+        f"capped at {MAX_HTTP_METADATA_SERVICES} services" in warning
+        for warning in result.warnings
+    )
+
 
 
 def test_http_metadata_service_cap_is_deterministic(tmp_path: Path) -> None:

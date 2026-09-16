@@ -15,7 +15,13 @@ from bugslyce.core.engagement_policy import (
     IDENTIFICATION_NONE,
     build_bug_bounty_policy,
 )
-from bugslyce.core.models import DiscoveredPath, HTTPArtifact, ProjectState
+from bugslyce.core.models import (
+    DiscoveredPath,
+    Evidence,
+    HTTPArtifact,
+    PortService,
+    ProjectState,
+)
 from bugslyce.core.programme_graph import (
     RELATIONSHIP_CONFIGURED_SEED,
     RELATIONSHIP_OBSERVED_REDIRECT,
@@ -78,7 +84,12 @@ def _capabilities():
     }
 
 
-def _runtime(tmp_path: Path, *, bind_origin: bool = True):
+def _runtime(
+    tmp_path: Path,
+    *,
+    bind_origin: bool = True,
+    configured_http_seeds: tuple[str, ...] | None = None,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
     scope = tmp_path / "scope.md"
     scope.write_text("# Authorised synthetic scope\n", encoding="utf-8")
@@ -126,6 +137,7 @@ def _runtime(tmp_path: Path, *, bind_origin: bool = True):
         STANDARD_RECON_PROFILE,
         capabilities=_capabilities(),
         ipv4_resolver=lambda _hostname, _port: ("8.8.8.8",),
+        configured_http_seeds=configured_http_seeds,
     )
     if bind_origin:
         runtime.bind_http_origins(("https://app.example.test/",))
@@ -258,6 +270,8 @@ def _state(
     *,
     discovered_paths: tuple[DiscoveredPath, ...] = (),
     http_artifacts: tuple[HTTPArtifact, ...] = (),
+    port_services: tuple[PortService, ...] = (),
+    evidence: tuple[Evidence, ...] = (),
 ) -> ProjectState:
     return ProjectState(
         project_name=runtime.project.name,
@@ -267,12 +281,12 @@ def _state(
         assets=[],
         http_services=[],
         endpoints=[],
-        port_services=[],
+        port_services=list(port_services),
         http_artifacts=list(http_artifacts),
         discovered_paths=list(discovered_paths),
         recon_summary=None,
         recon_manifest=None,
-        evidence=[],
+        evidence=list(evidence),
         warnings=[],
         generated_at=FIXED_TIME,
         engagement_context="bug_bounty",
@@ -327,14 +341,56 @@ def test_programme_plan_is_anchored_to_runtime_policy_and_rejects_broader_graph(
         module.require_programme_orchestration_plan_binding(runtime, forged_plan)
 
 
-def test_programme_plan_uses_only_runtime_approved_origins_as_configured_seeds(
+def test_programme_plan_keeps_configured_seed_provenance_separate_from_approved_origins(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        bind_origin=False,
+        configured_http_seeds=("https://app.example.test/",),
+    )
+    runtime.bind_http_origins(
+        (
+            "https://api.example.test/",
+            "https://app.example.test/",
+        )
+    )
+
+    module = _programme_orchestration_module()
+    plan = module.build_programme_orchestration_plan(runtime, _state(runtime))
+
+    configured_seed_relationships = tuple(
+        relationship
+        for relationship in plan.programme_graph.relationships
+        if relationship.relationship_type == RELATIONSHIP_CONFIGURED_SEED
+    )
+
+    assert runtime.configured_http_seeds == ("https://app.example.test/",)
+    assert runtime.approved_http_origins == (
+        "https://api.example.test/",
+        "https://app.example.test/",
+    )
+    assert tuple(
+        relationship.destination_origin
+        for relationship in configured_seed_relationships
+    ) == ("https://app.example.test",)
+    assert configured_seed_relationships[0].provenance_sources == (
+        "bug_bounty_project_runtime.configured_http_seeds",
+    )
+
+
+
+
+def test_legacy_runtime_without_explicit_configured_seeds_preserves_approved_seed_contract(
     tmp_path: Path,
 ) -> None:
     unbound_runtime = _runtime(tmp_path / "unbound", bind_origin=False)
     bound_runtime = _runtime(tmp_path / "bound")
     unbound_state = _state(unbound_runtime)
     bound_state = _state(bound_runtime)
+
     module = _programme_orchestration_module()
+
     unbound_plan = module.build_programme_orchestration_plan(
         unbound_runtime,
         unbound_state,
@@ -343,6 +399,7 @@ def test_programme_plan_uses_only_runtime_approved_origins_as_configured_seeds(
         bound_runtime,
         bound_state,
     )
+
     seed = next(
         relationship
         for relationship in bound_plan.programme_graph.relationships
@@ -355,15 +412,196 @@ def test_programme_plan_uses_only_runtime_approved_origins_as_configured_seeds(
     )
 
     assert unbound_runtime.project.target == "app.example.test"
+    assert unbound_runtime.configured_http_seeds is None
     assert unbound_runtime.approved_http_origins == ()
     assert unbound_plan.programme_graph.nodes == ()
     assert unbound_plan.http_work_items == ()
+
+    assert bound_runtime.configured_http_seeds is None
     assert seed.destination_origin == "https://app.example.test"
     assert seed.provenance_sources == (
         "bug_bounty_project_runtime.approved_http_origins",
     )
     assert seed_item.configured_seed is True
     assert seed_item.dynamically_materialised is False
+
+
+def test_configured_seed_also_retains_independent_nmap_service_provenance(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        bind_origin=False,
+        configured_http_seeds=("https://app.example.test/",),
+    )
+    runtime.bind_http_origins(("https://app.example.test/",))
+
+    evidence_id = "EVID-NMAP-HTTPS-443"
+    source_file = "raw/nmap-service-version.txt"
+
+    state = _state(
+        runtime,
+        port_services=(
+            PortService(
+                host="app.example.test",
+                port=443,
+                protocol="tcp",
+                state="open",
+                service="https",
+                product=None,
+                version=None,
+                source_file=source_file,
+                evidence_ids=[evidence_id],
+                tags=["open_service", "http_service"],
+            ),
+        ),
+        evidence=(
+            Evidence(
+                id=evidence_id,
+                source_file=source_file,
+                evidence_type="port_service",
+                value="app.example.test:443/tcp open https",
+                context={
+                    "port": 443,
+                    "protocol": "tcp",
+                    "state": "open",
+                    "service": "https",
+                },
+            ),
+        ),
+    )
+
+    module = _programme_orchestration_module()
+    plan = module.build_programme_orchestration_plan(runtime, state)
+
+    relationships = tuple(
+        relationship
+        for relationship in plan.programme_graph.relationships
+        if relationship.destination_origin == "https://app.example.test"
+    )
+
+    assert {
+        relationship.relationship_type
+        for relationship in relationships
+    } == {
+        "configured_seed",
+        "observed_service",
+    }
+
+    configured = next(
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type == "configured_seed"
+    )
+    observed = next(
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type == "observed_service"
+    )
+
+    assert configured.evidence_ids == ()
+    assert configured.provenance_sources == (
+        "bug_bounty_project_runtime.configured_http_seeds",
+    )
+
+    assert observed.source_origin is None
+    assert observed.evidence_ids == (evidence_id,)
+    assert observed.provenance_sources == (source_file,)
+
+    work_item = next(
+        item
+        for item in plan.http_work_items
+        if item.canonical_origin == "https://app.example.test"
+    )
+    assert work_item.configured_seed is True
+    assert work_item.dynamically_materialised is False
+    assert len(work_item.relationship_ids) == 2
+
+
+
+def test_nmap_discovered_approved_origin_remains_dynamic_programme_work_item(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        bind_origin=False,
+        configured_http_seeds=("https://app.example.test/",),
+    )
+    runtime.bind_http_origins(
+        (
+            "http://app.example.test/",
+            "https://app.example.test/",
+        )
+    )
+
+    evidence_id = "EVID-NMAP-HTTP-80"
+    source_file = "raw/nmap-discovery.txt"
+    state = _state(
+        runtime,
+        port_services=(
+            PortService(
+                host="app.example.test",
+                port=80,
+                protocol="tcp",
+                state="open",
+                service="http",
+                product=None,
+                version=None,
+                source_file=source_file,
+                evidence_ids=[evidence_id],
+                tags=["open_service", "http_service"],
+            ),
+        ),
+        evidence=(
+            Evidence(
+                id=evidence_id,
+                source_file=source_file,
+                evidence_type="port_service",
+                value="app.example.test:80/tcp open http",
+                context={
+                    "port": 80,
+                    "protocol": "tcp",
+                    "state": "open",
+                    "service": "http",
+                },
+            ),
+        ),
+    )
+
+    module = _programme_orchestration_module()
+    plan = module.build_programme_orchestration_plan(runtime, state)
+
+    by_origin = {
+        item.canonical_origin: item
+        for item in plan.http_work_items
+    }
+
+    assert tuple(sorted(by_origin)) == (
+        "http://app.example.test",
+        "https://app.example.test",
+    )
+
+    configured = by_origin["https://app.example.test"]
+    observed = by_origin["http://app.example.test"]
+
+    assert configured.configured_seed is True
+    assert configured.dynamically_materialised is False
+
+    assert observed.configured_seed is False
+    assert observed.dynamically_materialised is True
+    assert observed.relationship_ids
+
+    observed_relationships = tuple(
+        relationship
+        for relationship in plan.programme_graph.relationships
+        if relationship.destination_origin == "http://app.example.test"
+    )
+    assert len(observed_relationships) == 1
+    assert observed_relationships[0].relationship_type == "observed_service"
+    assert observed_relationships[0].source_origin is None
+    assert observed_relationships[0].evidence_ids == (evidence_id,)
+    assert observed_relationships[0].provenance_sources == (source_file,)
+
 
 
 def test_retained_redirect_to_authorised_child_becomes_exact_programme_work_item(

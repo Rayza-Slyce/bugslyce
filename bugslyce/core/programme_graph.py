@@ -22,6 +22,7 @@ from bugslyce.recon.http_origin import HttpOrigin, http_origin_from_url
 RELATIONSHIP_CONFIGURED_SEED = "configured_seed"
 RELATIONSHIP_OBSERVED_REDIRECT = "observed_redirect"
 RELATIONSHIP_OBSERVED_REFERENCE = "observed_reference"
+RELATIONSHIP_OBSERVED_SERVICE = "observed_service"
 RELATIONSHIP_DOCUMENTED_SERVICE = "documented_service"
 
 SUPPORTED_PROGRAMME_RELATIONSHIP_TYPES = frozenset(
@@ -29,6 +30,7 @@ SUPPORTED_PROGRAMME_RELATIONSHIP_TYPES = frozenset(
         RELATIONSHIP_CONFIGURED_SEED,
         RELATIONSHIP_OBSERVED_REDIRECT,
         RELATIONSHIP_OBSERVED_REFERENCE,
+        RELATIONSHIP_OBSERVED_SERVICE,
         RELATIONSHIP_DOCUMENTED_SERVICE,
     }
 )
@@ -125,6 +127,10 @@ def build_programme_relationship_evidence(
     if relationship_type == RELATIONSHIP_CONFIGURED_SEED:
         if source_origin is not None:
             raise ValueError("Configured programme seed must not have a source origin.")
+        canonical_source = None
+    elif relationship_type == RELATIONSHIP_OBSERVED_SERVICE:
+        if source_origin is not None:
+            raise ValueError("Observed programme service must not have a source origin.")
         canonical_source = None
     else:
         if source_origin is None:

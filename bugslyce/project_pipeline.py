@@ -2353,8 +2353,24 @@ def _step_runners(
             else:
                 state = build_project_state(output_dir)
                 from bugslyce.recon.http_metadata import discover_http_origins
+
+                discovered_http_origins = tuple(
+                    discover_http_origins(state, target)
+                )
+                configured_http_seeds = (
+                    getattr(project_runtime, "configured_http_seeds", None) or ()
+                )
                 project_runtime.bind_http_origins(
-                    tuple(discover_http_origins(state, target))
+                    tuple(
+                        sorted(
+                            set(
+                                (
+                                    *configured_http_seeds,
+                                    *discovered_http_origins,
+                                )
+                            )
+                        )
+                    )
                 )
         result = (
             run_http_metadata_workflow(

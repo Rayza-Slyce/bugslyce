@@ -26,8 +26,10 @@ def build_http_metadata_commands(
     commands: list[ReconCommand] = []
     for service_index, origin in enumerate(origins, start=1):
         parsed = urlparse(origin)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname != target:
-            raise ValueError(f"Discovered HTTP origin is not valid for target '{target}': {origin}")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(
+                f"Discovered HTTP origin is not a valid HTTP(S) origin: {origin}"
+            )
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         safe_host = _safe_host(parsed.hostname)
         normalized_origin = urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
@@ -122,8 +124,8 @@ def validate_live_http_metadata_command(
         if not _output_is_inside(command.output_file, output_dir):
             errors.append("output_file must stay inside the selected input directory.")
         parsed = urlparse(argv[url_index])
-        if parsed.scheme not in {"http", "https"} or parsed.hostname != target:
-            errors.append("Curl metadata URL must use the discovered target host.")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            errors.append("Curl metadata URL must use an HTTP(S) origin.")
         origin = urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
         if origin not in allowed_origins:
             errors.append("Curl metadata URL must belong to a discovered HTTP service.")

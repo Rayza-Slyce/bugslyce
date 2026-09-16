@@ -114,23 +114,31 @@ class BugBountyProjectRuntime:
             raise ValueError("Engagement policy is incomplete for project execution.")
         if self.target_decision.outcome != OUTCOME_ALLOWED:
             raise ValueError("Project target is not authorised by programme scope.")
+        canonical_configured_http_seeds = (
+            _canonical_authorised_http_seed_origins(
+                self.programme_scope_policy,
+                self.configured_http_seeds,
+            )
+            if self.configured_http_seeds is not None
+            else None
+        )
+        if (
+            self.configured_http_seeds is not None
+            and self.configured_http_seeds != canonical_configured_http_seeds
+        ):
+            raise ValueError(
+                "Configured HTTP seeds do not match canonical programme-scope authority."
+            )
         if self.tcp_discovery_skipped:
             expected_http_origins = (
-                _canonical_authorised_http_seed_origins(
-                    self.programme_scope_policy,
-                    self.configured_http_seeds,
-                )
-                if self.configured_http_seeds is not None
+                canonical_configured_http_seeds
+                if canonical_configured_http_seeds is not None
                 else _explicit_http_seed_origins(
                     self.programme_scope_policy,
                     self.target_decision,
                 )
             )
         else:
-            if self.configured_http_seeds is not None:
-                raise ValueError(
-                    "Configured HTTP seeds currently require TCP-skip project execution."
-                )
             expected_http_origins = ()
         if self.initial_http_origins != expected_http_origins:
             raise ValueError(
@@ -433,18 +441,19 @@ def build_bug_bounty_project_runtime(
             "Project target is not authorised by programme scope "
             f"({decision.reason_code})."
         )
-    if configured_http_seeds is not None and policy.tcp_discovery_policy != TCP_SKIP:
-        raise ValueError(
-            "Configured HTTP seeds currently require TCP-skip project execution."
+    canonical_configured_http_seeds = (
+        _canonical_authorised_http_seed_origins(
+            programme_scope,
+            configured_http_seeds,
         )
+        if configured_http_seeds is not None
+        else None
+    )
 
     if policy.tcp_discovery_policy == TCP_SKIP:
         initial_http_origins = (
-            _canonical_authorised_http_seed_origins(
-                programme_scope,
-                configured_http_seeds,
-            )
-            if configured_http_seeds is not None
+            canonical_configured_http_seeds
+            if canonical_configured_http_seeds is not None
             else _explicit_http_seed_origins(programme_scope, decision)
         )
     else:
@@ -467,11 +476,7 @@ def build_bug_bounty_project_runtime(
         target_decision=decision,
         initial_http_origins=initial_http_origins,
         capabilities=selected_capabilities,
-        configured_http_seeds=(
-            initial_http_origins
-            if configured_http_seeds is not None
-            else None
-        ),
+        configured_http_seeds=canonical_configured_http_seeds,
         ipv4_resolver=ipv4_resolver,
         process_runner=process_runner,
     )
