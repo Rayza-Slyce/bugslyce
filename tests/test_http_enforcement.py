@@ -13,7 +13,7 @@ import re
 import socket
 import ssl
 import threading
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler
 
 import pytest
@@ -4450,6 +4450,47 @@ def test_urllib_transport_uses_the_same_capture_contract(
     assert result.body == b"dir"
     assert result.capture.body == b"di"
     assert result.capture.body_capture_state == "truncated"
+
+
+def test_urllib_transport_normalises_urlerror_timeout_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = _RecordingOpener(error=URLError(TimeoutError("timed out")))
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "build_opener",
+        lambda *_handlers: opener,
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        UrllibHTTPTransport()(_transport_request())
+
+    assert exc_info.value.category == "timeout"
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_category"),
+    (
+        pytest.param(OSError("connection refused"), "transport_error", id="transport"),
+        pytest.param(ssl.SSLError("certificate failure"), "tls_error", id="tls"),
+    ),
+)
+def test_urllib_transport_normalises_urlerror_reason_categories(
+    monkeypatch: pytest.MonkeyPatch,
+    reason: BaseException,
+    expected_category: str,
+) -> None:
+    opener = _RecordingOpener(error=URLError(reason))
+    monkeypatch.setattr(
+        http_enforcement_module,
+        "build_opener",
+        lambda *_handlers: opener,
+    )
+
+    with pytest.raises(HTTPTransportFailure) as exc_info:
+        UrllibHTTPTransport()(_transport_request())
+
+    assert exc_info.value.category == expected_category
 
 
 @pytest.mark.parametrize(

@@ -23,7 +23,7 @@ from time import monotonic as system_monotonic
 from time import sleep as system_sleep
 from typing import Callable, Iterator, Protocol
 import unicodedata
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import (
     HTTPHandler,
@@ -2089,6 +2089,12 @@ class UrllibHTTPTransport:
             response = opener.open(urllib_request, timeout=request.timeout_seconds)
         except HTTPError as error:
             response = error
+        except URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise HTTPTransportFailure("timeout") from None
+            if isinstance(error.reason, ssl.SSLError):
+                raise HTTPTransportFailure("tls_error") from None
+            raise HTTPTransportFailure("transport_error") from None
         try:
             result = _transport_response_from_received(response, request)
         finally:
