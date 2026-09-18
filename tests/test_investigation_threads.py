@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 from types import SimpleNamespace
 
@@ -32,6 +33,7 @@ from bugslyce.recon.deep_source_route_collector import (
     DeepSourceRouteCollectionResult,
 )
 from bugslyce.recon.investigation_threads import (
+    InvestigationThread,
     build_investigation_threads,
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
@@ -889,6 +891,59 @@ def test_standard_thread_renderers_include_context_guidance_without_reordering()
     ) < runbook_markdown.index(
         threads[1].thread_id
     )
+
+
+def test_renderers_separate_subsumed_support_from_primary_attention() -> None:
+    parent = InvestigationThread(
+        thread_id="THREAD-" + "a" * 64,
+        title="Primary account workflow",
+        priority="high",
+        category="account_workflow",
+        summary="Primary workflow summary.",
+        why_it_matters="Primary workflow rationale.",
+        related_endpoints=("https://app.example.test/login",),
+        related_evidence_ids=("EVID-PARENT",),
+        related_candidate_ids=(),
+        related_lead_ids=(),
+        suggested_manual_review_order=("Review the workflow.",),
+        kill_switch_guidance=None,
+    )
+    child = replace(
+        parent,
+        thread_id="THREAD-" + "b" * 64,
+        title="Fetched login child",
+        priority="medium",
+        category="application_interface",
+        summary="Generic fetched page.",
+        why_it_matters="Generic page context.",
+        related_evidence_ids=("EVID-CHILD",),
+        suggested_manual_review_order=("Review retained page evidence.",),
+        subsumed_by_thread_id=parent.thread_id,
+        subsumption_reason=(
+            "Generic fetched-page review is covered by the broader account workflow."
+        ),
+    )
+    threads = (parent, child)
+
+    markdown = render_investigation_threads_markdown(threads)
+    runbook = render_standard_investigation_workflow_runbook_section(threads)
+
+    primary_markdown, supporting_markdown = markdown.split(
+        "### Subsumed Supporting Threads",
+        1,
+    )
+
+    assert parent.title in primary_markdown
+    assert child.title not in primary_markdown
+
+    assert child.title in supporting_markdown
+    assert child.thread_id in supporting_markdown
+    assert parent.thread_id in supporting_markdown
+    assert child.subsumption_reason in supporting_markdown
+    assert "EVID-CHILD" in supporting_markdown
+
+    assert parent.title in runbook
+    assert child.title not in runbook
 
 
 def test_renderer_includes_core_thread_fields_and_empty_state() -> None:

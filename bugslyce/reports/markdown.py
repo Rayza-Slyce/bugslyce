@@ -24,7 +24,10 @@ from bugslyce.reports.operator_summary import (
     OperatorSummaryLead,
     build_operator_summary,
 )
-from bugslyce.recon.investigation_threads import InvestigationThread
+from bugslyce.recon.investigation_threads import (
+    InvestigationThread,
+    primary_investigation_threads,
+)
 from bugslyce.reports.operator_report_view import OperatorReportView
 from bugslyce.reports.operator_brief import (
     OperatorBriefView,
@@ -171,7 +174,10 @@ def _operator_summary(
         )
     lines.extend(["## Operator Summary", "", "### Review First", ""])
     if investigation_threads is not None:
-        if not investigation_threads:
+        primary_threads = primary_investigation_threads(
+            investigation_threads
+        )
+        if not primary_threads:
             lines.extend(
                 [
                     "No prioritised review item was produced. Review the retained evidence "
@@ -179,7 +185,7 @@ def _operator_summary(
                     "",
                 ]
             )
-        for position, thread in enumerate(investigation_threads, start=1):
+        for position, thread in enumerate(primary_threads, start=1):
             context = (
                 context_index.primary_by_anchor_id.get(thread.thread_id)
                 if context_index is not None else None

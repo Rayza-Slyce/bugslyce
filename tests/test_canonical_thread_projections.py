@@ -137,6 +137,64 @@ def test_canonical_projection_preserves_successful_deep_content_attention() -> N
     assert legacy.title in report.split("### Low-Signal / Avoid Rabbit Holes", 1)[0]
 
 
+def test_subsumed_thread_is_not_projected_as_primary_operator_attention() -> None:
+    parent = replace(
+        _thread("a", "Primary account workflow"),
+        category="account_workflow",
+    )
+    child = replace(
+        _thread("b", "Fetched login child"),
+        related_endpoints=("https://app.example.test/login",),
+        related_evidence_ids=("EVID-CHILD",),
+        subsumed_by_thread_id=parent.thread_id,
+        subsumption_reason=(
+            "Generic fetched-page review is covered by the broader account workflow."
+        ),
+    )
+    threads = (parent, child)
+
+    report = render_markdown_report(
+        _state(),
+        [],
+        operator_summary=_legacy(),
+        investigation_threads=threads,
+    )
+    review_first = report.split("### Review First", 1)[1].split(
+        "### Low-Signal / Avoid Rabbit Holes",
+        1,
+    )[0]
+
+    assert parent.title in review_first
+    assert child.title not in review_first
+
+    from bugslyce.project_pipeline import (
+        PipelineCompletionSummary,
+        _render_compact_run_summary,
+    )
+    from bugslyce.reports.operator_report_view import build_operator_report_view
+
+    view = build_operator_report_view(
+        _legacy(),
+        investigation_threads=threads,
+    )
+
+    assert view.primary_anchor_ids == (parent.thread_id,)
+
+    terminal = _render_compact_run_summary(
+        PipelineCompletionSummary(
+            collection_confidence_notices=(),
+            operator_summary=_legacy(),
+            operator_report_view=view,
+            investigation_threads=threads,
+        )
+    )
+
+    assert terminal is not None
+    terminal_text = "\n".join(terminal)
+    assert parent.thread_id in terminal_text
+    assert child.thread_id not in terminal_text
+
+
 def test_empty_canonical_review_first_has_a_conservative_message() -> None:
     report = render_markdown_report(
         _state(), [], operator_summary=OperatorSummary(review_first=[], low_signal=[], coverage=[]),

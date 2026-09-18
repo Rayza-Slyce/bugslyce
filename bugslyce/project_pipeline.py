@@ -181,6 +181,7 @@ from bugslyce.recon.http_route_relationships import (
 from bugslyce.recon.investigation_threads import (
     InvestigationThread,
     build_investigation_threads,
+    primary_investigation_threads,
     render_investigation_threads_markdown,
     render_standard_investigation_workflow_runbook_section,
 )
@@ -1300,19 +1301,22 @@ def _render_compact_run_summary(
 
     lines.extend(["", "Review first:"])
     if investigation_threads is not None:
-        for position, thread in enumerate(investigation_threads[:5], start=1):
+        primary_threads = primary_investigation_threads(
+            investigation_threads
+        )
+        for position, thread in enumerate(primary_threads[:5], start=1):
             lines.extend(
                 _terminal_bullet(
                     f"{position}. [{thread.thread_id}] {thread.title}: {thread.why_it_matters}"
                 )
             )
-        remaining = len(investigation_threads) - 5
+        remaining = len(primary_threads) - 5
         if remaining > 0:
             noun = "item" if remaining == 1 else "items"
             lines.append(
                 f"... and {remaining} more prioritised {noun} in the full report."
             )
-        if not investigation_threads:
+        if not primary_threads:
             lines.extend(
                 _terminal_bullet(
                     "No prioritised review item was produced. Review the full report and "

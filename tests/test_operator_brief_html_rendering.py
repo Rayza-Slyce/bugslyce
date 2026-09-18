@@ -267,6 +267,61 @@ def test_persisted_canonical_threads_own_html_priority_identity_and_order(
     )
 
 
+def test_subsumed_canonical_thread_moves_from_html_priority_to_searchable_support(
+    tmp_path: Path,
+) -> None:
+    parent = replace(
+        _canonical_thread(
+            "a",
+            "HTML PRIMARY ACCOUNT WORKFLOW",
+            "http://blog.thm/account/",
+        ),
+        category="account_workflow",
+    )
+    child = replace(
+        _canonical_thread(
+            "b",
+            "HTML SUBSUMED FETCHED LOGIN",
+            "http://blog.thm/login/",
+        ),
+        subsumed_by_thread_id=parent.thread_id,
+        subsumption_reason=(
+            "Generic fetched-page review is covered by the broader account workflow."
+        ),
+    )
+    threads = (parent, child)
+
+    model = build_html_report_model(
+        _canonical_thread_pack(tmp_path, threads)
+    )
+    html = render_html_report(model)
+
+    primary = html.split(
+        '<section id="investigation-priorities"',
+        1,
+    )[1].split("</section>", 1)[0]
+
+    technical = html.split(
+        '<section id="technical-investigation-evidence"',
+        1,
+    )[1].split("</section>", 1)[0]
+
+    assert model.investigation_threads == threads
+    assert model.operator_report_view.primary_anchor_ids == (
+        parent.thread_id,
+    )
+
+    assert parent.title in primary
+    assert child.title not in primary
+    assert child.thread_id not in primary
+
+    assert "Subsumed supporting threads" in technical
+    assert child.title in technical
+    assert child.thread_id in technical
+    assert parent.thread_id in technical
+    assert child.subsumption_reason in technical
+
+
 def test_present_empty_canonical_snapshot_does_not_restore_legacy_html_priority(
     tmp_path: Path,
 ) -> None:

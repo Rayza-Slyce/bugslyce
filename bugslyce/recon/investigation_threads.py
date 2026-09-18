@@ -194,6 +194,45 @@ def _workflow_thread(lead: WorkflowLead) -> _ThreadDraft:
     )
 
 
+
+def primary_investigation_threads(
+    threads: Sequence[InvestigationThread],
+) -> tuple[InvestigationThread, ...]:
+    """Project canonical primary attention without re-inferring subsumption."""
+
+    if any(not isinstance(thread, InvestigationThread) for thread in threads):
+        raise TypeError(
+            "primary investigation-thread projection requires "
+            "InvestigationThread values"
+        )
+
+    by_id = {thread.thread_id: thread for thread in threads}
+    for thread in threads:
+        parent_id = thread.subsumed_by_thread_id
+        if parent_id is None:
+            continue
+        if parent_id == thread.thread_id or parent_id not in by_id:
+            raise ValueError(
+                "investigation thread has an invalid subsumption parent"
+            )
+
+    return tuple(
+        thread
+        for thread in threads
+        if thread.subsumed_by_thread_id is None
+    )
+
+
+def _subsumed_investigation_threads(
+    threads: Sequence[InvestigationThread],
+) -> tuple[InvestigationThread, ...]:
+    primary_investigation_threads(threads)
+    return tuple(
+        thread
+        for thread in threads
+        if thread.subsumed_by_thread_id is not None
+    )
+
 def render_investigation_threads_markdown(
     threads: Sequence[InvestigationThread],
     *,
@@ -212,11 +251,20 @@ def render_investigation_threads_markdown(
     ]
     if engagement_context is not None:
         lines.extend([engagement_context_review_guidance(engagement_context), ""])
-    if not threads:
-        lines.extend(["No investigation threads were generated from the provided evidence.", ""])
+
+    primary_threads = primary_investigation_threads(threads)
+    subsumed_threads = _subsumed_investigation_threads(threads)
+
+    if not primary_threads:
+        lines.extend(
+            [
+                "No investigation threads were generated from the provided evidence.",
+                "",
+            ]
+        )
         return "\n".join(lines).rstrip() + "\n"
 
-    for thread in threads:
+    for thread in primary_threads:
         lines.extend(
             [
                 f"### {thread.thread_id}: {thread.title}",
@@ -251,6 +299,38 @@ def render_investigation_threads_markdown(
         if thread.kill_switch_guidance:
             lines.append(f"- Kill-switch guidance: {thread.kill_switch_guidance}")
         lines.append("")
+
+    if subsumed_threads:
+        lines.extend(["### Subsumed Supporting Threads", ""])
+
+        for thread in subsumed_threads:
+            lines.extend(
+                [
+                    f"#### {thread.thread_id}: {thread.title}",
+                    "",
+                    f"- Subsumed by: `{thread.subsumed_by_thread_id}`",
+                    f"- Reason: {thread.subsumption_reason}",
+                ]
+            )
+
+            if thread.related_endpoints:
+                lines.append("- Related endpoints:")
+                lines.extend(
+                    f"  - `{endpoint}`"
+                    for endpoint in thread.related_endpoints
+                )
+
+            if thread.related_evidence_ids:
+                lines.append(
+                    "- Related evidence IDs: "
+                    + ", ".join(
+                        f"`{item}`"
+                        for item in thread.related_evidence_ids
+                    )
+                )
+
+            lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -276,7 +356,10 @@ def render_standard_investigation_workflow_runbook_section(
     ]
     if engagement_context is not None:
         lines.extend([engagement_context_review_guidance(engagement_context), ""])
-    if not threads:
+
+    primary_threads = primary_investigation_threads(threads)
+
+    if not primary_threads:
         lines.extend(
             [
                 (
@@ -288,7 +371,7 @@ def render_standard_investigation_workflow_runbook_section(
         )
         return "\n".join(lines).rstrip() + "\n"
 
-    for thread in threads:
+    for thread in primary_threads:
         lines.extend(
             [
                 f"### {thread.thread_id}: {thread.title}",

@@ -14,7 +14,10 @@ from urllib.parse import urlsplit
 
 from bugslyce.core.models import HTTPArtifact, ProjectState
 from bugslyce.recon.application_service_model import ApplicationServiceModel
-from bugslyce.recon.investigation_threads import InvestigationThread
+from bugslyce.recon.investigation_threads import (
+    InvestigationThread,
+    primary_investigation_threads,
+)
 from bugslyce.recon.deep_source_route_collector import (
     render_deep_source_route_skip_reason,
 )
@@ -409,12 +412,15 @@ def _investigation_priorities_section(
     context_index: InvestigationContextPresentationIndex,
 ) -> str:
     if model.investigation_threads is not None:
+        primary_threads = primary_investigation_threads(
+            model.investigation_threads
+        )
         content = (
             "".join(
                 _canonical_investigation_thread(thread, model, context_index)
-                for thread in model.investigation_threads
+                for thread in primary_threads
             )
-            if model.investigation_threads
+            if primary_threads
             else _empty(
                 "No canonical investigation priority was recorded. Review retained "
                 "supporting evidence and collection limitations."
@@ -660,6 +666,16 @@ def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
                 ),
             )
         )
+    subsumed_threads = (
+        tuple(
+            thread
+            for thread in model.investigation_threads
+            if thread.subsumed_by_thread_id is not None
+        )
+        if model.investigation_threads is not None
+        else ()
+    )
+
     content = (
         '<p class="section-note">Canonical technical subjects and provenance are retained '
         "for supporting review. These disclosures are not a second priority ranking.</p>"
@@ -670,11 +686,47 @@ def _technical_investigation_evidence_section(model: HtmlReportModel) -> str:
             )
             for item in subjects
         )
+        + _subsumed_canonical_threads(subsumed_threads)
     )
     return _section(
         "technical-investigation-evidence",
         "Technical investigation evidence",
         content,
+    )
+
+def _subsumed_canonical_threads(
+    threads: tuple[InvestigationThread, ...],
+) -> str:
+    if not threads:
+        return ""
+
+    rows = "".join(
+        '<details class="record searchable subsumed-investigation-thread">'
+        f'<summary>{_h(thread.title)}</summary>'
+        '<dl class="investigation-meta">'
+        f'<dt>Thread ID</dt><dd>{_h(thread.thread_id)}</dd>'
+        f'<dt>Subsumed by</dt><dd>'
+        f'{_h(thread.subsumed_by_thread_id or "")}</dd>'
+        f'<dt>Reason</dt><dd>{_h(thread.subsumption_reason or "")}</dd>'
+        f'<dt>Endpoints</dt><dd>'
+        f'{_render_value(_compact_list(thread.related_endpoints, "endpoints"))}'
+        '</dd>'
+        f'<dt>Evidence</dt><dd>'
+        f'{_render_value(_compact_list(thread.related_evidence_ids, "evidence IDs"))}'
+        '</dd>'
+        '</dl></details>'
+        for thread in threads
+    )
+
+    return (
+        '<div class="subsumed-investigation-threads searchable">'
+        '<h3>Subsumed supporting threads</h3>'
+        '<p class="section-note">'
+        'These canonical threads remain auditable and searchable, '
+        'but their operator attention is covered by the referenced '
+        'primary thread.</p>'
+        + rows
+        + '</div>'
     )
 
 

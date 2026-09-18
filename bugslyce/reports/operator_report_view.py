@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from bugslyce.recon.investigation_threads import InvestigationThread
+from bugslyce.recon.investigation_threads import (
+    InvestigationThread,
+    primary_investigation_threads,
+)
 
 from bugslyce.reports.analysis_coverage import (
     AnalysisCoverageExecutionEvidence,
@@ -55,7 +58,8 @@ def build_operator_report_view(
     return OperatorReportView(
         investigation_context=(
             build_primary_investigation_contexts_for_threads(
-                investigation_threads, investigation_sources,
+                primary_investigation_threads(investigation_threads),
+                investigation_sources,
             )
             if investigation_threads is not None
             else build_primary_investigation_contexts(
