@@ -78,6 +78,7 @@ def test_dynamic_account_routes_remain_supported() -> None:
     )
 
     assert len(leads) == 1
+    assert leads[0].priority == "medium"
     assert all(url in leads[0].covered_urls for url in urls)
 
 
@@ -485,6 +486,7 @@ def test_account_workflow_retains_typed_form_observations_without_values() -> No
 
     lead = _leads_for(_state(), "account_workflow", orchestration)[0]
 
+    assert lead.priority == "high"
     assert secret_value not in lead.covered_urls
     assert secret_value not in lead.summary
     (

@@ -569,6 +569,14 @@ def _account_workflow_leads(
     return tuple(leads)
 
 
+def _is_password_field_name(value: str) -> bool:
+    canonical = value.strip().casefold()
+    return (
+        "password" in canonical
+        or canonical in {"pass", "passwd", "passcode", "pwd"}
+    )
+
+
 def _account_origin_workflow_lead(
     origin: HttpOrigin,
     observations: list[_AccountObservation],
@@ -616,9 +624,19 @@ def _account_origin_workflow_lead(
             sorted(fields),
             max_items=_MAX_FIELD_NAMES,
         )
+    strong_evidence = (
+        counts["authentication_redirect"] > 0
+        or counts["access_boundary"] > 0
+        or any(
+            item.kind == "observed_form"
+            and any(method.casefold() == "post" for method in item.methods)
+            and any(_is_password_field_name(name) for name in item.field_names)
+            for item in observations
+        )
+    )
     return WorkflowLead(
         title="Authentication and account workflow review",
-        priority="high",
+        priority="high" if strong_evidence else "medium",
         category="account_workflow",
         summary=summary,
         why_it_matters=(
