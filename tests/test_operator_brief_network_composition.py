@@ -710,7 +710,7 @@ def test_composition_resolves_service_member_to_normalized_observation() -> None
     service = _service(
         host="closure.example.test",
         port=8080,
-        state="filtered",
+        state="open",
         service="http-proxy",
         product="Closure Proxy",
         version="7.4",
@@ -730,7 +730,7 @@ def test_composition_resolves_service_member_to_normalized_observation() -> None
     assert observation.host == "closure.example.test"
     assert observation.port == 8080
     assert observation.protocol == "tcp"
-    assert observation.state == "filtered"
+    assert observation.state == "open"
     assert observation.service == "http-proxy"
     assert observation.product == "Closure Proxy"
     assert observation.version == "7.4"
@@ -739,6 +739,28 @@ def test_composition_resolves_service_member_to_normalized_observation() -> None
     assert observation.artefact_references == ("nmap-service-closure.txt",)
     assert len(_facts(composition, OperatorBriefFactKind.SERVICE)) == 1
 
+
+def test_filtered_service_label_is_not_promoted_to_observed_service_fact() -> None:
+    api = _api()
+    service = _service(
+        host="playstation.example.test",
+        port=9090,
+        state="filtered",
+        service="zeus-admin",
+        evidence_ids=["EVID-FILTERED-9090"],
+        source_file="nmap-allports.txt",
+    )
+
+    composition = _composition(api, _state(services=(service,)))
+
+    assert len(composition.services) == 1
+    observation = composition.services[0]
+    assert observation.state == "filtered"
+    assert observation.service == "zeus-admin"
+    assert observation.evidence_ids == ("EVID-FILTERED-9090",)
+    assert observation.artefact_references == ("nmap-allports.txt",)
+    assert not _facts(composition, OperatorBriefFactKind.SERVICE)
+    assert not composition.subjects
 
 def test_composition_member_ids_have_complete_referential_integrity() -> None:
     api = _api()

@@ -324,9 +324,14 @@ def compose_operator_brief_network(
         observation.observation_id: _smb_fact(observation)
         for observation in normalized.smb_shares
     }
+    promoted_services = tuple(
+        observation
+        for observation in normalized.services
+        if observation.state == "open"
+    )
     service_facts = {
         observation.observation_id: _service_fact(observation)
-        for observation in normalized.services
+        for observation in promoted_services
     }
     smb_by_surface: dict[
         tuple[str, int],
@@ -361,7 +366,7 @@ def compose_operator_brief_network(
             )
         )
 
-    for service in normalized.services:
+    for service in promoted_services:
         if service.observation_id in matched_service_ids:
             continue
         fact = service_facts[service.observation_id]
