@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from types import SimpleNamespace
 
 from bugslyce.core.models import (
     Candidate,
@@ -135,6 +136,93 @@ def test_hidden_path_evidence_generates_hidden_path_thread() -> None:
     assert "Review the collected response for the discovered path." in (
         thread.suggested_manual_review_order
     )
+
+
+def test_repeated_response_family_weakens_hidden_path_attention() -> None:
+    urls = (
+        "http://example.test/api/dev",
+        "http://example.test/api/test",
+    )
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=500,
+                content_length=42,
+                redirect_location=None,
+                source="native",
+                evidence_ids=[f"EVID-PATH-{index}"],
+                tags=[],
+            )
+            for index, url in enumerate(urls, start=1)
+        ]
+    )
+    similarity = SimpleNamespace(
+        groups=(
+            SimpleNamespace(
+                category="request_reflecting_template_group",
+                requested_urls=urls,
+                evidence_ids=("EVID-FAMILY-1", "EVID-FAMILY-2"),
+            ),
+        )
+    )
+
+    thread = build_investigation_threads(
+        state,
+        response_similarity_review=similarity,
+    )[0]
+
+    assert thread.priority == "low"
+    assert thread.related_endpoints == urls
+    assert set(thread.related_evidence_ids) == {
+        "EVID-PATH-1",
+        "EVID-PATH-2",
+        "EVID-FAMILY-1",
+        "EVID-FAMILY-2",
+    }
+    assert "response-family context" in thread.summary
+    assert "weakens the lexical path-name signal" in thread.why_it_matters
+    assert thread.limitation_codes == (
+        "response_family_weakens_path_name_signal",
+    )
+
+
+def test_query_variant_family_does_not_weaken_query_free_hidden_path() -> None:
+    url = "http://example.test/api/dev"
+    state = _project_state(
+        discovered_paths=[
+            DiscoveredPath(
+                url=url,
+                status_code=200,
+                content_length=42,
+                redirect_location=None,
+                source="native",
+                evidence_ids=["EVID-PATH"],
+                tags=[],
+            )
+        ]
+    )
+    similarity = SimpleNamespace(
+        groups=(
+            SimpleNamespace(
+                category="candidate_default_template_group",
+                requested_urls=(
+                    url + "?view=one",
+                    url + "?view=two",
+                ),
+                evidence_ids=("EVID-QUERY",),
+            ),
+        )
+    )
+
+    thread = build_investigation_threads(
+        state,
+        response_similarity_review=similarity,
+    )[0]
+
+    assert thread.priority == "medium"
+    assert thread.limitation_codes == ()
+    assert "EVID-QUERY" not in thread.related_evidence_ids
 
 
 def test_encoded_or_source_evidence_generates_artefact_thread() -> None:

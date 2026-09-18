@@ -3397,6 +3397,11 @@ def _write_interpretation_report_if_needed(
         compatibility_summary_leads=(
             operator_summary.ranked_leads if operator_summary is not None else ()
         ),
+        response_similarity_review=(
+            getattr(orchestration, "response_similarity_review", None)
+            if orchestration is not None
+            else None
+        ),
     )
     if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
         thread_path = write_investigation_threads_artifact(output_dir, threads)
@@ -3845,6 +3850,11 @@ def _build_standard_investigation_runbook_section_if_needed(
             candidates,
             assembly.review_leads,
             workflow_leads=workflow_leads,
+            response_similarity_review=(
+                getattr(orchestration, "response_similarity_review", None)
+                if orchestration is not None
+                else None
+            ),
         )
     investigation_section = render_standard_investigation_workflow_runbook_section(
         threads,

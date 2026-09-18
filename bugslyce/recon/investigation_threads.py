@@ -15,6 +15,11 @@ from bugslyce.recon.application_service_composition import (
     ApplicationServiceSupportBasis,
 )
 from bugslyce.recon.application_service_model import ApplicationServiceModel
+from bugslyce.recon.deep_response_similarity_review import (
+    DeepResponseSimilarityReview,
+    PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES,
+)
+from bugslyce.recon.http_route_relationships import canonical_relationship_url
 from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.reports.artifact_classifier import (
     LIKELY_NOISE,
@@ -120,13 +125,18 @@ def build_investigation_threads(
     workflow_leads: Sequence[WorkflowLead] = (),
     application_service_model: ApplicationServiceModel | None = None,
     compatibility_summary_leads: Sequence[CompatibilitySummaryLead] = (),
+    response_similarity_review: DeepResponseSimilarityReview | None = None,
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
 
     drafts: list[_ThreadDraft] = []
     drafts.extend(_workflow_thread(lead) for lead in workflow_leads)
     drafts.extend(_high_port_http_threads(project_state, candidates, review_leads))
-    hidden_path = _hidden_path_thread(project_state, candidates)
+    hidden_path = _hidden_path_thread(
+        project_state,
+        candidates,
+        response_similarity_review,
+    )
     if hidden_path is not None:
         drafts.append(hidden_path)
     encoded = _encoded_or_source_thread(project_state, candidates, review_leads)
@@ -422,9 +432,48 @@ def _high_port_http_thread_for_origins(
     )
 
 
+def _response_family_weakening_for_endpoints(
+    endpoints: tuple[str, ...],
+    response_similarity_review: DeepResponseSimilarityReview | None,
+) -> tuple[bool, tuple[str, ...]]:
+    if response_similarity_review is None or not endpoints:
+        return False, ()
+
+    evidence_by_url: dict[str, set[str]] = {}
+    for group in response_similarity_review.groups:
+        if group.category not in PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES:
+            continue
+        group_evidence_ids = _unique_sorted(group.evidence_ids)
+        if not group_evidence_ids:
+            continue
+        for requested_url in group.requested_urls:
+            canonical_url = canonical_relationship_url(requested_url)
+            if canonical_url:
+                evidence_by_url.setdefault(canonical_url, set()).update(
+                    group_evidence_ids
+                )
+
+    endpoint_urls: list[str] = []
+    for endpoint in endpoints:
+        canonical_url = canonical_relationship_url(endpoint)
+        if not canonical_url:
+            return False, ()
+        endpoint_urls.append(canonical_url)
+
+    if not all(url in evidence_by_url for url in endpoint_urls):
+        return False, ()
+
+    return True, _unique_sorted(
+        evidence_id
+        for url in endpoint_urls
+        for evidence_id in evidence_by_url[url]
+    )
+
+
 def _hidden_path_thread(
     project_state: ProjectState,
     candidates: Sequence[Candidate],
+    response_similarity_review: DeepResponseSimilarityReview | None = None,
 ) -> _ThreadDraft | None:
     endpoints: list[str] = []
     evidence_ids: list[str] = []
@@ -445,18 +494,49 @@ def _hidden_path_thread(
 
     if not endpoints and not related_candidates:
         return None
+
+    related_endpoints = _unique_sorted(endpoints)
+    weakened, weakening_evidence_ids = _response_family_weakening_for_endpoints(
+        related_endpoints,
+        response_similarity_review,
+    )
+    if weakened:
+        evidence_ids.extend(weakening_evidence_ids)
+
     return _ThreadDraft(
         title="Discovered hidden-path review",
-        priority=_highest_priority([*(item.priority for item in related_candidates), "medium"]),
+        priority=(
+            "low"
+            if weakened
+            else _highest_priority(
+                [*(item.priority for item in related_candidates), "medium"]
+            )
+        ),
         category="discovered_content",
         summary=(
-            "Hidden-looking discovered paths may deserve bounded manual review "
-            "when linked to stronger context."
+            "Hidden-looking discovered paths are retained, but repeated "
+            "response-family context weakens their standalone lexical signal."
+            if weakened
+            else (
+                "Hidden-looking discovered paths may deserve bounded manual review "
+                "when linked to stronger context."
+            )
         ),
-        why_it_matters="Hidden-looking paths can concentrate useful context, but many are generic noise.",
-        related_endpoints=_unique_sorted(endpoints),
+        why_it_matters=(
+            "Repeated response-family context weakens the lexical path-name signal; "
+            "the retained routes remain useful as review evidence but should not be "
+            "treated as distinct application behaviour by path name alone."
+            if weakened
+            else (
+                "Hidden-looking paths can concentrate useful context, but many are "
+                "generic noise."
+            )
+        ),
+        related_endpoints=related_endpoints,
         related_evidence_ids=_unique_sorted(evidence_ids),
-        related_candidate_ids=_unique_sorted(item.id for item in related_candidates),
+        related_candidate_ids=_unique_sorted(
+            item.id for item in related_candidates
+        ),
         related_lead_ids=(),
         suggested_manual_review_order=(
             "Review the collected response for the discovered path.",
@@ -464,7 +544,15 @@ def _hidden_path_thread(
             "Avoid repeated effort if the page is generic or unchanged.",
             "Record manual observations before escalating.",
         ),
-        kill_switch_guidance="Avoid repeated effort when hidden-looking paths are default, empty, or unchanged.",
+        kill_switch_guidance=(
+            "Avoid repeated effort when hidden-looking paths are default, "
+            "empty, or unchanged."
+        ),
+        limitation_codes=(
+            ("response_family_weakens_path_name_signal",)
+            if weakened
+            else ()
+        ),
     )
 
 
