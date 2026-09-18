@@ -13,16 +13,22 @@ from bugslyce.recon.investigation_threads import InvestigationThread
 
 
 INVESTIGATION_THREADS_FILENAME = "investigation_threads.json"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+_SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 _GENERATED_BY = "bugslyce.investigation_threads"
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _THREAD_ID = re.compile(r"THREAD-[0-9a-f]{64}\Z")
-_THREAD_KEYS = {
+_THREAD_KEYS_V1 = {
     "thread_id", "title", "priority", "category", "summary", "why_it_matters",
     "related_endpoints", "related_evidence_ids", "related_candidate_ids",
     "related_lead_ids", "suggested_manual_review_order", "kill_switch_guidance",
     "related_native_observation_ids", "related_application_relation_ids",
     "limitation_codes",
+}
+_THREAD_KEYS_V2 = {
+    *_THREAD_KEYS_V1,
+    "subsumed_by_thread_id",
+    "subsumption_reason",
 }
 
 
@@ -78,11 +84,18 @@ def _thread_to_dict(thread: InvestigationThread) -> dict[str, object]:
         "related_native_observation_ids": list(thread.related_native_observation_ids),
         "related_application_relation_ids": list(thread.related_application_relation_ids),
         "limitation_codes": list(thread.limitation_codes),
+        "subsumed_by_thread_id": thread.subsumed_by_thread_id,
+        "subsumption_reason": thread.subsumption_reason,
     }
 
 
-def _thread_from_dict(value: object, label: str) -> InvestigationThread:
-    item = _mapping(value, _THREAD_KEYS, label)
+def _thread_from_dict(
+    value: object,
+    label: str,
+    schema_version: int,
+) -> InvestigationThread:
+    keys = _THREAD_KEYS_V2 if schema_version == 2 else _THREAD_KEYS_V1
+    item = _mapping(value, keys, label)
     thread_id = _text(item["thread_id"], f"{label}.thread_id")
     if not _THREAD_ID.fullmatch(thread_id):
         raise ValueError("thread_id must be a semantic THREAD-<64 lowercase hex> value")
@@ -93,39 +106,153 @@ def _thread_from_dict(value: object, label: str) -> InvestigationThread:
         category=_text(item["category"], f"{label}.category"),
         summary=_text(item["summary"], f"{label}.summary"),
         why_it_matters=_text(item["why_it_matters"], f"{label}.why_it_matters"),
-        related_endpoints=_texts(item["related_endpoints"], f"{label}.related_endpoints"),
-        related_evidence_ids=_texts(item["related_evidence_ids"], f"{label}.related_evidence_ids"),
-        related_candidate_ids=_texts(item["related_candidate_ids"], f"{label}.related_candidate_ids"),
-        related_lead_ids=_texts(item["related_lead_ids"], f"{label}.related_lead_ids"),
-        suggested_manual_review_order=_texts(item["suggested_manual_review_order"], f"{label}.suggested_manual_review_order"),
-        kill_switch_guidance=_optional_text(item["kill_switch_guidance"], f"{label}.kill_switch_guidance"),
-        related_native_observation_ids=_texts(item["related_native_observation_ids"], f"{label}.related_native_observation_ids"),
-        related_application_relation_ids=_texts(item["related_application_relation_ids"], f"{label}.related_application_relation_ids"),
-        limitation_codes=_texts(item["limitation_codes"], f"{label}.limitation_codes"),
+        related_endpoints=_texts(
+            item["related_endpoints"],
+            f"{label}.related_endpoints",
+        ),
+        related_evidence_ids=_texts(
+            item["related_evidence_ids"],
+            f"{label}.related_evidence_ids",
+        ),
+        related_candidate_ids=_texts(
+            item["related_candidate_ids"],
+            f"{label}.related_candidate_ids",
+        ),
+        related_lead_ids=_texts(
+            item["related_lead_ids"],
+            f"{label}.related_lead_ids",
+        ),
+        suggested_manual_review_order=_texts(
+            item["suggested_manual_review_order"],
+            f"{label}.suggested_manual_review_order",
+        ),
+        kill_switch_guidance=_optional_text(
+            item["kill_switch_guidance"],
+            f"{label}.kill_switch_guidance",
+        ),
+        related_native_observation_ids=_texts(
+            item["related_native_observation_ids"],
+            f"{label}.related_native_observation_ids",
+        ),
+        related_application_relation_ids=_texts(
+            item["related_application_relation_ids"],
+            f"{label}.related_application_relation_ids",
+        ),
+        limitation_codes=_texts(
+            item["limitation_codes"],
+            f"{label}.limitation_codes",
+        ),
+        subsumed_by_thread_id=(
+            _optional_text(
+                item["subsumed_by_thread_id"],
+                f"{label}.subsumed_by_thread_id",
+            )
+            if schema_version == 2
+            else None
+        ),
+        subsumption_reason=(
+            _optional_text(
+                item["subsumption_reason"],
+                f"{label}.subsumption_reason",
+            )
+            if schema_version == 2
+            else None
+        ),
     )
 
 
-def investigation_threads_to_dict(threads: tuple[InvestigationThread, ...]) -> dict[str, object]:
+def _validate_subsumption_relations(
+    threads: tuple[InvestigationThread, ...],
+) -> None:
+    by_id = {thread.thread_id: thread for thread in threads}
+
+    for thread in threads:
+        parent_id = thread.subsumed_by_thread_id
+        if parent_id is None:
+            continue
+
+        if parent_id == thread.thread_id:
+            raise ValueError("investigation thread cannot subsume itself")
+
+        parent = by_id.get(parent_id)
+        if parent is None:
+            raise ValueError(
+                "investigation thread subsumption references an unknown parent"
+            )
+
+        if parent.subsumed_by_thread_id is not None:
+            raise ValueError(
+                "investigation thread subsumption may not be nested"
+            )
+
+
+def investigation_threads_to_dict(
+    threads: tuple[InvestigationThread, ...],
+) -> dict[str, object]:
     if not isinstance(threads, tuple):
-        raise TypeError("investigation thread snapshot must be an ordered tuple")
+        raise TypeError(
+            "investigation thread snapshot must be an ordered tuple"
+        )
+
     payload = [_thread_to_dict(thread) for thread in threads]
     ids = [thread["thread_id"] for thread in payload]
+
     if len(ids) != len(set(ids)):
-        raise ValueError("investigation thread snapshot has duplicate thread IDs")
-    return {"schema_version": _SCHEMA_VERSION, "generated_by": _GENERATED_BY, "threads": payload}
+        raise ValueError(
+            "investigation thread snapshot has duplicate thread IDs"
+        )
+
+    _validate_subsumption_relations(threads)
+
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "generated_by": _GENERATED_BY,
+        "threads": payload,
+    }
 
 
-def investigation_threads_from_dict(value: object) -> tuple[InvestigationThread, ...]:
-    item = _mapping(value, {"schema_version", "generated_by", "threads"}, "investigation thread snapshot")
-    if isinstance(item["schema_version"], bool) or item["schema_version"] != _SCHEMA_VERSION:
-        raise ValueError("investigation thread snapshot has an unsupported schema version")
+def investigation_threads_from_dict(
+    value: object,
+) -> tuple[InvestigationThread, ...]:
+    item = _mapping(
+        value,
+        {"schema_version", "generated_by", "threads"},
+        "investigation thread snapshot",
+    )
+
+    schema_version = item["schema_version"]
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version not in _SUPPORTED_SCHEMA_VERSIONS
+    ):
+        raise ValueError(
+            "investigation thread snapshot has an unsupported schema version"
+        )
+
     if _text(item["generated_by"], "generated_by") != _GENERATED_BY:
-        raise ValueError("investigation thread snapshot has an unsupported generator")
+        raise ValueError(
+            "investigation thread snapshot has an unsupported generator"
+        )
+
     if not isinstance(item["threads"], list):
         raise ValueError("threads must be a list")
-    threads = tuple(_thread_from_dict(raw, f"threads[{index}]") for index, raw in enumerate(item["threads"]))
+
+    threads = tuple(
+        _thread_from_dict(
+            raw,
+            f"threads[{index}]",
+            schema_version,
+        )
+        for index, raw in enumerate(item["threads"])
+    )
+
     if len({thread.thread_id for thread in threads}) != len(threads):
-        raise ValueError("investigation thread snapshot has duplicate thread IDs")
+        raise ValueError(
+            "investigation thread snapshot has duplicate thread IDs"
+        )
+
+    _validate_subsumption_relations(threads)
     return threads
 
 

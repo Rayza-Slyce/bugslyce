@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Protocol
 from urllib.parse import urlparse
@@ -96,6 +96,18 @@ class InvestigationThread:
     related_native_observation_ids: tuple[str, ...] = ()
     related_application_relation_ids: tuple[str, ...] = ()
     limitation_codes: tuple[str, ...] = ()
+    subsumed_by_thread_id: str | None = None
+    subsumption_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.subsumed_by_thread_id is None) != (self.subsumption_reason is None):
+            raise ValueError(
+                "investigation thread subsumption requires both parent ID and reason"
+            )
+        if self.subsumption_reason is not None and not self.subsumption_reason.strip():
+            raise ValueError(
+                "investigation thread subsumption reason must not be empty"
+            )
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,8 @@ class _ThreadDraft:
     related_native_observation_ids: tuple[str, ...] = ()
     related_application_relation_ids: tuple[str, ...] = ()
     limitation_codes: tuple[str, ...] = ()
+    attention_coverage_urls: tuple[str, ...] = ()
+    compatibility_lead_type: str | None = None
 
 
 def build_investigation_threads(
@@ -171,6 +185,11 @@ def _workflow_thread(lead: WorkflowLead) -> _ThreadDraft:
         kill_switch_guidance=(
             "Stop if the retained evidence does not support the grouped workflow; "
             "do not submit forms, attempt authentication, mutate parameters, or infer a vulnerability."
+        ),
+        attention_coverage_urls=(
+            _unique_sorted(lead.covered_urls)
+            if lead.category == "account_workflow"
+            else ()
         ),
     )
 
@@ -1189,6 +1208,7 @@ def _compatibility_summary_threads(
                 ),
                 identity_key=(lead_type, *subject),
                 limitation_codes=limitations,
+                compatibility_lead_type=lead_type,
             )
         )
 
@@ -1247,30 +1267,85 @@ def _semantic_thread_id(draft: _ThreadDraft) -> str:
     return f"THREAD-{digest.hexdigest()}"
 
 
-def _assign_thread_ids(drafts: list[_ThreadDraft]) -> tuple[InvestigationThread, ...]:
+def _assign_thread_ids(
+    drafts: list[_ThreadDraft],
+) -> tuple[InvestigationThread, ...]:
     sorted_drafts = sorted(drafts, key=_thread_sort_key)
-    return tuple(
-        InvestigationThread(
-            thread_id=_semantic_thread_id(draft),
-            title=draft.title,
-            priority=draft.priority,
-            category=draft.category,
-            summary=draft.summary,
-            why_it_matters=draft.why_it_matters,
-            related_endpoints=draft.related_endpoints,
-            related_evidence_ids=draft.related_evidence_ids,
-            related_candidate_ids=draft.related_candidate_ids,
-            related_lead_ids=draft.related_lead_ids,
-            suggested_manual_review_order=draft.suggested_manual_review_order,
-            kill_switch_guidance=draft.kill_switch_guidance,
-            related_native_observation_ids=draft.related_native_observation_ids,
-            related_application_relation_ids=(
-                draft.related_application_relation_ids
+    paired = tuple(
+        (
+            draft,
+            InvestigationThread(
+                thread_id=_semantic_thread_id(draft),
+                title=draft.title,
+                priority=draft.priority,
+                category=draft.category,
+                summary=draft.summary,
+                why_it_matters=draft.why_it_matters,
+                related_endpoints=draft.related_endpoints,
+                related_evidence_ids=draft.related_evidence_ids,
+                related_candidate_ids=draft.related_candidate_ids,
+                related_lead_ids=draft.related_lead_ids,
+                suggested_manual_review_order=draft.suggested_manual_review_order,
+                kill_switch_guidance=draft.kill_switch_guidance,
+                related_native_observation_ids=draft.related_native_observation_ids,
+                related_application_relation_ids=(
+                    draft.related_application_relation_ids
+                ),
+                limitation_codes=draft.limitation_codes,
             ),
-            limitation_codes=draft.limitation_codes,
         )
         for draft in sorted_drafts
     )
+    return _apply_account_workflow_subsumption(paired)
+
+
+def _apply_account_workflow_subsumption(
+    paired: tuple[tuple[_ThreadDraft, InvestigationThread], ...],
+) -> tuple[InvestigationThread, ...]:
+    threads = [thread for _draft, thread in paired]
+    parents = tuple(
+        (index, draft)
+        for index, (draft, thread) in enumerate(paired)
+        if thread.category == "account_workflow"
+        and draft.attention_coverage_urls
+    )
+
+    for child_index, (child_draft, child) in enumerate(paired):
+        if (
+            child_draft.compatibility_lead_type != "fetched_application_page"
+            or len(child.related_endpoints) != 1
+        ):
+            continue
+
+        endpoint = child.related_endpoints[0]
+        matching_parents = tuple(
+            parent_index
+            for parent_index, parent_draft in parents
+            if endpoint in parent_draft.attention_coverage_urls
+        )
+
+        if len(matching_parents) != 1:
+            continue
+
+        parent_index = matching_parents[0]
+        parent = threads[parent_index]
+        reason = (
+            "Generic fetched-page review is covered by the broader account workflow."
+        )
+
+        threads[parent_index] = replace(
+            parent,
+            related_evidence_ids=_unique_sorted(
+                (*parent.related_evidence_ids, *child.related_evidence_ids)
+            ),
+        )
+        threads[child_index] = replace(
+            child,
+            subsumed_by_thread_id=parent.thread_id,
+            subsumption_reason=reason,
+        )
+
+    return tuple(threads)
 
 
 def _thread_sort_key(draft: _ThreadDraft) -> tuple[object, ...]:

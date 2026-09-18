@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def test_canonical_thread_snapshot_round_trips_exactly(tmp_path: Path) -> None:
 
     assert path.name == "investigation_threads.json"
     assert investigation_threads_to_dict(threads) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_by": "bugslyce.investigation_threads",
         "threads": [
             {
@@ -73,11 +74,71 @@ def test_canonical_thread_snapshot_round_trips_exactly(tmp_path: Path) -> None:
                     "redirect_destination_not_fetched",
                     "structured_response_not_confirmed_api",
                 ],
+                "subsumed_by_thread_id": None,
+                "subsumption_reason": None,
             }
         ],
     }
     assert load_investigation_threads_artifact(tmp_path) == threads
 
+
+def test_subsumption_relation_round_trips_with_stable_parent_reference(
+    tmp_path: Path,
+) -> None:
+    from bugslyce.recon.investigation_thread_persistence import (
+        investigation_threads_to_dict,
+        load_investigation_threads_artifact,
+        write_investigation_threads_artifact,
+    )
+
+    parent = _thread()
+    child = replace(
+        _thread(),
+        thread_id="THREAD-" + "b" * 64,
+        title="Fetched application page review",
+        related_endpoints=("https://app.example.test/login",),
+        related_evidence_ids=("EVID-LOGIN",),
+        subsumed_by_thread_id=parent.thread_id,
+        subsumption_reason=(
+            "Generic fetched-page review is covered by the broader account workflow."
+        ),
+    )
+    threads = (parent, child)
+
+    payload = investigation_threads_to_dict(threads)
+
+    assert payload["schema_version"] == 2
+    assert payload["threads"][1]["subsumed_by_thread_id"] == parent.thread_id
+    assert (
+        payload["threads"][1]["subsumption_reason"]
+        == "Generic fetched-page review is covered by the broader account workflow."
+    )
+
+    write_investigation_threads_artifact(tmp_path, threads)
+    assert load_investigation_threads_artifact(tmp_path) == threads
+
+    orphan = replace(
+        child,
+        subsumed_by_thread_id="THREAD-" + "c" * 64,
+    )
+    with pytest.raises(ValueError, match="unknown parent"):
+        investigation_threads_to_dict((parent, orphan))
+
+
+
+def test_schema_one_snapshot_remains_readable_without_subsumption_metadata() -> None:
+    from bugslyce.recon.investigation_thread_persistence import (
+        investigation_threads_from_dict,
+    )
+
+    thread = _thread()
+    payload = {
+        "schema_version": 1,
+        "generated_by": "bugslyce.investigation_threads",
+        "threads": [_thread_payload(thread)],
+    }
+
+    assert investigation_threads_from_dict(payload) == (thread,)
 
 def test_optional_absence_and_noncanonical_thread_payloads_fail_closed(tmp_path: Path) -> None:
     from bugslyce.recon.investigation_thread_persistence import (

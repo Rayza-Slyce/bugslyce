@@ -1492,6 +1492,97 @@ def test_package3_unrelated_application_origin_does_not_change_thread_identity()
     assert unrelated_thread.thread_id != expanded_thread.thread_id
 
 
+def test_account_workflow_subsumes_generic_fetched_page_attention_without_deleting_children() -> None:
+    login_url = "https://market.example.test/login"
+    signup_url = "https://market.example.test/signup"
+    about_url = "https://market.example.test/about"
+
+    workflow = WorkflowLead(
+        title="Authentication and account workflow review",
+        priority="high",
+        category="account_workflow",
+        summary="Observed account workflow context.",
+        why_it_matters="Direct account-workflow evidence deserves bounded review.",
+        suggested_manual_action="Review retained account workflow evidence.",
+        representative_urls=(login_url,),
+        covered_urls=(login_url, signup_url),
+        evidence_ids=("EVID-WORKFLOW",),
+        signal="account_workflow",
+    )
+    compatibility = (
+        SimpleNamespace(
+            lead_type="fetched_application_page",
+            endpoints=(login_url,),
+            evidence_ids=("EVID-PAGE-LOGIN",),
+        ),
+        SimpleNamespace(
+            lead_type="fetched_application_page",
+            endpoints=(signup_url,),
+            evidence_ids=("EVID-PAGE-SIGNUP",),
+        ),
+        SimpleNamespace(
+            lead_type="fetched_application_page",
+            endpoints=(about_url,),
+            evidence_ids=("EVID-PAGE-ABOUT",),
+        ),
+    )
+
+    baseline = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=compatibility,
+    )
+    composed = build_investigation_threads(
+        _project_state(),
+        workflow_leads=(workflow,),
+        compatibility_summary_leads=compatibility,
+    )
+
+    parent = next(
+        thread for thread in composed
+        if thread.category == "account_workflow"
+    )
+    login_child = next(
+        thread for thread in composed
+        if thread.related_endpoints == (login_url,)
+        and thread.category == "application_interface"
+    )
+    signup_child = next(
+        thread for thread in composed
+        if thread.related_endpoints == (signup_url,)
+        and thread.category == "application_interface"
+    )
+    about_child = next(
+        thread for thread in composed
+        if thread.related_endpoints == (about_url,)
+        and thread.category == "application_interface"
+    )
+
+    baseline_by_endpoint = {
+        thread.related_endpoints: thread.thread_id
+        for thread in baseline
+    }
+
+    assert login_child.thread_id == baseline_by_endpoint[(login_url,)]
+    assert signup_child.thread_id == baseline_by_endpoint[(signup_url,)]
+    assert about_child.thread_id == baseline_by_endpoint[(about_url,)]
+
+    assert login_child.subsumed_by_thread_id == parent.thread_id
+    assert signup_child.subsumed_by_thread_id == parent.thread_id
+    assert login_child.subsumption_reason is not None
+    assert signup_child.subsumption_reason is not None
+    assert "account workflow" in login_child.subsumption_reason.casefold()
+    assert "account workflow" in signup_child.subsumption_reason.casefold()
+
+    assert about_child.subsumed_by_thread_id is None
+    assert about_child.subsumption_reason is None
+
+    assert set(parent.related_evidence_ids) == {
+        "EVID-WORKFLOW",
+        "EVID-PAGE-LOGIN",
+        "EVID-PAGE-SIGNUP",
+    }
+
+
 def test_package3_workflow_thread_retains_all_exact_evidence_references() -> None:
     evidence_ids = tuple(
         f"EVID-WORKFLOW-{index:02d}"
