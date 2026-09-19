@@ -2083,4 +2083,114 @@ def test_generic_collected_metadata_priority_is_not_promoted_canonically() -> No
     )
 
     assert threads == ()
+def _sem4c_robots_route_hint(
+    *,
+    lead_id: str,
+    robots_url: str,
+    value: str,
+    source: str = "http_artifact:disallow_rule",
+):
+    from bugslyce.recon.deep_metadata_review import DeepMetadataReviewLead
 
+    return DeepMetadataReviewLead(
+        lead_id=lead_id,
+        category="robots_route_hint",
+        priority="medium",
+        title="robots.txt route hint observed",
+        url=robots_url,
+        source=source,
+        evidence_ids=(f"EVID-{lead_id}",),
+        value_preview=value,
+        why_it_matters=(
+            "robots.txt route directives can highlight paths that deserve "
+            "bounded manual review in service context."
+        ),
+        suggested_manual_review=(
+            "Review the collected directive and correlate it with discovered "
+            "paths and HTTP service context before drawing conclusions."
+        ),
+        safety_notes=("Review-only metadata context; not a confirmed finding.",),
+    )
+
+
+def test_directory_listing_thread_absorbs_exact_robots_disallow_corroboration() -> None:
+    url = "https://app.example.test/ftp"
+    listing_evidence = "EVID-DIRECTORY-LISTING"
+    robots_lead = _sem4c_robots_route_hint(
+        lead_id="LEAD-DEEP-META-FTP",
+        robots_url="https://app.example.test/robots.txt",
+        value="/ftp",
+    )
+    compatibility = SimpleNamespace(
+        lead_type="directory_listing_response",
+        endpoints=(url,),
+        evidence_ids=(listing_evidence,),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=(compatibility,),
+        metadata_review_leads=(robots_lead,),
+    )
+
+    assert len(threads) == 1
+    thread = threads[0]
+
+    assert thread.title == "Observed directory listing response"
+    assert thread.priority == "medium"
+    assert thread.category == "application_interface"
+    assert thread.related_endpoints == (url,)
+    assert set(thread.related_evidence_ids) == {
+        listing_evidence,
+        "EVID-LEAD-DEEP-META-FTP",
+    }
+    assert thread.related_lead_ids == ("LEAD-DEEP-META-FTP",)
+    assert "robots.txt" in (
+        f"{thread.summary} {thread.why_it_matters}"
+    ).casefold()
+
+
+def test_directory_listing_thread_rejects_nonmatching_robots_context() -> None:
+    url = "https://app.example.test/ftp"
+    listing_evidence = "EVID-DIRECTORY-LISTING"
+    compatibility = SimpleNamespace(
+        lead_type="directory_listing_response",
+        endpoints=(url,),
+        evidence_ids=(listing_evidence,),
+    )
+    metadata_leads = (
+        _sem4c_robots_route_hint(
+            lead_id="LEAD-DEEP-META-OTHER-PATH",
+            robots_url="https://app.example.test/robots.txt",
+            value="/admin",
+        ),
+        _sem4c_robots_route_hint(
+            lead_id="LEAD-DEEP-META-OTHER-ORIGIN",
+            robots_url="https://other.example.test/robots.txt",
+            value="/ftp",
+        ),
+        _sem4c_robots_route_hint(
+            lead_id="LEAD-DEEP-META-ALLOW",
+            robots_url="https://app.example.test/robots.txt",
+            value="/ftp",
+            source="http_artifact:allow_rule",
+        ),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=(compatibility,),
+        metadata_review_leads=metadata_leads,
+    )
+
+    assert len(threads) == 1
+    thread = threads[0]
+
+    assert thread.title == "Observed directory listing response"
+    assert thread.priority == "medium"
+    assert thread.related_endpoints == (url,)
+    assert thread.related_evidence_ids == (listing_evidence,)
+    assert thread.related_lead_ids == ()
+    assert "robots.txt" not in (
+        f"{thread.summary} {thread.why_it_matters}"
+    ).casefold()

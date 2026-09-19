@@ -787,6 +787,10 @@ def _isolate_stage6c_operator_brief_composition(
         "bugslyce.project_pipeline.build_project_operator_brief_composition",
         lambda **_kwargs: composition,
     )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_deep_metadata_review_from_project_state",
+        lambda _state: SimpleNamespace(leads=()),
+    )
 
 
 def test_cli_project_run_handles_finalisation_failure_without_failed_ordinary_step(
@@ -3190,6 +3194,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     thread_compatibility_lead_calls: list[object] = []
     thread_successful_content_calls: list[object] = []
     thread_collection_review_calls: list[object] = []
+    thread_metadata_review_calls: list[object] = []
     persisted_thread_calls: list[tuple[object, ...]] = []
     rendered_runbook_threads: list[tuple[object, ...]] = []
 
@@ -3209,6 +3214,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         )
         thread_collection_review_calls.append(
             kwargs.get("collection_review_priorities")
+        )
+        thread_metadata_review_calls.append(
+            kwargs.get("metadata_review_leads")
         )
         return canonical_threads
 
@@ -3235,6 +3243,12 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         project_pipeline,
         "build_investigation_threads",
         build_threads,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_deep_metadata_review_from_project_state",
+        lambda _state: SimpleNamespace(leads=("METADATA-REVIEW-LEAD",)),
+        raising=False,
     )
     monkeypatch.setattr(
         project_pipeline,
@@ -3321,6 +3335,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     ]
     assert thread_collection_review_calls == [
         tuple(orchestration.collection_review_bundle.priorities)
+    ]
+    assert thread_metadata_review_calls == [
+        ("METADATA-REVIEW-LEAD",)
     ]
     assert persisted_thread_calls == [canonical_threads]
     assert outputs_after_report.investigation_threads is canonical_threads
@@ -6490,7 +6507,7 @@ def test_bug_bounty_execution_policy_forwards_persisted_configured_http_seeds(
     assert observed["profile"] == NORMAL_PIPELINE_PROFILE
     assert observed["configured_http_seeds"] == seeds
 
-def test_deep_runbook_fallback_passes_collection_review_priorities(
+def test_deep_runbook_fallback_passes_collection_and_metadata_review_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6510,6 +6527,7 @@ def test_deep_runbook_fallback_passes_collection_review_priorities(
     }
     project_state = SimpleNamespace(engagement_context="unknown")
     observed: list[object] = []
+    metadata_observed: list[object] = []
 
     monkeypatch.setattr(
         project_pipeline,
@@ -6528,12 +6546,19 @@ def test_deep_runbook_fallback_passes_collection_review_priorities(
     )
     monkeypatch.setattr(
         project_pipeline,
+        "build_deep_metadata_review_from_project_state",
+        lambda _state: SimpleNamespace(leads=("METADATA-REVIEW-LEAD",)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
         "build_grouped_workflow_leads",
         lambda *_args, **_kwargs: (),
     )
 
     def build_threads(*_args, **kwargs):
         observed.append(kwargs.get("collection_review_priorities"))
+        metadata_observed.append(kwargs.get("metadata_review_leads"))
         return ()
 
     monkeypatch.setattr(
@@ -6580,5 +6605,8 @@ def test_deep_runbook_fallback_passes_collection_review_priorities(
 
     assert observed == [
         tuple(orchestration.collection_review_bundle.priorities)
+    ]
+    assert metadata_observed == [
+        ("METADATA-REVIEW-LEAD",)
     ]
     assert rendered == "## Standard Investigation Workflow\n"

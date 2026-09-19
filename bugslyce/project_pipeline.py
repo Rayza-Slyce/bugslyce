@@ -133,6 +133,9 @@ from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectionResult,
     collect_deep_metadata_from_plan,
 )
+from bugslyce.recon.deep_metadata_review import (
+    build_deep_metadata_review_from_project_state,
+)
 from bugslyce.recon.deep_orchestration import (
     DEEP_RECON_ORCHESTRATION_JSON,
     DEEP_RECON_REVIEW_MARKDOWN,
@@ -3428,6 +3431,11 @@ def _write_interpretation_report_if_needed(
             if orchestration is not None
             else ()
         ),
+        metadata_review_leads=(
+            build_deep_metadata_review_from_project_state(project_state).leads
+            if profile == DEEP_PIPELINE_PROFILE
+            else ()
+        ),
     )
     if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
         thread_path = write_investigation_threads_artifact(output_dir, threads)
@@ -3905,6 +3913,11 @@ def _build_standard_investigation_runbook_section_if_needed(
                     )
                 )
                 if orchestration is not None
+                else ()
+            ),
+            metadata_review_leads=(
+                build_deep_metadata_review_from_project_state(project_state).leads
+                if profile == DEEP_PIPELINE_PROFILE
                 else ()
             ),
         )

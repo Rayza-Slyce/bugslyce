@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Protocol
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bugslyce.core.engagement_context import engagement_context_review_guidance
 from bugslyce.core.models import Candidate, HTTPArtifact, ProjectState
@@ -16,6 +16,7 @@ from bugslyce.recon.application_service_composition import (
 )
 from bugslyce.recon.application_service_model import ApplicationServiceModel
 from bugslyce.recon.deep_collection_review_bundle import DeepCollectionReviewPriority
+from bugslyce.recon.deep_metadata_review import DeepMetadataReviewLead
 from bugslyce.recon.deep_response_similarity_review import (
     DeepResponseSimilarityReview,
     PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES,
@@ -147,6 +148,7 @@ def build_investigation_threads(
     response_similarity_review: DeepResponseSimilarityReview | None = None,
     successful_content_reviews: Sequence[SuccessfulDeepContentReview] = (),
     collection_review_priorities: Sequence[DeepCollectionReviewPriority] = (),
+    metadata_review_leads: Sequence[DeepMetadataReviewLead] = (),
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
 
@@ -163,6 +165,13 @@ def build_investigation_threads(
     ):
         raise TypeError(
             "collection review priorities must be DeepCollectionReviewPriority values"
+        )
+    if any(
+        not isinstance(lead, DeepMetadataReviewLead)
+        for lead in metadata_review_leads
+    ):
+        raise TypeError(
+            "metadata review leads must be DeepMetadataReviewLead values"
         )
 
     drafts: list[_ThreadDraft] = []
@@ -186,6 +195,7 @@ def build_investigation_threads(
             project_state,
             compatibility_summary_leads,
             successful_content_reviews,
+            metadata_review_leads,
         )
     )
     return _assign_thread_ids(drafts)
@@ -1194,10 +1204,66 @@ def _application_interface_threads(
     return tuple(drafts)
 
 
+def _directory_listing_robots_corroboration(
+    endpoints: Sequence[str],
+    metadata_review_leads: Sequence[DeepMetadataReviewLead],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Correlate proven listings with exact same-origin robots Disallow hints."""
+
+    canonical_endpoints = {
+        canonical
+        for endpoint in endpoints
+        if (canonical := canonical_relationship_url(endpoint))
+    }
+    if not canonical_endpoints:
+        return (), ()
+
+    evidence_ids: set[str] = set()
+    lead_ids: set[str] = set()
+
+    for lead in metadata_review_leads:
+        if (
+            lead.category != "robots_route_hint"
+            or lead.source != "http_artifact:disallow_rule"
+        ):
+            continue
+
+        directive = lead.value_preview.strip()
+        if not directive.startswith("/"):
+            continue
+
+        source_url = canonical_relationship_url(lead.url)
+        if not source_url:
+            continue
+
+        target_url = canonical_relationship_url(urljoin(source_url, directive))
+        source_origin = http_origin_from_url(source_url)
+        target_origin = http_origin_from_url(target_url)
+
+        if (
+            not target_url
+            or source_origin is None
+            or target_origin != source_origin
+            or target_url not in canonical_endpoints
+        ):
+            continue
+
+        evidence_ids.update(
+            evidence_id
+            for evidence_id in lead.evidence_ids
+            if evidence_id
+        )
+        if lead.lead_id:
+            lead_ids.add(lead.lead_id)
+
+    return tuple(sorted(evidence_ids)), tuple(sorted(lead_ids))
+
+
 def _compatibility_summary_threads(
     project_state: ProjectState,
     leads: Sequence[CompatibilitySummaryLead],
     successful_content_reviews: Sequence[SuccessfulDeepContentReview] = (),
+    metadata_review_leads: Sequence[DeepMetadataReviewLead] = (),
 ) -> tuple[_ThreadDraft, ...]:
     """Adapt selected direct-evidence summary families without importing rank."""
 
@@ -1252,6 +1318,8 @@ def _compatibility_summary_threads(
         else:
             endpoints = subject
 
+        related_lead_ids: tuple[str, ...] = ()
+
         if lead_type == "successful_deep_content":
             typed_partition = _typed_successful_content_partition(
                 endpoints,
@@ -1300,11 +1368,32 @@ def _compatibility_summary_threads(
             category = "application_interface"
         elif lead_type == "directory_listing_response":
             title = "Observed directory listing response"
-            summary = "A retained response presents directory-listing evidence."
-            why = (
-                "Directory-listing evidence may expose useful application context "
-                "and deserves bounded review."
+            robots_evidence_ids, related_lead_ids = (
+                _directory_listing_robots_corroboration(
+                    endpoints,
+                    metadata_review_leads,
+                )
             )
+            if robots_evidence_ids:
+                evidence_ids = _unique_sorted(
+                    (*evidence_ids, *robots_evidence_ids)
+                )
+                summary = (
+                    "A retained response presents directory-listing evidence, "
+                    "independently corroborated by a matching robots.txt "
+                    "Disallow route directive."
+                )
+                why = (
+                    "The matching robots.txt directive strengthens route context "
+                    "for bounded review, but neither signal alone nor their "
+                    "correlation establishes a vulnerability."
+                )
+            else:
+                summary = "A retained response presents directory-listing evidence."
+                why = (
+                    "Directory-listing evidence may expose useful application context "
+                    "and deserves bounded review."
+                )
             limitations = ()
             priority = "medium"
             category = "application_interface"
@@ -1372,7 +1461,7 @@ def _compatibility_summary_threads(
                 related_endpoints=endpoints,
                 related_evidence_ids=evidence_ids,
                 related_candidate_ids=(),
-                related_lead_ids=(),
+                related_lead_ids=related_lead_ids,
                 suggested_manual_review_order=(
                     "Review the retained direct evidence and its surrounding "
                     "application context.",
