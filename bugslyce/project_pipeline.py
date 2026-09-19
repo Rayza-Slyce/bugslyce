@@ -3417,6 +3417,17 @@ def _write_interpretation_report_if_needed(
             if orchestration is not None
             else ()
         ),
+        collection_review_priorities=(
+            tuple(
+                getattr(
+                    getattr(orchestration, "collection_review_bundle", None),
+                    "priorities",
+                    (),
+                )
+            )
+            if orchestration is not None
+            else ()
+        ),
     )
     if profile == DEEP_PIPELINE_PROFILE and application_service_model is not None:
         thread_path = write_investigation_threads_artifact(output_dir, threads)
@@ -3875,6 +3886,21 @@ def _build_standard_investigation_runbook_section_if_needed(
                     getattr(
                         orchestration,
                         "successful_content_reviews",
+                        (),
+                    )
+                )
+                if orchestration is not None
+                else ()
+            ),
+            collection_review_priorities=(
+                tuple(
+                    getattr(
+                        getattr(
+                            orchestration,
+                            "collection_review_bundle",
+                            None,
+                        ),
+                        "priorities",
                         (),
                     )
                 )

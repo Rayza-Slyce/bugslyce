@@ -3143,6 +3143,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     )
     orchestration = SimpleNamespace(
         successful_content_reviews=(),
+        collection_review_bundle=SimpleNamespace(
+            priorities=("COLLECTION-PRIORITY",),
+        ),
         form_inventory=SimpleNamespace(forms=()),
         parameter_inventory=SimpleNamespace(parameters=()),
     )
@@ -3186,6 +3189,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     thread_model_calls: list[object | None] = []
     thread_compatibility_lead_calls: list[object] = []
     thread_successful_content_calls: list[object] = []
+    thread_collection_review_calls: list[object] = []
     persisted_thread_calls: list[tuple[object, ...]] = []
     rendered_runbook_threads: list[tuple[object, ...]] = []
 
@@ -3202,6 +3206,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
         )
         thread_successful_content_calls.append(
             kwargs.get("successful_content_reviews")
+        )
+        thread_collection_review_calls.append(
+            kwargs.get("collection_review_priorities")
         )
         return canonical_threads
 
@@ -3311,6 +3318,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     assert thread_compatibility_lead_calls == [tuple(summary.ranked_leads)]
     assert thread_successful_content_calls == [
         tuple(getattr(orchestration, "successful_content_reviews", ()))
+    ]
+    assert thread_collection_review_calls == [
+        tuple(orchestration.collection_review_bundle.priorities)
     ]
     assert persisted_thread_calls == [canonical_threads]
     assert outputs_after_report.investigation_threads is canonical_threads
@@ -6479,3 +6489,96 @@ def test_bug_bounty_execution_policy_forwards_persisted_configured_http_seeds(
     assert observed["project"] is project
     assert observed["profile"] == NORMAL_PIPELINE_PROFILE
     assert observed["configured_http_seeds"] == seeds
+
+def test_deep_runbook_fallback_passes_collection_review_priorities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bugslyce import project_pipeline
+
+    orchestration = SimpleNamespace(
+        collection_review_bundle=SimpleNamespace(
+            priorities=("COLLECTION-PRIORITY",),
+        ),
+        response_similarity_review=None,
+        successful_content_reviews=(),
+    )
+    context = {
+        "deep_outputs": project_pipeline.DeepPipelineOutputs(
+            orchestration=orchestration,
+        )
+    }
+    project_state = SimpleNamespace(engagement_context="unknown")
+    observed: list[object] = []
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_project_state",
+        lambda _output_dir: project_state,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "generate_candidates",
+        lambda _state: [],
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "assemble_standard_interpretation_from_project_state",
+        lambda _state: SimpleNamespace(review_leads=()),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_grouped_workflow_leads",
+        lambda *_args, **_kwargs: (),
+    )
+
+    def build_threads(*_args, **kwargs):
+        observed.append(kwargs.get("collection_review_priorities"))
+        return ()
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_investigation_threads",
+        build_threads,
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_standard_investigation_workflow_runbook_section",
+        lambda *_args, **_kwargs: "## Standard Investigation Workflow\n",
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_successful_deep_content_runbook",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "_http_route_relationship_clusters_if_available",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_http_route_relationship_clusters_runbook",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "build_collection_confidence_notices_from_project",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "render_collection_confidence_runbook",
+        lambda *_args, **_kwargs: "",
+    )
+
+    rendered = project_pipeline._build_standard_investigation_runbook_section_if_needed(
+        project_pipeline.DEEP_PIPELINE_PROFILE,
+        tmp_path,
+        context,
+    )
+
+    assert observed == [
+        tuple(orchestration.collection_review_bundle.priorities)
+    ]
+    assert rendered == "## Standard Investigation Workflow\n"

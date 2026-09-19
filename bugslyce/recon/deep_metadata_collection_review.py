@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from bugslyce.recon.deep_metadata_collector import (
     DeepMetadataCollectedItem,
@@ -256,6 +257,29 @@ def _build_leads(
             )
         )
 
+    successful_security_items = [
+        item
+        for item in by_group.get("2xx_success", [])
+        if _is_security_metadata_url(item.url)
+    ]
+    if successful_security_items:
+        leads.append(
+            DeepMetadataCollectionReviewLead(
+                category="security_metadata_found",
+                severity="review",
+                title="Security metadata endpoint returned a success response",
+                detail=(
+                    "Collected security.txt metadata endpoint returned a success "
+                    "response; review reporting or policy context locally. "
+                    "This is not a vulnerability finding."
+                ),
+                urls=tuple(
+                    _dedupe([item.url for item in successful_security_items])
+                ),
+                evidence_ids=_evidence_ids(successful_security_items),
+            )
+        )
+
     lead_specs = (
         (
             "2xx_success",
@@ -281,6 +305,12 @@ def _build_leads(
     )
     for group, category, severity, title, detail in lead_specs:
         items = by_group.get(group, [])
+        if group == "2xx_success":
+            items = [
+                item
+                for item in items
+                if not _is_security_metadata_url(item.url)
+            ]
         if not items:
             continue
         leads.append(
@@ -400,6 +430,19 @@ def _build_leads(
             )
         )
     return tuple(leads)
+
+
+
+def _is_security_metadata_url(url: str) -> bool:
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        return False
+
+    return path in {
+        "/security.txt",
+        "/.well-known/security.txt",
+    }
 
 
 def _status_group(status_code: int) -> str:

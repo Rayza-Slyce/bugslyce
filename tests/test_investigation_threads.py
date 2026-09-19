@@ -2011,3 +2011,76 @@ process_cpu_seconds_total 12.5
     assert "EVID-ORDINARY" not in prometheus_thread.related_evidence_ids
     assert "EVID-PROMETHEUS" not in generic_thread.related_evidence_ids
 
+def test_collected_security_metadata_priority_becomes_canonical_thread() -> None:
+    from bugslyce.recon.deep_collection_review_bundle import (
+        DeepCollectionReviewPriority,
+    )
+
+    url = "https://app.example.test/security.txt"
+    priority = DeepCollectionReviewPriority(
+        priority_id="DEEP-COLL-REV-0001",
+        title="Security metadata endpoint returned a success response",
+        category="security_metadata_found",
+        reason=(
+            "Collected security.txt metadata endpoint returned a success "
+            "response; review reporting or policy context locally."
+        ),
+        source_sections=("metadata_collection_review",),
+        related_urls=(url,),
+        related_evidence_ids=("EVID-SECURITY",),
+        signals=("severity review",),
+        suggested_manual_review=(
+            "Review the collected metadata response context manually alongside "
+            "scope and service evidence."
+        ),
+        safety_note="Review-only priority; not a confirmed finding.",
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        collection_review_priorities=(priority,),
+    )
+
+    assert len(threads) == 1
+    thread = threads[0]
+
+    assert thread.title == "Security reporting metadata successfully collected"
+    assert thread.priority == "medium"
+    assert thread.category == "application_interface"
+    assert thread.related_endpoints == (url,)
+    assert thread.related_evidence_ids == ("EVID-SECURITY",)
+    assert "security.txt" in thread.summary.lower()
+    assert "vulnerability" in thread.why_it_matters.lower()
+    assert thread.limitation_codes == (
+        "security_metadata_not_security_finding",
+    )
+
+
+def test_generic_collected_metadata_priority_is_not_promoted_canonically() -> None:
+    from bugslyce.recon.deep_collection_review_bundle import (
+        DeepCollectionReviewPriority,
+    )
+
+    priority = DeepCollectionReviewPriority(
+        priority_id="DEEP-COLL-REV-0002",
+        title="Metadata endpoint returned a success response",
+        category="metadata_found",
+        reason=(
+            "Collected metadata endpoint returned a success response for "
+            "manual context review."
+        ),
+        source_sections=("metadata_collection_review",),
+        related_urls=("https://app.example.test/robots.txt",),
+        related_evidence_ids=("EVID-ROBOTS",),
+        signals=("severity review",),
+        suggested_manual_review="Review collected metadata context locally.",
+        safety_note="Review-only priority; not a confirmed finding.",
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        collection_review_priorities=(priority,),
+    )
+
+    assert threads == ()
+

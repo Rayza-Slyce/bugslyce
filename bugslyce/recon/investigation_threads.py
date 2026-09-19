@@ -15,6 +15,7 @@ from bugslyce.recon.application_service_composition import (
     ApplicationServiceSupportBasis,
 )
 from bugslyce.recon.application_service_model import ApplicationServiceModel
+from bugslyce.recon.deep_collection_review_bundle import DeepCollectionReviewPriority
 from bugslyce.recon.deep_response_similarity_review import (
     DeepResponseSimilarityReview,
     PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES,
@@ -145,6 +146,7 @@ def build_investigation_threads(
     compatibility_summary_leads: Sequence[CompatibilitySummaryLead] = (),
     response_similarity_review: DeepResponseSimilarityReview | None = None,
     successful_content_reviews: Sequence[SuccessfulDeepContentReview] = (),
+    collection_review_priorities: Sequence[DeepCollectionReviewPriority] = (),
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
 
@@ -154,6 +156,13 @@ def build_investigation_threads(
     ):
         raise TypeError(
             "successful content reviews must be SuccessfulDeepContentReview values"
+        )
+    if any(
+        not isinstance(priority, DeepCollectionReviewPriority)
+        for priority in collection_review_priorities
+    ):
+        raise TypeError(
+            "collection review priorities must be DeepCollectionReviewPriority values"
         )
 
     drafts: list[_ThreadDraft] = []
@@ -171,6 +180,7 @@ def build_investigation_threads(
         drafts.append(encoded)
     if application_service_model is not None:
         drafts.extend(_application_interface_threads(application_service_model))
+    drafts.extend(_collection_review_threads(collection_review_priorities))
     drafts.extend(
         _compatibility_summary_threads(
             project_state,
@@ -179,6 +189,60 @@ def build_investigation_threads(
         )
     )
     return _assign_thread_ids(drafts)
+
+
+def _collection_review_threads(
+    priorities: Sequence[DeepCollectionReviewPriority],
+) -> tuple[_ThreadDraft, ...]:
+    drafts: list[_ThreadDraft] = []
+
+    for priority in priorities:
+        if priority.category != "security_metadata_found":
+            continue
+        if (
+            "metadata_collection_review" not in priority.source_sections
+            or not priority.related_urls
+            or not priority.related_evidence_ids
+        ):
+            continue
+
+        urls = _unique_sorted(priority.related_urls)
+        evidence_ids = _unique_sorted(priority.related_evidence_ids)
+
+        drafts.append(
+            _ThreadDraft(
+                title="Security reporting metadata successfully collected",
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "A bounded metadata request successfully collected a "
+                    "security.txt response for offline review."
+                ),
+                why_it_matters=(
+                    "security.txt can provide reporting and policy context for "
+                    "authorised review, but successful collection does not by "
+                    "itself establish a vulnerability."
+                ),
+                related_endpoints=urls,
+                related_evidence_ids=evidence_ids,
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    priority.suggested_manual_review,
+                ),
+                kill_switch_guidance=(
+                    "Treat the retained security metadata as reporting or policy "
+                    "context only; do not infer a vulnerability from successful "
+                    "collection."
+                ),
+                identity_key=("security_metadata_found", *urls),
+                limitation_codes=(
+                    "security_metadata_not_security_finding",
+                ),
+            )
+        )
+
+    return tuple(drafts)
 
 
 def _workflow_thread(lead: WorkflowLead) -> _ThreadDraft:

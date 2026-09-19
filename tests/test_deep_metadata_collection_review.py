@@ -293,6 +293,91 @@ def test_renderer_compacts_long_url_lists_and_avoids_finding_language() -> None:
         assert forbidden not in lowered
 
 
+
+def test_successful_security_metadata_is_split_from_generic_metadata_success() -> None:
+    result = DeepMetadataCollectionResult(
+        collected=(
+            _collected(
+                "https://app.example.test/security.txt",
+                200,
+                "security-hash",
+                preview=(
+                    "Contact: mailto:security@example.test\n"
+                    "Policy: https://app.example.test/security-policy"
+                ),
+                evidence_ids=("EVID-SECURITY",),
+            ),
+            _collected(
+                "https://app.example.test/robots.txt",
+                200,
+                "robots-hash",
+                preview="User-agent: *",
+                evidence_ids=("EVID-ROBOTS",),
+            ),
+        ),
+        skipped=(),
+        total_considered=2,
+        total_collected=2,
+        total_skipped=0,
+    )
+
+    summary = build_deep_metadata_collection_review(result)
+
+    security = next(
+        lead for lead in summary.leads
+        if lead.category == "security_metadata_found"
+    )
+    generic = next(
+        lead for lead in summary.leads
+        if lead.category == "metadata_found"
+    )
+
+    assert security.severity == "review"
+    assert security.urls == ("https://app.example.test/security.txt",)
+    assert security.evidence_ids == ("EVID-SECURITY",)
+    assert "security" in security.title.lower()
+    assert "report" in security.detail.lower() or "policy" in security.detail.lower()
+
+    assert generic.urls == ("https://app.example.test/robots.txt",)
+    assert generic.evidence_ids == ("EVID-ROBOTS",)
+
+    assert "EVID-ROBOTS" not in security.evidence_ids
+    assert "EVID-SECURITY" not in generic.evidence_ids
+
+
+def test_unsuccessful_security_metadata_does_not_get_success_semantics() -> None:
+    result = DeepMetadataCollectionResult(
+        collected=(
+            _collected(
+                "https://app.example.test/.well-known/security.txt",
+                404,
+                "missing-hash",
+                preview="Not found",
+                evidence_ids=("EVID-MISSING",),
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    summary = build_deep_metadata_collection_review(result)
+
+    assert all(
+        lead.category != "security_metadata_found"
+        for lead in summary.leads
+    )
+
+    missing = next(
+        lead for lead in summary.leads
+        if lead.category == "metadata_missing"
+    )
+    assert missing.urls == (
+        "https://app.example.test/.well-known/security.txt",
+    )
+    assert missing.evidence_ids == ("EVID-MISSING",)
+
 def test_single_operator_recon_mode_invariant() -> None:
     surviving = get_recon_mode("deep")
     assert surviving.display_name == "Reconnaissance"
