@@ -17,6 +17,7 @@ from bugslyce.recon.deep_source_route_collector import (
 from bugslyce.recon.deep_successful_content import (
     build_successful_deep_content_reviews,
     directory_listing_title,
+    prometheus_metrics_exposition,
     render_successful_deep_content_runbook,
 )
 
@@ -209,6 +210,53 @@ def test_promotion_uses_persisted_preview_and_survives_json_round_trip() -> None
     assert len(before[0].body_preview) <= MAX_RENDERED_BODY_PREVIEW_CHARS
     assert restored.collected[0].body == b""
     assert before[0].canonical_url.endswith("/archive/image.png")
+
+
+
+def test_prometheus_exposition_detection_requires_structure_not_keywords() -> None:
+    positive = build_successful_deep_content_reviews(
+        _result(
+            _item(
+                "https://portal.example.test/internal/telemetry",
+                body=(
+                    b"# HELP process_cpu_seconds_total CPU time.\n"
+                    b"# TYPE process_cpu_seconds_total counter\n"
+                    b"process_cpu_seconds_total 12.5\n"
+                ),
+                content_type="text/plain; version=0.0.4",
+                evidence_ids=("EVID-PROM",),
+            )
+        )
+    )[0]
+
+    mismatched = build_successful_deep_content_reviews(
+        _result(
+            _item(
+                "https://portal.example.test/metrics",
+                body=(
+                    b"# TYPE process_cpu_seconds_total counter\n"
+                    b"unrelated_metric 12.5\n"
+                ),
+                content_type="text/plain; version=0.0.4",
+                evidence_ids=("EVID-MISMATCH",),
+            )
+        )
+    )[0]
+
+    keyword_only = build_successful_deep_content_reviews(
+        _result(
+            _item(
+                "https://portal.example.test/metrics",
+                body=b"Prometheus metrics exposition is documented elsewhere.",
+                content_type="text/plain",
+                evidence_ids=("EVID-WORDS",),
+            )
+        )
+    )[0]
+
+    assert prometheus_metrics_exposition(positive)
+    assert not prometheus_metrics_exposition(mismatched)
+    assert not prometheus_metrics_exposition(keyword_only)
 
 
 def _result(

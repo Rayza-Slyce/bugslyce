@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html.parser import HTMLParser
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 from bugslyce.recon.deep_source_route_collection_export import (
@@ -24,6 +25,18 @@ _LISTING_TITLE_PREFIXES = (
     "directory listing of ",
     "listing directory ",
 )
+
+
+_PROMETHEUS_TYPE_DIRECTIVE = re.compile(
+    r"(?:^|\s)#\s*TYPE\s+([A-Za-z_:][A-Za-z0-9_:]*)\s+"
+    r"(counter|gauge|histogram|summary|untyped|info|stateset|gaugehistogram)"
+    r"(?=\s|$)",
+    re.IGNORECASE,
+)
+_PROMETHEUS_NUMBER = (
+    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+)
+
 
 
 class _TitleParser(HTMLParser):
@@ -152,6 +165,87 @@ def directory_listing_title(
         ):
             return title
     return None
+
+
+
+def prometheus_metrics_exposition(
+    review: SuccessfulDeepContentReview,
+) -> bool:
+    """Return whether retained body evidence has Prometheus exposition structure."""
+
+    if not isinstance(review, SuccessfulDeepContentReview):
+        raise TypeError(
+            "Prometheus exposition classification requires "
+            "SuccessfulDeepContentReview"
+        )
+
+    if not (200 <= review.status_code <= 299):
+        return False
+
+    content_type = (
+        (review.content_type or "")
+        .split(";", 1)[0]
+        .strip()
+        .casefold()
+    )
+    if content_type and content_type not in {
+        "text/plain",
+        "application/openmetrics-text",
+    }:
+        return False
+
+    preview = " ".join(review.body_preview.split())
+    if not preview:
+        return False
+
+    for type_match in _PROMETHEUS_TYPE_DIRECTIVE.finditer(preview):
+        metric_name = type_match.group(1)
+        metric_type = type_match.group(2).casefold()
+
+        expected_names = {metric_name}
+
+        if metric_type == "counter":
+            expected_names.update(
+                {
+                    f"{metric_name}_total",
+                    f"{metric_name}_created",
+                }
+            )
+        elif metric_type in {"histogram", "gaugehistogram"}:
+            expected_names.update(
+                {
+                    f"{metric_name}_bucket",
+                    f"{metric_name}_sum",
+                    f"{metric_name}_count",
+                    f"{metric_name}_created",
+                }
+            )
+        elif metric_type == "summary":
+            expected_names.update(
+                {
+                    f"{metric_name}_sum",
+                    f"{metric_name}_count",
+                    f"{metric_name}_created",
+                }
+            )
+        elif metric_type == "info":
+            expected_names.add(f"{metric_name}_info")
+
+        remainder = preview[type_match.end():]
+
+        for expected_name in sorted(expected_names):
+            sample = re.compile(
+                r"(?:^|\s)"
+                + re.escape(expected_name)
+                + r"(?:\{[^{}]*\})?\s+"
+                + _PROMETHEUS_NUMBER
+                + r"(?:\s+\d+)?(?=\s|$)"
+            )
+            if sample.search(remainder) is not None:
+                return True
+
+    return False
+
 
 
 def _normalised_listing_path(value: str) -> str | None:

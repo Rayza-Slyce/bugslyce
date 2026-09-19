@@ -1856,3 +1856,158 @@ def test_mobile_subsumption_is_exact_observation_not_url_wide() -> None:
     assert structured[0].related_native_observation_ids == (
         "native-observation:132:0",
     )
+
+def _sem4_successful_content_review(
+    url: str,
+    body_preview: str,
+    evidence_id: str,
+):
+    from bugslyce.recon.deep_successful_content import (
+        SuccessfulDeepContentReview,
+    )
+
+    body = body_preview.encode("utf-8")
+    return SuccessfulDeepContentReview(
+        review_id="DEEP-CONTENT-SEM4",
+        canonical_url=url,
+        requested_urls=(url,),
+        status_code=200,
+        content_type="text/plain; version=0.0.4",
+        body_bytes=len(body),
+        body_sha256=sha256(body).hexdigest(),
+        body_preview=body_preview,
+        evidence_ids=(evidence_id,),
+        artefact_references=("deep_source_route_collection.json",),
+    )
+
+
+def test_prometheus_exposition_content_gets_specific_canonical_thread_without_pathname_dependency() -> None:
+    url = "https://app.example.test/internal/telemetry"
+    evidence_id = "EVID-PROMETHEUS"
+
+    review = _sem4_successful_content_review(
+        url,
+        """# HELP process_cpu_seconds_total Total user and system CPU time.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 12.5
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 104857600
+""",
+        evidence_id,
+    )
+    compatibility = SimpleNamespace(
+        lead_type="successful_deep_content",
+        endpoints=(url,),
+        evidence_ids=(evidence_id,),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=(compatibility,),
+        successful_content_reviews=(review,),
+    )
+
+    related = tuple(
+        thread
+        for thread in threads
+        if evidence_id in thread.related_evidence_ids
+    )
+
+    assert len(related) == 1
+
+    thread = related[0]
+    assert thread.title == "Prometheus-style metrics exposition observed"
+    assert thread.priority == "medium"
+    assert thread.category == "application_interface"
+    assert thread.related_endpoints == (url,)
+    assert thread.related_evidence_ids == (evidence_id,)
+    assert "metrics exposition" in thread.summary.casefold()
+    assert "vulnerability" in thread.why_it_matters.casefold()
+    assert "metrics_exposition_not_security_finding" in thread.limitation_codes
+
+
+def test_metrics_pathname_without_exposition_content_stays_generic() -> None:
+    url = "https://app.example.test/metrics"
+    evidence_id = "EVID-ORDINARY-METRICS-PATH"
+
+    review = _sem4_successful_content_review(
+        url,
+        "Service is healthy. No metrics exposition is present.",
+        evidence_id,
+    )
+    compatibility = SimpleNamespace(
+        lead_type="successful_deep_content",
+        endpoints=(url,),
+        evidence_ids=(evidence_id,),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=(compatibility,),
+        successful_content_reviews=(review,),
+    )
+
+    related = tuple(
+        thread
+        for thread in threads
+        if evidence_id in thread.related_evidence_ids
+    )
+
+    assert len(related) == 1
+
+    thread = related[0]
+    assert thread.title == "Successfully collected Deep content available offline"
+    assert thread.priority == "medium"
+    assert "prometheus" not in thread.title.casefold()
+    assert "metrics_exposition_not_security_finding" not in thread.limitation_codes
+
+def test_prometheus_promotion_splits_only_matching_review_from_generic_aggregate() -> None:
+    prometheus_url = "https://app.example.test/internal/telemetry"
+    ordinary_url = "https://app.example.test/public/notice.txt"
+
+    prometheus = _sem4_successful_content_review(
+        prometheus_url,
+        """# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 12.5
+""",
+        "EVID-PROMETHEUS",
+    )
+    ordinary = _sem4_successful_content_review(
+        ordinary_url,
+        "Scheduled maintenance notice.",
+        "EVID-ORDINARY",
+    )
+
+    compatibility = SimpleNamespace(
+        lead_type="successful_deep_content",
+        endpoints=(prometheus_url, ordinary_url),
+        evidence_ids=("EVID-PROMETHEUS", "EVID-ORDINARY"),
+    )
+
+    threads = build_investigation_threads(
+        _project_state(),
+        compatibility_summary_leads=(compatibility,),
+        successful_content_reviews=(prometheus, ordinary),
+    )
+
+    prometheus_thread = next(
+        thread
+        for thread in threads
+        if thread.title == "Prometheus-style metrics exposition observed"
+    )
+    generic_thread = next(
+        thread
+        for thread in threads
+        if thread.title == "Successfully collected Deep content available offline"
+    )
+
+    assert prometheus_thread.related_endpoints == (prometheus_url,)
+    assert prometheus_thread.related_evidence_ids == ("EVID-PROMETHEUS",)
+
+    assert generic_thread.related_endpoints == (ordinary_url,)
+    assert generic_thread.related_evidence_ids == ("EVID-ORDINARY",)
+
+    assert "EVID-ORDINARY" not in prometheus_thread.related_evidence_ids
+    assert "EVID-PROMETHEUS" not in generic_thread.related_evidence_ids
+

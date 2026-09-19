@@ -19,6 +19,10 @@ from bugslyce.recon.deep_response_similarity_review import (
     DeepResponseSimilarityReview,
     PAGE_REVIEW_WEAKENING_GROUP_CATEGORIES,
 )
+from bugslyce.recon.deep_successful_content import (
+    SuccessfulDeepContentReview,
+    prometheus_metrics_exposition,
+)
 from bugslyce.recon.http_route_relationships import canonical_relationship_url
 from bugslyce.recon.interpretation import ReviewLead
 from bugslyce.reports.artifact_classifier import (
@@ -140,8 +144,17 @@ def build_investigation_threads(
     application_service_model: ApplicationServiceModel | None = None,
     compatibility_summary_leads: Sequence[CompatibilitySummaryLead] = (),
     response_similarity_review: DeepResponseSimilarityReview | None = None,
+    successful_content_reviews: Sequence[SuccessfulDeepContentReview] = (),
 ) -> tuple[InvestigationThread, ...]:
     """Build deterministic investigation threads from existing offline evidence."""
+
+    if any(
+        not isinstance(review, SuccessfulDeepContentReview)
+        for review in successful_content_reviews
+    ):
+        raise TypeError(
+            "successful content reviews must be SuccessfulDeepContentReview values"
+        )
 
     drafts: list[_ThreadDraft] = []
     drafts.extend(_workflow_thread(lead) for lead in workflow_leads)
@@ -159,7 +172,11 @@ def build_investigation_threads(
     if application_service_model is not None:
         drafts.extend(_application_interface_threads(application_service_model))
     drafts.extend(
-        _compatibility_summary_threads(project_state, compatibility_summary_leads)
+        _compatibility_summary_threads(
+            project_state,
+            compatibility_summary_leads,
+            successful_content_reviews,
+        )
     )
     return _assign_thread_ids(drafts)
 
@@ -1116,6 +1133,7 @@ def _application_interface_threads(
 def _compatibility_summary_threads(
     project_state: ProjectState,
     leads: Sequence[CompatibilitySummaryLead],
+    successful_content_reviews: Sequence[SuccessfulDeepContentReview] = (),
 ) -> tuple[_ThreadDraft, ...]:
     """Adapt selected direct-evidence summary families without importing rank."""
 
@@ -1169,6 +1187,18 @@ def _compatibility_summary_threads(
             endpoints = subject[1:] if typed_share_name is not None else subject
         else:
             endpoints = subject
+
+        if lead_type == "successful_deep_content":
+            typed_partition = _typed_successful_content_partition(
+                endpoints,
+                evidence_ids,
+                successful_content_reviews,
+            )
+            if typed_partition is not None:
+                specific_drafts, endpoints, evidence_ids = typed_partition
+                drafts.extend(specific_drafts)
+                if not endpoints:
+                    continue
 
         if lead_type == "structured_json_routes":
             title = "Observed structured route disclosure"
@@ -1296,6 +1326,144 @@ def _compatibility_summary_threads(
         )
 
     return tuple(drafts)
+
+
+
+def _typed_successful_content_partition(
+    endpoints: tuple[str, ...],
+    evidence_ids: tuple[str, ...],
+    reviews: Sequence[SuccessfulDeepContentReview],
+) -> (
+    tuple[
+        tuple[_ThreadDraft, ...],
+        tuple[str, ...],
+        tuple[str, ...],
+    ]
+    | None
+):
+    """Split typed metrics exposition from a fully correlated legacy aggregate."""
+
+    if not reviews:
+        return None
+
+    endpoint_set = frozenset(endpoints)
+    evidence_set = frozenset(evidence_ids)
+
+    correlated = tuple(
+        review
+        for review in reviews
+        if review.canonical_url in endpoint_set
+        and review.evidence_ids
+        and frozenset(review.evidence_ids).issubset(evidence_set)
+    )
+
+    if not correlated:
+        return None
+
+    correlated_endpoints = frozenset(
+        review.canonical_url
+        for review in correlated
+    )
+    correlated_evidence = frozenset(
+        evidence_id
+        for review in correlated
+        for evidence_id in review.evidence_ids
+        if evidence_id
+    )
+
+    if (
+        correlated_endpoints != endpoint_set
+        or correlated_evidence != evidence_set
+    ):
+        return None
+
+    prometheus_reviews = tuple(
+        review
+        for review in correlated
+        if prometheus_metrics_exposition(review)
+    )
+    remaining_reviews = tuple(
+        review
+        for review in correlated
+        if not prometheus_metrics_exposition(review)
+    )
+
+    specific_drafts: list[_ThreadDraft] = []
+
+    for endpoint in sorted(
+        {
+            review.canonical_url
+            for review in prometheus_reviews
+        }
+    ):
+        endpoint_reviews = tuple(
+            review
+            for review in prometheus_reviews
+            if review.canonical_url == endpoint
+        )
+        endpoint_evidence = _unique_sorted(
+            evidence_id
+            for review in endpoint_reviews
+            for evidence_id in review.evidence_ids
+            if evidence_id
+        )
+
+        specific_drafts.append(
+            _ThreadDraft(
+                title="Prometheus-style metrics exposition observed",
+                priority="medium",
+                category="application_interface",
+                summary=(
+                    "A retained successful response contains body evidence "
+                    "matching Prometheus metrics exposition structure."
+                ),
+                why_it_matters=(
+                    "Prometheus-style metrics exposition can provide useful "
+                    "observability and application context, but successful "
+                    "access does not by itself establish a vulnerability."
+                ),
+                related_endpoints=(endpoint,),
+                related_evidence_ids=endpoint_evidence,
+                related_candidate_ids=(),
+                related_lead_ids=(),
+                suggested_manual_review_order=(
+                    "Inspect the retained bounded metrics preview offline and "
+                    "identify what operational or application context it exposes.",
+                    "Assess intended exposure and data sensitivity from existing "
+                    "authorised evidence before considering any further action.",
+                ),
+                kill_switch_guidance=(
+                    "Stop if the retained body does not support Prometheus-style "
+                    "metrics exposition or if further action would require "
+                    "uncollected requests."
+                ),
+                identity_key=(
+                    "prometheus_metrics_exposition",
+                    endpoint,
+                ),
+                limitation_codes=(
+                    "metrics_exposition_not_security_finding",
+                ),
+                compatibility_lead_type="successful_deep_content",
+            )
+        )
+
+    remaining_endpoints = _unique_sorted(
+        review.canonical_url
+        for review in remaining_reviews
+    )
+    remaining_evidence = _unique_sorted(
+        evidence_id
+        for review in remaining_reviews
+        for evidence_id in review.evidence_ids
+        if evidence_id
+    )
+
+    return (
+        tuple(specific_drafts),
+        remaining_endpoints,
+        remaining_evidence,
+    )
 
 
 def _compatibility_subject(

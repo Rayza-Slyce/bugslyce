@@ -3185,6 +3185,7 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     )
     thread_model_calls: list[object | None] = []
     thread_compatibility_lead_calls: list[object] = []
+    thread_successful_content_calls: list[object] = []
     persisted_thread_calls: list[tuple[object, ...]] = []
     rendered_runbook_threads: list[tuple[object, ...]] = []
 
@@ -3196,7 +3197,12 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
 
     def build_threads(*_args, **kwargs):
         thread_model_calls.append(kwargs.get("application_service_model"))
-        thread_compatibility_lead_calls.append(kwargs.get("compatibility_summary_leads"))
+        thread_compatibility_lead_calls.append(
+            kwargs.get("compatibility_summary_leads")
+        )
+        thread_successful_content_calls.append(
+            kwargs.get("successful_content_reviews")
+        )
         return canonical_threads
 
     def persist_threads(root: Path, threads):
@@ -3303,6 +3309,9 @@ def test_deep_report_assembly_passes_and_retains_one_shared_operator_view(
     assert isinstance(outputs_after_report, DeepPipelineOutputs)
     assert thread_model_calls == [application_service_model]
     assert thread_compatibility_lead_calls == [tuple(summary.ranked_leads)]
+    assert thread_successful_content_calls == [
+        tuple(getattr(orchestration, "successful_content_reviews", ()))
+    ]
     assert persisted_thread_calls == [canonical_threads]
     assert outputs_after_report.investigation_threads is canonical_threads
     assert captured["threads"] is canonical_threads
