@@ -68,6 +68,8 @@ from bugslyce.recon.deep_source_route_collector import DeepSourceRouteCollection
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     build_successful_deep_content_reviews,
+    build_retained_successful_content_reviews,
+    merge_successful_deep_content_reviews,
 )
 from bugslyce.recon.http_route_relationships import (
     HttpRouteRelationshipCluster,
@@ -250,7 +252,13 @@ def build_html_report_model(
         _project_state_redirect_sources(project_state),
     )
     similarities = build_deep_response_similarity_review(fingerprints, redirects)
-    successful_content = build_successful_deep_content_reviews(source_collection)
+    successful_content = merge_successful_deep_content_reviews(
+        build_successful_deep_content_reviews(source_collection),
+        build_retained_successful_content_reviews(
+            project_state,
+            source_collection=source_collection,
+        ),
+    )
     deep_disclosures, deep_mode_enabled = _load_deep_disclosures(root)
     deep_summary_complete, summary_fallback, missing_deep_inputs = (
         _deep_summary_input_status(root, project_state, deep_mode_enabled)

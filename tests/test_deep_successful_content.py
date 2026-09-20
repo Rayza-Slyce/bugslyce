@@ -300,3 +300,260 @@ def _item(
         evidence_ids=evidence_ids,
         body=body,
     )
+
+
+def test_retained_body_fetch_prometheus_enters_successful_content_review(
+    tmp_path: Path,
+) -> None:
+    import json
+    from hashlib import sha256
+
+    from bugslyce.core.project import build_project_state
+    import bugslyce.recon.deep_successful_content as successful_content
+    from bugslyce.recon.deep_source_route_collector import (
+        DeepSourceRouteCollectionResult,
+    )
+
+    url = "https://example.test/metrics"
+    body = (
+        b"# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.\n"
+        b"# TYPE process_cpu_seconds_total counter\n"
+        b"process_cpu_seconds_total 12.5\n"
+    )
+
+    (tmp_path / "metrics.headers").write_text(
+        "HTTP/1.1 200 OK\n"
+        "Content-Type: text/plain; version=0.0.4\n"
+        f"Content-Length: {len(body)}\n"
+        "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.body").write_bytes(body)
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "example.test",
+                "profile": "deep-bounded",
+                "artifacts": [
+                    {
+                        "type": "http_headers",
+                        "file": "metrics.headers",
+                        "url": url,
+                        "description": (
+                            "Bounded header request for content-discovery result follow-up"
+                        ),
+                    },
+                    {
+                        "type": "html",
+                        "file": "metrics.body",
+                        "url": url,
+                        "description": (
+                            "Bounded body request for selected high-signal "
+                            "content-discovery follow-up path"
+                        ),
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    empty_collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(),
+        total_considered=0,
+        total_collected=0,
+        total_skipped=0,
+    )
+
+    reviews = successful_content.build_retained_successful_content_reviews(
+        state,
+        source_collection=empty_collection,
+    )
+
+    assert len(reviews) == 1
+    review = reviews[0]
+    assert review.canonical_url == url
+    assert review.status_code == 200
+    assert review.content_type == "text/plain; version=0.0.4"
+    assert review.body_bytes == len(body)
+    assert review.body_sha256 == sha256(body).hexdigest()
+    assert set(review.artefact_references) == {
+        "metrics.body",
+        "metrics.headers",
+    }
+    assert successful_content.prometheus_metrics_exposition(review)
+
+
+def test_retained_body_fetch_requires_exact_success_header_correlation(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    from bugslyce.core.project import build_project_state
+    import bugslyce.recon.deep_successful_content as successful_content
+    from bugslyce.recon.deep_source_route_collector import (
+        DeepSourceRouteCollectionResult,
+    )
+
+    body_url = "https://example.test/metrics"
+    body = (
+        b"# HELP process_cpu_seconds_total CPU time.\n"
+        b"# TYPE process_cpu_seconds_total counter\n"
+        b"process_cpu_seconds_total 1\n"
+    )
+
+    empty_collection = DeepSourceRouteCollectionResult(
+        collected=(),
+        skipped=(),
+        total_considered=0,
+        total_collected=0,
+        total_skipped=0,
+    )
+
+    cases = (
+        ("non-2xx", body_url, 403),
+        ("wrong-url", "https://example.test/other", 200),
+    )
+
+    for name, header_url, status in cases:
+        root = tmp_path / name
+        root.mkdir()
+
+        (root / "response.headers").write_text(
+            f"HTTP/1.1 {status} {'OK' if status == 200 else 'Forbidden'}\n"
+            "Content-Type: text/plain; version=0.0.4\n"
+            "\n",
+            encoding="utf-8",
+        )
+        (root / "response.body").write_bytes(body)
+        (root / "recon_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "target": "example.test",
+                    "profile": "deep-bounded",
+                    "artifacts": [
+                        {
+                            "type": "http_headers",
+                            "file": "response.headers",
+                            "url": header_url,
+                            "description": (
+                                "Bounded header request for content-discovery "
+                                "result follow-up"
+                            ),
+                        },
+                        {
+                            "type": "html",
+                            "file": "response.body",
+                            "url": body_url,
+                            "description": (
+                                "Bounded body request for selected high-signal "
+                                "content-discovery follow-up path"
+                            ),
+                        },
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        state = build_project_state(root)
+
+        assert successful_content.build_retained_successful_content_reviews(
+            state,
+            source_collection=empty_collection,
+        ) == ()
+
+
+def test_retained_body_fetch_skips_response_already_owned_by_deep_collection(
+    tmp_path: Path,
+) -> None:
+    import json
+    from hashlib import sha256
+
+    from bugslyce.core.project import build_project_state
+    import bugslyce.recon.deep_successful_content as successful_content
+    from bugslyce.recon.deep_source_route_collector import (
+        DeepSourceRouteCollectedItem,
+        DeepSourceRouteCollectionResult,
+    )
+
+    url = "https://example.test/metrics"
+    body = (
+        b"# HELP process_cpu_seconds_total CPU time.\n"
+        b"# TYPE process_cpu_seconds_total counter\n"
+        b"process_cpu_seconds_total 2\n"
+    )
+
+    (tmp_path / "metrics.headers").write_text(
+        "HTTP/1.1 200 OK\n"
+        "Content-Type: text/plain; version=0.0.4\n"
+        "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.body").write_bytes(body)
+    (tmp_path / "recon_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "target": "example.test",
+                "profile": "deep-bounded",
+                "artifacts": [
+                    {
+                        "type": "http_headers",
+                        "file": "metrics.headers",
+                        "url": url,
+                        "description": (
+                            "Bounded header request for content-discovery result follow-up"
+                        ),
+                    },
+                    {
+                        "type": "html",
+                        "file": "metrics.body",
+                        "url": url,
+                        "description": (
+                            "Bounded body request for selected high-signal "
+                            "content-discovery follow-up path"
+                        ),
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_project_state(tmp_path)
+    collection = DeepSourceRouteCollectionResult(
+        collected=(
+            DeepSourceRouteCollectedItem(
+                url=url,
+                method="GET",
+                status_code=200,
+                final_url=url,
+                headers=(("Content-Type", "text/plain; version=0.0.4"),),
+                body_preview=body.decode("utf-8"),
+                body_sha256=sha256(body).hexdigest(),
+                body_bytes=len(body),
+                elapsed_seconds=0.01,
+                source="source_route_coverage",
+                reason="fixture",
+                evidence_ids=("EVID-DEEP",),
+                body=body,
+            ),
+        ),
+        skipped=(),
+        total_considered=1,
+        total_collected=1,
+        total_skipped=0,
+    )
+
+    assert successful_content.build_retained_successful_content_reviews(
+        state,
+        source_collection=collection,
+    ) == ()

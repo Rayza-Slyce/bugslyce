@@ -80,6 +80,7 @@ from bugslyce.recon.deep_source_route_collection_review import (
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     build_successful_deep_content_reviews,
+    merge_successful_deep_content_reviews,
 )
 from bugslyce.recon.deep_source_route_collector import DeepSourceRouteCollectionResult
 
@@ -151,6 +152,9 @@ def build_deep_recon_orchestration(
     initial_retained_javascript_route_extraction: (
         DeepInitialRetainedJavaScriptRouteExtractionResult | None
     ) = None,
+    retained_successful_content_reviews: tuple[
+        SuccessfulDeepContentReview, ...
+    ] = (),
     deep_profile_selected: bool = False,
     deep_collection_completed: bool | None = None,
 ) -> DeepReconOrchestrationResult:
@@ -200,8 +204,9 @@ def build_deep_recon_orchestration(
             initial_retained_javascript_routes
         ),
     )
-    successful_content_reviews = build_successful_deep_content_reviews(
-        source_collection
+    successful_content_reviews = merge_successful_deep_content_reviews(
+        build_successful_deep_content_reviews(source_collection),
+        retained_successful_content_reviews,
     )
     stage_counts = _stage_counts(
         collection_bundle,

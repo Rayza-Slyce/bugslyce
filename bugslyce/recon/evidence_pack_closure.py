@@ -93,6 +93,8 @@ from bugslyce.recon.deep_source_route_collection_export import (
 from bugslyce.recon.deep_successful_content import (
     SuccessfulDeepContentReview,
     build_successful_deep_content_reviews,
+    build_retained_successful_content_reviews,
+    merge_successful_deep_content_reviews,
 )
 from bugslyce.reports.analysis_coverage import (
     ANALYSIS_COVERAGE_FILENAME,
@@ -3159,8 +3161,18 @@ def _deep_relationship_references(root: Path) -> tuple[EvidencePackReference, ..
         collection = load_deep_source_route_collection_result(collection_path)
     except (OSError, ValueError) as exc:
         raise ValueError("could not reconstruct current Deep references") from exc
-    reviews = build_successful_deep_content_reviews(collection)
     project_state = _load_relationship_project_state(root)
+    reviews = merge_successful_deep_content_reviews(
+        build_successful_deep_content_reviews(collection),
+        (
+            build_retained_successful_content_reviews(
+                project_state,
+                source_collection=collection,
+            )
+            if project_state is not None
+            else ()
+        ),
+    )
     clusters = (
         build_http_route_relationship_clusters(
             project_state,

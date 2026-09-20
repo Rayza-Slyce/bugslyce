@@ -145,6 +145,7 @@ from bugslyce.recon.deep_orchestration import (
     write_deep_recon_orchestration_artifacts,
 )
 from bugslyce.recon.deep_successful_content import (
+    build_retained_successful_content_reviews,
     render_successful_deep_content_runbook,
 )
 from bugslyce.recon.deep_shallow_route_followup import (
@@ -2817,10 +2818,17 @@ def _step_runners(
             or current.shallow_followups is None
         ):
             raise ValueError("Deep collection results are required before orchestration.")
+        project_state = build_project_state(output_dir)
         initial_retained_javascript_routes = (
             build_deep_initial_retained_javascript_route_extraction(
-                build_project_state(output_dir),
+                project_state,
                 current.source_collection,
+            )
+        )
+        retained_successful_content_reviews = (
+            build_retained_successful_content_reviews(
+                project_state,
+                source_collection=current.source_collection,
             )
         )
         orchestration = build_deep_recon_orchestration(
@@ -2829,6 +2837,9 @@ def _step_runners(
             metadata_collection=current.metadata_collection,
             initial_retained_javascript_route_extraction=(
                 initial_retained_javascript_routes
+            ),
+            retained_successful_content_reviews=(
+                retained_successful_content_reviews
             ),
             deep_profile_selected=profile == DEEP_PIPELINE_PROFILE,
             deep_collection_completed=profile == DEEP_PIPELINE_PROFILE,

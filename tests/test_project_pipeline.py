@@ -1467,6 +1467,13 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
     project_file, output_dir = _fresh_project(tmp_path)
     calls: list[str] = []
     _patch_successful_pipeline(monkeypatch, output_dir, calls)
+    retained_successful_content = (
+        SimpleNamespace(review_id="DEEP-RETAINED-CONTENT-0001"),
+    )
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_retained_successful_content_reviews",
+        lambda _state, *, source_collection=None: retained_successful_content,
+    )
     _isolate_stage6c_operator_brief_composition(monkeypatch, output_dir)
     monkeypatch.setattr(
         "bugslyce.project_pipeline._report_coverage_evidence",
@@ -1676,12 +1683,14 @@ def test_deep_pipeline_runs_bounded_collectors_and_threads_phase_93_seams(
         *,
         metadata_collection=None,
         initial_retained_javascript_route_extraction=None,
+        retained_successful_content_reviews=(),
         deep_profile_selected=False,
         deep_collection_completed=None,
     ):
         calls.append("deep-orchestrate")
         assert deep_profile_selected is True
         assert deep_collection_completed is True
+        assert retained_successful_content_reviews == retained_successful_content
         identities["orchestration_source"] = source_arg
         identities["orchestration_metadata"] = metadata_collection
         identities["orchestration_shallow"] = shallow_arg
@@ -5583,6 +5592,10 @@ def _patch_successful_pipeline(
     calls: list[str],
 ) -> None:
     _patch_current_native_runtime(monkeypatch, output_dir)
+    monkeypatch.setattr(
+        "bugslyce.project_pipeline.build_retained_successful_content_reviews",
+        lambda _state, *, source_collection=None: (),
+    )
     monkeypatch.setattr(
         "bugslyce.project_pipeline.write_deep_provenance_artifacts",
         lambda root, shallow, html, javascript: _write_named_files(
