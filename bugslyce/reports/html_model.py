@@ -591,6 +591,24 @@ def _url_path(url: str) -> str:
         return ""
 
 
+def load_report_project_state(root: Path) -> ProjectState | None:
+    """Read saved report state without running report/semantic composition.
+
+    Optional absence supports not-yet-analysed projects. Use the same decoder as
+    HTML so provenance is not reparsed or assigned new evidence identities.
+    """
+
+    path = root / "project_state.json"
+    if path.is_symlink():
+        raise ValueError("structured artefact must be a regular file: project_state.json")
+    if not path.exists():
+        return None
+    state, _ = _project_state_from_payload(
+        _read_json_object(root, "project_state.json", required=True), root,
+    )
+    return state
+
+
 def _project_state_from_payload(
     payload: dict[str, Any],
     root: Path,
