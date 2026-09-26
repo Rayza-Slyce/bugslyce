@@ -19,18 +19,29 @@ def _label(value: str) -> str:
     return value.replace("_", " ").capitalize().replace(" api", " API").replace(" http", " HTTP")
 
 
-def _page(model: DashboardReadModel, title: str, content: str) -> bytes:
+def _page(
+    model: DashboardReadModel, title: str, content: str, *, active: str = "investigations"
+) -> bytes:
     name = _text(model.project.name)
+    links = []
+    for key, path, label in (
+        ("investigations", "/", "Investigations"),
+        ("application", "/application", "Application"),
+        ("collection", "/limitations", "Collection context"),
+    ):
+        current = ' aria-current="page"' if key == active else ""
+        links.append(f'<a href="{path}"{current}>{label}</a>')
+    navigation = "".join(links)
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_text(title)} · BugSlyce</title>"
         "<link rel=\"stylesheet\" href=\"/assets/dashboard.css\">"
-        "</head><body><a class=\"skip-link\" href=\"#main\">Skip to investigations</a>"
+        "</head><body><a class=\"skip-link\" href=\"#main\">Skip to content</a>"
         "<div class=\"app-shell\"><header class=\"topbar\">"
         "<a class=\"brand\" href=\"/\" aria-label=\"BugSlyce dashboard home\">"
         "<span class=\"brand-mark\">B<span>·</span></span><span>BugSlyce</span></a>"
-        "<span class=\"topbar-mode\">Local investigation dashboard</span>"
+        f'<nav class="primary-nav" aria-label="Dashboard">{navigation}</nav>'
         "<span class=\"read-only\">Read-only</span></header>"
         f"<main id=\"main\" class=\"main-content\" aria-label=\"{name} dashboard\">"
         f"{content}</main><footer class=\"footer\">"
@@ -275,4 +286,4 @@ def render_limitations(model: DashboardReadModel) -> bytes:
         "<p>These are collection qualifications, not application findings.</p>"
         f"</section><div class=\"notice-detail-list\">{items}</div>"
     )
-    return _page(model, "Collection limitations", body)
+    return _page(model, "Collection limitations", body, active="collection")

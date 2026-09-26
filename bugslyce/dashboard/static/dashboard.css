@@ -20,6 +20,10 @@ a:focus-visible, summary:focus-visible { outline: 2px solid #abcde9; outline-off
 .brand-mark { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; background: #25394d; color: #c5ddf1; font-weight: 800; font-size: .86rem; }
 .brand-mark span { color: #8eb5d5; }
 .topbar-mode { color: #8493a0; font-size: .85rem; }
+.primary-nav { display: flex; align-items: stretch; gap: .3rem; align-self: stretch; margin-left: 1rem; }
+.primary-nav a { display: grid; place-items: center; padding: 0 .75rem; border-bottom: 2px solid transparent; color: #a8b7c3; font-size: .82rem; white-space: nowrap; }
+.primary-nav a:hover { color: #e6ebef; text-decoration: none; }
+.primary-nav a[aria-current="page"] { color: #eaf2f8; border-bottom-color: #9ab9d0; }
 .read-only { margin-left: auto; border: 1px solid #3b5146; color: #a8cbb2; border-radius: 30px; padding: .2rem .65rem; font-size: .74rem; letter-spacing: .02em; }
 .main-content { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 34px 0 72px; flex: 1; }
 .eyebrow, .section-label, .small-label, .meta-key { text-transform: uppercase; letter-spacing: .13em; font-size: .7rem; font-weight: 700; color: #92a1ae; }
@@ -93,14 +97,41 @@ h1 { font-size: clamp(1.7rem, 2.4vw, 2.35rem); line-height: 1.2; letter-spacing:
 .endpoint-full { padding-left: 1.7rem; margin: 0; }
 .endpoint-full li { padding: .25rem 0; border-bottom: 1px solid #25313b; }
 .notice-detail-list { max-width: 850px; }
+.estate-header p { max-width: 88ch; }
+.estate-counts { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; color: #aebdca; font-size: .8rem; }
+.estate-counts strong { color: #e3ebf1; font-variant-numeric: tabular-nums; }
+.estate-section { margin: 1.4rem 0; }
+.origin-list, .route-list, .relation-list, .native-list { list-style: none; padding: 0; margin: 0; }
+.origin-list { display: grid; gap: .55rem; }
+.origin-row { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: .8rem 1rem; border: 1px solid #2b3743; border-radius: 7px; background: #151e27; }
+.origin-main { min-width: 0; display: grid; gap: .15rem; }
+.origin-link { font: 600 .88rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.origin-main .muted { font-size: .68rem; }
+.origin-stats { display: flex; flex-wrap: wrap; justify-content: end; gap: .25rem .8rem; color: #a4b4c0; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.native-overview { margin-top: 1.5rem; }
+.estate-detail-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .75fr); gap: 14px; align-items: start; }
+.route-row, .relation-row, .native-list li { border-top: 1px solid #2b3743; padding: .55rem 0; overflow-wrap: anywhere; }
+.route-list, .relation-list { margin-top: .5rem; }
+.relation-heading { font-size: .82rem; font-weight: 650; color: #d6e1e9; }
+.relation-endpoints { font: .73rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #adcadf; overflow-wrap: anywhere; margin: .35rem 0; }
+.relation-support { padding-left: 1.2rem !important; margin: .35rem 0 !important; }
+.relation-support li { margin-top: .2rem !important; font-size: .73rem; }
+.basis { color: #d0d9e0; font-weight: 650; }
+.machine-id { color: #7d92a1; font: .65rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.pager { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .6rem; color: #9babb8; font-size: .76rem; font-variant-numeric: tabular-nums; }
+.pager-links { display: flex; gap: 1rem; }
 @media (max-width: 850px) {
-  .thread-grid, .detail-grid { grid-template-columns: 1fr; }
+  .thread-grid, .detail-grid, .estate-detail-grid { grid-template-columns: 1fr; }
   .notices { grid-template-columns: 1fr; gap: .75rem; }
   .section-heading { align-items: start; flex-direction: column; }
+  .origin-row { align-items: start; flex-direction: column; }
+  .origin-stats { justify-content: start; }
 }
 @media (max-width: 540px) {
   .main-content { width: min(100% - 28px, 1180px); padding-top: 20px; }
-  .topbar { padding: 0 14px; gap: .6rem; }
+  .topbar { padding: 0 14px; gap: .6rem; flex-wrap: wrap; }
+  .primary-nav { order: 3; width: 100%; min-height: 38px; margin-left: 0; overflow-x: auto; }
+  .primary-nav a { padding: 0 .55rem; }
   .topbar-mode { display: none; }
   .project-meta { display: grid; gap: .45rem; }
   .thread-card { padding: 1rem 1rem 0; }

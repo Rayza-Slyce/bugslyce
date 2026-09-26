@@ -5,8 +5,19 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.resources import files
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
+from bugslyce.dashboard.application_view import (
+    DOCUMENTATION_PAGE_SIZE,
+    RELATION_PAGE_SIZE,
+    ROUTE_PAGE_SIZE,
+    build_application_navigation,
+    page_count,
+    render_application_home,
+    render_documentation_page,
+    render_origin_detail,
+)
 from bugslyce.dashboard.presentation import (
     render_investigation_home,
     render_limitations,
@@ -17,6 +28,10 @@ from bugslyce.project_session import BugSlyceProject
 
 
 LOOPBACK_HOST = "127.0.0.1"
+_ORIGIN_PATH = re.compile(
+    r"/application/origin/(APP-ORIGIN-[0-9a-f]{64})(?:/(routes|relations)/([1-9][0-9]{0,4}))?\Z"
+)
+_DOCUMENTATION_PATH = re.compile(r"/application/documentation/page/([1-9][0-9]{0,4})\Z")
 CONTENT_SECURITY_POLICY = (
     "default-src 'none'; style-src 'self'; script-src 'none'; img-src 'none'; "
     "font-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; "
@@ -36,6 +51,7 @@ class DashboardHTTPServer(HTTPServer):
         )
         self.home_page = render_investigation_home(model)
         self.limitations_page = render_limitations(model)
+        self.application_navigation = build_application_navigation(model.application_service_model)
         self.threads_by_path = {
             f"/thread/{thread.thread_id}": thread
             for thread in (model.investigation_threads or ())
@@ -82,6 +98,49 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             body, content_type = self.server.limitations_page, "text/html; charset=utf-8"
         elif parsed.path == "/assets/dashboard.css":
             body, content_type = self.server.stylesheet, "text/css; charset=utf-8"
+        elif parsed.path == "/application":
+            body = render_application_home(
+                self.server.dashboard_model, self.server.application_navigation
+            )
+            content_type = "text/html; charset=utf-8"
+        elif parsed.path == "/application/documentation" or _DOCUMENTATION_PATH.fullmatch(parsed.path):
+            if self.server.application_navigation.model is None:
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            matched = _DOCUMENTATION_PATH.fullmatch(parsed.path)
+            page = int(matched.group(1)) if matched else 1
+            if page > page_count(
+                len(self.server.application_navigation.documentation_items),
+                DOCUMENTATION_PAGE_SIZE,
+            ):
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_documentation_page(
+                self.server.dashboard_model, self.server.application_navigation, page=page
+            )
+            content_type = "text/html; charset=utf-8"
+        elif matched := _ORIGIN_PATH.fullmatch(parsed.path):
+            origin = self.server.application_navigation.origin_for_id(matched.group(1))
+            if origin is None:
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            page = int(matched.group(3)) if matched.group(3) else 1
+            routes_page = page if matched.group(2) == "routes" else 1
+            relations_page = page if matched.group(2) == "relations" else 1
+            if (
+                routes_page > page_count(len(origin.routes), ROUTE_PAGE_SIZE)
+                or relations_page > page_count(len(origin.relations), RELATION_PAGE_SIZE)
+            ):
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_origin_detail(
+                self.server.dashboard_model,
+                self.server.application_navigation,
+                origin,
+                routes_page=routes_page,
+                relations_page=relations_page,
+            )
+            content_type = "text/html; charset=utf-8"
         elif parsed.path in self.server.threads_by_path:
             body = render_thread_detail(
                 self.server.dashboard_model,
