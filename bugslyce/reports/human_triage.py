@@ -898,7 +898,10 @@ def _independent_access_boundary_item(
         ),
         suggested_manual_action=(
             "Correlate the saved source reference with the recorded HTTP response and scope. "
-            "Do not attempt login, bypass, brute force, or form submission from this prompt."
+            "If the engagement rules authorise active manual follow-up, controlled login "
+            "or form interaction may be appropriate within scope; preserve request/response "
+            "evidence. This lead is not proof of a vulnerability and does not itself grant "
+            "authority for bypass or brute-force testing."
         ),
         evidence_ids=evidence_ids,
         url=endpoint.url,

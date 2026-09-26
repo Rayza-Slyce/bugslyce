@@ -647,8 +647,9 @@ def _account_origin_workflow_lead(
         ),
         suggested_manual_action=(
             "Review the saved forms, redirects, and access-boundary responses in "
-            "context. Do not submit forms, attempt login, or create test values from "
-            "this prompt."
+            "context. If the engagement rules authorise active manual follow-up, "
+            "controlled login, form submission, or test-value creation may be "
+            "appropriate; preserve request/response evidence and remain within scope."
         ),
         representative_urls=route_urls[:_MAX_REPRESENTATIVE_ROUTES],
         covered_urls=route_urls,

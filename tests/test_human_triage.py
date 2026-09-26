@@ -1077,6 +1077,14 @@ def test_html_reference_remains_independent_from_forbidden_response() -> None:
     assert provenance.independent_reference_evidence_ids == ("EVID-HTML-LINK",)
     assert promoted.title == "Independently referenced access-boundary route"
     assert promoted.evidence_ids == ("EVID-HTML-LINK", "EVID-RESPONSE")
+    action = promoted.suggested_manual_action.casefold()
+    assert "from this prompt" not in action
+    assert "saved source reference" in action
+    assert "engagement rules" in action
+    assert "authorise" in action
+    assert "brute-force" in action
+    assert "vulnerability" in action
+    assert "authority" in action
 
 
 def test_parsed_url_inventory_reference_remains_independent() -> None:

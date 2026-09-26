@@ -274,8 +274,9 @@ def _workflow_thread(lead: WorkflowLead) -> _ThreadDraft:
             ),
         ),
         kill_switch_guidance=(
-            "Stop if the retained evidence does not support the grouped workflow; "
-            "do not submit forms, attempt authentication, mutate parameters, or infer a vulnerability."
+            "Deprioritise if the retained evidence does not support the grouped workflow. "
+            "This thread is reconnaissance context, not proof of a vulnerability "
+            "or authority for active follow-up."
         ),
         attention_coverage_urls=(
             _unique_sorted(lead.covered_urls)

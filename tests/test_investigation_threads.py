@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from bugslyce.core.models import (
     Candidate,
     DiscoveredPath,
+    Endpoint,
     HTTPArtifact,
     HTTPService,
     ProjectState,
@@ -45,7 +46,7 @@ from bugslyce.recon.native_observation_facts import (
     NativeStructuredResponseFact,
 )
 from bugslyce.recon.http_route_relationships import HttpRouteRelationshipEdge
-from bugslyce.triage.workflow_leads import WorkflowLead
+from bugslyce.triage.workflow_leads import WorkflowLead, build_grouped_workflow_leads
 
 
 
@@ -1664,6 +1665,46 @@ def test_package3_workflow_thread_retains_all_exact_evidence_references() -> Non
 
     assert thread.related_evidence_ids == evidence_ids
 
+
+def test_account_workflow_thread_copies_authority_aware_action_without_identity_churn() -> None:
+    state = _project_state()
+    state.endpoints.extend([
+        Endpoint(
+            url=url,
+            hostname="portal.example.test",
+            path=path,
+            query_params=[],
+            evidence_ids=[evidence_id],
+            tags=[],
+        )
+        for url, path, evidence_id in (
+            ("https://portal.example.test/login", "/login", "EVID-LOGIN"),
+            ("https://portal.example.test/account", "/account", "EVID-ACCOUNT"),
+        )
+    ])
+    lead = next(
+        item for item in build_grouped_workflow_leads(state)
+        if item.category == "account_workflow"
+    )
+    thread = next(
+        item for item in build_investigation_threads(state, workflow_leads=(lead,))
+        if item.category == "account_workflow"
+    )
+
+    assert thread.suggested_manual_review_order[0] == lead.suggested_manual_action
+    assert "engagement rules" in thread.suggested_manual_review_order[0].casefold()
+    assert "do not submit forms" not in thread.kill_switch_guidance.casefold()
+    assert "attempt authentication" not in thread.kill_switch_guidance.casefold()
+    assert "reconnaissance context" in thread.kill_switch_guidance.casefold()
+    assert "not proof of a vulnerability" in thread.kill_switch_guidance.casefold()
+    assert "not proof of a vulnerability or authority" in thread.kill_switch_guidance.casefold()
+    changed_presentation = replace(lead, suggested_manual_action="Different presentation wording")
+    changed_thread = next(
+        item for item in build_investigation_threads(
+            state, workflow_leads=(changed_presentation,)
+        ) if item.category == "account_workflow"
+    )
+    assert thread.thread_id == changed_thread.thread_id
 
 
 def test_structured_response_query_identity_remains_distinct() -> None:

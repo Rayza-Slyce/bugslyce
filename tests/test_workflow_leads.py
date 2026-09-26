@@ -406,6 +406,26 @@ def test_account_workflows_are_split_by_origin() -> None:
     )
 
 
+def test_account_workflow_manual_action_preserves_human_authority_boundary() -> None:
+    state = _state(
+        endpoints=[
+            _endpoint("https://portal.example.test/login", "EVID-LOGIN"),
+            _endpoint("https://portal.example.test/account", "EVID-ACCOUNT"),
+        ]
+    )
+    lead = _leads_for(state, "account_workflow")[0]
+    action = lead.suggested_manual_action.casefold()
+
+    assert "from this prompt" not in action
+    assert "do not submit forms" not in action
+    assert "do not attempt login" not in action
+    assert "do not create test values" not in action
+    assert "engagement rules" in action
+    assert "active manual follow-up" in action
+    assert "scope" in action
+    assert "preserve request/response evidence" in action
+
+
 def test_schemes_and_ports_are_distinct_workflow_origins() -> None:
     state = _state(
         endpoints=[
