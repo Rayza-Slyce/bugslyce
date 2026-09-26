@@ -104,6 +104,21 @@ def test_persisted_order_subsumption_navigation_and_legacy_non_authority(tmp_pat
         model.investigation_threads = ()
 
 
+def test_generic_evidence_exposes_only_loaded_tuple_and_preserves_absence(tmp_path):
+    absent = build_dashboard_read_model(tmp_path)
+    assert absent.generic_evidence is None
+    _state(tmp_path)
+    loaded = build_dashboard_read_model(tmp_path)
+    assert loaded.generic_evidence == (Evidence("EVID-ONE", "response.txt", "http", "observed", {}),)
+    assert not hasattr(loaded, "project_state")
+    assert all(not isinstance(value, ProjectState) for value in vars(loaded).values())
+    payload = json.loads((tmp_path / "project_state.json").read_text())
+    payload["project_state"]["evidence"] = []
+    (tmp_path / "project_state.json").write_text(json.dumps(payload))
+    empty = build_dashboard_read_model(tmp_path)
+    assert empty.generic_evidence == ()
+
+
 @pytest.mark.parametrize("present", [False, True])
 def test_absent_vs_authoritative_empty_never_reconstructs_priority(tmp_path, monkeypatch, present):
     _state(tmp_path)

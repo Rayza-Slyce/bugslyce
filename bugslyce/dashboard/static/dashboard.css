@@ -120,6 +120,23 @@ h1 { font-size: clamp(1.7rem, 2.4vw, 2.35rem); line-height: 1.2; letter-spacing:
 .machine-id { color: #7d92a1; font: .65rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 .pager { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .6rem; color: #9babb8; font-size: .76rem; font-variant-numeric: tabular-nums; }
 .pager-links { display: flex; gap: 1rem; }
+.evidence-domains { display: grid; gap: 14px; }
+.evidence-domain { margin-bottom: 0; }
+.evidence-header p { max-width: 88ch; }
+.evidence-list, .backlink-list, .support-preview, .reference-list { padding-left: 1.3rem; margin: .65rem 0; }
+.evidence-row { padding: .55rem 0; border-top: 1px solid #2b3743; overflow-wrap: anywhere; }
+.evidence-row strong { display: inline-block; margin-right: .55rem; font-size: .82rem; }
+.evidence-row p { margin: .35rem 0; overflow-wrap: anywhere; }
+.domain-tag { color: #b8cbd9; border: 1px solid #3a4c5c; border-radius: 4px; padding: .12rem .38rem; font-size: .68rem; }
+.context-list { margin: .55rem 0 1.25rem; }
+.context-pair { display: grid; grid-template-columns: minmax(110px, 28%) minmax(0, 1fr); gap: .6rem; padding: .4rem 0; border-top: 1px solid #2b3743; font-size: .78rem; }
+.context-pair dt { color: #97adbd; }
+.context-pair dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.saved-value { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.support-domain { border-top: 1px solid #2b3743; padding: .7rem 0; }
+.support-domain h3 { margin: 0; font-size: .82rem; }
+.support-domain p { margin: .3rem 0; }
+.support-preview li, .backlink-list li, .reference-list li { overflow-wrap: anywhere; }
 @media (max-width: 850px) {
   .thread-grid, .detail-grid, .estate-detail-grid { grid-template-columns: 1fr; }
   .notices { grid-template-columns: 1fr; gap: .75rem; }

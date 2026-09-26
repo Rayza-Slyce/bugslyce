@@ -342,7 +342,8 @@ def _relation_row(index: ApplicationNavigation, value: OriginRelation) -> str:
         ' <span aria-hidden="true">→</span> '
         f'{_text(_entity_label(index, relation.target_entity_id))}</div>'
         f'<ul class="relation-support">{"".join(support_rows)}{more}</ul>'
-        f'<div class="machine-id">{_text(relation.relation_id)}</div></li>'
+        f'<div class="machine-id">{_text(relation.relation_id)}</div>'
+        f'<a class="text-link" href="/evidence/application/{_text(relation.relation_id)}">Review provenance</a></li>'
     )
 
 

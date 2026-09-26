@@ -18,6 +18,18 @@ from bugslyce.dashboard.application_view import (
     render_documentation_page,
     render_origin_detail,
 )
+from bugslyce.dashboard.evidence_view import (
+    GENERIC_PAGE_SIZE,
+    NATIVE_PAGE_SIZE,
+    RELATION_PAGE_SIZE as EVIDENCE_RELATION_PAGE_SIZE,
+    SUPPORT_PAGE_SIZE,
+    build_evidence_navigation,
+    render_evidence_index,
+    render_evidence_landing,
+    render_generic_detail,
+    render_native_detail,
+    render_relation_detail,
+)
 from bugslyce.dashboard.presentation import (
     render_investigation_home,
     render_limitations,
@@ -32,6 +44,12 @@ _ORIGIN_PATH = re.compile(
     r"/application/origin/(APP-ORIGIN-[0-9a-f]{64})(?:/(routes|relations)/([1-9][0-9]{0,4}))?\Z"
 )
 _DOCUMENTATION_PATH = re.compile(r"/application/documentation/page/([1-9][0-9]{0,4})\Z")
+_EVIDENCE_INDEX_PATH = re.compile(r"/evidence/(generic|native|application)/page/([1-9][0-9]{0,4})\Z")
+_GENERIC_EVIDENCE_PATH = re.compile(r"/evidence/generic/id/([0-9a-f]{64})\Z")
+_NATIVE_EVIDENCE_PATH = re.compile(r"/evidence/native/(0|[1-9][0-9]*)/(0|[1-9][0-9]*)\Z")
+_RELATION_EVIDENCE_PATH = re.compile(
+    r"/evidence/application/(APP-RELATION-[0-9a-f]{64})(?:/supports/([1-9][0-9]{0,4}))?\Z"
+)
 CONTENT_SECURITY_POLICY = (
     "default-src 'none'; style-src 'self'; script-src 'none'; img-src 'none'; "
     "font-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; "
@@ -52,6 +70,8 @@ class DashboardHTTPServer(HTTPServer):
         self.home_page = render_investigation_home(model)
         self.limitations_page = render_limitations(model)
         self.application_navigation = build_application_navigation(model.application_service_model)
+        self.evidence_navigation = build_evidence_navigation(model)
+        self.evidence_home_page = render_evidence_landing(model, self.evidence_navigation)
         self.threads_by_path = {
             f"/thread/{thread.thread_id}": thread
             for thread in (model.investigation_threads or ())
@@ -98,6 +118,49 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             body, content_type = self.server.limitations_page, "text/html; charset=utf-8"
         elif parsed.path == "/assets/dashboard.css":
             body, content_type = self.server.stylesheet, "text/css; charset=utf-8"
+        elif parsed.path == "/evidence":
+            body, content_type = self.server.evidence_home_page, "text/html; charset=utf-8"
+        elif matched := _EVIDENCE_INDEX_PATH.fullmatch(parsed.path):
+            domain, page = matched.group(1), int(matched.group(2))
+            navigation = self.server.evidence_navigation
+            count, size = {
+                "generic": (len(navigation.generic or ()), GENERIC_PAGE_SIZE),
+                "native": (len(navigation.native_sources), NATIVE_PAGE_SIZE),
+                "application": (len(navigation.relations or ()), EVIDENCE_RELATION_PAGE_SIZE),
+            }[domain]
+            if page > page_count(count, size):
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_evidence_index(self.server.dashboard_model, navigation, domain, page)
+            content_type = "text/html; charset=utf-8"
+        elif matched := _GENERIC_EVIDENCE_PATH.fullmatch(parsed.path):
+            navigation = self.server.evidence_navigation
+            item = navigation.generic_by_locator.get(matched.group(1))
+            if item is None:
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_generic_detail(self.server.dashboard_model, navigation, item)
+            content_type = "text/html; charset=utf-8"
+        elif matched := _NATIVE_EVIDENCE_PATH.fullmatch(parsed.path):
+            navigation = self.server.evidence_navigation
+            identity = f"native-observation:{matched.group(1)}:{matched.group(2)}"
+            source = navigation.native_by_id.get(identity)
+            if source is None:
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_native_detail(self.server.dashboard_model, navigation, source)
+            content_type = "text/html; charset=utf-8"
+        elif matched := _RELATION_EVIDENCE_PATH.fullmatch(parsed.path):
+            navigation = self.server.evidence_navigation
+            relation = navigation.relation_by_id.get(matched.group(1))
+            page = int(matched.group(2)) if matched.group(2) else 1
+            if relation is None or page > page_count(len(relation.supports), SUPPORT_PAGE_SIZE):
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
+            body = render_relation_detail(
+                self.server.dashboard_model, navigation, relation, page=page
+            )
+            content_type = "text/html; charset=utf-8"
         elif parsed.path == "/application":
             body = render_application_home(
                 self.server.dashboard_model, self.server.application_navigation
@@ -145,6 +208,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             body = render_thread_detail(
                 self.server.dashboard_model,
                 self.server.threads_by_path[parsed.path],
+                self.server.evidence_navigation,
             )
             content_type = "text/html; charset=utf-8"
         else:

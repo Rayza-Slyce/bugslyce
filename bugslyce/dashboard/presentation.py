@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from html import escape
+from typing import TYPE_CHECKING
 
 from bugslyce.dashboard.read_model import DashboardReadModel
 from bugslyce.recon.investigation_threads import InvestigationThread
 
 
 ENDPOINT_PREVIEW_LIMIT = 5
+SUPPORT_PREVIEW_LIMIT = 5
+
+if TYPE_CHECKING:
+    from bugslyce.dashboard.evidence_view import EvidenceNavigation
 
 
 def _text(value: object) -> str:
@@ -27,6 +32,7 @@ def _page(
     for key, path, label in (
         ("investigations", "/", "Investigations"),
         ("application", "/application", "Application"),
+        ("evidence", "/evidence", "Evidence"),
         ("collection", "/limitations", "Collection context"),
     ):
         current = ' aria-current="page"' if key == active else ""
@@ -136,6 +142,48 @@ def _support(thread: InvestigationThread) -> str:
     ) + "</div>"
 
 
+def _support_preview(
+    model: DashboardReadModel, thread: InvestigationThread,
+    navigation: EvidenceNavigation | None,
+) -> str:
+    if navigation is None:
+        # Standalone rendering is used by presentation tests. The HTTP server
+        # always supplies its one startup index.
+        from bugslyce.dashboard.evidence_view import build_evidence_navigation
+        navigation = build_evidence_navigation(model)
+    domains = (
+        ("Retained evidence", thread.related_evidence_ids, navigation.generic_path,
+         lambda identity: navigation.generic_by_id[identity].evidence_type),
+        ("Native observations", thread.related_native_observation_ids, navigation.native_path,
+         lambda identity: f"{len(navigation.native_by_id[identity].facts)} typed facts"),
+        ("Application relationships", thread.related_application_relation_ids, navigation.relation_path,
+         lambda identity: navigation.relation_by_id[identity].relation_kind.value.replace("_", " ")),
+    )
+    sections = []
+    for label, identities, resolver, descriptor in domains:
+        rows = []
+        for identity in identities[:SUPPORT_PREVIEW_LIMIT]:
+            path = resolver(identity)
+            if path:
+                rows.append(
+                    f'<li><a href="{path}">{_text(identity)}</a> '
+                    f'<span class="muted">· {_text(descriptor(identity))}</span></li>'
+                )
+            else:
+                rows.append(
+                    f'<li>{_text(identity)} <span class="muted">· retained reference '
+                    'unresolved in loaded snapshot</span></li>'
+                )
+        more = len(identities) - SUPPORT_PREVIEW_LIMIT
+        more_text = f'<p class="muted">+{more} more retained references</p>' if more > 0 else ''
+        empty = '<p class="muted">No references recorded in this domain.</p>' if not identities else ''
+        sections.append(
+            f'<div class="support-domain"><h3>{label} <span class="count">{len(identities)}</span></h3>'
+            f'{empty}<ul class="support-preview">{"".join(rows)}</ul>{more_text}</div>'
+        )
+    return ''.join(sections)
+
+
 def _limitations(thread: InvestigationThread) -> str:
     if not thread.limitation_codes:
         return ""
@@ -219,7 +267,10 @@ def render_investigation_home(model: DashboardReadModel) -> bytes:
     return _page(model, "Investigations", content)
 
 
-def render_thread_detail(model: DashboardReadModel, thread: InvestigationThread) -> bytes:
+def render_thread_detail(
+    model: DashboardReadModel, thread: InvestigationThread,
+    evidence_navigation: EvidenceNavigation | None = None,
+) -> bytes:
     """Render one saved thread. Its full endpoint list is absent from home HTML."""
 
     all_threads = model.investigation_threads or ()
@@ -259,7 +310,8 @@ def render_thread_detail(model: DashboardReadModel, thread: InvestigationThread)
         "<section class=\"detail-section\"><h2>When to deprioritise</h2>"
         f"{kill}</section>{child_html}</div><div>"
         "<section class=\"detail-section\"><h2>Support and qualifications</h2>"
-        f"{_support(thread)}{_limitations(thread)}</section>"
+        f"{_support(thread)}{_support_preview(model, thread, evidence_navigation)}"
+        f"{_limitations(thread)}</section>"
         "<section class=\"detail-section\"><h2>Related endpoints "
         f"<span class=\"count\">{len(thread.related_endpoints)}</span></h2>"
         "<p class=\"muted\">Saved concrete endpoints; no reachability is implied by listing.</p>"

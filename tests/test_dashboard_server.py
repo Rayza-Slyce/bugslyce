@@ -246,7 +246,8 @@ def test_startup_loads_read_model_once_and_requests_do_not_reload(monkeypatch, t
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("subprocess started"))
     with _running(create_dashboard_server(tmp_path)) as server:
         for route in ("/", "/thread/" + model.investigation_threads[0].thread_id,
-                      "/limitations", "/assets/dashboard.css"):
+                      "/limitations", "/evidence", "/evidence/generic/page/1",
+                      "/assets/dashboard.css"):
             assert _request(server, route)[0] == 200
         assert len(calls) == 1
     assert marker.read_text() == "saved"
@@ -259,9 +260,9 @@ def test_full_endpoint_detail_is_only_rendered_after_deliberate_request(monkeypa
 
     original = dashboard_server.render_thread_detail
 
-    def render(model, thread):
+    def render(model, thread, evidence_navigation=None):
         calls.append(thread.thread_id)
-        return original(model, thread)
+        return original(model, thread, evidence_navigation)
 
     monkeypatch.setattr(dashboard_server, "render_thread_detail", render)
     thread = _thread("a", related_endpoints=tuple(

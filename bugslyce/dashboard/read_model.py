@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from bugslyce.core.models import Evidence
 from bugslyce.core.engagement_policy import (
     EngagementPolicyAssessment,
     assess_engagement_policy,
@@ -88,6 +89,7 @@ class DashboardReadModel:
     analysis_coverage_evidence: tuple[AnalysisCoverageExecutionEvidence, ...] | None
     confidence_notices: tuple[CollectionConfidenceNotice, ...]
     authority: DashboardAuthoritySummary
+    generic_evidence: tuple[Evidence, ...] | None = None
 
 
 def build_dashboard_read_model(project: BugSlyceProject | Path) -> DashboardReadModel:
@@ -161,4 +163,5 @@ def build_dashboard_read_model(project: BugSlyceProject | Path) -> DashboardRead
                 if scope is not None else None
             ),
         ),
+        generic_evidence=tuple(state.evidence) if state is not None else None,
     )
