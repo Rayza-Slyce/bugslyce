@@ -22,6 +22,7 @@ from bugslyce.core.engagement_context import (
 from bugslyce.core.engagement_policy import enforce_r0b2_bug_bounty_live_block
 from bugslyce.core.project import build_project_state
 from bugslyce.doctor import build_doctor_report, doctor_exit_code, render_doctor_text
+from bugslyce.dashboard.server import create_dashboard_server
 from bugslyce.engagement_policy_setup import (
     configure_project_policy_interactively,
     show_project_policy,
@@ -248,6 +249,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run":
         return _run(args.input_dir, args.output_dir)
+    if args.command == "dashboard":
+        return _dashboard(args)
     if args.command == "config":
         return _config(args)
     if args.command == "project":
@@ -290,6 +293,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Directory where report.md and project_state.json will be written.",
+    )
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="Open a read-only investigation dashboard for a saved local project.",
+    )
+    dashboard_parser.add_argument(
+        "project", type=Path, help="Saved project file or local project directory."
+    )
+    dashboard_parser.add_argument(
+        "--port", type=int, default=0,
+        help="127.0.0.1 port; 0 chooses an available local port (default).",
     )
 
     subparsers.add_parser(
@@ -1263,6 +1278,25 @@ def _run(input_dir: Path, output_dir: Path) -> int:
     else:
         print(f"LLM provider: {provider.name}")
 
+    return 0
+
+
+def _dashboard(args: argparse.Namespace) -> int:
+    print("Loading saved dashboard state…", flush=True)
+    try:
+        server = create_dashboard_server(args.project, port=args.port)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"Error: dashboard could not load: {exc}", file=sys.stderr)
+        print("No dashboard listener was opened.", file=sys.stderr)
+        return 2
+    print(f"BugSlyce dashboard: {server.url}", flush=True)
+    print("Read-only local view. Press Ctrl+C to stop.", flush=True)
+    try:
+        server.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        print("Dashboard stopped.")
+    finally:
+        server.server_close()
     return 0
 
 

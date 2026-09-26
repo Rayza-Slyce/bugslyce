@@ -1,4 +1,4 @@
-"""Read-only projections of existing canonical project state; no UI or execution."""
+"""Read-only projections and local browser views of canonical project state."""
 
 from bugslyce.dashboard.read_model import (
     DashboardAuthoritySummary,
